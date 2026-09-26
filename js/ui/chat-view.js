@@ -125,7 +125,7 @@ function renderMessage(m) {
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
-      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
+      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id, messages: lastMessages });
     }));
   }
   meta.appendChild(actions);
@@ -311,7 +311,10 @@ async function handleSend(e) {
         { id: userMsg.id, order: userMsg.order, role: "user", content: text, tokenCount: userMsg.tokenCount },
       ]);
     }
-    await runAssistantTurn({});
+    // Explicitly pass the bridged cache: opts.messages keeps buildContextForRequest
+    // off the racy getMessages() fallback, which would hit the watch cache and
+    // potentially miss the just-committed user message.
+    await runAssistantTurn({ messages: lastMessages });
   } catch (err) {
     showTransientError(err.message || String(err));
   } finally {
@@ -324,6 +327,11 @@ async function runAssistantTurn(opts = {}) {
   if (!settings) return;
   setBusy(true);
   try {
+    if (opts.upToOrder !== undefined || opts.overwriteId) {
+      console.log(
+        `[LLM DEBUG] Regenerate: upToOrder=${opts.upToOrder} overwriteId=${opts.overwriteId} breakpointOrder=${session.breakpointOrder ?? 0}`
+      );
+    }
     // Uses the snapshot-listener cache — no Firestore reads.
     const { apiMessages } = await buildContextForRequest(session, settings, opts);
     startStreamUI();

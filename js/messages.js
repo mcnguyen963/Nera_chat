@@ -1,5 +1,5 @@
 import {
-  doc, getDoc, getDocs, query, orderBy, updateDoc, deleteDoc,
+  doc, getDoc, getDocsFromServer, query, orderBy, updateDoc, deleteDoc,
   collection, runTransaction, writeBatch, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
@@ -94,9 +94,12 @@ export async function addMessagesBulk(sessionId, items) {
   return ids.map((id, j) => ({ id, order: orders[j], tokenCount: tokenCounts[j] }));
 }
 
+// Fallback for callers without a snapshot cache (e.g. import/export). Reads from
+// the SERVER: getDocs() would be served by the local watch cache, which can lag
+// behind an just-acked transaction and return stale history for an LLM request.
 export async function getMessages(sessionId) {
   const q = query(msgsCol(sessionId), orderBy("order", "asc"));
-  const snap = await getDocs(q);
+  const snap = await getDocsFromServer(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
