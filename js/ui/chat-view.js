@@ -9,6 +9,7 @@ import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, stripPlan } from "../plan-parser.js";
 import { updateSession } from "../sessions.js";
+import { currentUid } from "../auth.js";
 
 let msgUnsub = null;
 let sessUnsub = null;
@@ -44,7 +45,7 @@ export function setSession(sessionId) {
   if (!sessionId) return;
 
   sessUnsub = onSnapshot(
-    doc(db, "sessions", sessionId),
+    doc(db, "users", currentUid(), "sessions", sessionId),
     (snap) => {
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       updateIndicator();
@@ -54,7 +55,7 @@ export function setSession(sessionId) {
   );
 
   msgUnsub = onSnapshot(
-    query(collection(db, "sessions", sessionId, "messages"), orderBy("order", "asc")),
+    query(collection(db, "users", currentUid(), "sessions", sessionId, "messages"), orderBy("order", "asc")),
     (snap) => {
       renderMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       updateIndicator(); // cached data — no extra Firestore reads

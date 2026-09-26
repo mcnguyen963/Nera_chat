@@ -14,6 +14,14 @@ export function initAuth(callback) {
   return onAuthStateChanged(getAuth(), callback);
 }
 
+// Current signed-in user's uid — used to scope every session/message path so each
+// user has an isolated chat history (users/{uid}/sessions/...).
+export function currentUid() {
+  const uid = getAuth().currentUser?.uid;
+  if (!uid) throw new Error("Not signed in — no Firebase user.");
+  return uid;
+}
+
 export async function login(email, password) {
   await signInWithEmailAndPassword(getAuth(), email.trim(), password);
 }

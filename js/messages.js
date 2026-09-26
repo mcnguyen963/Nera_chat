@@ -3,7 +3,20 @@ import {
   collection, runTransaction, writeBatch, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
+import { currentUid } from "./auth.js";
 import { countTokens } from "./tokenizer.js";
+
+// Message paths are scoped to the signed-in user: users/{uid}/sessions/{id}/messages/...
+
+function msgRef(sessionId, messageId) {
+  return doc(db, "users", currentUid(), "sessions", sessionId, "messages", messageId);
+}
+function msgsCol(sessionId) {
+  return collection(db, "users", currentUid(), "sessions", sessionId, "messages");
+}
+function sessionRef(sessionId) {
+  return doc(db, "users", currentUid(), "sessions", sessionId);
+}
 
 function newMsgId() {
   return "msg_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -31,18 +44,18 @@ function msgDoc({ role, content, thinking, tokenCount, order }) {
 export async function addMessage(sessionId, { role, content, thinking = null }, opts = {}) {
   const tokenCount = await countTokens(content);
   const msgId = opts.id ?? newMsgId();
-  const sessionRef = doc(db, "sessions", sessionId);
-  const msgRef = doc(db, "sessions", sessionId, "messages", msgId);
+  const sessionDocRef = sessionRef(sessionId);
+  const messageRef = msgRef(sessionId, msgId);
 
   const order = await runTransaction(db, async (tx) => {
-    const snap = await tx.get(sessionRef);
+    const snap = await tx.get(sessionDocRef);
     const next = (snap.data()?.nextOrder ?? 0) + 1;
-    tx.update(sessionRef, {
+    tx.update(sessionDocRef, {
       nextOrder: next,
       updatedAt: serverTimestamp(),
       ...(opts.sessionUpdate ?? {}),
     });
-    tx.set(msgRef, msgDoc({ role, content, thinking, tokenCount, order: next }));
+    tx.set(messageRef, msgDoc({ role, content, thinking, tokenCount, order: next }));
     return next;
   });
 
@@ -56,14 +69,14 @@ export async function addMessagesBulk(sessionId, items) {
   if (items.length === 0) return [];
   const tokenCounts = await Promise.all(items.map((it) => countTokens(it.content)));
   const ids = items.map(() => newMsgId());
-  const sessionRef = doc(db, "sessions", sessionId);
+  const sessionDocRef = sessionRef(sessionId);
 
   const orders = await runTransaction(db, async (tx) => {
-    const snap = await tx.get(sessionRef);
+    const snap = await tx.get(sessionDocRef);
     let next = snap.data()?.nextOrder ?? 0;
     const out = [];
     for (let i = 0; i < items.length; i++) out.push(++next);
-    tx.update(sessionRef, { nextOrder: next, updatedAt: serverTimestamp() });
+    tx.update(sessionDocRef, { nextOrder: next, updatedAt: serverTimestamp() });
     return out;
   });
 
@@ -71,7 +84,7 @@ export async function addMessagesBulk(sessionId, items) {
     const batch = writeBatch(db);
     for (let j = i; j < Math.min(i + 450, ids.length); j++) {
       batch.set(
-        doc(db, "sessions", sessionId, "messages", ids[j]),
+        msgRef(sessionId, ids[j]),
         msgDoc({ role: items[j].role, content: items[j].content, thinking: items[j].thinking, tokenCount: tokenCounts[j], order: orders[j] })
       );
     }
@@ -82,20 +95,20 @@ export async function addMessagesBulk(sessionId, items) {
 }
 
 export async function getMessages(sessionId) {
-  const q = query(collection(db, "sessions", sessionId, "messages"), orderBy("order", "asc"));
+  const q = query(msgsCol(sessionId), orderBy("order", "asc"));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 export async function getMessage(sessionId, messageId) {
-  const snap = await getDoc(doc(db, "sessions", sessionId, "messages", messageId));
+  const snap = await getDoc(msgRef(sessionId, messageId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
 // Edit: overwrite content in place, recompute tokenCount. No cascade (spec §9).
 export async function editMessage(sessionId, messageId, content) {
   const tokenCount = await countTokens(content);
-  await updateDoc(doc(db, "sessions", sessionId, "messages", messageId), {
+  await updateDoc(msgRef(sessionId, messageId), {
     content,
     tokenCount,
     editedAt: serverTimestamp(),
@@ -106,7 +119,7 @@ export async function editMessage(sessionId, messageId, content) {
 // Regenerate: overwrite content/thinking/tokenCount in place (spec §9).
 export async function overwriteMessage(sessionId, messageId, { content, thinking }) {
   const tokenCount = await countTokens(content);
-  await updateDoc(doc(db, "sessions", sessionId, "messages", messageId), {
+  await updateDoc(msgRef(sessionId, messageId), {
     content,
     thinking: thinking ?? null,
     tokenCount,
@@ -116,5 +129,5 @@ export async function overwriteMessage(sessionId, messageId, { content, thinking
 
 // The only path that truly loses data (spec §9).
 export async function deleteMessage(sessionId, messageId) {
-  await deleteDoc(doc(db, "sessions", sessionId, "messages", messageId));
+  await deleteDoc(msgRef(sessionId, messageId));
 }
