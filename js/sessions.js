@@ -67,5 +67,10 @@ export async function deleteSession(sessionId) {
 
 export function subscribeSessions(callback, onError) {
   const q = query(sessionsCol(), orderBy("updatedAt", "desc"));
-  return onSnapshot(q, callback, onError);
+  return onSnapshot(
+    q,
+    // Map the QuerySnapshot to plain objects — the UI expects an array of sessions.
+    (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError
+  );
 }
