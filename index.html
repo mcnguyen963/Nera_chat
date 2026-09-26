@@ -75,8 +75,36 @@
         </div>
         <div id="message-list" class="message-list"></div>
         <form id="composer" class="composer">
-          <textarea id="chat-input" placeholder="Write your turn…" rows="1"></textarea>
-          <button type="submit" id="btn-send" class="btn primary">Send</button>
+          <div id="composer-box" class="composer-box">
+            <textarea id="chat-input" placeholder="Write your turn…" rows="1"></textarea>
+            <div class="composer-row">
+              <button type="button" id="btn-model-chip" class="composer-chip" aria-haspopup="true">
+                <span id="chip-model" class="chip-label">Model</span>
+              </button>
+              <button type="button" id="btn-thinking-chip" class="composer-chip" aria-haspopup="true">
+                <span id="chip-thinking" class="chip-label">Thinking</span>
+              </button>
+              <span class="composer-spacer"></span>
+              <button type="submit" id="btn-send" class="composer-send" aria-label="Send">↑</button>
+            </div>
+          </div>
+          <div id="composer-popover" class="composer-popover" hidden>
+            <label class="popover-field">Model ID
+              <input type="text" id="quick-model" placeholder="e.g. anthropic/claude-3.5-sonnet" autocomplete="off" />
+            </label>
+            <label class="popover-field">Thinking
+              <select id="quick-thinking">
+                <option value="off">Off</option>
+                <option value="minimal">minimal</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+                <option value="max_tokens">max_tokens mode</option>
+              </select>
+            </label>
+          </div>
         </form>
       </section>
 

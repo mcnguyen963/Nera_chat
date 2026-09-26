@@ -281,8 +281,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   white-space: pre-wrap;
   word-break: break-word;
 }
-.msg.user { align-self: flex-end; background: var(--user-bubble); }
-.msg.assistant { align-self: flex-start; background: var(--assistant-bubble); }
+.msg.user { align-self: flex-end; background: var(--user-bubble); max-width: 82%; }
+.msg.assistant, .msg.system { align-self: stretch; background: var(--assistant-bubble); max-width: 100%; }
 .msg.summary {
   align-self: center;
   background: var(--summary-bg);
@@ -342,7 +342,9 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 .status-line { align-self: center; color: var(--accent); font-size: 13px; padding: 4px; }
 
 /* ---------- Hold-to-copy ---------- */
-.msg.holding { border-color: var(--accent); opacity: 0.85; }
+/* Whole-box highlight: brightens the bubble's own fill instead of drawing a
+   bright accent border line (static bright lines risk OLED burn-in). */
+.msg.holding { border-color: var(--border); filter: brightness(1.4); }
 
 .toast {
   position: fixed;
@@ -368,16 +370,107 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 }
 
 .composer {
-  display: flex;
-  gap: 10px;
-  padding: 12px 16px;
-  padding-bottom: calc(12px + var(--safe-bottom));
-  border-top: 1px solid var(--border);
+  padding: 8px 16px;
+  padding-bottom: calc(8px + var(--safe-bottom));
   background: var(--panel);
-  align-items: flex-end;
+  position: relative;
 }
-.composer textarea { flex: 1; min-height: 44px; max-height: 40vh; resize: none; overflow-y: auto; }
-.composer .btn { min-height: 44px; }
+
+/* GPT-style rounded input box */
+.composer-box {
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background: var(--panel-2);
+  padding: 10px 12px 8px;
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.composer-box:focus-within { border-color: var(--muted); }
+.composer textarea {
+  flex: 1;
+  min-height: 28px;
+  max-height: 40vh;
+  resize: none;
+  overflow-y: auto;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 0;
+}
+.composer textarea:focus { border: none; outline: none; }
+.composer-row { display: flex; align-items: center; gap: 8px; }
+
+.composer-chip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 16px;
+  cursor: pointer;
+  max-width: 45%;
+  touch-action: manipulation;
+}
+.composer-chip:hover { background: rgba(255, 255, 255, 0.06); }
+.composer-chip .chip-label {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.composer-spacer { flex: 1; }
+
+.composer-send {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+.composer-send:disabled { opacity: 0.4; cursor: default; }
+
+/* Quick model / thinking popover */
+.composer-popover {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 16px;
+  right: 16px;
+  margin: 0 auto;
+  max-width: 868px;
+  z-index: 40;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  padding: 12px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.composer-popover[hidden] { display: none; }
+.composer-popover .popover-field {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
 
 /* ---------- Settings ---------- */
 .settings-tab { padding: 20px 28px calc(60px + var(--safe-bottom)); overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
@@ -459,9 +552,13 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 
   .main { width: 100%; }
   .message-list { padding: 12px; gap: 10px; }
-  .msg { max-width: 92%; padding: 10px 12px; }
-  .composer { padding: 10px 12px; padding-bottom: calc(10px + var(--safe-bottom)); gap: 8px; }
-  .composer .btn { padding: 10px 16px; }
+  .msg { padding: 10px 12px; }
+  .msg.user { max-width: 92%; }
+  .composer { padding: 8px 12px; padding-bottom: calc(8px + var(--safe-bottom)); }
+  .composer-box { border-radius: 22px; padding: 8px 10px 6px; }
+  .composer-chip { font-size: 12px; padding: 8px 10px; }
+  .composer-send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; font-size: 19px; }
+  .composer-popover { left: 12px; right: 12px; }
 
   .settings-tab { padding: 16px 16px calc(40px + var(--safe-bottom)); }
   .settings-grid { grid-template-columns: 1fr; gap: 12px; }

@@ -10,6 +10,12 @@ import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, stripPlan } from "../plan-parser.js";
 import { updateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
+import {
+  saveSettings,
+  normalizeProfiles,
+  activeProfile,
+  mirrorToActiveProfile,
+} from "../settings.js";
 
 let msgUnsub = null;
 let sessUnsub = null;
@@ -48,6 +54,100 @@ export function initChatView() {
   el.input.addEventListener("focus", () => {
     requestAnimationFrame(() => alignFieldToKeyboard(el.composer));
   });
+
+  initQuickControls();
+}
+
+// ---------- quick model / thinking chips (composer) ----------
+
+// Quick controls edit the live settings object and persist immediately, so
+// they stay in sync with the Settings tab (which re-reads state.settings).
+function initQuickControls() {
+  el.chipModel = document.getElementById("btn-model-chip");
+  el.chipModelLabel = document.getElementById("chip-model");
+  el.chipThinkingLabel = document.getElementById("chip-thinking");
+  el.popover = document.getElementById("composer-popover");
+  el.quickModel = document.getElementById("quick-model");
+  el.quickThinking = document.getElementById("quick-thinking");
+
+  el.chipModel.addEventListener("click", () => toggleQuickPopover());
+  el.chipThinking.addEventListener("click", () => toggleQuickPopover());
+
+  el.quickModel.addEventListener("change", async () => {
+    const s = state.settings;
+    if (!s) return;
+    s.modelId = el.quickModel.value.trim();
+    normalizeProfiles(s);
+    mirrorToActiveProfile(s);
+    refreshQuickChips();
+    try {
+      await saveSettings(s);
+      document.dispatchEvent(new CustomEvent("settings-changed"));
+    } catch (e) {
+      showTransientError("Save failed: " + e.message);
+    }
+  });
+
+  el.quickThinking.addEventListener("change", async () => {
+    const s = state.settings;
+    if (!s) return;
+    const v = el.quickThinking.value;
+    if (v === "off") {
+      s.reasoning = { ...s.reasoning, enabled: false };
+    } else if (v === "max_tokens") {
+      s.reasoning = { ...s.reasoning, enabled: true, mode: "max_tokens" };
+    } else {
+      s.reasoning = { ...s.reasoning, enabled: true, mode: "effort", effort: v };
+    }
+    normalizeProfiles(s);
+    mirrorToActiveProfile(s);
+    refreshQuickChips();
+    try {
+      await saveSettings(s);
+      document.dispatchEvent(new CustomEvent("settings-changed"));
+    } catch (e) {
+      showTransientError("Save failed: " + e.message);
+    }
+  });
+
+  // Close when tapping anywhere outside the popover and the chips.
+  document.addEventListener("click", (e) => {
+    if (el.popover.hidden) return;
+    if (el.popover.contains(e.target)) return;
+    if (el.chipModel.contains(e.target) || el.chipThinking.contains(e.target)) return;
+    el.popover.hidden = true;
+  });
+
+  document.addEventListener("settings-changed", refreshQuickChips);
+  refreshQuickChips();
+}
+
+function toggleQuickPopover() {
+  if (el.popover.hidden) {
+    const s = state.settings;
+    el.quickModel.value = s?.modelId ?? "";
+    el.quickThinking.value = quickThinkingValue(s);
+    el.popover.hidden = false;
+  } else {
+    el.popover.hidden = true;
+  }
+}
+
+function quickThinkingValue(s) {
+  const r = s?.reasoning;
+  if (!r?.enabled) return "off";
+  return r.mode === "max_tokens" ? "max_tokens" : r.effort ?? "medium";
+}
+
+function refreshQuickChips() {
+  const s = state.settings;
+  if (!s) return;
+  el.chipModelLabel.textContent = s.modelId || "Model not set";
+  const r = s.reasoning;
+  el.chipThinkingLabel.textContent =
+    !r?.enabled ? "Thinking: off"
+    : r.mode === "max_tokens" ? "Thinking: tokens"
+    : "Thinking: " + (r.effort ?? "medium");
 }
 
 export function setSession(sessionId) {

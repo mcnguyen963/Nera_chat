@@ -191,6 +191,7 @@ async function handleSaveSettings() {
   try {
     state.settings = collectGlobal();
     await saveSettings(state.settings);
+    document.dispatchEvent(new CustomEvent("settings-changed"));
     flashSaved("Saved ✓");
     fillSessionSection(); // plan injection text depends on settings only via session; cheap refresh
     refreshContextIndicator();
