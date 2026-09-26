@@ -1,5 +1,10 @@
 import { state } from "../state.js";
-import { saveSettings } from "../settings.js";
+import {
+  saveSettings,
+  normalizeProfiles,
+  activeProfile,
+  mirrorToActiveProfile,
+} from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator } from "./chat-view.js";
@@ -25,12 +30,19 @@ export function initSettingsView() {
   el.sessionTitle = document.getElementById("set-session-title");
   el.sessionPlan = document.getElementById("set-session-plan");
   el.saveBtn = document.getElementById("btn-save-settings");
+  el.profiles = document.getElementById("set-profiles");
+  el.profileName = document.getElementById("set-profile-name");
+  el.profileCopy = document.getElementById("btn-profile-copy");
+  el.profileDelete = document.getElementById("btn-profile-delete");
   el.saveSessionBtn = document.getElementById("btn-save-session");
   el.importBtn = document.getElementById("btn-import-st");
   el.importFile = document.getElementById("file-import-st");
   el.exportBtn = document.getElementById("btn-export-st");
 
   el.saveBtn.addEventListener("click", handleSaveSettings);
+  el.profiles.addEventListener("change", handleProfileSwitch);
+  el.profileCopy.addEventListener("click", handleProfileCopy);
+  el.profileDelete.addEventListener("click", handleProfileDelete);
   el.saveSessionBtn.addEventListener("click", handleSaveSession);
   el.importBtn.addEventListener("click", () => el.importFile.click());
   el.importFile.addEventListener("change", handleImport);
@@ -46,6 +58,7 @@ export function initSettingsView() {
 function fillGlobal() {
   const s = state.settings;
   if (!s) return;
+  fillProfileSelect();
   el.endpoint.value = s.endpoint ?? "";
   el.apikey.value = s.apiKey ?? "";
   el.model.value = s.modelId ?? "";
@@ -62,9 +75,24 @@ function fillGlobal() {
   el.summarizerPrompt.value = s.summarizerSystemPrompt ?? "";
 }
 
-function collectGlobal() {
+// ---------- connection profiles ----------
+
+function fillProfileSelect() {
+  const s = state.settings;
+  el.profiles.replaceChildren(
+    ...s.profiles.map((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.name;
+      return o;
+    })
+  );
+  el.profiles.value = s.activeProfileId;
+  el.profileName.value = activeProfile(s)?.name ?? "";
+}
+
+function collectConnection() {
   return {
-    ...state.settings,
     endpoint: el.endpoint.value.trim(),
     apiKey: el.apikey.value.trim(),
     modelId: el.model.value.trim(),
@@ -76,12 +104,87 @@ function collectGlobal() {
       effort: el.reasoningEffort.value,
       maxTokens: Number(el.reasoningMaxTokens.value) || 2000,
     },
+  };
+}
+
+// Persist the form's connection fields into the current profile, then switch
+// to the newly selected one and reload the form from it.
+async function handleProfileSwitch() {
+  const s = { ...state.settings, ...collectConnection() };
+  const cur = activeProfile(s);
+  cur.name = el.profileName.value.trim() || cur.name || "Default";
+  mirrorToActiveProfile(s);
+  s.activeProfileId = el.profiles.value;
+  normalizeProfiles(s);
+  state.settings = s;
+  fillGlobal();
+  try {
+    await saveSettings(s);
+  } catch (e) {
+    flashSaved("Save failed: " + e.message, true);
+  }
+}
+
+async function handleProfileCopy() {
+  const s = { ...state.settings, ...collectConnection() };
+  normalizeProfiles(s);
+  const cur = activeProfile(s);
+  cur.name = el.profileName.value.trim() || cur.name || "Default";
+  mirrorToActiveProfile(s);
+  const copy = {
+    ...structuredClone(cur),
+    id: "p" + Date.now().toString(36),
+    name: cur.name + " (copy)",
+  };
+  s.profiles.push(copy);
+  s.activeProfileId = copy.id;
+  state.settings = s;
+  fillGlobal();
+  try {
+    await saveSettings(s);
+    flashSaved("Profile copied ✓");
+  } catch (e) {
+    flashSaved("Save failed: " + e.message, true);
+  }
+}
+
+async function handleProfileDelete() {
+  const s = state.settings;
+  normalizeProfiles(s);
+  if (s.profiles.length <= 1) {
+    flashSaved("Can't delete the last profile", true);
+    return;
+  }
+  const cur = activeProfile(s);
+  if (!confirm(`Delete connection profile "${cur.name}"?`)) return;
+  s.profiles = s.profiles.filter((p) => p.id !== s.activeProfileId);
+  s.activeProfileId = s.profiles[0].id;
+  normalizeProfiles(s);
+  state.settings = s;
+  fillGlobal();
+  try {
+    await saveSettings(s);
+    flashSaved("Profile deleted ✓");
+  } catch (e) {
+    flashSaved("Save failed: " + e.message, true);
+  }
+}
+
+function collectGlobal() {
+  const s = {
+    ...state.settings,
+    ...collectConnection(),
     maxContextTokens: Number(el.maxContext.value) || 8000,
     autoSummaryThresholdPercent: Number(el.autoThreshold.value) || 70,
     keepRecentMessagesAfterSummary: Number(el.keepN.value) || 10,
     narratorSystemPrompt: el.narratorPrompt.value,
     summarizerSystemPrompt: el.summarizerPrompt.value,
   };
+  normalizeProfiles(s);
+  const cur = activeProfile(s);
+  cur.name = el.profileName.value.trim() || cur.name || "Default";
+  mirrorToActiveProfile(s);
+  return s;
 }
 
 async function handleSaveSettings() {

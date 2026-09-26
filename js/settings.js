@@ -54,6 +54,66 @@ function mergeDefaults(data) {
   };
 }
 
+// ---------- connection profiles ----------
+// A profile is a named, swappable LLM connection (endpoint, key, model, response
+// caps, reasoning). The flat top-level connection fields on settings always
+// mirror the ACTIVE profile, so chat code can keep reading settings.endpoint etc.
+// Context/summarization settings and prompts stay global (not per-profile).
+
+const PROFILE_CONNECTION_KEYS = [
+  "endpoint",
+  "apiKey",
+  "modelId",
+  "streaming",
+  "maxResponseTokens",
+];
+
+export function activeProfile(settings) {
+  return settings.profiles?.find((p) => p.id === settings.activeProfileId) ?? null;
+}
+
+// Copy the flat connection fields into the active profile.
+export function mirrorToActiveProfile(settings) {
+  const p = activeProfile(settings);
+  if (!p) return;
+  for (const k of PROFILE_CONNECTION_KEYS) p[k] = settings[k];
+  p.reasoning = structuredClone(settings.reasoning ?? DEFAULT_SETTINGS.reasoning);
+}
+
+// Copy the active profile's connection fields into the flat fields.
+export function mirrorFromActiveProfile(settings) {
+  const p = activeProfile(settings);
+  if (!p) return;
+  for (const k of PROFILE_CONNECTION_KEYS) {
+    if (p[k] !== undefined) settings[k] = p[k];
+  }
+  if (p.reasoning) {
+    settings.reasoning = {
+      ...structuredClone(DEFAULT_SETTINGS.reasoning),
+      ...p.reasoning,
+    };
+  }
+}
+
+// Guarantees: profiles array exists, activeProfileId points at a real profile,
+// and legacy settings (no profiles stored yet) are seeded from their flat fields.
+export function normalizeProfiles(settings) {
+  if (!Array.isArray(settings.profiles) || settings.profiles.length === 0) {
+    settings.profiles = [{ id: "default", name: "Default" }];
+  }
+  if (!settings.profiles.some((p) => p.id === settings.activeProfileId)) {
+    settings.activeProfileId = settings.profiles[0].id;
+  }
+  const p = activeProfile(settings);
+  const stored = p.endpoint !== undefined || p.modelId !== undefined || p.apiKey !== undefined;
+  if (stored) {
+    mirrorFromActiveProfile(settings);
+  } else {
+    mirrorToActiveProfile(settings);
+  }
+  return settings;
+}
+
 // Per-account settings: each signed-in user has their own doc at
 // users/{uid}/settings/current — covered by the per-user Firestore rules,
 // so no account can read another account's API key or config.
@@ -64,7 +124,7 @@ function userSettingsRef() {
 export async function loadSettings() {
   const ref = userSettingsRef();
   const snap = await getDoc(ref);
-  if (snap.exists()) return mergeDefaults(snap.data());
+  if (snap.exists()) return normalizeProfiles(mergeDefaults(snap.data()));
 
   // One-time migration: seed this account's settings from the legacy shared
   // /settings/global doc (falling back to defaults). Everything is then
@@ -72,7 +132,7 @@ export async function loadSettings() {
   let seed = structuredClone(DEFAULT_SETTINGS);
   try {
     const legacy = await getDoc(doc(db, "settings", "global"));
-    if (legacy.exists()) seed = mergeDefaults(legacy.data());
+    if (legacy.exists()) seed = normalizeProfiles(mergeDefaults(legacy.data()));
   } catch (e) {
     console.warn("Could not read legacy /settings/global (using defaults):", e);
   }

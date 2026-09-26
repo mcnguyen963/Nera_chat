@@ -87,6 +87,18 @@
         </div>
         <h2>Connection</h2>
         <div class="settings-grid">
+          <label>Profile
+            <div class="profile-row">
+              <select id="set-profiles"></select>
+              <button id="btn-profile-copy" class="btn small" type="button">Copy</button>
+              <button id="btn-profile-delete" class="btn small danger" type="button">Delete</button>
+            </div>
+          </label>
+          <label>Profile name
+            <input type="text" id="set-profile-name" />
+          </label>
+        </div>
+        <div class="settings-grid">
           <label>Endpoint URL
             <input type="text" id="set-endpoint" placeholder="https://openrouter.ai/api/v1/chat/completions" />
           </label>

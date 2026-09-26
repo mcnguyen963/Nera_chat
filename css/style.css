@@ -385,6 +385,9 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 .settings-backbar { display: none; }
 .settings-tab h2 { font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 .settings-tab h3 { font-size: 14px; color: var(--muted); margin: 18px 0 8px; }
+
+.profile-row { display: flex; gap: 8px; align-items: center; }
+.profile-row select { flex: 1; min-width: 0; }
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
