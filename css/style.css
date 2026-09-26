@@ -387,12 +387,14 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
 }
 .composer-box:focus-within { border-color: var(--muted); }
 .composer textarea {
-  flex: 1;
+  display: block;
+  width: 100%;
   min-height: 28px;
-  max-height: 40vh;
+  max-height: min(48vh, 288px);
   resize: none;
   overflow-y: auto;
   background: none;
@@ -444,15 +446,13 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 }
 .composer-send:disabled { opacity: 0.4; cursor: default; }
 
-/* Quick model / thinking popover */
+/* Quick model / thinking popover — anchored above the send button */
 .composer-popover {
   position: absolute;
-  bottom: calc(100% - 4px);
-  left: 16px;
-  right: 16px;
-  margin: 0 auto;
-  max-width: 868px;
+  bottom: calc(100% + 8px);
+  right: 0;
   z-index: 40;
+  width: min(360px, calc(100vw - 32px));
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -464,7 +464,7 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 }
 .composer-popover[hidden] { display: none; }
 .composer-popover .popover-field {
-  flex: 1 1 220px;
+  flex: 1 1 200px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -558,7 +558,6 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
   .composer-box { border-radius: 22px; padding: 8px 10px 6px; }
   .composer-chip { font-size: 12px; padding: 8px 10px; }
   .composer-send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; font-size: 19px; }
-  .composer-popover { left: 12px; right: 12px; }
 
   .settings-tab { padding: 16px 16px calc(40px + var(--safe-bottom)); }
   .settings-grid { grid-template-columns: 1fr; gap: 12px; }

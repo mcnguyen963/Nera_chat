@@ -40,12 +40,15 @@ export function initChatView() {
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
 
-  // Auto-grow composer: starts at one row, grows with content (clamped by CSS).
+  // Auto-grow composer: starts at one row, grows with content, capped by CSS
+  // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
   const autoGrow = () => {
     el.input.style.height = "auto";
+    el.input.style.height = Math.min(el.input.scrollHeight, el.input.clientHeight || el.input.scrollHeight) + "px";
     el.input.style.height = el.input.scrollHeight + "px";
   };
   el.input.addEventListener("input", autoGrow);
+  window.addEventListener("resize", autoGrow);
   autoGrow();
 
   // iOS keyboard: keep the composer right above the keyboard, not pushed far
@@ -65,13 +68,11 @@ export function initChatView() {
 function initQuickControls() {
   el.chipModel = document.getElementById("btn-model-chip");
   el.chipModelLabel = document.getElementById("chip-model");
-  el.chipThinkingLabel = document.getElementById("chip-thinking");
   el.popover = document.getElementById("composer-popover");
   el.quickModel = document.getElementById("quick-model");
   el.quickThinking = document.getElementById("quick-thinking");
 
   el.chipModel.addEventListener("click", () => toggleQuickPopover());
-  el.chipThinking.addEventListener("click", () => toggleQuickPopover());
 
   el.quickModel.addEventListener("change", async () => {
     const s = state.settings;
@@ -110,11 +111,11 @@ function initQuickControls() {
     }
   });
 
-  // Close when tapping anywhere outside the popover and the chips.
+  // Close when tapping anywhere outside the popover and the chip.
   document.addEventListener("click", (e) => {
     if (el.popover.hidden) return;
     if (el.popover.contains(e.target)) return;
-    if (el.chipModel.contains(e.target) || el.chipThinking.contains(e.target)) return;
+    if (el.chipModel.contains(e.target)) return;
     el.popover.hidden = true;
   });
 
@@ -143,11 +144,6 @@ function refreshQuickChips() {
   const s = state.settings;
   if (!s) return;
   el.chipModelLabel.textContent = s.modelId || "Model not set";
-  const r = s.reasoning;
-  el.chipThinkingLabel.textContent =
-    !r?.enabled ? "Thinking: off"
-    : r.mode === "max_tokens" ? "Thinking: tokens"
-    : "Thinking: " + (r.effort ?? "medium");
 }
 
 export function setSession(sessionId) {
