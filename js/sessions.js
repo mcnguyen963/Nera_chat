@@ -74,3 +74,35 @@ export function subscribeSessions(callback, onError) {
     onError
   );
 }
+
+// Duplicate a session: copies the session doc (title, long-term plan, breakpoint,
+// summary pointer — i.e. all its "settings") and every message into a new session.
+// Message docs are copied with their ORIGINAL ids and orders, so
+// activeSummaryMessageId and breakpointOrder keep pointing at the right messages.
+export async function duplicateSession(sourceId) {
+  const source = await getSession(sourceId);
+  if (!source) throw new Error("Session not found.");
+  const msgsSnap = await getDocs(
+    collection(db, "users", currentUid(), "sessions", sourceId, "messages")
+  );
+
+  const id = newId("sess");
+  const { id: _omit, createdAt: _c, updatedAt: _u, ...fields } = source;
+  await setDoc(sessionDoc(id), {
+    ...fields,
+    title: (source.title || "Session") + " (copy)",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    nextOrder: source.nextOrder ?? 0,
+  });
+
+  const docs = msgsSnap.docs;
+  for (let i = 0; i < docs.length; i += 450) {
+    const batch = writeBatch(db);
+    docs.slice(i, i + 450).forEach((d) => {
+      batch.set(doc(db, "users", currentUid(), "sessions", id, "messages", d.id), d.data());
+    });
+    await batch.commit();
+  }
+  return id;
+}

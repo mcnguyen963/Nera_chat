@@ -1,5 +1,5 @@
 import { state } from "../state.js";
-import { subscribeSessions, createSession, renameSession, deleteSession } from "../sessions.js";
+import { subscribeSessions, createSession, renameSession, deleteSession, duplicateSession } from "../sessions.js";
 import { logout, currentUserInfo } from "../auth.js";
 import { setSession } from "./chat-view.js";
 
@@ -91,7 +91,27 @@ function render(listEl, sessions) {
       await deleteSession(s.id);
     });
 
-    actions.append(renameBtn, delBtn);
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy";
+    copyBtn.className = "cpy";
+    copyBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      copyBtn.disabled = true;
+      copyBtn.textContent = "…";
+      try {
+        const newId = await duplicateSession(s.id);
+        // Jump straight into the fresh copy (same event the importer uses).
+        document.dispatchEvent(new CustomEvent("session-imported", { detail: newId }));
+        document.dispatchEvent(new CustomEvent("sidebar:close"));
+      } catch (err) {
+        alert("Copy failed: " + (err.message || err));
+      } finally {
+        copyBtn.disabled = false;
+        copyBtn.textContent = "Copy";
+      }
+    });
+
+    actions.append(renameBtn, copyBtn, delBtn);
     li.append(title, actions);
     li.addEventListener("click", () => {
       setSession(s.id);
