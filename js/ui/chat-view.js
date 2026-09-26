@@ -140,6 +140,7 @@ function renderMessage(m) {
   content.textContent = m.content;
   wrap.appendChild(content);
 
+  attachHoldToCopy(wrap, () => m.content);
   return wrap;
 }
 
@@ -201,6 +202,70 @@ function startEdit(m, wrap) {
   editingState = { id: m.id, ta };
   ta.focus();
   alignFieldToKeyboard(ta);
+}
+
+// ---------- hold-to-copy ----------
+
+// Long-press (mobile) / mouse-hold on a message copies its text to the
+// clipboard and shows a toast. A >10px finger movement (scrolling) cancels it.
+function attachHoldToCopy(target, getText) {
+  const HOLD_MS = 500;
+  let timer = null;
+  let startX = 0, startY = 0;
+
+  const cancel = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    target.classList.remove("holding");
+  };
+
+  target.addEventListener("contextmenu", (e) => e.preventDefault());
+  target.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // Don't hijack presses on the inline controls (Edit/Delete/Regenerate).
+    if (e.target.closest("button, textarea, input, select, a, details")) return;
+    startX = e.clientX; startY = e.clientY;
+    target.classList.add("holding");
+    timer = setTimeout(async () => {
+      timer = null;
+      target.classList.remove("holding");
+      await copyText(getText());
+    }, HOLD_MS);
+  });
+  target.addEventListener("pointermove", (e) => {
+    if (!timer) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
+  });
+  target.addEventListener("pointerup", cancel);
+  target.addEventListener("pointercancel", cancel);
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for non-secure contexts / older iOS Safari.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0;";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    showToast("Copied to clipboard", true);
+  } catch {
+    showToast("Copy failed", false);
+  }
+}
+
+function showToast(text, ok) {
+  document.querySelector(".toast")?.remove();
+  const t = document.createElement("div");
+  t.className = "toast" + (ok ? "" : " error");
+  t.textContent = text;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2000);
 }
 
 // ---------- context indicator ----------
