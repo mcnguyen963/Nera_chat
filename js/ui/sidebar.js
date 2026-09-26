@@ -8,6 +8,7 @@ export function initSidebar() {
   const newBtn = document.getElementById("btn-new-session");
   const logoutBtn = document.getElementById("btn-logout");
   const userEl = document.getElementById("current-user");
+  const titleEl = document.getElementById("top-bar-title");
 
   const me = currentUserInfo();
   if (me) userEl.textContent = `${me.email ?? "(no email)"} · ${me.uid.slice(0, 8)}`;
@@ -26,6 +27,8 @@ export function initSidebar() {
   subscribeSessions(
     (sessions) => {
       render(listEl, sessions);
+      const active = sessions.find((s) => s.id === state.sessionId);
+      if (titleEl) titleEl.textContent = active?.title || "Sessions";
       if (sessions.length === 0) {
         const li = document.createElement("li");
         li.className = "muted";
@@ -90,7 +93,11 @@ function render(listEl, sessions) {
 
     actions.append(renameBtn, delBtn);
     li.append(title, actions);
-    li.addEventListener("click", () => setSession(s.id));
+    li.addEventListener("click", () => {
+      setSession(s.id);
+      if (titleEl) titleEl.textContent = s.title || "Sessions";
+      document.dispatchEvent(new CustomEvent("sidebar:close"));
+    });
     listEl.appendChild(li);
   }
 }

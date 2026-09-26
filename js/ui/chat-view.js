@@ -32,6 +32,14 @@ export function initChatView() {
 
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
+
+  // Auto-grow composer: starts at one row, grows with content (clamped by CSS).
+  const autoGrow = () => {
+    el.input.style.height = "auto";
+    el.input.style.height = el.input.scrollHeight + "px";
+  };
+  el.input.addEventListener("input", autoGrow);
+  autoGrow();
 }
 
 export function setSession(sessionId) {
@@ -70,10 +78,11 @@ let lastMessages = [];
 
 function renderMessages(msgs) {
   lastMessages = msgs;
+  const sticky = isNearBottom();
   el.list.innerHTML = "";
   for (const m of msgs) el.list.appendChild(renderMessage(m));
   if (streamState) el.list.appendChild(streamState.wrap);
-  scrollToEnd();
+  if (sticky) scrollToEnd();
 }
 
 function renderMessage(m) {
@@ -194,6 +203,7 @@ async function handleSend(e) {
     return;
   }
   el.input.value = "";
+  el.input.style.height = "auto";
   setBusy(true);
   try {
     const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
@@ -314,6 +324,7 @@ function startStreamUI() {
 
 function appendStream(kind, text) {
   if (!streamState) return;
+  const sticky = isNearBottom();
   if (kind === "content") {
     streamState.contentText += text;
     streamState.content.textContent = streamState.contentText;
@@ -321,7 +332,7 @@ function appendStream(kind, text) {
     streamState.thinkingText += text;
     streamState.thinking.querySelector(".thinking-body").textContent = streamState.thinkingText;
   }
-  scrollToEnd();
+  if (sticky) scrollToEnd();
 }
 
 // ---------- helpers ----------
@@ -332,6 +343,11 @@ function setBusy(b) {
   el.summarizeBtn.disabled = b;
 }
 
+// Only keep the list pinned to the bottom while the user hasn't scrolled up.
+function isNearBottom() {
+  return el.list.scrollHeight - el.list.scrollTop - el.list.clientHeight < 60;
+}
+
 function scrollToEnd() {
   el.list.scrollTop = el.list.scrollHeight;
 }
@@ -339,6 +355,7 @@ function scrollToEnd() {
 function setStatus(text, autoHide = false) {
   let statusEl = el.list.querySelector(".status-line");
   if (!text) { statusEl?.remove(); return; }
+  const sticky = isNearBottom();
   if (!statusEl) {
     statusEl = document.createElement("div");
     statusEl.className = "status-line";
@@ -346,14 +363,15 @@ function setStatus(text, autoHide = false) {
   }
   statusEl.textContent = text;
   if (autoHide) setTimeout(() => statusEl?.remove(), 4000);
-  scrollToEnd();
+  if (sticky) scrollToEnd();
 }
 
 function showTransientError(text) {
+  const sticky = isNearBottom();
   const div = document.createElement("div");
   div.className = "msg error";
   div.textContent = "⚠ " + text;
   el.list.appendChild(div);
-  scrollToEnd();
+  if (sticky) scrollToEnd();
   setTimeout(() => div.remove(), 10000);
 }

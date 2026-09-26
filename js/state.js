@@ -1,5 +1,5 @@
 export const state = {
-  settings: null,   // cached /settings/global
+  settings: null,   // cached per-account settings (users/{uid}/settings/current)
   sessionId: null,  // active session id
   busy: false,      // a request/stream/summarization is in flight
 };

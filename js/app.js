@@ -14,9 +14,35 @@ const el = {
   tabs: document.querySelectorAll(".tab"),
   chatTab: document.getElementById("chat-tab"),
   settingsTab: document.getElementById("settings-tab"),
+  sidebarToggle: document.getElementById("btn-sidebar-toggle"),
+  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
 };
 
 let appInitialized = false;
+
+// Keep the app at the *visual* viewport height so the iOS keyboard never
+// hides the composer (100dvh alone is unreliable on Safari).
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const updateAppHeight = () =>
+    document.documentElement.style.setProperty("--app-height", vv.height + "px");
+  vv.addEventListener("resize", updateAppHeight);
+  vv.addEventListener("visualViewportResize", updateAppHeight);
+  updateAppHeight();
+}
+
+// ---------- mobile sidebar drawer ----------
+function setSidebarOpen(open) {
+  document.body.classList.toggle("sidebar-open", open);
+  el.app?.classList.toggle("sidebar-open", open);
+  if (el.sidebarBackdrop) el.sidebarBackdrop.hidden = !open;
+}
+
+el.sidebarToggle?.addEventListener("click", () =>
+  setSidebarOpen(!document.body.classList.contains("sidebar-open"))
+);
+el.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false));
+document.addEventListener("sidebar:close", () => setSidebarOpen(false));
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
 initAuth((user) => {
@@ -67,7 +93,7 @@ async function enterApp() {
     state.settings = await loadSettings();
   } catch (e) {
     console.error("Failed to load settings:", e);
-    el.loginNote.textContent = "Warning: could not load /settings/global — check Firestore rules.";
+    el.loginNote.textContent = "Warning: could not load your settings — check Firestore rules.";
     el.loginNote.style.color = "var(--danger)";
     // Still enter; settings-view will fill with defaults once available.
     state.settings = null;
@@ -89,6 +115,7 @@ function wireTabs() {
         // Re-fill the This-Session section each time the tab opens.
         document.dispatchEvent(new CustomEvent("session-changed"));
       }
+      document.dispatchEvent(new CustomEvent("sidebar:close"));
     });
   });
 }

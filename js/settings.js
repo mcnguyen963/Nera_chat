@@ -1,5 +1,10 @@
-import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import {
+  doc,
+  getDoc,
+  setDoc,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
+import { currentUid } from "./auth.js";
 
 export const DEFAULT_SETTINGS = {
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
@@ -11,9 +16,9 @@ export const DEFAULT_SETTINGS = {
     enabled: false,
     mode: "effort", // "effort" | "max_tokens" — mutually exclusive OpenRouter controls
     effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "none"
-    maxTokens: 2000,
+    maxTokens: 20000,
   },
-  maxContextTokens: 8000,
+  maxContextTokens: 120000,
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
   narratorSystemPrompt:
@@ -33,20 +38,39 @@ function mergeDefaults(data) {
   return {
     ...structuredClone(DEFAULT_SETTINGS),
     ...data,
-    reasoning: { ...structuredClone(DEFAULT_SETTINGS.reasoning), ...(data?.reasoning ?? {}) },
+    reasoning: {
+      ...structuredClone(DEFAULT_SETTINGS.reasoning),
+      ...(data?.reasoning ?? {}),
+    },
   };
 }
 
+// Per-account settings: each signed-in user has their own doc at
+// users/{uid}/settings/current — covered by the per-user Firestore rules,
+// so no account can read another account's API key or config.
+function userSettingsRef() {
+  return doc(db, "users", currentUid(), "settings", "current");
+}
+
 export async function loadSettings() {
-  const snap = await getDoc(doc(db, "settings", "global"));
-  if (!snap.exists()) {
-    const initial = structuredClone(DEFAULT_SETTINGS);
-    await setDoc(doc(db, "settings", "global"), initial);
-    return initial;
+  const ref = userSettingsRef();
+  const snap = await getDoc(ref);
+  if (snap.exists()) return mergeDefaults(snap.data());
+
+  // One-time migration: seed this account's settings from the legacy shared
+  // /settings/global doc (falling back to defaults). Everything is then
+  // written to (and only ever read from) the per-user doc.
+  let seed = structuredClone(DEFAULT_SETTINGS);
+  try {
+    const legacy = await getDoc(doc(db, "settings", "global"));
+    if (legacy.exists()) seed = mergeDefaults(legacy.data());
+  } catch (e) {
+    console.warn("Could not read legacy /settings/global (using defaults):", e);
   }
-  return mergeDefaults(snap.data());
+  await setDoc(ref, seed);
+  return seed;
 }
 
 export async function saveSettings(settings) {
-  await setDoc(doc(db, "settings", "global"), settings);
+  await setDoc(userSettingsRef(), settings);
 }

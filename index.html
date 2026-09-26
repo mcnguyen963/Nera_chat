@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Roleplay Chat</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -38,11 +42,19 @@
       </div>
     </aside>
 
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
     <main class="main">
-      <nav class="tab-bar">
-        <button class="tab active" data-tab="chat">Chat</button>
-        <button class="tab" data-tab="settings">Settings</button>
-      </nav>
+      <header class="top-bar">
+        <button id="btn-sidebar-toggle" class="btn icon-btn" aria-label="Toggle sessions menu">
+          <span class="hamburger"><span></span><span></span><span></span></span>
+        </button>
+        <span id="top-bar-title" class="top-bar-title">Sessions</span>
+        <nav class="tab-bar">
+          <button class="tab active" data-tab="chat">Chat</button>
+          <button class="tab" data-tab="settings">Settings</button>
+        </nav>
+      </header>
 
       <!-- Chat tab -->
       <section id="chat-tab" class="chat-tab">
@@ -55,7 +67,7 @@
         </div>
         <div id="message-list" class="message-list"></div>
         <form id="composer" class="composer">
-          <textarea id="chat-input" placeholder="Write your turn… (Enter to send, Shift+Enter for newline)" rows="2"></textarea>
+          <textarea id="chat-input" placeholder="Write your turn…" rows="1"></textarea>
           <button type="submit" id="btn-send" class="btn primary">Send</button>
         </form>
       </section>
@@ -116,7 +128,7 @@
           </label>
         </div>
 
-        <h2>Prompts (global)</h2>
+        <h2>Prompts</h2>
         <div class="settings-prompts">
           <label>Narrator system prompt
             <textarea id="set-narrator-prompt" rows="8"></textarea>
