@@ -210,11 +210,13 @@ function startEdit(m, wrap) {
 // clipboard and shows a toast. A >10px finger movement (scrolling) cancels it.
 function attachHoldToCopy(target, getText) {
   const HOLD_MS = 500;
-  let timer = null;
-  let startX = 0, startY = 0;
+  let holding = false;   // press in progress
+  let eligible = false;  // held ≥ HOLD_MS without scrolling
+  let startX = 0, startY = 0, startT = 0;
 
   const cancel = () => {
-    if (timer) { clearTimeout(timer); timer = null; }
+    holding = false;
+    eligible = false;
     target.classList.remove("holding");
   };
 
@@ -223,19 +225,26 @@ function attachHoldToCopy(target, getText) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     // Don't hijack presses on the inline controls (Edit/Delete/Regenerate).
     if (e.target.closest("button, textarea, input, select, a, details")) return;
-    startX = e.clientX; startY = e.clientY;
+    startX = e.clientX; startY = e.clientY; startT = performance.now();
+    holding = true;
     target.classList.add("holding");
-    timer = setTimeout(async () => {
-      timer = null;
-      target.classList.remove("holding");
-      await copyText(getText());
+    // iOS WebKit (Safari AND Chrome-on-iOS) drops the user gesture inside
+    // setTimeout, so the clipboard write must NOT happen here — the timer
+    // only marks the hold as long enough. The copy runs in pointerup.
+    setTimeout(() => {
+      if (holding) eligible = true;
     }, HOLD_MS);
   });
   target.addEventListener("pointermove", (e) => {
-    if (!timer) return;
-    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
+    if (holding && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
   });
-  target.addEventListener("pointerup", cancel);
+  target.addEventListener("pointerup", () => {
+    // Copy synchronously inside this gesture handler — the only way an
+    // iOS clipboard write succeeds.
+    const held = holding && eligible;
+    cancel();
+    if (held) copyText(getText());
+  });
   target.addEventListener("pointercancel", cancel);
 }
 
@@ -244,12 +253,18 @@ async function copyText(text) {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
     } else {
-      // Fallback for non-secure contexts / older iOS Safari.
+      // Fallback for non-secure contexts / older iOS WebKit. The focus +
+      // explicit selection is required for execCommand('copy') on iOS;
+      // readonly + contentEditable keeps the keyboard from popping up.
       const ta = document.createElement("textarea");
       ta.value = text;
-      ta.style.cssText = "position:fixed;opacity:0;";
+      ta.readOnly = true;
+      ta.contentEditable = true;
+      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
       document.body.appendChild(ta);
+      ta.focus();
       ta.select();
+      ta.setSelectionRange(0, ta.value.length);
       document.execCommand("copy");
       ta.remove();
     }
