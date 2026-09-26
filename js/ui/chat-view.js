@@ -100,7 +100,7 @@ function renderMessage(m) {
   const actions = document.createElement("span");
   actions.className = "msg-actions";
   if (m.role === "user" || m.role === "assistant") {
-    actions.appendChild(actionBtn("Edit", () => startEdit(m, wrap)));
+    actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (!confirm("Delete this message permanently?")) return;
@@ -128,10 +128,12 @@ function renderMessage(m) {
 }
 
 function actionBtn(text, cls, onClick) {
+  // Tolerate a 2-arg call: actionBtn("Edit", () => …) — callback shifts into `cls`.
+  if (typeof cls === "function") { onClick = cls; cls = null; }
   const b = document.createElement("button");
   b.textContent = text;
   if (cls) b.className = cls;
-  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+  b.addEventListener("click", (e) => { e.stopPropagation(); onClick?.(); });
   return b;
 }
 

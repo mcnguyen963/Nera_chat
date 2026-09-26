@@ -15,7 +15,7 @@ export const DEFAULT_SETTINGS = {
   reasoning: {
     enabled: false,
     mode: "effort", // "effort" | "max_tokens" — mutually exclusive OpenRouter controls
-    effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "none"
+    effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
     maxTokens: 20000,
   },
   maxContextTokens: 120000,
