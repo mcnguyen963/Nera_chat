@@ -327,12 +327,6 @@ async function runAssistantTurn(opts = {}) {
   if (!settings) return;
   setBusy(true);
   try {
-    if (opts.upToOrder !== undefined || opts.overwriteId) {
-      console.log(
-        `[LLM DEBUG] Regenerate: upToOrder=${opts.upToOrder} overwriteId=${opts.overwriteId} breakpointOrder=${session.breakpointOrder ?? 0}`
-      );
-    }
-    // Uses the snapshot-listener cache — no Firestore reads.
     const { apiMessages } = await buildContextForRequest(session, settings, opts);
     startStreamUI();
 

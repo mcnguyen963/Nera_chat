@@ -21,28 +21,6 @@ export function buildRequestBody(settings, messages) {
   return body;
 }
 
-function debugLogMessages(messages, modelId) {
-  console.groupCollapsed(
-    `%c[LLM DEBUG] ${messages.length} messages sent to model (${modelId})`,
-    "color:#0a84ff;font-weight:bold"
-  );
-  messages.forEach((m, i) => {
-    console.groupCollapsed(`#${i} [${m.role}] (${m.content.length} chars)`);
-    console.log(m.content);
-    console.groupEnd();
-  });
-  console.table(
-    messages.map((m, i) => ({
-      i,
-      role: m.role,
-      chars: m.content.length,
-      head: m.content.slice(0, 80).replace(/\n/g, " "),
-      tail: m.content.slice(-80).replace(/\n/g, " "),
-    }))
-  );
-  console.groupEnd();
-}
-
 function headers(settings) {
   return {
     "Content-Type": "application/json",
@@ -53,12 +31,6 @@ function headers(settings) {
 export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
-
-  const lastApi = messages[messages.length - 1];
-  console.log(
-    `[LLM] ${messages.length} msgs -> ${settings.modelId} | last: [${lastApi?.role}] "${(lastApi?.content ?? "").slice(0, 120).replace(/\n/g, " ")}"`
-  );
-  debugLogMessages(messages, settings.modelId); // expanded view (fires BEFORE any request/response)
 
   if (!settings.streaming) {
     return nonStreamedCompletion({ settings, messages, signal });
