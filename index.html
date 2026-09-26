@@ -84,23 +84,23 @@
               <span class="composer-spacer"></span>
               <button type="submit" id="btn-send" class="composer-send" aria-label="Send">↑</button>
             </div>
-          </div>
-          <div id="composer-popover" class="composer-popover" hidden>
-            <label class="popover-field">Model ID
-              <input type="text" id="quick-model" placeholder="e.g. anthropic/claude-3.5-sonnet" autocomplete="off" />
-            </label>
-            <label class="popover-field">Thinking
-              <select id="quick-thinking">
-                <option value="off">Off</option>
-                <option value="minimal">minimal</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-                <option value="xhigh">xhigh</option>
-                <option value="max">max</option>
-                <option value="max_tokens">max_tokens mode</option>
-              </select>
-            </label>
+            <div id="composer-popover" class="composer-popover" hidden>
+              <label class="popover-field">Connection profile
+                <select id="quick-profile"></select>
+              </label>
+              <label class="popover-field">Thinking
+                <select id="quick-thinking">
+                  <option value="off">Off</option>
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                  <option value="max">max</option>
+                  <option value="max_tokens">max_tokens mode</option>
+                </select>
+              </label>
+            </div>
           </div>
         </form>
       </section>

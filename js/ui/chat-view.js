@@ -14,7 +14,6 @@ import {
   saveSettings,
   normalizeProfiles,
   activeProfile,
-  mirrorToActiveProfile,
 } from "../settings.js";
 
 let msgUnsub = null;
@@ -69,17 +68,16 @@ function initQuickControls() {
   el.chipModel = document.getElementById("btn-model-chip");
   el.chipModelLabel = document.getElementById("chip-model");
   el.popover = document.getElementById("composer-popover");
-  el.quickModel = document.getElementById("quick-model");
+  el.quickProfile = document.getElementById("quick-profile");
   el.quickThinking = document.getElementById("quick-thinking");
 
   el.chipModel.addEventListener("click", () => toggleQuickPopover());
 
-  el.quickModel.addEventListener("change", async () => {
+  el.quickProfile.addEventListener("change", async () => {
     const s = state.settings;
     if (!s) return;
-    s.modelId = el.quickModel.value.trim();
-    normalizeProfiles(s);
-    mirrorToActiveProfile(s);
+    s.activeProfileId = el.quickProfile.value;
+    normalizeProfiles(s); // mirrors the chosen profile's connection fields
     refreshQuickChips();
     try {
       await saveSettings(s);
@@ -126,12 +124,25 @@ function initQuickControls() {
 function toggleQuickPopover() {
   if (el.popover.hidden) {
     const s = state.settings;
-    el.quickModel.value = s?.modelId ?? "";
+    if (s) normalizeProfiles(s);
+    fillQuickProfileSelect(s);
     el.quickThinking.value = quickThinkingValue(s);
     el.popover.hidden = false;
   } else {
     el.popover.hidden = true;
   }
+}
+
+function fillQuickProfileSelect(s) {
+  el.quickProfile.replaceChildren(
+    ...s.profiles.map((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.name;
+      return o;
+    })
+  );
+  el.quickProfile.value = s.activeProfileId;
 }
 
 function quickThinkingValue(s) {
@@ -143,7 +154,11 @@ function quickThinkingValue(s) {
 function refreshQuickChips() {
   const s = state.settings;
   if (!s) return;
-  el.chipModelLabel.textContent = s.modelId || "Model not set";
+  normalizeProfiles(s);
+  const p = activeProfile(s);
+  el.chipModelLabel.textContent = p?.name
+    ? `${p.name} · ${s.modelId || "no model"}`
+    : s.modelId || "Model not set";
 }
 
 export function setSession(sessionId) {
