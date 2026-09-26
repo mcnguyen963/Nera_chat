@@ -21,14 +21,23 @@ const el = {
 let appInitialized = false;
 
 // Keep the app at the *visual* viewport height so the iOS keyboard never
-// hides the composer (100dvh alone is unreliable on Safari).
+// hides the composer (100dvh alone is unreliable on iOS). iOS also pushes
+// the whole page up when an input is focused; undo that push so the app
+// stays glued to the top of the keyboard instead of floating above it.
 if (window.visualViewport) {
   const vv = window.visualViewport;
-  const updateAppHeight = () =>
+  const syncViewport = () => {
     document.documentElement.style.setProperty("--app-height", vv.height + "px");
-  vv.addEventListener("resize", updateAppHeight);
-  vv.addEventListener("visualViewportResize", updateAppHeight);
-  updateAppHeight();
+    // While pinch-zoomed, panning the visual viewport is intentional.
+    if (vv.scale === 1 && (window.scrollX !== 0 || window.scrollY !== 0)) {
+      window.scrollTo(0, 0);
+    }
+  };
+  vv.addEventListener("resize", syncViewport);
+  vv.addEventListener("scroll", syncViewport);
+  // Element scrolls don't fire this; only the document scroll does.
+  window.addEventListener("scroll", syncViewport, { passive: true });
+  syncViewport();
 }
 
 // ---------- mobile sidebar drawer ----------

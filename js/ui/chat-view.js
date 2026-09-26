@@ -17,6 +17,7 @@ let session = null;      // latest snapshot of the active session doc
 let streamState = null;  // live streaming UI handle
 let busy = false;
 let indicatorRun = 0;
+let editingState = null; // { id, ta } while a message is being edited inline
 
 const el = {};
 
@@ -40,6 +41,13 @@ export function initChatView() {
   };
   el.input.addEventListener("input", autoGrow);
   autoGrow();
+
+  // iOS keyboard: keep the composer right above the keyboard, not pushed far
+  // above it (iOS auto-scrolls the window on focus; app.js cancels that, and
+  // this compensates inside the list if the user was scrolled deep).
+  el.input.addEventListener("focus", () => {
+    requestAnimationFrame(() => alignFieldToKeyboard(el.composer));
+  });
 }
 
 export function setSession(sessionId) {
@@ -49,6 +57,7 @@ export function setSession(sessionId) {
   state.sessionId = sessionId;
   session = null;
   streamState = null;
+  editingState = null;
   el.list.innerHTML = "";
   if (!sessionId) return;
 
@@ -78,6 +87,13 @@ let lastMessages = [];
 
 function renderMessages(msgs) {
   lastMessages = msgs;
+  if (editingState) {
+    // A Firestore snapshot must never destroy the open edit textarea (it
+    // would wipe the user's in-progress text). The fresh data is already
+    // cached in lastMessages and is rendered on Save/Cancel.
+    if (msgs.some((m) => m.id === editingState.id)) return;
+    editingState = null; // the edited message was deleted remotely
+  }
   const sticky = isNearBottom();
   el.list.innerHTML = "";
   for (const m of msgs) el.list.appendChild(renderMessage(m));
@@ -152,25 +168,39 @@ function buildThinking(text, streaming) {
 
 function startEdit(m, wrap) {
   const contentEl = wrap.querySelector(".msg-content");
-  if (!contentEl) return;
+  if (!contentEl || editingState) return; // one edit at a time
   const ta = document.createElement("textarea");
   ta.value = m.content;
   ta.rows = Math.max(2, Math.min(20, m.content.split("\n").length + 1));
   ta.style.width = "100%";
+  ta.style.maxHeight = "40vh"; // stay within the area above the keyboard
 
   const bar = document.createElement("div");
   bar.style.cssText = "display:flex;gap:8px;margin-top:6px;";
+  const finish = () => {
+    editingState = null;
+    renderMessages(lastMessages);
+  };
   const save = actionBtn("Save", "small", async () => {
+    const text = ta.value;
+    editingState = null; // let the snapshot re-render the edited message
     try {
-      await messagesApi.editMessage(state.sessionId, m.id, ta.value);
-    } catch (e) { showTransientError(e.message); }
+      await messagesApi.editMessage(state.sessionId, m.id, text);
+      renderMessages(lastMessages); // in case the snapshot hasn't landed yet
+    } catch (e) {
+      // Keep the textarea (and the render lock) so the text isn't lost.
+      editingState = { id: m.id, ta };
+      showTransientError(e.message);
+    }
   });
-  const cancel = actionBtn("Cancel", "small", () => renderMessages(lastMessages));
+  const cancel = actionBtn("Cancel", "small", finish);
   save.classList.add("btn"); cancel.classList.add("btn");
   bar.append(save, cancel);
 
   contentEl.replaceWith(ta, bar);
+  editingState = { id: m.id, ta };
   ta.focus();
+  alignFieldToKeyboard(ta);
 }
 
 // ---------- context indicator ----------
@@ -352,6 +382,31 @@ function isNearBottom() {
 
 function scrollToEnd() {
   el.list.scrollTop = el.list.scrollHeight;
+}
+
+// Scroll the inner message list (never the window) so the field's bottom edge
+// sits just above the iOS keyboard. Runs over a few frames because the
+// keyboard (and thus visualViewport) animates in after focus.
+function alignFieldToKeyboard(field) {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  let frames = 0;
+  const tick = () => {
+    const keyboardTop = vv.offsetTop + vv.height; // viewport-Y of the keyboard
+    const rect = field.getBoundingClientRect();
+    if (rect.bottom > keyboardTop) {
+      // Element extends under the keyboard: scroll the list up by the overlap.
+      el.list.scrollTop += rect.bottom - keyboardTop + 8;
+    } else if (rect.bottom < keyboardTop - vv.height * 0.45) {
+      // Element floats far above the keyboard: walk it back down.
+      el.list.scrollTop -= Math.min(
+        keyboardTop - rect.bottom - vv.height * 0.45,
+        el.list.scrollTop
+      );
+    }
+    if (++frames < 10) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 
 function setStatus(text, autoHide = false) {
