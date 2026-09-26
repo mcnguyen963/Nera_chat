@@ -54,14 +54,6 @@
           <button class="tab active" data-tab="chat">Chat</button>
           <button class="tab" data-tab="settings">Settings</button>
         </nav>
-        <div class="top-menu-wrap">
-          <button id="btn-top-menu" class="btn small top-menu-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
-          <div id="top-menu" class="top-menu" hidden>
-            <button class="top-menu-item" data-action="sessions">Sessions</button>
-            <button class="top-menu-item" data-action="chat">Chat</button>
-            <button class="top-menu-item" data-action="settings">Settings</button>
-          </div>
-        </div>
       </header>
 
       <!-- Chat tab -->
@@ -72,6 +64,14 @@
             <span id="context-label" class="muted">—</span>
           </div>
           <button id="btn-summarize" class="btn small">Summarize</button>
+          <div class="top-menu-wrap">
+            <button id="btn-top-menu" class="btn small top-menu-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
+            <div id="top-menu" class="top-menu" hidden>
+              <button class="top-menu-item" data-action="sessions">Sessions</button>
+              <button class="top-menu-item" data-action="chat">Chat</button>
+              <button class="top-menu-item" data-action="settings">Settings</button>
+            </div>
+          </div>
         </div>
         <div id="message-list" class="message-list"></div>
         <form id="composer" class="composer">
