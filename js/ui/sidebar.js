@@ -22,6 +22,14 @@ export function initSidebar() {
   subscribeSessions(
     (sessions) => {
       render(listEl, sessions);
+      if (sessions.length === 0) {
+        const li = document.createElement("li");
+        li.className = "muted";
+        li.style.padding = "10px 12px";
+        li.textContent = "No sessions yet — use + New or Settings → Import.";
+        listEl.appendChild(li);
+        return;
+      }
       // Auto-select the first session if none is active or the active one vanished.
       if (!state.sessionId && sessions.length > 0) {
         setSession(sessions[0].id);
@@ -29,7 +37,15 @@ export function initSidebar() {
         setSession(null);
       }
     },
-    (err) => console.error("Sessions listener error:", err)
+    (err) => {
+      console.error("Sessions listener error:", err);
+      listEl.innerHTML = "";
+      const li = document.createElement("li");
+      li.className = "error-text";
+      li.style.padding = "10px 12px";
+      li.textContent = "Error loading sessions: " + (err.message || err.code || err);
+      listEl.appendChild(li);
+    }
   );
 }
 
