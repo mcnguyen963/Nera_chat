@@ -8,7 +8,7 @@ import { buildContextForRequest, computeContextUsage } from "../context-builder.
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, stripPlan } from "../plan-parser.js";
-import { getSession, updateSession } from "../sessions.js";
+import { updateSession } from "../sessions.js";
 
 let msgUnsub = null;
 let sessUnsub = null;
@@ -57,6 +57,7 @@ export function setSession(sessionId) {
     query(collection(db, "sessions", sessionId, "messages"), orderBy("order", "asc")),
     (snap) => {
       renderMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      updateIndicator(); // cached data — no extra Firestore reads
     },
     (err) => showTransientError("Firestore listener error: " + err.message)
   );
@@ -165,7 +166,7 @@ function startEdit(m, wrap) {
 export async function updateIndicator() {
   if (!session || !state.settings) return;
   const run = ++indicatorRun;
-  const usage = await computeContextUsage(session, state.settings);
+  const usage = await computeContextUsage(session, state.settings, lastMessages);
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
   const pct = usage.max > 0 ? (usage.usedTokens / usage.max) * 100 : 0;
@@ -194,7 +195,14 @@ async function handleSend(e) {
   el.input.value = "";
   setBusy(true);
   try {
-    await messagesApi.addMessage(session.id, { role: "user", content: text });
+    const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
+    // Bridge until the snapshot arrives so the context build includes the user turn
+    // without re-reading the collection from Firestore.
+    if (!lastMessages.some((m) => m.id === userMsg.id)) {
+      lastMessages = lastMessages.concat([
+        { id: userMsg.id, order: userMsg.order, role: "user", content: text, tokenCount: userMsg.tokenCount },
+      ]);
+    }
     await runAssistantTurn({});
   } catch (err) {
     showTransientError(err.message || String(err));
@@ -208,6 +216,7 @@ async function runAssistantTurn(opts = {}) {
   if (!settings) return;
   setBusy(true);
   try {
+    // Uses the snapshot-listener cache — no Firestore reads.
     const { apiMessages } = await buildContextForRequest(session, settings, opts);
     startStreamUI();
 
@@ -217,33 +226,43 @@ async function runAssistantTurn(opts = {}) {
       onDelta: (t) => { streamState && appendStream("content", t); },
       onReasoning: (t) => { streamState && appendStream("thinking", t); },
     });
+    streamState = null; // snapshot re-render replaces the placeholder
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
     const plan = extractPlan(content);
     const clean = stripPlan(content);
     const finalContent =
       clean || (plan !== null ? "(plan updated — no narrative content in the reply)" : "(empty response)");
+    const newPlan = plan !== null && plan.length > 0 ? plan : null;
 
-    if (plan !== null && plan.length > 0) {
-      await updateSession(session.id, { longTermPlan: plan });
-    }
-
+    // Bridge the local cache for the auto-summary check (avoids a fresh
+    // getSession/getMessages round-trip — the snapshots will reconcile shortly).
+    let savedMsg;
     if (opts.overwriteId) {
-      await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
+      const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
         content: finalContent, thinking,
       });
+      const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
+      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, tokenCount };
     } else {
-      await messagesApi.addMessage(session.id, {
+      savedMsg = await messagesApi.addMessage(session.id, {
         role: "assistant", content: finalContent, thinking,
       });
+      lastMessages = lastMessages.concat([
+        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, tokenCount: savedMsg.tokenCount },
+      ]);
     }
-    streamState = null; // snapshot re-render replaces the placeholder
 
-    // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1).
-    const fresh = await getSession(session.id);
-    if (fresh && (await shouldAutoSummarize(fresh, settings))) {
+    if (newPlan !== null) {
+      await updateSession(session.id, { longTermPlan: newPlan });
+    }
+
+    // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
+    // computed entirely from cached data.
+    const fresh = { ...session, longTermPlan: newPlan ?? session.longTermPlan };
+    if (await shouldAutoSummarize(fresh, settings, lastMessages)) {
       setStatus("Context near limit — auto-summarizing…");
-      const r = await runSummarization(fresh, settings);
+      const r = await runSummarization(fresh, settings, { messages: lastMessages });
       setStatus(r.skipped ? r.reason : "Summary updated.", true);
     }
   } catch (err) {
@@ -259,7 +278,7 @@ async function handleSummarize() {
   setBusy(true);
   setStatus("Summarizing…");
   try {
-    const r = await runSummarization(session, state.settings);
+    const r = await runSummarization(session, state.settings, { messages: lastMessages });
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
   } catch (err) {
     showTransientError("Summarization failed: " + (err.message || String(err)));

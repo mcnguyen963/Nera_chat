@@ -1,13 +1,14 @@
 // Rolling summarization (spec §8). The new summary always folds in the old summary
 // plus everything since the last breakpoint; only the newest summary is referenced by
 // the session going forward — older summary docs remain in the log as history.
+//
+// Firestore optimization: opts.messages lets the caller pass its already-cached
+// message list (zero collection reads); the summary message + session pointer update
+// are committed in ONE transaction (1 read + 2 writes instead of 2 reads + 3 writes).
 
-import { getMessages, getMessage, addMessage } from "./messages.js";
+import { getMessages, addMessage, newMessageId } from "./messages.js";
 import { chatCompletion } from "./llm-client.js";
 import { computeContextUsage } from "./context-builder.js";
-import { updateSession } from "./sessions.js";
-import { doc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { db } from "./db.js";
 
 export function formatAsTranscript(msgs) {
   return msgs
@@ -15,9 +16,11 @@ export function formatAsTranscript(msgs) {
     .join("\n\n");
 }
 
-export async function runSummarization(session, settings) {
+export async function runSummarization(session, settings, opts = {}) {
+  const all = opts.messages ?? (await getMessages(session.id));
   const N = settings.keepRecentMessagesAfterSummary;
-  const raw = (await getMessages(session.id))
+
+  const raw = all
     .filter((m) => m.role !== "summary")
     .sort((a, b) => a.order - b.order);
 
@@ -33,8 +36,9 @@ export async function runSummarization(session, settings) {
     return { skipped: true, reason: "Nothing new to fold in since the last breakpoint." };
   }
 
+  // Prior summary is already in `all` — no extra getMessage() read.
   const priorSummary = session.activeSummaryMessageId
-    ? (await getMessage(session.id, session.activeSummaryMessageId))?.content
+    ? all.find((m) => m.id === session.activeSummaryMessageId)?.content ?? null
     : null;
 
   const summarizerInput =
@@ -50,17 +54,19 @@ export async function runSummarization(session, settings) {
     ],
   });
 
-  const newMsg = await addMessage(session.id, { role: "summary", content });
-  await updateDoc(doc(db, "sessions", session.id), {
-    activeSummaryMessageId: newMsg.id,
-    breakpointOrder: newBreakpointOrder,
-  });
+  // One transaction: summary doc + updated summary pointer/breakpoint together.
+  const summaryId = newMessageId();
+  const newMsg = await addMessage(
+    session.id,
+    { role: "summary", content },
+    { id: summaryId, sessionUpdate: { activeSummaryMessageId: summaryId, breakpointOrder: newBreakpointOrder } }
+  );
 
   return { skipped: false, summaryId: newMsg.id, newBreakpointOrder, foldedCount: toFold.length };
 }
 
 // Auto-trigger check (spec §8.1): fires after each assistant reply is saved.
-export async function shouldAutoSummarize(session, settings) {
-  const { overThreshold } = await computeContextUsage(session, settings);
+export async function shouldAutoSummarize(session, settings, messages = null) {
+  const { overThreshold } = await computeContextUsage(session, settings, messages);
   return overThreshold;
 }

@@ -1,6 +1,6 @@
 import {
   doc, getDoc, getDocs, query, orderBy, updateDoc, deleteDoc,
-  collection, runTransaction, serverTimestamp,
+  collection, runTransaction, writeBatch, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { countTokens } from "./tokenizer.js";
@@ -9,31 +9,76 @@ function newMsgId() {
   return "msg_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-// Adds a message with a monotonically increasing per-session `order`, taken
-// transactionally from the session doc's `nextOrder` counter (spec §2).
-export async function addMessage(sessionId, { role, content, thinking = null }) {
+// Exported so callers that need the message id BEFORE the write (e.g. summarization
+// folding the summary pointer into the same transaction) can pre-generate one.
+export const newMessageId = newMsgId;
+
+function msgDoc({ role, content, thinking, tokenCount, order }) {
+  return {
+    role,
+    content,
+    thinking: thinking ?? null,
+    tokenCount,
+    order,
+    createdAt: serverTimestamp(),
+    editedAt: null,
+  };
+}
+
+// Adds one message. `order` comes transactionally from the session doc's `nextOrder`
+// counter (spec §2). `opts.sessionUpdate` folds extra session fields (e.g. summary
+// pointer) into the SAME transaction, saving a separate write.
+export async function addMessage(sessionId, { role, content, thinking = null }, opts = {}) {
   const tokenCount = await countTokens(content);
-  const msgId = newMsgId();
+  const msgId = opts.id ?? newMsgId();
   const sessionRef = doc(db, "sessions", sessionId);
   const msgRef = doc(db, "sessions", sessionId, "messages", msgId);
 
   const order = await runTransaction(db, async (tx) => {
     const snap = await tx.get(sessionRef);
     const next = (snap.data()?.nextOrder ?? 0) + 1;
-    tx.update(sessionRef, { nextOrder: next, updatedAt: serverTimestamp() });
-    tx.set(msgRef, {
-      role,
-      content,
-      thinking,
-      tokenCount,
-      order: next,
-      createdAt: serverTimestamp(),
-      editedAt: null,
+    tx.update(sessionRef, {
+      nextOrder: next,
+      updatedAt: serverTimestamp(),
+      ...(opts.sessionUpdate ?? {}),
     });
+    tx.set(msgRef, msgDoc({ role, content, thinking, tokenCount, order: next }));
     return next;
   });
 
   return { id: msgId, order, tokenCount };
+}
+
+// Bulk add: ONE transaction bumps nextOrder by N, then batched writes (450/batch)
+// for the message docs. Used by SillyTavern import (N messages = 1 read + ~2 writes
+// per batch instead of N transactions).
+export async function addMessagesBulk(sessionId, items) {
+  if (items.length === 0) return [];
+  const tokenCounts = await Promise.all(items.map((it) => countTokens(it.content)));
+  const ids = items.map(() => newMsgId());
+  const sessionRef = doc(db, "sessions", sessionId);
+
+  const orders = await runTransaction(db, async (tx) => {
+    const snap = await tx.get(sessionRef);
+    let next = snap.data()?.nextOrder ?? 0;
+    const out = [];
+    for (let i = 0; i < items.length; i++) out.push(++next);
+    tx.update(sessionRef, { nextOrder: next, updatedAt: serverTimestamp() });
+    return out;
+  });
+
+  for (let i = 0; i < ids.length; i += 450) {
+    const batch = writeBatch(db);
+    for (let j = i; j < Math.min(i + 450, ids.length); j++) {
+      batch.set(
+        doc(db, "sessions", sessionId, "messages", ids[j]),
+        msgDoc({ role: items[j].role, content: items[j].content, thinking: items[j].thinking, tokenCount: tokenCounts[j], order: orders[j] })
+      );
+    }
+    await batch.commit();
+  }
+
+  return ids.map((id, j) => ({ id, order: orders[j], tokenCount: tokenCounts[j] }));
 }
 
 export async function getMessages(sessionId) {
@@ -55,6 +100,7 @@ export async function editMessage(sessionId, messageId, content) {
     tokenCount,
     editedAt: serverTimestamp(),
   });
+  return { tokenCount };
 }
 
 // Regenerate: overwrite content/thinking/tokenCount in place (spec §9).
@@ -65,6 +111,7 @@ export async function overwriteMessage(sessionId, messageId, { content, thinking
     thinking: thinking ?? null,
     tokenCount,
   });
+  return { tokenCount };
 }
 
 // The only path that truly loses data (spec §9).

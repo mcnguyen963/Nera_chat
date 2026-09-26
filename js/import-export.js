@@ -3,7 +3,7 @@
 // subsequent line is one message {name, is_user, send_date, mes}.
 
 import { createSession, getSession } from "./sessions.js";
-import { getMessages, addMessage } from "./messages.js";
+import { getMessages, addMessagesBulk } from "./messages.js";
 
 export function parseSillyTavernJsonl(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -38,9 +38,9 @@ export async function importSillyTavern(file) {
   const text = await file.text();
   const { title, messages } = parseSillyTavernJsonl(text);
   const sessionId = await createSession(title || file.name.replace(/\.jsonl$/i, "") || "Imported chat");
-  for (const m of messages) {
-    await addMessage(sessionId, { role: m.role, content: m.content });
-  }
+  // Single transaction for the order counter + batched writes (~450 msgs per write
+  // batch) instead of one transaction per message.
+  await addMessagesBulk(sessionId, messages.map((m) => ({ role: m.role, content: m.content })));
   return sessionId;
 }
 

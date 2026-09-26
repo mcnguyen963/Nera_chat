@@ -1,6 +1,6 @@
 import { state } from "../state.js";
 import { saveSettings } from "../settings.js";
-import { getSession, renameSession, updateSession } from "../sessions.js";
+import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator } from "./chat-view.js";
 
@@ -105,6 +105,10 @@ function flashSaved(text, isError = false) {
 // ---------- this-session settings ----------
 
 async function fillSessionSection() {
+  // Skip entirely when the Settings tab is hidden — avoids a getSession() read on
+  // every session/message snapshot (each message write touches the session doc).
+  const tab = document.getElementById("settings-tab");
+  if (tab.classList.contains("hidden")) return;
   if (!state.sessionId) {
     el.sessionTitle.value = "";
     el.sessionPlan.value = "";
@@ -127,9 +131,11 @@ async function fillSessionSection() {
 async function handleSaveSession() {
   if (!state.sessionId) return;
   try {
-    const title = el.sessionTitle.value.trim() || "Untitled";
-    await renameSession(state.sessionId, title);
-    await updateSession(state.sessionId, { longTermPlan: el.sessionPlan.value });
+    // Single updateDoc write: title + long-term plan together.
+    await updateSession(state.sessionId, {
+      title: el.sessionTitle.value.trim() || "Untitled",
+      longTermPlan: el.sessionPlan.value,
+    });
     flashSaved("Session saved ✓");
     refreshContextIndicator();
   } catch (e) {
