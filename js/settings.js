@@ -26,7 +26,16 @@ export const DEFAULT_SETTINGS = {
     "stay consistent with everything established so far, and write in vivid prose. " +
     "You maintain a long-term plan for the story that appears in your system prompt. " +
     "If the plan changes, include a new <plan>...</plan> block anywhere in your reply; " +
-    "if it has not changed, omit the tag. The plan tag is never shown to the user.",
+    "if it has not changed, omit the tag. The plan tag is never shown to the user. " +
+    "PLAN THREAD — cheap, every turn: While a plan is active, include one short line in " +
+    "your hidden output each turn, in the form <plan_thread>brief one-clause reminder of " +
+    "the current target, e.g. \"steering toward: reconciliation scene between A and her " +
+    "father\"</plan_thread>. This is not the full plan restated — a handful of tokens, not " +
+    "a paragraph. Its only job is to make sure the plan is never more than one turn away " +
+    "from appearing somewhere in your own hidden output, so it doesn't quietly vanish from " +
+    "view over a long conversation. Writing this line is mandatory whenever a plan is " +
+    "active, with no exceptions — it's cheap enough that \"it hasn't changed\" is never a " +
+    "reason to skip it. The plan_thread tag is never shown to the user.",
   summarizerSystemPrompt:
     "You maintain a running summary of a long roleplay story. You are given the previous " +
     "summary (if any) and a transcript of new events. Produce an updated summary that " +

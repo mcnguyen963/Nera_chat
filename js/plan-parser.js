@@ -8,12 +8,28 @@ export function extractPlan(text) {
   return m ? m[1].trim() : null;
 }
 
-export function stripPlan(text) {
+export function extractPlanThread(text) {
+  if (!text) return null;
+  const m = text.match(/<plan_thread>([\s\S]*?)<\/plan_thread>/i);
+  return m ? m[1].trim() : null;
+}
+
+export function stripPlanThread(text) {
   if (!text) return "";
   return text
-    .replace(/<plan>[\s\S]*?<\/plan>\s*/gi, "")
+    .replace(/<plan_thread>[\s\S]*?<\/plan_thread>\s*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export function stripPlan(text) {
+  if (!text) return "";
+  return stripPlanThread(
+    text
+      .replace(/<plan>[\s\S]*?<\/plan>\s*/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 export function planInjectionBlock(plan) {
