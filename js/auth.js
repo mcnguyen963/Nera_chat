@@ -22,6 +22,12 @@ export function currentUid() {
   return uid;
 }
 
+// For UI display: which account is signed in (email + short uid).
+export function currentUserInfo() {
+  const u = getAuth().currentUser;
+  return u ? { uid: u.uid, email: u.email } : null;
+}
+
 export async function login(email, password) {
   await signInWithEmailAndPassword(getAuth(), email.trim(), password);
 }

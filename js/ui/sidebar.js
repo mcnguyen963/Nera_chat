@@ -1,12 +1,16 @@
 import { state } from "../state.js";
 import { subscribeSessions, createSession, renameSession, deleteSession } from "../sessions.js";
-import { logout } from "../auth.js";
+import { logout, currentUserInfo } from "../auth.js";
 import { setSession } from "./chat-view.js";
 
 export function initSidebar() {
   const listEl = document.getElementById("session-list");
   const newBtn = document.getElementById("btn-new-session");
   const logoutBtn = document.getElementById("btn-logout");
+  const userEl = document.getElementById("current-user");
+
+  const me = currentUserInfo();
+  if (me) userEl.textContent = `${me.email ?? "(no email)"} · ${me.uid.slice(0, 8)}`;
 
   newBtn.addEventListener("click", async () => {
     const title = prompt("Session title:", "New Session");
@@ -39,11 +43,14 @@ export function initSidebar() {
     },
     (err) => {
       console.error("Sessions listener error:", err);
+      const me = currentUserInfo();
       listEl.innerHTML = "";
       const li = document.createElement("li");
       li.className = "error-text";
       li.style.padding = "10px 12px";
-      li.textContent = "Error loading sessions: " + (err.message || err.code || err);
+      li.textContent =
+        "Error loading sessions: " + (err.message || err.code || err) +
+        (me ? ` (signed in as ${me.email ?? me.uid})` : "");
       listEl.appendChild(li);
     }
   );
