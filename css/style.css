@@ -381,6 +381,8 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
 
 /* ---------- Settings ---------- */
 .settings-tab { padding: 20px 28px calc(60px + var(--safe-bottom)); overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+/* Mobile-only nav bar to get back to chat (tab bar is hidden on phones) */
+.settings-backbar { display: none; }
 .settings-tab h2 { font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 .settings-tab h3 { font-size: 14px; color: var(--muted); margin: 18px 0 8px; }
 .settings-grid {
@@ -411,6 +413,21 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
      row, so hiding the (now empty) header frees a whole row */
   .top-bar { display: none; }
   .top-menu-wrap { display: block; }
+
+  /* Settings: mobile nav bar back to chat */
+  .settings-backbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    justify-content: flex-start;
+    margin: -16px -16px 16px;
+    padding: 6px 10px;
+    padding-top: calc(6px + var(--safe-top));
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .settings-backbar .btn { padding: 3px 10px; font-size: 12px; min-height: 0; }
 
   /* Slim summarize / context / ⋯ row so more messages fit on screen */
   .chat-toolbar { padding: 3px 10px; padding-top: calc(3px + var(--safe-top)); gap: 8px; }

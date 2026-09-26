@@ -157,4 +157,9 @@ function wireTabs() {
       document.dispatchEvent(new CustomEvent("sidebar:close"));
     });
   });
+
+  // Mobile: the tab bar is hidden, so Settings needs its own way back.
+  document.getElementById("btn-back-to-chat")?.addEventListener("click", () => {
+    document.querySelector('.tab[data-tab="chat"]')?.click();
+  });
 }
