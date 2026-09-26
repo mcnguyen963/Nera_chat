@@ -16,6 +16,8 @@ const el = {
   settingsTab: document.getElementById("settings-tab"),
   sidebarToggle: document.getElementById("btn-sidebar-toggle"),
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
+  topMenuBtn: document.getElementById("btn-top-menu"),
+  topMenu: document.getElementById("top-menu"),
 };
 
 let appInitialized = false;
@@ -52,6 +54,34 @@ el.sidebarToggle?.addEventListener("click", () =>
 );
 el.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false));
 document.addEventListener("sidebar:close", () => setSidebarOpen(false));
+
+// ---------- compact top menu (mobile) ----------
+function setTopMenuOpen(open) {
+  if (el.topMenu) el.topMenu.hidden = !open;
+}
+
+el.topMenuBtn?.addEventListener("click", () =>
+  setTopMenuOpen(el.topMenu.hidden)
+);
+
+el.topMenu?.addEventListener("click", (e) => {
+  const item = e.target.closest(".top-menu-item");
+  if (!item) return;
+  setTopMenuOpen(false);
+  if (item.dataset.action === "sessions") {
+    setSidebarOpen(true);
+  } else {
+    // Reuse the existing tab logic; the tab buttons are just CSS-hidden.
+    document.querySelector(`.tab[data-tab="${item.dataset.action}"]`)?.click();
+  }
+});
+
+// Close the menu when tapping anywhere else.
+document.addEventListener("click", (e) => {
+  if (el.topMenu && !el.topMenu.hidden && !e.target.closest(".top-menu-wrap")) {
+    setTopMenuOpen(false);
+  }
+});
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
 initAuth((user) => {

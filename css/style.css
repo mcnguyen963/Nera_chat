@@ -200,6 +200,38 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .tab.active { color: var(--text); background: var(--panel-2); }
 .tab:hover { color: var(--text); }
 
+/* Compact ⋯ menu (mobile replaces the whole top bar with this) */
+.top-menu-wrap { position: relative; margin-left: auto; display: none; }
+.top-menu-btn { line-height: 1.2; padding: 2px 10px; font-size: 16px; }
+.top-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 45;
+  min-width: 150px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.top-menu[hidden] { display: none; }
+.top-menu-item {
+  background: none;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  font-size: 15px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.top-menu-item:hover { background: var(--panel-2); }
+
 /* ---------- Chat ---------- */
 .chat-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-toolbar {
@@ -349,8 +381,23 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
     padding: 10px 12px;
   }
 
-  /* Sidebar becomes an off-canvas drawer */
-  .icon-btn { display: inline-block; }
+  /* Collapse the top bar into one small ⋯ menu button to free space */
+  .top-bar { padding: 4px 10px; padding-top: calc(4px + var(--safe-top)); }
+  .top-bar .icon-btn,
+  .top-bar-title,
+  .tab-bar { display: none; }
+  .top-menu-wrap { display: block; }
+  .top-bar .top-menu-btn { padding: 2px 10px; font-size: 16px; }
+
+  /* Slim summarize / context row so more messages fit on screen */
+  .chat-toolbar { padding: 3px 10px; gap: 8px; }
+  .context-indicator { gap: 8px; }
+  .context-bar { height: 5px; max-width: none; }
+  .context-threshold { top: -1px; bottom: -1px; }
+  #context-label { font-size: 11px; }
+  .chat-toolbar .btn { padding: 3px 10px; font-size: 12px; min-height: 0; }
+
+  /* Sidebar becomes an off-canvas drawer (opened via the ⋯ menu → Sessions) */
   .sidebar {
     position: fixed;
     top: 0;
@@ -367,9 +414,6 @@ details.thinking.streaming summary::after { content: " · streaming…"; color: 
   .sidebar-footer { padding-bottom: calc(10px + var(--safe-bottom)); }
 
   .main { width: 100%; }
-  .chat-toolbar { padding: 8px 12px; gap: 8px; }
-  .context-indicator { gap: 8px; }
-  .context-bar { max-width: none; }
   .message-list { padding: 12px; gap: 10px; }
   .msg { max-width: 92%; padding: 10px 12px; }
   .composer { padding: 10px 12px; padding-bottom: calc(10px + var(--safe-bottom)); gap: 8px; }
