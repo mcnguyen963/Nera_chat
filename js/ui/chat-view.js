@@ -1,0 +1,339 @@
+import {
+  doc, collection, query, orderBy, onSnapshot,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { db } from "../db.js";
+import { state } from "../state.js";
+import * as messagesApi from "../messages.js";
+import { buildContextForRequest, computeContextUsage } from "../context-builder.js";
+import { chatCompletion } from "../llm-client.js";
+import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
+import { extractPlan, stripPlan } from "../plan-parser.js";
+import { getSession, updateSession } from "../sessions.js";
+
+let msgUnsub = null;
+let sessUnsub = null;
+let session = null;      // latest snapshot of the active session doc
+let streamState = null;  // live streaming UI handle
+let busy = false;
+let indicatorRun = 0;
+
+const el = {};
+
+export function initChatView() {
+  el.list = document.getElementById("message-list");
+  el.input = document.getElementById("chat-input");
+  el.composer = document.getElementById("composer");
+  el.sendBtn = document.getElementById("btn-send");
+  el.summarizeBtn = document.getElementById("btn-summarize");
+  el.contextFill = document.getElementById("context-fill");
+  el.contextThreshold = document.getElementById("context-threshold");
+  el.contextLabel = document.getElementById("context-label");
+
+  el.composer.addEventListener("submit", handleSend);
+  el.summarizeBtn.addEventListener("click", handleSummarize);
+}
+
+export function setSession(sessionId) {
+  msgUnsub?.();
+  sessUnsub?.();
+  msgUnsub = sessUnsub = null;
+  state.sessionId = sessionId;
+  session = null;
+  streamState = null;
+  el.list.innerHTML = "";
+  if (!sessionId) return;
+
+  sessUnsub = onSnapshot(
+    doc(db, "sessions", sessionId),
+    (snap) => {
+      session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      updateIndicator();
+      document.dispatchEvent(new CustomEvent("session-changed"));
+    },
+    (err) => console.error("Session listener error:", err)
+  );
+
+  msgUnsub = onSnapshot(
+    query(collection(db, "sessions", sessionId, "messages"), orderBy("order", "asc")),
+    (snap) => {
+      renderMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    },
+    (err) => showTransientError("Firestore listener error: " + err.message)
+  );
+}
+
+// ---------- rendering ----------
+
+let lastMessages = [];
+
+function renderMessages(msgs) {
+  lastMessages = msgs;
+  el.list.innerHTML = "";
+  for (const m of msgs) el.list.appendChild(renderMessage(m));
+  if (streamState) el.list.appendChild(streamState.wrap);
+  scrollToEnd();
+}
+
+function renderMessage(m) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + m.role;
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  const label = document.createElement("span");
+  label.textContent =
+    m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
+  if (m.editedAt) label.textContent += " (edited)";
+  meta.appendChild(label);
+
+  const actions = document.createElement("span");
+  actions.className = "msg-actions";
+  if (m.role === "user" || m.role === "assistant") {
+    actions.appendChild(actionBtn("Edit", () => startEdit(m, wrap)));
+  }
+  actions.appendChild(actionBtn("Delete", "del", async () => {
+    if (!confirm("Delete this message permanently?")) return;
+    await messagesApi.deleteMessage(state.sessionId, m.id);
+  }));
+  if (m.role === "assistant") {
+    actions.appendChild(actionBtn("Regenerate", "regen", () => {
+      if (busy) return;
+      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
+    }));
+  }
+  meta.appendChild(actions);
+  wrap.appendChild(meta);
+
+  if (m.role === "assistant" && m.thinking) {
+    wrap.appendChild(buildThinking(m.thinking, false));
+  }
+
+  const content = document.createElement("div");
+  content.className = "msg-content";
+  content.textContent = m.content;
+  wrap.appendChild(content);
+
+  return wrap;
+}
+
+function actionBtn(text, cls, onClick) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  if (cls) b.className = cls;
+  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+
+function buildThinking(text, streaming) {
+  const det = document.createElement("details");
+  det.className = "thinking" + (streaming ? " streaming" : "");
+  if (streaming) det.open = true;
+  const sum = document.createElement("summary");
+  sum.textContent = "Thinking";
+  const body = document.createElement("div");
+  body.className = "thinking-body";
+  body.textContent = text;
+  det.append(sum, body);
+  return det;
+}
+
+function startEdit(m, wrap) {
+  const contentEl = wrap.querySelector(".msg-content");
+  if (!contentEl) return;
+  const ta = document.createElement("textarea");
+  ta.value = m.content;
+  ta.rows = Math.max(2, Math.min(20, m.content.split("\n").length + 1));
+  ta.style.width = "100%";
+
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;gap:8px;margin-top:6px;";
+  const save = actionBtn("Save", "small", async () => {
+    try {
+      await messagesApi.editMessage(state.sessionId, m.id, ta.value);
+    } catch (e) { showTransientError(e.message); }
+  });
+  const cancel = actionBtn("Cancel", "small", () => renderMessages(lastMessages));
+  save.classList.add("btn"); cancel.classList.add("btn");
+  bar.append(save, cancel);
+
+  contentEl.replaceWith(ta, bar);
+  ta.focus();
+}
+
+// ---------- context indicator ----------
+
+export async function updateIndicator() {
+  if (!session || !state.settings) return;
+  const run = ++indicatorRun;
+  const usage = await computeContextUsage(session, state.settings);
+  if (run !== indicatorRun) return; // a newer computation superseded this one
+
+  const pct = usage.max > 0 ? (usage.usedTokens / usage.max) * 100 : 0;
+  el.contextFill.style.width = Math.min(100, pct) + "%";
+  el.contextFill.classList.toggle("over", usage.overThreshold);
+  el.contextThreshold.style.left =
+    (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
+  el.contextLabel.textContent =
+    `${usage.usedTokens.toLocaleString()} / ${usage.max.toLocaleString()} tokens` +
+    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "");
+}
+export const refreshContextIndicator = updateIndicator;
+
+// ---------- send / stream / summarize ----------
+
+async function handleSend(e) {
+  e.preventDefault();
+  if (busy || !session) return;
+  const text = el.input.value.trim();
+  if (!text) return;
+  const settings = state.settings;
+  if (!settings?.modelId || !settings?.apiKey) {
+    showTransientError("Set your API key and Model ID in the Settings tab first.");
+    return;
+  }
+  el.input.value = "";
+  setBusy(true);
+  try {
+    await messagesApi.addMessage(session.id, { role: "user", content: text });
+    await runAssistantTurn({});
+  } catch (err) {
+    showTransientError(err.message || String(err));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function runAssistantTurn(opts = {}) {
+  const settings = state.settings;
+  if (!settings) return;
+  setBusy(true);
+  try {
+    const { apiMessages } = await buildContextForRequest(session, settings, opts);
+    startStreamUI();
+
+    const { content, thinking } = await chatCompletion({
+      settings,
+      messages: apiMessages,
+      onDelta: (t) => { streamState && appendStream("content", t); },
+      onReasoning: (t) => { streamState && appendStream("thinking", t); },
+    });
+
+    // Plan tag handling (spec §11): extract, save, strip from visible content.
+    const plan = extractPlan(content);
+    const clean = stripPlan(content);
+    const finalContent =
+      clean || (plan !== null ? "(plan updated — no narrative content in the reply)" : "(empty response)");
+
+    if (plan !== null && plan.length > 0) {
+      await updateSession(session.id, { longTermPlan: plan });
+    }
+
+    if (opts.overwriteId) {
+      await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
+        content: finalContent, thinking,
+      });
+    } else {
+      await messagesApi.addMessage(session.id, {
+        role: "assistant", content: finalContent, thinking,
+      });
+    }
+    streamState = null; // snapshot re-render replaces the placeholder
+
+    // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1).
+    const fresh = await getSession(session.id);
+    if (fresh && (await shouldAutoSummarize(fresh, settings))) {
+      setStatus("Context near limit — auto-summarizing…");
+      const r = await runSummarization(fresh, settings);
+      setStatus(r.skipped ? r.reason : "Summary updated.", true);
+    }
+  } catch (err) {
+    streamState = null;
+    showTransientError(err.message || String(err));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function handleSummarize() {
+  if (busy || !session) return;
+  setBusy(true);
+  setStatus("Summarizing…");
+  try {
+    const r = await runSummarization(session, state.settings);
+    setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
+  } catch (err) {
+    showTransientError("Summarization failed: " + (err.message || String(err)));
+  } finally {
+    setBusy(false);
+  }
+}
+
+// ---------- streaming UI ----------
+
+function startStreamUI() {
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant";
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  const label = document.createElement("span");
+  label.textContent = "Assistant · streaming…";
+  meta.appendChild(label);
+  wrap.appendChild(meta);
+
+  const thinking = buildThinking("", true);
+  const content = document.createElement("div");
+  content.className = "msg-content";
+  wrap.append(thinking, content);
+
+  el.list.appendChild(wrap);
+  scrollToEnd();
+
+  streamState = { wrap, thinking, content, thinkingText: "", contentText: "" };
+}
+
+function appendStream(kind, text) {
+  if (!streamState) return;
+  if (kind === "content") {
+    streamState.contentText += text;
+    streamState.content.textContent = streamState.contentText;
+  } else {
+    streamState.thinkingText += text;
+    streamState.thinking.querySelector(".thinking-body").textContent = streamState.thinkingText;
+  }
+  scrollToEnd();
+}
+
+// ---------- helpers ----------
+
+function setBusy(b) {
+  busy = state.busy = b;
+  el.sendBtn.disabled = b;
+  el.summarizeBtn.disabled = b;
+}
+
+function scrollToEnd() {
+  el.list.scrollTop = el.list.scrollHeight;
+}
+
+function setStatus(text, autoHide = false) {
+  let statusEl = el.list.querySelector(".status-line");
+  if (!text) { statusEl?.remove(); return; }
+  if (!statusEl) {
+    statusEl = document.createElement("div");
+    statusEl.className = "status-line";
+    el.list.appendChild(statusEl);
+  }
+  statusEl.textContent = text;
+  if (autoHide) setTimeout(() => statusEl?.remove(), 4000);
+  scrollToEnd();
+}
+
+function showTransientError(text) {
+  const div = document.createElement("div");
+  div.className = "msg error";
+  div.textContent = "⚠ " + text;
+  el.list.appendChild(div);
+  scrollToEnd();
+  setTimeout(() => div.remove(), 10000);
+}

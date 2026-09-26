@@ -1,0 +1,4 @@
+# Real Firebase config — never commit (injected by CI from repo secrets)
+js/firebase-config.js
+
+.DS_Store
