@@ -14,6 +14,8 @@ import {
   saveSettings,
   normalizeProfiles,
   activeProfile,
+  mirrorFromActiveProfile,
+  mirrorToActiveProfile,
 } from "../settings.js";
 
 let msgUnsub = null;
@@ -38,6 +40,8 @@ export function initChatView() {
 
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
+  document.addEventListener("summarize-full", handleFullSummarize);
+  document.addEventListener("reset-summary", handleResetSummary);
 
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
   // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
@@ -74,21 +78,21 @@ function initQuickControls() {
   el.chipModel.addEventListener("click", () => toggleQuickPopover());
 
   el.quickProfile.addEventListener("change", async () => {
-    const s = state.settings;
+    const s = structuredClone(state.settings);
     if (!s) return;
     s.activeProfileId = el.quickProfile.value;
-    normalizeProfiles(s); // mirrors the chosen profile's connection fields
-    refreshQuickChips();
+    normalizeProfiles(s);
+    mirrorFromActiveProfile(s); // load the chosen profile's connection fields
     try {
       await saveSettings(s);
-      document.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (e) {
+      refreshQuickChips();
       showTransientError("Save failed: " + e.message);
     }
   });
 
   el.quickThinking.addEventListener("change", async () => {
-    const s = state.settings;
+    const s = structuredClone(state.settings);
     if (!s) return;
     const v = el.quickThinking.value;
     if (v === "off") {
@@ -100,11 +104,10 @@ function initQuickControls() {
     }
     normalizeProfiles(s);
     mirrorToActiveProfile(s);
-    refreshQuickChips();
     try {
       await saveSettings(s);
-      document.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (e) {
+      refreshQuickChips();
       showTransientError("Save failed: " + e.message);
     }
   });
@@ -118,6 +121,7 @@ function initQuickControls() {
   });
 
   document.addEventListener("settings-changed", refreshQuickChips);
+  document.addEventListener("settings-changed", updateIndicator);
   refreshQuickChips();
 }
 
@@ -134,6 +138,7 @@ function toggleQuickPopover() {
 }
 
 function fillQuickProfileSelect(s) {
+  if (!s) return;
   el.quickProfile.replaceChildren(
     ...s.profiles.map((p) => {
       const o = document.createElement("option");
@@ -156,12 +161,18 @@ function refreshQuickChips() {
   if (!s) return;
   normalizeProfiles(s);
   const p = activeProfile(s);
+  fillQuickProfileSelect(s);
+  el.quickThinking.value = quickThinkingValue(s);
   el.chipModelLabel.textContent = p?.name
     ? `${p.name} · ${s.modelId || "no model"}`
     : s.modelId || "Model not set";
 }
 
 export function setSession(sessionId) {
+  if (busy) {
+    showTransientError("Wait for the current reply or summary to finish before switching sessions.");
+    return false;
+  }
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -169,12 +180,18 @@ export function setSession(sessionId) {
   session = null;
   streamState = null;
   editingState = null;
+  lastMessages = [];
+  ++indicatorRun;
   el.list.innerHTML = "";
-  if (!sessionId) return;
+  el.contextFill.style.width = "0%";
+  el.contextLabel.textContent = "No session selected";
+  document.dispatchEvent(new CustomEvent("session-changed"));
+  if (!sessionId) return true;
 
   sessUnsub = onSnapshot(
     doc(db, "users", currentUid(), "sessions", sessionId),
     (snap) => {
+      if (state.sessionId !== sessionId) return;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       updateIndicator();
       document.dispatchEvent(new CustomEvent("session-changed"));
@@ -185,11 +202,13 @@ export function setSession(sessionId) {
   msgUnsub = onSnapshot(
     query(collection(db, "users", currentUid(), "sessions", sessionId, "messages"), orderBy("order", "asc")),
     (snap) => {
+      if (state.sessionId !== sessionId) return;
       renderMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       updateIndicator(); // cached data — no extra Firestore reads
     },
     (err) => showTransientError("Firestore listener error: " + err.message)
   );
+  return true;
 }
 
 // ---------- rendering ----------
@@ -226,10 +245,11 @@ function renderMessage(m) {
 
   const actions = document.createElement("span");
   actions.className = "msg-actions";
-  if (m.role === "user" || m.role === "assistant") {
+  if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
+    if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
     await messagesApi.deleteMessage(state.sessionId, m.id);
   }));
@@ -279,12 +299,17 @@ function buildThinking(text, streaming) {
 }
 
 function startEdit(m, wrap) {
+  if (busy) return;
   const contentEl = wrap.querySelector(".msg-content");
   if (!contentEl || editingState) return; // one edit at a time
+  // The bubble is shrink-to-fit; replacing the content with a textarea would
+  // collapse it to the textarea's default ~20-col width. Freeze its size.
+  wrap.style.width = wrap.getBoundingClientRect().width + "px";
   const ta = document.createElement("textarea");
   ta.value = m.content;
   ta.rows = Math.max(2, Math.min(20, m.content.split("\n").length + 1));
   ta.style.width = "100%";
+  ta.style.display = "block";
   ta.style.maxHeight = "40vh"; // stay within the area above the keyboard
 
   const bar = document.createElement("div");
@@ -417,10 +442,10 @@ export const refreshContextIndicator = updateIndicator;
 
 async function handleSend(e) {
   e.preventDefault();
-  if (busy || !session) return;
+  if (busy || !session || editingState) return;
   const text = el.input.value.trim();
   if (!text) return;
-  const settings = state.settings;
+  const settings = structuredClone(state.settings);
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in the Settings tab first.");
     return;
@@ -449,7 +474,7 @@ async function handleSend(e) {
 }
 
 async function runAssistantTurn(opts = {}) {
-  const settings = state.settings;
+  const settings = structuredClone(state.settings);
   if (!settings) return;
   setBusy(true);
   try {
@@ -462,7 +487,8 @@ async function runAssistantTurn(opts = {}) {
       onDelta: (t) => { streamState && appendStream("content", t); },
       onReasoning: (t) => { streamState && appendStream("thinking", t); },
     });
-    streamState = null; // snapshot re-render replaces the placeholder
+    streamState?.wrap.remove();
+    streamState = null;
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
     const plan = extractPlan(content);
@@ -484,10 +510,11 @@ async function runAssistantTurn(opts = {}) {
       savedMsg = await messagesApi.addMessage(session.id, {
         role: "assistant", content: finalContent, thinking,
       });
-      lastMessages = lastMessages.concat([
+      lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
         { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, tokenCount: savedMsg.tokenCount },
       ]);
     }
+    renderMessages(lastMessages);
 
     if (newPlan !== null) {
       await updateSession(session.id, { longTermPlan: newPlan });
@@ -497,11 +524,20 @@ async function runAssistantTurn(opts = {}) {
     // computed entirely from cached data.
     const fresh = { ...session, longTermPlan: newPlan ?? session.longTermPlan };
     if (await shouldAutoSummarize(fresh, settings, lastMessages)) {
-      setStatus("Context near limit — auto-summarizing…");
-      const r = await runSummarization(fresh, settings, { messages: lastMessages });
-      setStatus(r.skipped ? r.reason : "Summary updated.", true);
+      const ui = streamSummaryUI("Context near limit — auto-summarizing…");
+      try {
+        const r = await runSummarization(fresh, settings, {
+          messages: lastMessages,
+          onDelta: ui.onDelta,
+          onReasoning: ui.onReasoning,
+        });
+        setStatus(r.skipped ? r.reason : "Summary updated.", true);
+      } finally {
+        ui.done();
+      }
     }
   } catch (err) {
+    streamState?.wrap.remove();
     streamState = null;
     showTransientError(err.message || String(err));
   } finally {
@@ -509,17 +545,105 @@ async function runAssistantTurn(opts = {}) {
   }
 }
 
+// Live-stream the summarizer's output into a proper summary bubble (tail only,
+// so the element stays a fixed size while tokens arrive). Reasoning deltas go
+// into the same collapsible Thinking pane used by chat messages.
+function streamSummaryUI(label) {
+  let acc = "";
+  let thinkAcc = "";
+  const bubble = document.createElement("div");
+  bubble.className = "msg summary streaming-summary";
+  const head = document.createElement("div");
+  head.className = "msg-meta";
+  head.textContent = label;
+  const thinking = buildThinking("", true);
+  const body = document.createElement("div");
+  body.className = "summary-stream-body";
+  bubble.append(head, thinking, body);
+  const sticky = isNearBottom();
+  el.list.appendChild(bubble);
+  if (sticky) scrollToEnd();
+  return {
+    setLabel: (text) => { head.textContent = text; },
+    onDelta: (t) => {
+      acc += t;
+      body.textContent = acc.slice(-2000);
+      if (isNearBottom()) scrollToEnd();
+    },
+    onReasoning: (t) => {
+      thinkAcc += t;
+      thinking.querySelector(".thinking-body").textContent = thinkAcc;
+      if (isNearBottom()) scrollToEnd();
+    },
+    done: () => bubble.remove(),
+  };
+}
+
 async function handleSummarize() {
   if (busy || !session) return;
   setBusy(true);
-  setStatus("Summarizing…");
+  const ui = streamSummaryUI("Summarizing…");
   try {
-    const r = await runSummarization(session, state.settings, { messages: lastMessages });
+    const r = await runSummarization(session, state.settings, {
+      messages: lastMessages,
+      onDelta: ui.onDelta,
+      onReasoning: ui.onReasoning,
+    });
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
   } catch (err) {
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
+    ui.done();
     setBusy(false);
+  }
+}
+
+// Full-history summary: ignores the checkpoint and folds in every message
+// from the very start, replacing the active summary (local-only action).
+async function handleFullSummarize() {
+  if (busy || !session) return;
+  if (
+    !confirm(
+      "Summarize the ENTIRE chat history from the start? This replaces the current summary and may take a while."
+    )
+  )
+    return;
+  setBusy(true);
+  const ui = streamSummaryUI("Summarizing full history…");
+  try {
+    const r = await runSummarization(session, state.settings, {
+      messages: lastMessages,
+      full: true,
+      onDelta: ui.onDelta,
+      onReasoning: ui.onReasoning,
+      onProgress: (multi, i, total) => {
+        if (multi) ui.setLabel(`Summarizing part ${i}/${total}…`);
+      },
+    });
+    setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
+  } catch (err) {
+    showTransientError("Summarization failed: " + (err.message || String(err)));
+  } finally {
+    ui.done();
+    setBusy(false);
+  }
+}
+
+// Reset the summary checkpoint: no summary is injected and every message
+// becomes context again (local-only action, no LLM call).
+async function handleResetSummary() {
+  if (busy || !session) return;
+  if (
+    !confirm(
+      "Reset the summary checkpoint? The summary will stop being injected and the full history will be sent again (may exceed context until re-summarized)."
+    )
+  )
+    return;
+  try {
+    await updateSession(session.id, { activeSummaryMessageId: null, breakpointOrder: 0 });
+    setStatus("Summary checkpoint reset.", true);
+  } catch (err) {
+    showTransientError("Reset failed: " + (err.message || String(err)));
   }
 }
 
@@ -552,7 +676,7 @@ function appendStream(kind, text) {
   const sticky = isNearBottom();
   if (kind === "content") {
     streamState.contentText += text;
-    streamState.content.textContent = streamState.contentText;
+    streamState.content.textContent = stripPlan(streamState.contentText);
   } else {
     streamState.thinkingText += text;
     streamState.thinking.querySelector(".thinking-body").textContent = streamState.thinkingText;

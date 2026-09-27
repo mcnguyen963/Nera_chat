@@ -1,5 +1,5 @@
 import { initAuth, login } from "./auth.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
 import { initChatView, setSession } from "./ui/chat-view.js";
@@ -70,6 +70,8 @@ el.topMenu?.addEventListener("click", (e) => {
   setTopMenuOpen(false);
   if (item.dataset.action === "sessions") {
     setSidebarOpen(true);
+  } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary") {
+    document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else {
     // Reuse the existing tab logic; the tab buttons are just CSS-hidden.
     document.querySelector(`.tab[data-tab="${item.dataset.action}"]`)?.click();
@@ -85,6 +87,11 @@ document.addEventListener("click", (e) => {
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
 initAuth((user) => {
+  // Tear down account-scoped listeners and in-flight work on auth transitions.
+  if (appInitialized) {
+    window.location.reload();
+    return;
+  }
   if (user) {
     el.loginScreen.classList.add("hidden");
     el.app.classList.remove("hidden");
@@ -134,8 +141,8 @@ async function enterApp() {
     console.error("Failed to load settings:", e);
     el.loginNote.textContent = "Warning: could not load your settings — check Firestore rules.";
     el.loginNote.style.color = "var(--danger)";
-    // Still enter; settings-view will fill with defaults once available.
-    state.settings = null;
+    state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
+    alert("Could not load your saved settings. Using defaults for this page; check your connection and Firestore rules before saving.");
   }
   initChatView();
   initSidebar();

@@ -70,6 +70,8 @@
               <button class="top-menu-item" data-action="sessions">Sessions</button>
               <button class="top-menu-item" data-action="chat">Chat</button>
               <button class="top-menu-item" data-action="settings">Settings</button>
+              <button class="top-menu-item" data-action="summarize-full">Summarize full history</button>
+              <button class="top-menu-item" data-action="reset-summary">Reset summary checkpoint</button>
             </div>
           </div>
         </div>
@@ -91,6 +93,7 @@
               <label class="popover-field">Thinking
                 <select id="quick-thinking">
                   <option value="off">Off</option>
+                  <option value="none">none</option>
                   <option value="minimal">minimal</option>
                   <option value="low">low</option>
                   <option value="medium">medium</option>
@@ -174,6 +177,12 @@
           </label>
           <label>Keep recent messages after summary
             <input type="number" id="set-keep-n" min="0" />
+          </label>
+          <label>Summarizer max response tokens
+            <input type="number" id="set-summarizer-maxtokens" min="256" />
+          </label>
+          <label>Summarizer input chunk (tokens per call)
+            <input type="number" id="set-summarizer-chunk" min="2000" />
           </label>
         </div>
 

@@ -4,6 +4,7 @@ import {
   normalizeProfiles,
   activeProfile,
   mirrorToActiveProfile,
+  mirrorFromActiveProfile,
 } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
@@ -24,6 +25,8 @@ export function initSettingsView() {
   el.maxContext = document.getElementById("set-max-context");
   el.autoThreshold = document.getElementById("set-auto-threshold");
   el.keepN = document.getElementById("set-keep-n");
+  el.summarizerMaxTokens = document.getElementById("set-summarizer-maxtokens");
+  el.summarizerChunk = document.getElementById("set-summarizer-chunk");
   el.narratorPrompt = document.getElementById("set-narrator-prompt");
   el.summarizerPrompt = document.getElementById("set-summarizer-prompt");
   el.savedMsg = document.getElementById("settings-saved-msg");
@@ -49,6 +52,7 @@ export function initSettingsView() {
   el.exportBtn.addEventListener("click", handleExport);
 
   document.addEventListener("session-changed", fillSessionSection);
+  document.addEventListener("settings-changed", fillGlobal);
   fillGlobal();
   fillSessionSection();
 }
@@ -71,6 +75,8 @@ function fillGlobal() {
   el.maxContext.value = s.maxContextTokens ?? 8000;
   el.autoThreshold.value = s.autoSummaryThresholdPercent ?? 70;
   el.keepN.value = s.keepRecentMessagesAfterSummary ?? 10;
+  el.summarizerMaxTokens.value = s.summarizerMaxTokens ?? 100000;
+  el.summarizerChunk.value = s.summarizerChunkTokens ?? 250000;
   el.narratorPrompt.value = s.narratorSystemPrompt ?? "";
   el.summarizerPrompt.value = s.summarizerSystemPrompt ?? "";
 }
@@ -110,37 +116,29 @@ function collectConnection() {
 // Persist the form's connection fields into the current profile, then switch
 // to the newly selected one and reload the form from it.
 async function handleProfileSwitch() {
-  const s = { ...state.settings, ...collectConnection() };
-  const cur = activeProfile(s);
-  cur.name = el.profileName.value.trim() || cur.name || "Default";
-  mirrorToActiveProfile(s);
-  s.activeProfileId = el.profiles.value;
-  normalizeProfiles(s);
-  state.settings = s;
-  fillGlobal();
   try {
+    const s = collectGlobal();
+    s.activeProfileId = el.profiles.value;
+    normalizeProfiles(s);
+    mirrorFromActiveProfile(s);
     await saveSettings(s);
   } catch (e) {
+    el.profiles.value = state.settings.activeProfileId;
     flashSaved("Save failed: " + e.message, true);
   }
 }
 
 async function handleProfileCopy() {
-  const s = { ...state.settings, ...collectConnection() };
-  normalizeProfiles(s);
-  const cur = activeProfile(s);
-  cur.name = el.profileName.value.trim() || cur.name || "Default";
-  mirrorToActiveProfile(s);
-  const copy = {
-    ...structuredClone(cur),
-    id: "p" + Date.now().toString(36),
-    name: cur.name + " (copy)",
-  };
-  s.profiles.push(copy);
-  s.activeProfileId = copy.id;
-  state.settings = s;
-  fillGlobal();
   try {
+    const s = collectGlobal();
+    const cur = activeProfile(s);
+    const copy = {
+      ...structuredClone(cur),
+      id: crypto.randomUUID(),
+      name: cur.name + " (copy)",
+    };
+    s.profiles.push(copy);
+    s.activeProfileId = copy.id;
     await saveSettings(s);
     flashSaved("Profile copied ✓");
   } catch (e) {
@@ -149,20 +147,17 @@ async function handleProfileCopy() {
 }
 
 async function handleProfileDelete() {
-  const s = state.settings;
-  normalizeProfiles(s);
-  if (s.profiles.length <= 1) {
-    flashSaved("Can't delete the last profile", true);
-    return;
-  }
-  const cur = activeProfile(s);
-  if (!confirm(`Delete connection profile "${cur.name}"?`)) return;
-  s.profiles = s.profiles.filter((p) => p.id !== s.activeProfileId);
-  s.activeProfileId = s.profiles[0].id;
-  normalizeProfiles(s);
-  state.settings = s;
-  fillGlobal();
   try {
+    const s = collectGlobal();
+    if (s.profiles.length <= 1) {
+      flashSaved("Can't delete the last profile", true);
+      return;
+    }
+    const cur = activeProfile(s);
+    if (!confirm(`Delete connection profile "${cur.name}"?`)) return;
+    s.profiles = s.profiles.filter((p) => p.id !== s.activeProfileId);
+    s.activeProfileId = s.profiles[0].id;
+    mirrorFromActiveProfile(s);
     await saveSettings(s);
     flashSaved("Profile deleted ✓");
   } catch (e) {
@@ -171,15 +166,25 @@ async function handleProfileDelete() {
 }
 
 function collectGlobal() {
+  for (const input of document.querySelectorAll('#settings-tab input[type="number"]')) {
+    if (!input.value.trim() || !input.reportValidity()) {
+      throw new Error("Enter valid values for all token limits and summary settings.");
+    }
+  }
   const s = {
-    ...state.settings,
+    ...structuredClone(state.settings),
     ...collectConnection(),
     maxContextTokens: Number(el.maxContext.value) || 8000,
     autoSummaryThresholdPercent: Number(el.autoThreshold.value) || 70,
-    keepRecentMessagesAfterSummary: Number(el.keepN.value) || 10,
+    keepRecentMessagesAfterSummary: Number(el.keepN.value),
+    summarizerMaxTokens: Number(el.summarizerMaxTokens.value) || 100000,
+    summarizerChunkTokens: Number(el.summarizerChunk.value) || 250000,
     narratorSystemPrompt: el.narratorPrompt.value,
     summarizerSystemPrompt: el.summarizerPrompt.value,
   };
+  if (s.maxResponseTokens >= s.maxContextTokens) {
+    throw new Error("Max context tokens must exceed max response tokens.");
+  }
   normalizeProfiles(s);
   const cur = activeProfile(s);
   cur.name = el.profileName.value.trim() || cur.name || "Default";
@@ -189,9 +194,7 @@ function collectGlobal() {
 
 async function handleSaveSettings() {
   try {
-    state.settings = collectGlobal();
-    await saveSettings(state.settings);
-    document.dispatchEvent(new CustomEvent("settings-changed"));
+    await saveSettings(collectGlobal());
     flashSaved("Saved ✓");
     fillSessionSection(); // plan injection text depends on settings only via session; cheap refresh
     refreshContextIndicator();
@@ -219,7 +222,9 @@ async function fillSessionSection() {
     return;
   }
   try {
-    const s = await getSession(state.sessionId);
+    const sessionId = state.sessionId;
+    const s = await getSession(sessionId);
+    if (sessionId !== state.sessionId) return;
     if (!s) return;
     if (el.sessionTitle.value !== s.title && document.activeElement !== el.sessionTitle) {
       el.sessionTitle.value = s.title ?? "";
@@ -234,6 +239,10 @@ async function fillSessionSection() {
 
 async function handleSaveSession() {
   if (!state.sessionId) return;
+  if (state.busy) {
+    flashSaved("Wait for the current reply or summary before changing the session.", true);
+    return;
+  }
   try {
     // Single updateDoc write: title + long-term plan together.
     await updateSession(state.sessionId, {

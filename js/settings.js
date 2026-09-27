@@ -5,6 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
+import { state } from "./state.js";
 
 export const DEFAULT_SETTINGS = {
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
@@ -21,6 +22,8 @@ export const DEFAULT_SETTINGS = {
   maxContextTokens: 120000,
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
+  summarizerMaxTokens: 100000,
+  summarizerChunkTokens: 250000,
   narratorSystemPrompt:
     "You are the narrator of an interactive, ongoing story. Drive the plot forward, " +
     "stay consistent with everything established so far, and write in vivid prose. " +
@@ -44,7 +47,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 function mergeDefaults(data) {
-  return {
+  const merged = {
     ...structuredClone(DEFAULT_SETTINGS),
     ...data,
     reasoning: {
@@ -52,6 +55,7 @@ function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
+  return merged;
 }
 
 // ---------- connection profiles ----------
@@ -85,18 +89,18 @@ export function mirrorFromActiveProfile(settings) {
   const p = activeProfile(settings);
   if (!p) return;
   for (const k of PROFILE_CONNECTION_KEYS) {
-    if (p[k] !== undefined) settings[k] = p[k];
+    settings[k] = p[k] ?? DEFAULT_SETTINGS[k];
   }
-  if (p.reasoning) {
-    settings.reasoning = {
-      ...structuredClone(DEFAULT_SETTINGS.reasoning),
-      ...p.reasoning,
-    };
-  }
+  settings.reasoning = {
+    ...structuredClone(DEFAULT_SETTINGS.reasoning),
+    ...(p.reasoning ?? {}),
+  };
 }
 
-// Guarantees: profiles array exists, activeProfileId points at a real profile,
-// and legacy settings (no profiles stored yet) are seeded from their flat fields.
+// Structural validation only: guarantee a profiles array exists and
+// activeProfileId points at a real profile. Never mirrors field values —
+// callers do that explicitly (mirrorToActiveProfile / mirrorFromActiveProfile),
+// otherwise UI edits get silently overwritten by stale profile data.
 export function normalizeProfiles(settings) {
   if (!Array.isArray(settings.profiles) || settings.profiles.length === 0) {
     settings.profiles = [{ id: "default", name: "Default" }];
@@ -104,6 +108,14 @@ export function normalizeProfiles(settings) {
   if (!settings.profiles.some((p) => p.id === settings.activeProfileId)) {
     settings.activeProfileId = settings.profiles[0].id;
   }
+  return settings;
+}
+
+// Load-time hydration: if the active profile has stored connection data, it
+// wins (loaded into the flat fields); otherwise (legacy settings) the flat
+// fields seed the profile.
+export function hydrateProfiles(settings) {
+  normalizeProfiles(settings);
   const p = activeProfile(settings);
   const stored = p.endpoint !== undefined || p.modelId !== undefined || p.apiKey !== undefined;
   if (stored) {
@@ -124,7 +136,7 @@ function userSettingsRef() {
 export async function loadSettings() {
   const ref = userSettingsRef();
   const snap = await getDoc(ref);
-  if (snap.exists()) return normalizeProfiles(mergeDefaults(snap.data()));
+  if (snap.exists()) return hydrateProfiles(mergeDefaults(snap.data()));
 
   // One-time migration: seed this account's settings from the legacy shared
   // /settings/global doc (falling back to defaults). Everything is then
@@ -132,14 +144,26 @@ export async function loadSettings() {
   let seed = structuredClone(DEFAULT_SETTINGS);
   try {
     const legacy = await getDoc(doc(db, "settings", "global"));
-    if (legacy.exists()) seed = normalizeProfiles(mergeDefaults(legacy.data()));
+    if (legacy.exists()) seed = hydrateProfiles(mergeDefaults(legacy.data()));
   } catch (e) {
     console.warn("Could not read legacy /settings/global (using defaults):", e);
   }
+  hydrateProfiles(seed);
   await setDoc(ref, seed);
   return seed;
 }
 
 export async function saveSettings(settings) {
-  await setDoc(userSettingsRef(), settings);
+  if (state.settingsSaving) throw new Error("A settings save is already in progress. Please try again.");
+  const snapshot = structuredClone(settings);
+  normalizeProfiles(snapshot);
+  mirrorToActiveProfile(snapshot);
+  state.settingsSaving = true;
+  try {
+    await setDoc(userSettingsRef(), snapshot);
+    state.settings = snapshot;
+    document.dispatchEvent(new CustomEvent("settings-changed"));
+  } finally {
+    state.settingsSaving = false;
+  }
 }

@@ -35,12 +35,12 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const parts = [{ role: "system", content: systemText }];
   let used = systemTokens;
 
-  const summaryMsg = session.activeSummaryMessageId
+  const summaryMsg = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upToOrder
     ? all.find((m) => m.id === session.activeSummaryMessageId)
     : null;
   if (summaryMsg) {
     parts.push({ role: "system", content: "Story so far:\n" + summaryMsg.content });
-    used += summaryMsg.tokenCount ?? 0;
+    used += await countSystemTokensCached("Story so far:\n" + summaryMsg.content);
   }
 
   let budget = settings.maxContextTokens - settings.maxResponseTokens - used;
@@ -50,7 +50,7 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     .filter(
       (m) =>
         m.role !== "summary" &&
-        m.order > (session.breakpointOrder ?? 0) &&
+        m.order > (summaryMsg ? (session.breakpointOrder ?? 0) : 0) &&
         m.order < upToOrder
     )
     .sort((a, b) => b.order - a.order); // newest first

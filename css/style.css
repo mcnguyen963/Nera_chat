@@ -200,8 +200,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .tab.active { color: var(--text); background: var(--panel-2); }
 .tab:hover { color: var(--text); }
 
-/* Compact ⋯ menu (mobile replaces the whole top bar with this) */
-.top-menu-wrap { position: relative; margin-left: auto; display: none; }
+/* Compact ⋯ menu (also on desktop, for summarize/reset summary actions) */
+.top-menu-wrap { position: relative; margin-left: auto; display: block; }
 .top-menu-btn { line-height: 1.2; padding: 2px 10px; font-size: 16px; }
 .top-menu {
   position: absolute;
@@ -339,7 +339,18 @@ details.thinking .thinking-body {
 }
 details.thinking.streaming summary::after { content: " · streaming…"; color: var(--accent); }
 
-.status-line { align-self: center; color: var(--accent); font-size: 13px; padding: 4px; }
+.status-line { align-self: center; color: var(--accent); font-size: 13px; padding: 4px; white-space: pre-wrap; }
+
+/* Live-streaming summary bubble (fixed-size window over the growing text) */
+.streaming-summary { align-self: stretch; }
+.summary-stream-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 /* ---------- Hold-to-copy ---------- */
 /* Whole-box highlight: brightens the bubble's own fill instead of drawing a

@@ -14,9 +14,11 @@ export function initSidebar() {
   if (me) userEl.textContent = `${me.email ?? "(no email)"} · ${me.uid.slice(0, 8)}`;
 
   newBtn.addEventListener("click", async () => {
+    if (state.busy) return;
     const title = prompt("Session title:", "New Session");
     if (title === null) return;
-    await createSession(title.trim() || "New Session");
+    const id = await createSession(title.trim() || "New Session");
+    setSession(id);
   });
 
   logoutBtn.addEventListener("click", () => logout());
@@ -24,12 +26,20 @@ export function initSidebar() {
   // Select a freshly imported session.
   document.addEventListener("session-imported", (e) => setSession(e.detail));
 
+  let cachedSessions = [];
+  document.addEventListener("session-changed", () => {
+    render(listEl, cachedSessions);
+    const active = cachedSessions.find((s) => s.id === state.sessionId);
+    if (titleEl) titleEl.textContent = active?.title || "Sessions";
+  });
   subscribeSessions(
     (sessions) => {
+      cachedSessions = sessions;
       render(listEl, sessions);
       const active = sessions.find((s) => s.id === state.sessionId);
       if (titleEl) titleEl.textContent = active?.title || "Sessions";
       if (sessions.length === 0) {
+        if (state.sessionId) setSession(null);
         const li = document.createElement("li");
         li.className = "muted";
         li.style.padding = "10px 12px";
@@ -86,6 +96,7 @@ function render(listEl, sessions) {
     delBtn.className = "del";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (state.busy) return;
       if (!confirm(`Delete session "${s.title}" and all its messages? This cannot be undone.`)) return;
       if (state.sessionId === s.id) setSession(null);
       await deleteSession(s.id);
@@ -96,6 +107,7 @@ function render(listEl, sessions) {
     copyBtn.className = "cpy";
     copyBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (state.busy) return;
       copyBtn.disabled = true;
       copyBtn.textContent = "…";
       try {
@@ -114,8 +126,7 @@ function render(listEl, sessions) {
     actions.append(renameBtn, copyBtn, delBtn);
     li.append(title, actions);
     li.addEventListener("click", () => {
-      setSession(s.id);
-      if (titleEl) titleEl.textContent = s.title || "Sessions";
+      if (!setSession(s.id)) return;
       document.dispatchEvent(new CustomEvent("sidebar:close"));
     });
     listEl.appendChild(li);

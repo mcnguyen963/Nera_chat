@@ -26,7 +26,9 @@ export function stripPlan(text) {
   if (!text) return "";
   return stripPlanThread(
     text
-      .replace(/<plan>[\s\S]*?<\/plan>\s*/gi, "")
+      .replace(/<(plan|plan_thread)>[\s\S]*?<\/\1>\s*/gi, "")
+      .replace(/<(plan|plan_thread)>[\s\S]*$/gi, "")
+      .replace(/<(?:p|pl|pla|plan|plan_|plan_t|plan_th|plan_thr|plan_thre|plan_threa|plan_thread)?$/i, "")
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
