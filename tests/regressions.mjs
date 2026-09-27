@@ -21,9 +21,10 @@ async function harness() {
     closest() { return { firstChild: { textContent: this.id } }; }
     getClientRects() { return [1]; }
     querySelectorAll() { return []; }
-    appendChild(child) { this.children.push(child); return child; }
+    appendChild(child) { child.remove(); this.children.push(child); child.parentNode = this; return child; }
+    insertBefore(child, anchor) { child.remove(); const index = anchor ? this.children.indexOf(anchor) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
     append(...children) { this.children.push(...children); }
-    remove() {}
+    remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); this.parentNode = null; }
     reportValidity() { return this.id === 'set-endpoint' || (Number.isInteger(Number(this.value)) && Number(this.value) >= 0); }
   }
   const document = new Element();
@@ -54,7 +55,7 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document,
@@ -70,7 +71,7 @@ async function harness() {
   const firestore = {
     doc: (...args) => args, collection() {},
     query: (...args) => { calls.queries.push(args); return args; },
-    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: () => () => {},
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (_ref, callback) => { calls.sessionCallbacks.push(callback); return () => {}; },
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
       if (calls.fail) throw new Error('write denied');
@@ -86,7 +87,7 @@ async function harness() {
     'messages.js': {
       getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
-      subscribeLatestMessages: (sessionId) => { calls.subscriptions.push(sessionId); return () => {}; },
+      subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
     },
   };
   const cache = new Map();
@@ -458,5 +459,31 @@ test('Opening a chat uses the chunked message subscription', async () => {
   const chat = await h.use('ui/chat-view.js');
   chat.initChatView();
   chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(h.calls.subscriptions, ['story']);
+});
+
+test('Switching back to a recently opened session reuses its cached messages', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  const open = async (id) => {
+    chat.setSession(id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionCallback = h.calls.sessionCallbacks.at(-1);
+    sessionCallback?.({ id, exists: () => true, data: () => ({ title: id, nextOrder: 1 }) });
+    const latestCallback = h.calls.latestCallbacks.at(-1);
+    latestCallback?.({ messages: [{ id: `${id}-m`, order: 1, role: 'user', content: id }], hasEarlier: false });
+  };
+  await open('story-a');
+  await open('story-b');
+  const readsBeforeReturn = h.calls.subscriptions.length;
+  chat.setSession('story-a');
+  assert.equal(h.calls.subscriptions.length, readsBeforeReturn);
+  await open('story-c');
+  await open('story-d');
+  const readsBeforeEvictedReturn = h.calls.subscriptions.length;
+  chat.setSession('story-b');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(h.calls.subscriptions.length, readsBeforeEvictedReturn + 1);
 });

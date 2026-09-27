@@ -8,7 +8,7 @@ import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
 import { updateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
-import { loadChatCache, saveChatCache } from "../chat-cache.js";
+import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
 import {
   useLocalSettings,
   normalizeProfiles,
@@ -245,6 +245,8 @@ export function setSession(sessionId) {
   if (cachedHistory) {
     historyCache.delete(sessionId);
     historyCache.set(sessionId, cachedHistory);
+  } else if (sessionId && historyCache.size >= 3) {
+    historyCache.delete(historyCache.keys().next().value);
   }
   historyLoading = null;
   renderedMessages.clear();
@@ -347,6 +349,26 @@ function subscribeChat(sessionId) {
   );
 }
 
+// The sidebar already watches session metadata, so use that feed to keep a
+// restored chat current without attaching another Firestore listener.
+export function syncActiveSession(metadata) {
+  if (!metadata || metadata.id !== state.sessionId || !session) return;
+  const previous = session;
+  session = { ...session, ...metadata };
+  if (session.title !== previous.title || session.longTermPlan !== previous.longTermPlan) {
+    document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId: session.id, session } }));
+  }
+  if (session.longTermPlan !== previous.longTermPlan ||
+      session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
+      session.breakpointOrder !== previous.breakpointOrder) updateIndicator();
+  queueCacheSave();
+}
+
+export function forgetChatSession(sessionId) {
+  historyCache.delete(sessionId);
+  void deleteChatCache(currentUid(), sessionId);
+}
+
 // ---------- rendering ----------
 
 let lastMessages = [];
@@ -375,7 +397,11 @@ async function ensureHistory() {
     if (state.sessionId !== sessionId) throw new Error("Session changed while loading history.");
     historyMessages = mergeMessages(messages, lastMessages);
     historyStartOrder = 0;
-    queueCacheSave();
+    const snapshot = chatSnapshot();
+    historyCache.delete(sessionId);
+    historyCache.set(sessionId, snapshot);
+    if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+    void saveChatCache(currentUid(), sessionId, snapshot);
     return historyMessages;
   })().finally(() => { historyLoading = null; });
   return historyLoading;

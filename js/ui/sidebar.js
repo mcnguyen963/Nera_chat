@@ -1,7 +1,7 @@
 import { state } from "../state.js";
 import { subscribeSessions, createSession, renameSession, deleteSession, duplicateSession } from "../sessions.js";
 import { logout, currentUserInfo } from "../auth.js";
-import { setSession } from "./chat-view.js";
+import { setSession, syncActiveSession, forgetChatSession } from "./chat-view.js";
 
 export function initSidebar() {
   const listEl = document.getElementById("session-list");
@@ -36,6 +36,7 @@ export function initSidebar() {
   subscribeSessions(
     (sessions) => {
       cachedSessions = sessions;
+      syncActiveSession(sessions.find((s) => s.id === state.sessionId));
       const signature = JSON.stringify(sessions.map((s) => [s.id, s.title]));
       if (signature !== renderedSignature) {
         render(listEl, sessions);
@@ -114,6 +115,7 @@ function render(listEl, sessions) {
       if (!confirm(`Delete session "${s.title}" and all its messages? This cannot be undone.`)) return;
       if (state.sessionId === s.id) setSession(null);
       await deleteSession(s.id);
+      forgetChatSession(s.id);
     });
 
     const copyBtn = document.createElement("button");
