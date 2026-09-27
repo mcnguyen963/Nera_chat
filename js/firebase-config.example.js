@@ -1,12 +1,12 @@
-// Placeholder Firebase config — safe to commit.
-// For local development: copy this file to js/firebase-config.js (git-ignored) and fill in
-// the real values from your Firebase project console (Project settings → General).
-// For deployment: .github/workflows/deploy.yml generates js/firebase-config.js from repo secrets.
+// Firebase web config — safe to commit; Firebase API keys identify the project,
+// while access is controlled by Firebase Security Rules.
+// For local development: copy this file to js/firebase-config.js (git-ignored).
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyBIdIDMi24w5kYo-i5fHlRIh-EjGmbXa54",
+  authDomain: "aichat-95df4.firebaseapp.com",
+  projectId: "aichat-95df4",
+  storageBucket: "aichat-95df4.firebasestorage.app",
+  messagingSenderId: "225600392302",
+  appId: "1:225600392302:web:1b2577ba2e0147e778aa7f",
+  measurementId: "G-440MGBS4HF",
 };

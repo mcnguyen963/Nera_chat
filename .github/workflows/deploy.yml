@@ -20,19 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Generate js/firebase-config.js from repository secrets before publishing.
-      # Required secrets: FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID,
-      # FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_SENDER_ID, FIREBASE_APP_ID
-      - name: Write firebase-config.js from secrets
+      # Generate js/firebase-config.js before publishing to GitHub Pages.
+      - name: Write firebase-config.js
         run: |
           cat > js/firebase-config.js <<'EOF'
           export const firebaseConfig = {
-            apiKey: "${{ secrets.FIREBASE_API_KEY }}",
-            authDomain: "${{ secrets.FIREBASE_AUTH_DOMAIN }}",
-            projectId: "${{ secrets.FIREBASE_PROJECT_ID }}",
-            storageBucket: "${{ secrets.FIREBASE_STORAGE_BUCKET }}",
-            messagingSenderId: "${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}",
-            appId: "${{ secrets.FIREBASE_APP_ID }}"
+            apiKey: "AIzaSyBIdIDMi24w5kYo-i5fHlRIh-EjGmbXa54",
+            authDomain: "aichat-95df4.firebaseapp.com",
+            projectId: "aichat-95df4",
+            storageBucket: "aichat-95df4.firebasestorage.app",
+            messagingSenderId: "225600392302",
+            appId: "1:225600392302:web:1b2577ba2e0147e778aa7f",
+            measurementId: "G-440MGBS4HF"
           };
           EOF
 
