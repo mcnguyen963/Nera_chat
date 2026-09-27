@@ -157,7 +157,8 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-dot { width: 5px; height: 5px; border-radius: 50%; background: #aaa; flex-shrink: 0; }
 .composer-spacer { flex: 1; }
-.composer-send { display: grid; place-items: center; width: 33px; height: 33px; flex-shrink: 0; border-radius: 50%; background: #dededb; color: #111; border: 0; font-size: 23px; line-height: 1; }
+.composer-send { display: grid; place-items: center; width: 33px; height: 33px; flex-shrink: 0; align-self: center; padding: 0; border-radius: 50%; background: #dededb; color: #111; border: 0; font-size: 23px; line-height: 1; }
+.composer-send span { display: block; transform: translateY(-1px); }
 .composer-send:hover:enabled { background: #fff; }
 .composer-note { margin: 12px 0 0; color: #626262; text-align: center; font-size: 10px; }
 .composer-popover { position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 40; width: min(340px, calc(100vw - 48px)); display: flex; flex-direction: column; gap: 16px; background: #1c1c1c; border: 1px solid #3b3b3b; border-radius: 14px; box-shadow: 0 12px 32px #0008; padding: 18px; }
