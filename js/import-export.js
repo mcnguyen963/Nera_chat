@@ -38,8 +38,7 @@ export async function importSillyTavern(file) {
   const text = await file.text();
   const { title, messages } = parseSillyTavernJsonl(text);
   const sessionId = await createSession(title || file.name.replace(/\.jsonl$/i, "") || "Imported chat");
-  // Single transaction for the order counter + batched writes (~450 msgs per write
-  // batch) instead of one transaction per message.
+  // Store the imported log in bounded chunks instead of one document per turn.
   await addMessagesBulk(sessionId, messages.map((m) => ({ role: m.role, content: m.content })));
   return sessionId;
 }

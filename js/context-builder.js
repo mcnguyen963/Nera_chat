@@ -2,11 +2,10 @@
 // Budget accounting: narrator prompt + plan block + summary + sliding-window messages
 // all live inside maxContextTokens; maxResponseTokens is reserved on top.
 //
-// Firestore optimization: both functions accept a pre-fetched `messages` array (the
-// chat view already holds one from its snapshot listener), so normal chat turns and
-// the context indicator perform ZERO extra Firestore reads.
+// Firestore optimization: both functions accept messages cached by the chat
+// view, so repeated turns and indicator updates need no collection read.
 
-import { getMessages } from "./messages.js";
+import { getCheckpointMessages, getMessages } from "./messages.js";
 import { countTokens } from "./tokenizer.js";
 import { planInjectionBlock } from "./plan-parser.js";
 
@@ -25,8 +24,10 @@ async function countSystemTokensCached(text) {
 }
 
 export async function buildContextForRequest(session, settings, opts = {}) {
-  const all = opts.messages ?? (await getMessages(session.id));
   const upToOrder = opts.upToOrder ?? Infinity; // regenerate: only messages before this order
+  const all = opts.messages ?? (upToOrder <= (session.breakpointOrder ?? 0)
+    ? await getMessages(session.id)
+    : await getCheckpointMessages(session));
 
   const systemText =
     (settings.narratorSystemPrompt || "") + "\n\n" + planInjectionBlock(session.longTermPlan);

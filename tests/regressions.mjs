@@ -19,18 +19,22 @@ async function harness() {
     appendChild(child) { this.children.push(child); return child; }
     append(...children) { this.children.push(...children); }
     remove() {}
-    reportValidity() { return Number.isInteger(Number(this.value)) && Number(this.value) >= 0; }
+    reportValidity() { return this.id === 'set-endpoint' || (Number.isInteger(Number(this.value)) && Number(this.value) >= 0); }
   }
   const document = new Element();
   document.getElementById = (id) => {
-    if (!elements.has(id)) elements.set(id, new Element());
+    if (!elements.has(id)) {
+      const element = new Element();
+      element.id = id;
+      elements.set(id, element);
+    }
     return elements.get(id);
   };
   document.createElement = () => new Element();
   document.querySelectorAll = () => [];
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { writes: [], messages: [], requests: [], fail: false, response: 'summary' };
+  const calls = { writes: [], messages: [], requests: [], queries: [], subscriptions: [], fail: false, response: 'summary' };
   const context = vm.createContext({
     console, structuredClone, document,
     window: { addEventListener() {} }, crypto,
@@ -42,7 +46,9 @@ async function harness() {
     },
   });
   const firestore = {
-    doc: (...args) => args, collection() {}, query() {}, orderBy() {}, onSnapshot: () => () => {},
+    doc: (...args) => args, collection() {},
+    query: (...args) => { calls.queries.push(args); return args; },
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: () => () => {},
     getDoc: async () => ({ exists: () => false }),
     setDoc: async (_ref, settings) => {
       if (calls.fail) throw new Error('write denied');
@@ -56,8 +62,9 @@ async function harness() {
     'sessions.js': { getSession: async () => null, updateSession: async () => {} },
     'import-export.js': { importSillyTavern() {}, exportSillyTavern() {} },
     'messages.js': {
-      getMessages: async () => [], newMessageId: () => 'summary-id',
+      getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
+      subscribeLatestMessages: (sessionId) => { calls.subscriptions.push(sessionId); return () => {}; },
     },
   };
   const cache = new Map();
@@ -197,6 +204,24 @@ test('Missing checkpoint and regeneration before checkpoint recover original his
   assert.equal(regen.apiMessages.some((m) => m.content.includes('future events')), false);
 });
 
+test('Context uses the checkpoint and every later message supplied by the cache', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const session = { id: 's', activeSummaryMessageId: 'summary', breakpointOrder: 200 };
+  const messages = [
+    { id: 'summary', order: 201, role: 'summary', content: 'Earlier story', tokenCount: 13 },
+    ...Array.from({ length: 150 }, (_, i) => ({
+      id: `m${i}`, order: 202 + i, role: 'user', content: `turn ${i}`, tokenCount: 1,
+    })),
+  ];
+  const result = await buildContextForRequest(session, {
+    ...h.state.settings, maxContextTokens: 100000, maxResponseTokens: 1000,
+  }, { messages });
+  assert.equal(result.windowedCount, 150);
+  assert.equal(result.apiMessages[1].content, 'Story so far:\nEarlier story');
+  assert.equal(result.apiMessages.at(-1).content, 'turn 149');
+});
+
 test('Streaming plan tags remain hidden even when split across chunks', async () => {
   const h = await harness();
   const { stripPlan } = await h.use('plan-parser.js');
@@ -241,4 +266,12 @@ test('Empty chat enables writing only after a story is selected', async () => {
   assert.equal(chat.setSession(null), true);
   assert.equal(h.el('btn-welcome-new').hidden, false);
   assert.equal(h.el('chat-input').disabled, true);
+});
+
+test('Opening a chat uses the chunked message subscription', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  chat.setSession('story');
+  assert.deepEqual(h.calls.subscriptions, ['story']);
 });

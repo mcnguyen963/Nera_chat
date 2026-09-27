@@ -1,9 +1,10 @@
 import {
-  doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, orderBy,
-  runTransaction, writeBatch, serverTimestamp, onSnapshot,
+  doc, getDoc, getDocFromServer, setDoc, updateDoc, deleteDoc, collection, getDocs, getDocsFromServer, query, orderBy,
+  writeBatch, serverTimestamp, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
+import { ensureChunked } from "./messages.js";
 
 // Every session lives under users/{uid}/sessions/... so each user's chat history
 // is isolated — enforced both by path scoping and by Firestore rules.
@@ -40,6 +41,10 @@ export async function createSession(title) {
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1
+    storageVersion: 2,
+    activeChunkId: null,
+    activeChunkBytes: 0,
+    activeChunkCount: 0,
   };
   await setDoc(sessionDoc(id), data);
   return id;
@@ -54,13 +59,14 @@ export async function renameSession(sessionId, title) {
 }
 
 export async function deleteSession(sessionId) {
-  // Firestore has no recursive delete from the client — batch the messages subcollection.
-  const snap = await getDocs(collection(db, "users", currentUid(), "sessions", sessionId, "messages"));
-  const docs = snap.docs;
-  for (let i = 0; i < docs.length; i += 450) {
-    const batch = writeBatch(db);
-    docs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
-    await batch.commit();
+  // Migrated sessions retain their legacy docs for recovery. Delete both trees.
+  for (const name of ["messageChunks", "messages"]) {
+    const snap = await getDocsFromServer(collection(db, "users", currentUid(), "sessions", sessionId, name));
+    for (let i = 0; i < snap.docs.length; i += 450) {
+      const batch = writeBatch(db);
+      snap.docs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
   }
   await deleteDoc(sessionDoc(sessionId));
 }
@@ -75,15 +81,15 @@ export function subscribeSessions(callback, onError) {
   );
 }
 
-// Duplicate a session: copies the session doc (title, long-term plan, breakpoint,
-// summary pointer — i.e. all its "settings") and every message into a new session.
-// Message docs are copied with their ORIGINAL ids and orders, so
-// activeSummaryMessageId and breakpointOrder keep pointing at the right messages.
+// Duplicate the session metadata and its message chunks. Embedded message ids
+// and orders stay the same, preserving the summary checkpoint pointers.
 export async function duplicateSession(sourceId) {
-  const source = await getSession(sourceId);
+  await ensureChunked(sourceId);
+  const sourceSnap = await getDocFromServer(sessionDoc(sourceId));
+  const source = sourceSnap.exists() ? { id: sourceSnap.id, ...sourceSnap.data() } : null;
   if (!source) throw new Error("Session not found.");
-  const msgsSnap = await getDocs(
-    collection(db, "users", currentUid(), "sessions", sourceId, "messages")
+  const msgsSnap = await getDocsFromServer(
+    collection(db, "users", currentUid(), "sessions", sourceId, "messageChunks")
   );
 
   const id = newId("sess");
@@ -97,10 +103,11 @@ export async function duplicateSession(sourceId) {
   });
 
   const docs = msgsSnap.docs;
-  for (let i = 0; i < docs.length; i += 450) {
+  // Chunk payloads can be large; keep each commit well below the 10 MiB cap.
+  for (let i = 0; i < docs.length; i += 6) {
     const batch = writeBatch(db);
-    docs.slice(i, i + 450).forEach((d) => {
-      batch.set(doc(db, "users", currentUid(), "sessions", id, "messages", d.id), d.data());
+    docs.slice(i, i + 6).forEach((d) => {
+      batch.set(doc(db, "users", currentUid(), "sessions", id, "messageChunks", d.id), d.data());
     });
     await batch.commit();
   }

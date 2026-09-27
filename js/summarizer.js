@@ -2,11 +2,11 @@
 // plus everything since the last breakpoint; only the newest summary is referenced by
 // the session going forward — older summary docs remain in the log as history.
 //
-// Firestore optimization: opts.messages lets the caller pass its already-cached
-// message list (zero collection reads); the summary message + session pointer update
+// Firestore optimization: opts.messages lets the caller pass its cached
+// checkpoint-to-present message list; the summary message + session pointer update
 // are committed in ONE transaction (1 read + 2 writes instead of 2 reads + 3 writes).
 
-import { getMessages, addMessage, newMessageId } from "./messages.js";
+import { getMessages, getCheckpointMessages, addMessage, newMessageId } from "./messages.js";
 import { chatCompletion } from "./llm-client.js";
 import { computeContextUsage } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
@@ -45,7 +45,9 @@ export function formatAsTranscript(msgs) {
 }
 
 export async function runSummarization(session, settings, opts = {}) {
-  const all = opts.messages ?? (await getMessages(session.id));
+  const all = opts.messages ?? (opts.full
+    ? await getMessages(session.id)
+    : await getCheckpointMessages(session));
   const N = settings.keepRecentMessagesAfterSummary;
 
   const raw = all
@@ -120,7 +122,13 @@ export async function runSummarization(session, settings, opts = {}) {
     { id: summaryId, sessionUpdate: { activeSummaryMessageId: summaryId, breakpointOrder: newBreakpointOrder } }
   );
 
-  return { skipped: false, summaryId: newMsg.id, newBreakpointOrder, foldedCount: toFold.length };
+  return {
+    skipped: false,
+    summaryId: newMsg.id,
+    newBreakpointOrder,
+    foldedCount: toFold.length,
+    summaryMessage: { id: newMsg.id, order: newMsg.order, role: "summary", content, tokenCount: newMsg.tokenCount },
+  };
 }
 
 // Auto-trigger check (spec §8.1): fires after each assistant reply is saved.

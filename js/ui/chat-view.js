@@ -1,6 +1,4 @@
-import {
-  doc, collection, query, orderBy, onSnapshot,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
@@ -27,6 +25,13 @@ let indicatorRun = 0;
 let editingState = null; // { id, ta } while a message is being edited inline
 const PAGE_SIZE = 100;
 let visibleCount = PAGE_SIZE;
+let hasEarlier = false;
+let latestMessageIds = new Set();
+let latestReady = false;
+let historyMessages = null; // full history or the active checkpoint onward
+let historyStartOrder = 0;
+let historyLoading = null;
+const historyCache = new Map(); // keep recently visited sessions in memory
 const renderedMessages = new Map();
 
 const el = {};
@@ -43,12 +48,38 @@ export function initChatView() {
   el.earlierBtn = document.createElement("button");
   el.earlierBtn.className = "btn earlier-messages";
   el.earlierBtn.type = "button";
-  el.earlierBtn.addEventListener("click", () => {
+  el.earlierBtn.addEventListener("click", async () => {
+    if (!lastMessages.length) return;
+    if (lastMessages.length > visibleCount) {
+      visibleCount += PAGE_SIZE;
+      renderMessages(lastMessages);
+      return;
+    }
+    if (!hasEarlier) return;
     const previousHeight = el.list.scrollHeight;
     const previousTop = el.list.scrollTop;
-    visibleCount += PAGE_SIZE;
-    renderMessages(lastMessages);
-    el.list.scrollTop = previousTop + el.list.scrollHeight - previousHeight;
+    const sessionId = state.sessionId;
+    const beforeOrder = lastMessages[0].order;
+    el.earlierBtn.disabled = true;
+    try {
+      const cachedEarlier = historyMessages && historyStartOrder === 0
+        ? historyMessages.filter((m) => m.order < beforeOrder)
+        : null;
+      const older = cachedEarlier
+        ? cachedEarlier.slice(-PAGE_SIZE)
+        : await messagesApi.getEarlierMessages(sessionId, beforeOrder, PAGE_SIZE);
+      if (state.sessionId !== sessionId) return;
+      hasEarlier = cachedEarlier
+        ? cachedEarlier.length > older.length
+        : older.length === PAGE_SIZE;
+      visibleCount += older.length;
+      renderMessages(mergeMessages(lastMessages, older));
+      el.list.scrollTop = previousTop + el.list.scrollHeight - previousHeight;
+    } catch (err) {
+      showTransientError("Could not load earlier messages: " + err.message);
+    } finally {
+      el.earlierBtn.disabled = false;
+    }
   });
 
   el.composer.addEventListener("submit", handleSend);
@@ -197,6 +228,11 @@ export function setSession(sessionId) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
   }
+  if (state.sessionId && historyMessages) {
+    historyCache.delete(state.sessionId);
+    historyCache.set(state.sessionId, { messages: historyMessages, startOrder: historyStartOrder });
+    if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+  }
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -206,6 +242,17 @@ export function setSession(sessionId) {
   editingState = null;
   lastMessages = [];
   visibleCount = PAGE_SIZE;
+  hasEarlier = false;
+  latestMessageIds = new Set();
+  latestReady = false;
+  const cachedHistory = historyCache.get(sessionId);
+  historyMessages = cachedHistory?.messages ?? null;
+  historyStartOrder = cachedHistory?.startOrder ?? 0;
+  if (historyMessages) {
+    historyCache.delete(sessionId);
+    historyCache.set(sessionId, cachedHistory);
+  }
+  historyLoading = null;
   renderedMessages.clear();
   ++indicatorRun;
   el.list.innerHTML = "";
@@ -214,6 +261,7 @@ export function setSession(sessionId) {
   document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session: null } }));
   updateWelcome();
   if (!sessionId) return true;
+  el.contextLabel.textContent = "Loading chat…";
 
   sessUnsub = onSnapshot(
     doc(db, "users", currentUid(), "sessions", sessionId),
@@ -235,14 +283,27 @@ export function setSession(sessionId) {
     (err) => console.error("Session listener error:", err)
   );
 
-  msgUnsub = onSnapshot(
-    query(collection(db, "users", currentUid(), "sessions", sessionId, "messages"), orderBy("order", "asc")),
-    (snap) => {
+  msgUnsub = messagesApi.subscribeLatestMessages(
+    sessionId,
+    ({ messages: latest, hasEarlier: olderExists }) => {
       if (state.sessionId !== sessionId) return;
-      renderMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      latestReady = true;
+      const ids = new Set(latest.map((m) => m.id));
+      const oldestOrder = latest[0]?.order ?? Infinity;
+      const deleted = new Set([...latestMessageIds].filter((id) =>
+        !ids.has(id) && (latest.length === 0 ||
+          (lastMessages.find((m) => m.id === id)?.order ?? Infinity) >= oldestOrder)
+      ));
+      latestMessageIds = ids;
+      lastMessages = lastMessages.filter((m) => !deleted.has(m.id));
+      if (historyMessages) historyMessages = historyMessages.filter((m) => !deleted.has(m.id));
+      if (lastMessages.length <= latest.length) hasEarlier = olderExists;
+      const merged = mergeMessages(lastMessages, latest);
+      renderMessages(visibleCount <= PAGE_SIZE ? merged.slice(-PAGE_SIZE) : merged);
+      if (historyMessages) historyMessages = mergeMessages(historyMessages, latest);
       updateIndicator(); // cached data — no extra Firestore reads
     },
-    (err) => showTransientError("Firestore listener error: " + err.message)
+    (err) => showTransientError("Could not load chat: " + err.message)
   );
   return true;
 }
@@ -250,6 +311,64 @@ export function setSession(sessionId) {
 // ---------- rendering ----------
 
 let lastMessages = [];
+
+function mergeMessages(existing, incoming) {
+  const byId = new Map(existing.map((m) => [m.id, m]));
+  for (const m of incoming) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => a.order - b.order);
+}
+
+async function ensureHistory({ full = false } = {}) {
+  const checkpoint = !full && session?.activeSummaryMessageId
+    ? (session.breakpointOrder ?? 0)
+    : 0;
+  if (historyMessages && historyStartOrder <= checkpoint &&
+      (!checkpoint || historyMessages.some((m) => m.id === session.activeSummaryMessageId))) {
+    return historyMessages;
+  }
+  if (historyLoading) {
+    await historyLoading;
+    return ensureHistory({ full });
+  }
+  if (latestReady && !hasEarlier) {
+    historyMessages = [...lastMessages];
+    historyStartOrder = 0;
+    return historyMessages;
+  }
+  const sessionId = state.sessionId;
+  historyLoading = (async () => {
+    let startOrder = checkpoint;
+    let messages = checkpoint
+      ? await messagesApi.getMessagesAfterOrder(sessionId, checkpoint)
+      : await messagesApi.getMessages(sessionId);
+    // A broken or deleted checkpoint must not silently omit older context.
+    if (checkpoint && !messages.some((m) => m.id === session.activeSummaryMessageId)) {
+      messages = await messagesApi.getMessages(sessionId);
+      startOrder = 0;
+    }
+    if (state.sessionId !== sessionId) throw new Error("Session changed while loading history.");
+    historyMessages = mergeMessages(messages, lastMessages.filter((m) => m.order > startOrder));
+    historyStartOrder = startOrder;
+    return historyMessages;
+  })().finally(() => { historyLoading = null; });
+  return historyLoading;
+}
+
+function applySummaryResult(result) {
+  if (result.skipped) return;
+  session = {
+    ...session,
+    activeSummaryMessageId: result.summaryId,
+    breakpointOrder: result.newBreakpointOrder,
+  };
+  historyMessages = mergeMessages(
+    historyMessages.filter((m) => m.order > result.newBreakpointOrder),
+    [result.summaryMessage]
+  );
+  historyStartOrder = result.newBreakpointOrder;
+  renderMessages(mergeMessages(lastMessages, [result.summaryMessage]));
+  updateIndicator();
+}
 
 function renderMessages(msgs) {
   if (!isNearBottom() && msgs.length > lastMessages.length) {
@@ -291,8 +410,8 @@ function renderMessages(msgs) {
     }
     anchor = entry.node;
   }
-  if (msgs.length > visible.length) {
-    el.earlierBtn.textContent = `Show earlier messages (${msgs.length - visible.length})`;
+  if (hasEarlier || msgs.length > visible.length) {
+    el.earlierBtn.textContent = "Show earlier messages";
     if (el.earlierBtn.parentNode !== el.list || el.earlierBtn.nextSibling !== anchor) {
       el.list.insertBefore(el.earlierBtn, anchor);
     }
@@ -342,12 +461,14 @@ function renderMessage(m) {
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
-    await messagesApi.deleteMessage(state.sessionId, m.id);
+    await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
+    renderMessages(lastMessages.filter((item) => item.id !== m.id));
   }));
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
-      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id, messages: lastMessages });
+      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
     }));
   }
   meta.appendChild(actions);
@@ -423,8 +544,11 @@ function startEdit(m, wrap) {
     save.disabled = true;
     cancel.disabled = true;
     try {
-      const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text);
+      const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
       lastMessages = lastMessages.map((item) =>
+        item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
+      );
+      if (historyMessages) historyMessages = historyMessages.map((item) =>
         item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
       );
       finish();
@@ -526,9 +650,9 @@ function showToast(text, ok) {
 // ---------- context indicator ----------
 
 export async function updateIndicator() {
-  if (!session || !state.settings) return;
+  if (!session || !state.settings || !latestReady) return;
   const run = ++indicatorRun;
-  const usage = await computeContextUsage(session, state.settings, lastMessages);
+  const usage = await computeContextUsage(session, state.settings, historyMessages ?? lastMessages);
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
   const pct = usage.max > 0 ? (usage.usedTokens / usage.max) * 100 : 0;
@@ -538,7 +662,8 @@ export async function updateIndicator() {
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
     `${usage.usedTokens.toLocaleString()} / ${usage.max.toLocaleString()} tokens` +
-    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "");
+    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
+    (!historyMessages && hasEarlier ? " · recent history estimate" : "");
 }
 export const refreshContextIndicator = updateIndicator;
 
@@ -558,6 +683,7 @@ async function handleSend(e) {
   el.input.style.height = "auto";
   setBusy(true);
   try {
+    await ensureHistory();
     const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
     // Bridge until the snapshot arrives so the context build includes the user turn
     // without re-reading the collection from Firestore.
@@ -566,10 +692,11 @@ async function handleSend(e) {
         { id: userMsg.id, order: userMsg.order, role: "user", content: text, tokenCount: userMsg.tokenCount },
       ]);
     }
+    historyMessages = mergeMessages(historyMessages, [lastMessages.find((m) => m.id === userMsg.id)]);
     // Explicitly pass the bridged cache: opts.messages keeps buildContextForRequest
     // off the racy getMessages() fallback, which would hit the watch cache and
     // potentially miss the just-committed user message.
-    await runAssistantTurn({ messages: lastMessages });
+    await runAssistantTurn({ messages: historyMessages });
   } catch (err) {
     showTransientError(err.message || String(err));
   } finally {
@@ -582,7 +709,9 @@ async function runAssistantTurn(opts = {}) {
   if (!settings) return;
   setBusy(true);
   try {
-    const { apiMessages } = await buildContextForRequest(session, settings, opts);
+    const beforeCheckpoint = opts.upToOrder <= (session.breakpointOrder ?? 0);
+    const allMessages = opts.messages ?? await ensureHistory({ full: beforeCheckpoint });
+    const { apiMessages } = await buildContextForRequest(session, settings, { ...opts, messages: allMessages });
     startStreamUI();
 
     const { content, thinking } = await chatCompletion({
@@ -607,9 +736,12 @@ async function runAssistantTurn(opts = {}) {
     if (opts.overwriteId) {
       const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
         content: finalContent, thinking,
-      });
+      }, opts.upToOrder);
       const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
       if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, tokenCount };
+      historyMessages = historyMessages.map((m) =>
+        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, tokenCount } : m
+      );
     } else {
       savedMsg = await messagesApi.addMessage(session.id, {
         role: "assistant", content: finalContent, thinking,
@@ -617,6 +749,7 @@ async function runAssistantTurn(opts = {}) {
       lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
         { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, tokenCount: savedMsg.tokenCount },
       ]);
+      historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
     }
     renderMessages(lastMessages);
 
@@ -627,14 +760,15 @@ async function runAssistantTurn(opts = {}) {
     // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
     // computed entirely from cached data.
     const fresh = { ...session, longTermPlan: newPlan ?? session.longTermPlan };
-    if (await shouldAutoSummarize(fresh, settings, lastMessages)) {
+    if (await shouldAutoSummarize(fresh, settings, historyMessages)) {
       const ui = streamSummaryUI("Context near limit — auto-summarizing…");
       try {
         const r = await runSummarization(fresh, settings, {
-          messages: lastMessages,
+          messages: historyMessages,
           onDelta: ui.onDelta,
           onReasoning: ui.onReasoning,
         });
+        applySummaryResult(r);
         setStatus(r.skipped ? r.reason : "Summary updated.", true);
       } finally {
         ui.done();
@@ -695,11 +829,13 @@ async function handleSummarize() {
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
   try {
+    await ensureHistory();
     const r = await runSummarization(session, state.settings, {
-      messages: lastMessages,
+      messages: historyMessages,
       onDelta: ui.onDelta,
       onReasoning: ui.onReasoning,
     });
+    applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
   } catch (err) {
     showTransientError("Summarization failed: " + (err.message || String(err)));
@@ -722,8 +858,9 @@ async function handleFullSummarize() {
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
+    await ensureHistory({ full: true });
     const r = await runSummarization(session, state.settings, {
-      messages: lastMessages,
+      messages: historyMessages,
       full: true,
       onDelta: ui.onDelta,
       onReasoning: ui.onReasoning,
@@ -731,6 +868,7 @@ async function handleFullSummarize() {
         if (multi) ui.setLabel(`Summarizing part ${i}/${total}…`);
       },
     });
+    applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
   } catch (err) {
     showTransientError("Summarization failed: " + (err.message || String(err)));
@@ -752,6 +890,11 @@ async function handleResetSummary() {
     return;
   try {
     await updateSession(session.id, { activeSummaryMessageId: null, breakpointOrder: 0 });
+    session = { ...session, activeSummaryMessageId: null, breakpointOrder: 0 };
+    historyMessages = null;
+    historyStartOrder = 0;
+    historyCache.delete(session.id);
+    updateIndicator();
     setStatus("Summary checkpoint reset.", true);
   } catch (err) {
     showTransientError("Reset failed: " + (err.message || String(err)));
