@@ -270,6 +270,7 @@ function renderMessage(m) {
 
   const actions = document.createElement("span");
   actions.className = "msg-actions";
+  actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
   if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
