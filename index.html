@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-  <meta name="theme-color" content="#0f1115" />
+  <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -15,16 +15,18 @@
   <!-- Login gate -->
   <div id="login-screen" class="login-screen hidden">
     <form id="login-form" class="login-card">
-      <h1>Roleplay Chat</h1>
+      <div class="brand-mark" aria-hidden="true">✳</div>
+      <p class="eyebrow">ROLEPLAY CHAT</p>
+      <h1>A space for your stories.</h1>
       <p class="muted" id="login-note"></p>
-      <label>Email (Firebase Auth user)
-        <input type="text" id="login-username" autocomplete="username" required />
+      <label>Email address
+        <input type="email" id="login-username" autocomplete="username" required />
       </label>
       <label>Password
         <input type="password" id="login-password" autocomplete="current-password" required />
       </label>
       <div id="login-error" class="error-text"></div>
-      <button type="submit" class="btn primary">Log in</button>
+      <button type="submit" class="btn primary">Continue →</button>
     </form>
   </div>
 
@@ -32,12 +34,13 @@
   <div id="app" class="app hidden">
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
-        <span>Sessions</span>
-        <button id="btn-new-session" class="btn small" title="New session">+ New</button>
+        <a class="brand" href="./" aria-label="Roleplay Chat home"><span class="brand-mark" aria-hidden="true">✳</span> Roleplay<span class="brand-dot">chat</span></a>
       </div>
+      <button id="btn-new-session" class="btn new-session" title="New session"><span aria-hidden="true">＋</span> New story <span class="new-arrow" aria-hidden="true">↗</span></button>
+      <div class="sidebar-label">Your stories</div>
       <ul id="session-list" class="session-list"></ul>
       <div class="sidebar-footer">
-        <div id="current-user" class="muted" style="margin-bottom:8px; word-break:break-all;"></div>
+        <div class="account-row"><span class="account-avatar" aria-hidden="true">You</span><div class="account-info"><span class="account-label">Your workspace</span><div id="current-user" class="muted"></div></div></div>
         <button id="btn-logout" class="btn small">Log out</button>
       </div>
     </aside>
@@ -46,12 +49,12 @@
 
     <main class="main">
       <header class="top-bar">
-        <button id="btn-sidebar-toggle" class="btn icon-btn" aria-label="Toggle sessions menu">
+        <button id="btn-sidebar-toggle" class="btn icon-btn" aria-label="Toggle stories menu" aria-expanded="false" aria-controls="sidebar">
           <span class="hamburger"><span></span><span></span><span></span></span>
         </button>
-        <span id="top-bar-title" class="top-bar-title">Sessions</span>
-        <nav class="tab-bar">
-          <button class="tab active" data-tab="chat">Chat</button>
+        <span id="top-bar-title" class="top-bar-title">Your next story</span>
+        <nav class="tab-bar" aria-label="Workspace">
+          <button class="tab active" data-tab="chat">Conversation</button>
           <button class="tab" data-tab="settings">Settings</button>
         </nav>
       </header>
@@ -60,7 +63,7 @@
       <section id="chat-tab" class="chat-tab">
         <div class="chat-toolbar">
           <div id="context-indicator" class="context-indicator" title="Tokens that would be sent next turn / context budget">
-            <div class="context-bar"><div id="context-fill" class="context-fill"></div><div id="context-threshold" class="context-threshold"></div></div>
+            <span class="context-caption">Context</span><div class="context-bar"><div id="context-fill" class="context-fill"></div><div id="context-threshold" class="context-threshold"></div></div>
             <span id="context-label" class="muted">—</span>
           </div>
           <button id="btn-summarize" class="btn small">Summarize</button>
@@ -75,13 +78,25 @@
             </div>
           </div>
         </div>
-        <div id="message-list" class="message-list"></div>
+        <div id="welcome" class="welcome">
+          <div class="brand-mark welcome-mark" aria-hidden="true">✳</div>
+          <p class="eyebrow">A LITTLE IMAGINATION. ENDLESS POSSIBILITY.</p>
+          <h1>Where will your story go?</h1>
+          <p>Build a world, become a character, or see where a conversation takes you.</p>
+          <button id="btn-welcome-new" type="button" class="btn primary welcome-new">Create your first story <span aria-hidden="true">↗</span></button>
+          <div class="story-starters" aria-label="Story inspiration">
+            <button type="button" data-starter="Start a fantasy adventure. I arrive in a quiet village where the stars have begun to disappear."><span aria-hidden="true">◇</span><strong>Explore a new world</strong><small>Let the adventure find you</small></button>
+            <button type="button" data-starter="Help me create an intriguing character. Ask me about their world, their ambitions, and the secret they keep."><span aria-hidden="true">♧</span><strong>Become someone new</strong><small>Every character has a story</small></button>
+            <button type="button" data-starter="Begin a mystery. A letter arrives at my door, dated thirty years from tomorrow."><span aria-hidden="true">☾</span><strong>Follow your curiosity</strong><small>Start with a little mystery</small></button>
+          </div>
+        </div>
+        <div id="message-list" class="message-list" aria-label="Conversation"></div>
         <form id="composer" class="composer">
           <div id="composer-box" class="composer-box">
-            <textarea id="chat-input" placeholder="Write your turn…" rows="1"></textarea>
+            <textarea id="chat-input" placeholder="Where shall we begin?" aria-label="Your message" rows="1"></textarea>
             <div class="composer-row">
               <button type="button" id="btn-model-chip" class="composer-chip" aria-haspopup="true">
-                <span id="chip-model" class="chip-label">Model</span>
+                <span class="model-dot" aria-hidden="true"></span><span id="chip-model" class="chip-label">Model</span><span aria-hidden="true">⌄</span>
               </button>
               <span class="composer-spacer"></span>
               <button type="submit" id="btn-send" class="composer-send" aria-label="Send">↑</button>
@@ -105,6 +120,7 @@
               </label>
             </div>
           </div>
+          <p class="composer-note">Your imagination leads the way.</p>
         </form>
       </section>
 
@@ -113,6 +129,7 @@
         <div class="settings-backbar">
           <button id="btn-back-to-chat" class="btn small" type="button">‹ Back to chat</button>
         </div>
+        <div class="settings-heading"><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p class="muted">The right setup for the stories you want to tell.</p></div>
         <h2>Connection</h2>
         <div class="settings-grid">
           <label>Profile
@@ -206,17 +223,17 @@
             <input type="text" id="set-session-title" />
           </label>
         </div>
-        <label class="full-label">Long-term plan (hidden from chat view; the model can update it via &lt;plan&gt;…&lt;/plan&gt;)
+        <label class="full-label">Story notes &amp; long-term plan
           <textarea id="set-session-plan" rows="6"></textarea>
         </label>
         <div class="settings-actions">
           <button id="btn-save-session" class="btn primary">Save session</button>
         </div>
 
-        <h2>Import / Export (SillyTavern JSONL)</h2>
+        <h2>Bring your stories with you</h2>
         <div class="settings-actions">
           <input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" />
-          <button id="btn-import-st" class="btn">Import .jsonl (creates new session)</button>
+          <button id="btn-import-st" class="btn">Import story (.jsonl)</button>
           <button id="btn-export-st" class="btn">Export current session</button>
         </div>
       </section>

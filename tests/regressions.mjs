@@ -225,3 +225,20 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]);
   assert.equal(result, true);
 });
+
+test('Empty chat enables writing only after a story is selected', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  assert.equal(h.el('welcome').hidden, false);
+  assert.equal(h.el('btn-welcome-new').hidden, false);
+  assert.equal(h.el('chat-input').disabled, true);
+  assert.equal(h.el('btn-send').disabled, true);
+  assert.equal(chat.setSession('story'), true);
+  assert.equal(h.el('btn-welcome-new').hidden, true);
+  assert.equal(h.el('chat-input').disabled, false);
+  assert.equal(h.el('btn-send').disabled, false);
+  assert.equal(chat.setSession(null), true);
+  assert.equal(h.el('btn-welcome-new').hidden, false);
+  assert.equal(h.el('chat-input').disabled, true);
+});

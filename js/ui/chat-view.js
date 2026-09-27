@@ -47,7 +47,6 @@ export function initChatView() {
   // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
   const autoGrow = () => {
     el.input.style.height = "auto";
-    el.input.style.height = Math.min(el.input.scrollHeight, el.input.clientHeight || el.input.scrollHeight) + "px";
     el.input.style.height = el.input.scrollHeight + "px";
   };
   el.input.addEventListener("input", autoGrow);
@@ -61,6 +60,17 @@ export function initChatView() {
     requestAnimationFrame(() => alignFieldToKeyboard(el.composer));
   });
 
+  document.querySelectorAll("[data-starter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      el.input.value = button.dataset.starter;
+      autoGrow();
+      el.input.focus();
+    });
+  });
+  document.getElementById("btn-welcome-new")?.addEventListener("click", () => {
+    document.getElementById("btn-new-session")?.click();
+  });
+  updateWelcome();
   initQuickControls();
 }
 
@@ -186,6 +196,7 @@ export function setSession(sessionId) {
   el.contextFill.style.width = "0%";
   el.contextLabel.textContent = "No session selected";
   document.dispatchEvent(new CustomEvent("session-changed"));
+  updateWelcome();
   if (!sessionId) return true;
 
   sessUnsub = onSnapshot(
@@ -226,9 +237,23 @@ function renderMessages(msgs) {
   }
   const sticky = isNearBottom();
   el.list.innerHTML = "";
+  updateWelcome();
   for (const m of msgs) el.list.appendChild(renderMessage(m));
   if (streamState) el.list.appendChild(streamState.wrap);
   if (sticky) scrollToEnd();
+}
+
+function updateWelcome() {
+  const welcome = document.getElementById("welcome");
+  const empty = lastMessages.length === 0 && !streamState;
+  if (welcome) welcome.hidden = !empty;
+  const newStory = document.getElementById("btn-welcome-new");
+  if (newStory) newStory.hidden = Boolean(state.sessionId);
+  document.getElementById("chat-tab")?.classList.toggle("is-empty", empty);
+  el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
+  el.input.disabled = !state.sessionId;
+  el.sendBtn.disabled = busy || !state.sessionId;
+  document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
 }
 
 function renderMessage(m) {
@@ -669,6 +694,7 @@ function startStreamUI() {
   scrollToEnd();
 
   streamState = { wrap, thinking, content, thinkingText: "", contentText: "" };
+  updateWelcome();
 }
 
 function appendStream(kind, text) {

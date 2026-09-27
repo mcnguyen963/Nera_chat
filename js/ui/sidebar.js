@@ -11,14 +11,16 @@ export function initSidebar() {
   const titleEl = document.getElementById("top-bar-title");
 
   const me = currentUserInfo();
-  if (me) userEl.textContent = `${me.email ?? "(no email)"} · ${me.uid.slice(0, 8)}`;
+  if (me) userEl.textContent = me.email ?? "Signed in";
 
   newBtn.addEventListener("click", async () => {
     if (state.busy) return;
-    const title = prompt("Session title:", "New Session");
+    const title = prompt("Session title:", "Untitled story");
     if (title === null) return;
-    const id = await createSession(title.trim() || "New Session");
+    const id = await createSession(title.trim() || "Untitled story");
     setSession(id);
+    document.querySelector('.tab[data-tab="chat"]')?.click();
+    document.dispatchEvent(new CustomEvent("sidebar:close"));
   });
 
   logoutBtn.addEventListener("click", () => logout());
@@ -30,20 +32,20 @@ export function initSidebar() {
   document.addEventListener("session-changed", () => {
     render(listEl, cachedSessions);
     const active = cachedSessions.find((s) => s.id === state.sessionId);
-    if (titleEl) titleEl.textContent = active?.title || "Sessions";
+    if (titleEl) titleEl.textContent = active?.title || "Your next story";
   });
   subscribeSessions(
     (sessions) => {
       cachedSessions = sessions;
       render(listEl, sessions);
       const active = sessions.find((s) => s.id === state.sessionId);
-      if (titleEl) titleEl.textContent = active?.title || "Sessions";
+      if (titleEl) titleEl.textContent = active?.title || "Your next story";
       if (sessions.length === 0) {
         if (state.sessionId) setSession(null);
         const li = document.createElement("li");
         li.className = "muted";
         li.style.padding = "10px 12px";
-        li.textContent = "No sessions yet — use + New or Settings → Import.";
+        li.textContent = "A blank page, a new possibility. Create your first story above.";
         listEl.appendChild(li);
         return;
       }
@@ -77,6 +79,12 @@ function render(listEl, sessions) {
 
     const title = document.createElement("span");
     title.className = "session-title";
+    title.tabIndex = 0;
+    title.setAttribute("role", "button");
+    title.setAttribute("aria-current", s.id === state.sessionId ? "true" : "false");
+    title.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); title.click(); }
+    });
     title.textContent = s.title || "Untitled";
 
     const actions = document.createElement("span");

@@ -47,6 +47,7 @@ function setSidebarOpen(open) {
   document.body.classList.toggle("sidebar-open", open);
   el.app?.classList.toggle("sidebar-open", open);
   if (el.sidebarBackdrop) el.sidebarBackdrop.hidden = !open;
+  el.sidebarToggle?.setAttribute("aria-expanded", String(open));
 }
 
 el.sidebarToggle?.addEventListener("click", () =>
@@ -54,6 +55,15 @@ el.sidebarToggle?.addEventListener("click", () =>
 );
 el.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false));
 document.addEventListener("sidebar:close", () => setSidebarOpen(false));
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    setSidebarOpen(false);
+    setTopMenuOpen(false);
+    const popover = document.getElementById("composer-popover");
+    if (popover) popover.hidden = true;
+  }
+});
 
 // ---------- compact top menu (mobile) ----------
 function setTopMenuOpen(open) {
@@ -99,7 +109,7 @@ initAuth((user) => {
   } else {
     el.app.classList.add("hidden");
     el.loginScreen.classList.remove("hidden");
-    el.loginNote.textContent = "Sign in with your Firebase Auth account.";
+    el.loginNote.textContent = "Welcome back. Sign in to continue your story.";
   }
 });
 
