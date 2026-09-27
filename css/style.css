@@ -204,16 +204,16 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   input[type="text"], input[type="email"], input[type="url"], input[type="password"], input[type="number"], select, textarea { font-size: 16px; }
   .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(84vw, 300px); min-width: 0; transform: translateX(-105%); transition: transform .2s; box-shadow: 15px 0 50px #0008; }
   .app.sidebar-open .sidebar { transform: translateX(0); }
-  .icon-btn { display: block; width: 44px; min-height: 44px; }
-  .top-bar { min-height: 62px; gap: 6px; padding: calc(10px + var(--safe-top)) 12px 10px; }
-  .top-bar-title { font-size: 12px; }
-  .tab { padding: 8px 9px; min-height: 38px; font-size: 11px; }
-  .tab-bar { gap: 0; padding: 3px; }
-  .chat-toolbar { padding: 0 16px 8px; gap: 6px; }
+  .icon-btn { display: block; width: 32px; min-height: 32px; padding: 6px; }
+  .top-bar { min-height: 0; gap: 5px; padding: calc(5px + var(--safe-top)) 12px 5px; }
+  .top-bar-title { font-size: 11px; }
+  .tab { padding: 5px 7px; min-height: 26px; font-size: 10px; }
+  .tab-bar { gap: 0; padding: 2px; }
+  .chat-toolbar { padding: 0 16px 6px; gap: 5px; }
   .context-caption { display: none; }
   .context-bar { width: 35px; }
   #context-label { font-size: 9px; }
-  .chat-toolbar .btn { min-height: 32px; }
+  .chat-toolbar .btn { min-height: 26px; padding: 4px 6px; }
   .welcome { padding: 25px 22px 16px; }
   .welcome-mark { font-size: 39px; margin-bottom: 18px; }
   .welcome h1 { font-size: 33px; letter-spacing: -1px; }
@@ -224,10 +224,10 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .story-starters button > span { font-size: 18px; margin: 0; width: 20px; }
   .story-starters small { display: none; }
   .message-list { padding: 18px 20px; gap: 23px; }
-  .msg { font-size: 15px; }
+  .msg { font-size: 14px; }
   .msg.user { max-width: 92%; padding: 12px 16px; }
-  .composer { padding: 10px 14px calc(10px + var(--safe-bottom)); }
-  .composer-box { padding: 15px 12px 9px; border-radius: 20px; }
+  .composer { padding: 10px 14px calc(7px + var(--safe-bottom)); }
+  .composer-box { padding: 15px 12px 6px; border-radius: 20px; }
   .composer textarea { font-size: 16px; }
   .composer-send { width: 44px; height: 44px; }
   .composer-chip { padding: 10px 5px; min-height: 44px; }
