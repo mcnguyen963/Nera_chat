@@ -61,10 +61,11 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     if (budget - cost < 0) break; // stop BEFORE exceeding — whole-message boundary only
     budget -= cost;
     used += cost;
-    windowed.unshift(m); // restore chronological order
+    windowed.push(m);
   }
 
-  for (const m of windowed) {
+  for (let i = windowed.length - 1; i >= 0; i--) {
+    const m = windowed[i];
     parts.push({ role: m.role, content: m.content });
   }
 

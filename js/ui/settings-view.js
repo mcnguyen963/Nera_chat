@@ -211,7 +211,7 @@ function flashSaved(text, isError = false) {
 
 // ---------- this-session settings ----------
 
-async function fillSessionSection() {
+async function fillSessionSection(event) {
   // Skip entirely when the Settings tab is hidden — avoids a getSession() read on
   // every session/message snapshot (each message write touches the session doc).
   const tab = document.getElementById("settings-tab");
@@ -223,9 +223,15 @@ async function fillSessionSection() {
   }
   try {
     const sessionId = state.sessionId;
-    const s = await getSession(sessionId);
+    const s = event?.detail?.sessionId === sessionId
+      ? event.detail.session
+      : await getSession(sessionId);
     if (sessionId !== state.sessionId) return;
-    if (!s) return;
+    if (!s) {
+      el.sessionTitle.value = "";
+      el.sessionPlan.value = "";
+      return;
+    }
     if (el.sessionTitle.value !== s.title && document.activeElement !== el.sessionTitle) {
       el.sessionTitle.value = s.title ?? "";
     }

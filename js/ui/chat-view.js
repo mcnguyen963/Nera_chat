@@ -25,6 +25,9 @@ let streamState = null;  // live streaming UI handle
 let busy = false;
 let indicatorRun = 0;
 let editingState = null; // { id, ta } while a message is being edited inline
+const PAGE_SIZE = 100;
+let visibleCount = PAGE_SIZE;
+const renderedMessages = new Map();
 
 const el = {};
 
@@ -37,6 +40,16 @@ export function initChatView() {
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
   el.contextLabel = document.getElementById("context-label");
+  el.earlierBtn = document.createElement("button");
+  el.earlierBtn.className = "btn earlier-messages";
+  el.earlierBtn.type = "button";
+  el.earlierBtn.addEventListener("click", () => {
+    const previousHeight = el.list.scrollHeight;
+    const previousTop = el.list.scrollTop;
+    visibleCount += PAGE_SIZE;
+    renderMessages(lastMessages);
+    el.list.scrollTop = previousTop + el.list.scrollHeight - previousHeight;
+  });
 
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
@@ -179,6 +192,7 @@ function refreshQuickChips() {
 }
 
 export function setSession(sessionId) {
+  if (state.sessionId === sessionId) return true;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
@@ -191,11 +205,13 @@ export function setSession(sessionId) {
   streamState = null;
   editingState = null;
   lastMessages = [];
+  visibleCount = PAGE_SIZE;
+  renderedMessages.clear();
   ++indicatorRun;
   el.list.innerHTML = "";
   el.contextFill.style.width = "0%";
   el.contextLabel.textContent = "No session selected";
-  document.dispatchEvent(new CustomEvent("session-changed"));
+  document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session: null } }));
   updateWelcome();
   if (!sessionId) return true;
 
@@ -203,9 +219,18 @@ export function setSession(sessionId) {
     doc(db, "users", currentUid(), "sessions", sessionId),
     (snap) => {
       if (state.sessionId !== sessionId) return;
+      const previous = session;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-      updateIndicator();
-      document.dispatchEvent(new CustomEvent("session-changed"));
+      if (!session || !previous ||
+          session.longTermPlan !== previous.longTermPlan ||
+          session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
+          session.breakpointOrder !== previous.breakpointOrder) {
+        updateIndicator();
+      }
+      if (!session || !previous || session.title !== previous.title ||
+          session.longTermPlan !== previous.longTermPlan) {
+        document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
+      }
     },
     (err) => console.error("Session listener error:", err)
   );
@@ -227,6 +252,9 @@ export function setSession(sessionId) {
 let lastMessages = [];
 
 function renderMessages(msgs) {
+  if (!isNearBottom() && msgs.length > lastMessages.length) {
+    visibleCount += msgs.length - lastMessages.length;
+  }
   lastMessages = msgs;
   if (editingState) {
     // A Firestore snapshot must never destroy the open edit textarea (it
@@ -236,11 +264,48 @@ function renderMessages(msgs) {
     editingState = null; // the edited message was deleted remotely
   }
   const sticky = isNearBottom();
-  el.list.innerHTML = "";
+  const visible = msgs.slice(-visibleCount);
+  const visibleIds = new Set(visible.map((m) => m.id));
+  for (const [id, entry] of renderedMessages) {
+    if (!visibleIds.has(id)) {
+      entry.node.remove();
+      renderedMessages.delete(id);
+    }
+  }
+  // Keep status, errors, and a live stream after the saved messages.
+  let anchor = [...el.list.children].find((node) =>
+    node !== el.earlierBtn && !node.dataset.messageId
+  ) ?? null;
+  for (let i = visible.length - 1; i >= 0; i--) {
+    const m = visible[i];
+    let entry = renderedMessages.get(m.id);
+    if (!entry || !entry.message || !sameRenderedMessage(entry.message, m)) {
+      const node = renderMessage(m);
+      node.dataset.messageId = m.id;
+      entry?.node.remove();
+      entry = { node, message: m };
+      renderedMessages.set(m.id, entry);
+    }
+    if (entry.node.parentNode !== el.list || entry.node.nextSibling !== anchor) {
+      el.list.insertBefore(entry.node, anchor);
+    }
+    anchor = entry.node;
+  }
+  if (msgs.length > visible.length) {
+    el.earlierBtn.textContent = `Show earlier messages (${msgs.length - visible.length})`;
+    if (el.earlierBtn.parentNode !== el.list || el.earlierBtn.nextSibling !== anchor) {
+      el.list.insertBefore(el.earlierBtn, anchor);
+    }
+  } else {
+    el.earlierBtn.remove();
+  }
   updateWelcome();
-  for (const m of msgs) el.list.appendChild(renderMessage(m));
-  if (streamState) el.list.appendChild(streamState.wrap);
   if (sticky) scrollToEnd();
+}
+
+function sameRenderedMessage(a, b) {
+  return a.role === b.role && a.content === b.content && a.thinking === b.thinking &&
+    Boolean(a.editedAt) === Boolean(b.editedAt);
 }
 
 function updateWelcome() {
@@ -328,42 +393,55 @@ function startEdit(m, wrap) {
   if (busy) return;
   const contentEl = wrap.querySelector(".msg-content");
   if (!contentEl || editingState) return; // one edit at a time
-  // The bubble is shrink-to-fit; replacing the content with a textarea would
-  // collapse it to the textarea's default ~20-col width. Freeze its size.
-  wrap.style.width = wrap.getBoundingClientRect().width + "px";
+  const wrapRect = wrap.getBoundingClientRect();
+  const contentRect = contentEl.getBoundingClientRect();
+  const meta = wrap.querySelector(".msg-meta");
+  const actions = wrap.querySelector(".msg-actions");
+  const scrollTop = el.list.scrollTop;
+  // Match the original bubble and text area before focusing. Changing either
+  // size here makes the conversation jump, especially with the phone keyboard.
+  wrap.style.width = wrapRect.width + "px";
+  wrap.style.height = wrapRect.height + "px";
+  meta.style.height = meta.getBoundingClientRect().height + "px";
   const ta = document.createElement("textarea");
+  ta.className = "msg-editor";
   ta.value = m.content;
-  ta.rows = Math.max(2, Math.min(20, m.content.split("\n").length + 1));
-  ta.style.width = "100%";
-  ta.style.display = "block";
-  ta.style.maxHeight = "40vh"; // stay within the area above the keyboard
+  ta.rows = 1;
+  ta.style.height = contentRect.height + "px";
 
-  const bar = document.createElement("div");
-  bar.style.cssText = "display:flex;gap:8px;margin-top:6px;";
   const finish = () => {
     editingState = null;
+    const top = wrap.getBoundingClientRect().top;
+    const entry = renderedMessages.get(m.id);
+    if (entry) entry.message = null;
     renderMessages(lastMessages);
+    const next = renderedMessages.get(m.id)?.node;
+    if (next) el.list.scrollTop += next.getBoundingClientRect().top - top;
   };
   const save = actionBtn("Save", "small", async () => {
     const text = ta.value;
-    editingState = null; // let the snapshot re-render the edited message
+    save.disabled = true;
+    cancel.disabled = true;
     try {
-      await messagesApi.editMessage(state.sessionId, m.id, text);
-      renderMessages(lastMessages); // in case the snapshot hasn't landed yet
+      const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text);
+      lastMessages = lastMessages.map((item) =>
+        item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
+      );
+      finish();
     } catch (e) {
-      // Keep the textarea (and the render lock) so the text isn't lost.
-      editingState = { id: m.id, ta };
       showTransientError(e.message);
+    } finally {
+      save.disabled = false;
+      cancel.disabled = false;
     }
   });
   const cancel = actionBtn("Cancel", "small", finish);
   save.classList.add("btn"); cancel.classList.add("btn");
-  bar.append(save, cancel);
-
-  contentEl.replaceWith(ta, bar);
+  actions.replaceChildren(save, cancel);
+  contentEl.replaceWith(ta);
   editingState = { id: m.id, ta };
-  ta.focus();
-  alignFieldToKeyboard(ta);
+  ta.focus({ preventScroll: true });
+  el.list.scrollTop = scrollTop;
 }
 
 // ---------- hold-to-copy ----------
@@ -577,6 +655,7 @@ async function runAssistantTurn(opts = {}) {
 function streamSummaryUI(label) {
   let acc = "";
   let thinkAcc = "";
+  let frame = 0;
   const bubble = document.createElement("div");
   bubble.className = "msg summary streaming-summary";
   const head = document.createElement("div");
@@ -586,22 +665,28 @@ function streamSummaryUI(label) {
   const body = document.createElement("div");
   body.className = "summary-stream-body";
   bubble.append(head, thinking, body);
+  const thinkingBody = thinking.querySelector(".thinking-body");
   const sticky = isNearBottom();
   el.list.appendChild(bubble);
   if (sticky) scrollToEnd();
+  const schedulePaint = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const stickyNow = isNearBottom();
+      body.textContent = acc.slice(-2000);
+      thinkingBody.textContent = thinkAcc.slice(-4000);
+      if (stickyNow) scrollToEnd();
+    });
+  };
   return {
     setLabel: (text) => { head.textContent = text; },
-    onDelta: (t) => {
-      acc += t;
-      body.textContent = acc.slice(-2000);
-      if (isNearBottom()) scrollToEnd();
+    onDelta: (t) => { acc += t; schedulePaint(); },
+    onReasoning: (t) => { thinkAcc += t; schedulePaint(); },
+    done: () => {
+      if (frame) cancelAnimationFrame(frame);
+      bubble.remove();
     },
-    onReasoning: (t) => {
-      thinkAcc += t;
-      thinking.querySelector(".thinking-body").textContent = thinkAcc;
-      if (isNearBottom()) scrollToEnd();
-    },
-    done: () => bubble.remove(),
   };
 }
 
@@ -694,21 +779,31 @@ function startStreamUI() {
   el.list.appendChild(wrap);
   scrollToEnd();
 
-  streamState = { wrap, thinking, content, thinkingText: "", contentText: "" };
+  streamState = {
+    wrap, thinking, thinkingBody: thinking.querySelector(".thinking-body"), content,
+    thinkingText: "", contentText: "", frame: 0,
+  };
   updateWelcome();
 }
 
 function appendStream(kind, text) {
   if (!streamState) return;
-  const sticky = isNearBottom();
   if (kind === "content") {
     streamState.contentText += text;
-    streamState.content.textContent = stripPlan(streamState.contentText);
   } else {
     streamState.thinkingText += text;
-    streamState.thinking.querySelector(".thinking-body").textContent = streamState.thinkingText;
   }
-  if (sticky) scrollToEnd();
+  if (!streamState.frame) {
+    const current = streamState;
+    current.frame = requestAnimationFrame(() => {
+      current.frame = 0;
+      if (streamState !== current) return;
+      const sticky = isNearBottom();
+      current.content.textContent = stripPlan(current.contentText);
+      current.thinkingBody.textContent = current.thinkingText.slice(-4000);
+      if (sticky) scrollToEnd();
+    });
+  }
 }
 
 // ---------- helpers ----------

@@ -19,7 +19,7 @@ async function chunkByTokens(msgs, budget) {
   let cur = [];
   let curTokens = 0;
   for (const m of msgs) {
-    const t = await countTokens(m.content);
+    const t = m.tokenCount ?? await countTokens(m.content);
     if (cur.length > 0 && curTokens + t > budget) {
       chunks.push(cur);
       cur = [];

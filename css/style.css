@@ -114,6 +114,7 @@ input[type="checkbox"] { accent-color: #dededb; width: 16px; height: 16px; }
 .story-starters strong { font-size: 12px; font-weight: 500; }
 .story-starters small { color: #777; font-size: 10px; margin-top: 7px; line-height: 1.5; }
 .message-list { flex: 1; overflow-y: auto; min-height: 0; padding: 25px max(28px, calc((100% - 740px) / 2)); display: flex; flex-direction: column; gap: 27px; overscroll-behavior-y: contain; }
+.earlier-messages { align-self: center; flex-shrink: 0; font-size: 12px; }
 .is-empty { overflow-y: auto; }
 .is-empty .message-list:empty { flex: 0; padding: 0; }
 .is-empty .composer { margin-bottom: auto; }
@@ -129,6 +130,8 @@ input[type="checkbox"] { accent-color: #dededb; width: 16px; height: 16px; }
 .msg-actions button { border: 0; padding: 4px 0; background: transparent; color: #999; font-size: 10px; }
 .msg-actions button:hover { color: #fff; }
 .msg-actions .del:hover { color: var(--danger); }
+.msg-editor { display: block; width: 100%; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; letter-spacing: inherit; resize: none; overflow: auto; overflow-wrap: anywhere; }
+.msg-editor:focus { border: 0; outline: none; }
 @media (hover: none) {
   .msg-actions { opacity: 1; }
   .msg-actions button { min-height: 32px; }

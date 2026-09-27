@@ -29,24 +29,28 @@ export function initSidebar() {
   document.addEventListener("session-imported", (e) => setSession(e.detail));
 
   let cachedSessions = [];
+  let renderedSignature = "";
   document.addEventListener("session-changed", () => {
-    render(listEl, cachedSessions);
-    const active = cachedSessions.find((s) => s.id === state.sessionId);
-    if (titleEl) titleEl.textContent = active?.title || "Your next story";
+    refreshActive(listEl, cachedSessions, titleEl);
   });
   subscribeSessions(
     (sessions) => {
       cachedSessions = sessions;
-      render(listEl, sessions);
-      const active = sessions.find((s) => s.id === state.sessionId);
-      if (titleEl) titleEl.textContent = active?.title || "Your next story";
+      const signature = JSON.stringify(sessions.map((s) => [s.id, s.title]));
+      if (signature !== renderedSignature) {
+        render(listEl, sessions);
+        renderedSignature = signature;
+      }
+      refreshActive(listEl, sessions, titleEl);
       if (sessions.length === 0) {
         if (state.sessionId) setSession(null);
-        const li = document.createElement("li");
-        li.className = "muted";
-        li.style.padding = "10px 12px";
-        li.textContent = "A blank page, a new possibility. Create your first story above.";
-        listEl.appendChild(li);
+        if (!listEl.querySelector(".muted")) {
+          const li = document.createElement("li");
+          li.className = "muted";
+          li.style.padding = "10px 12px";
+          li.textContent = "A blank page, a new possibility. Create your first story above.";
+          listEl.appendChild(li);
+        }
         return;
       }
       // Auto-select the first session if none is active or the active one vanished.
@@ -58,6 +62,7 @@ export function initSidebar() {
     },
     (err) => {
       console.error("Sessions listener error:", err);
+      renderedSignature = "";
       const me = currentUserInfo();
       listEl.innerHTML = "";
       const li = document.createElement("li");
@@ -75,6 +80,7 @@ function render(listEl, sessions) {
   listEl.innerHTML = "";
   for (const s of sessions) {
     const li = document.createElement("li");
+    li.dataset.sessionId = s.id;
     li.className = "session-item" + (s.id === state.sessionId ? " active" : "");
 
     const title = document.createElement("span");
@@ -139,4 +145,15 @@ function render(listEl, sessions) {
     });
     listEl.appendChild(li);
   }
+}
+
+function refreshActive(listEl, sessions, titleEl) {
+  const activeId = state.sessionId;
+  for (const item of listEl.querySelectorAll(".session-item")) {
+    const active = item.dataset.sessionId === activeId;
+    item.classList.toggle("active", active);
+    item.querySelector(".session-title")?.setAttribute("aria-current", String(active));
+  }
+  const active = sessions.find((s) => s.id === activeId);
+  if (titleEl) titleEl.textContent = active?.title || "Your next story";
 }

@@ -1,4 +1,4 @@
-# Roleplay LLM Chat App — System Specification
+# Nera Chat — System Specification
 
 Frontend-only web app (vanilla HTML/CSS/JS, no build step), hosted on GitHub Pages, using Firebase Firestore as the sole backend for settings, provider config, prompts, sessions, and chat history. Dark mode only. Single admin user, simple credential check (no hashing).
 
