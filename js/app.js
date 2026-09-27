@@ -1,4 +1,4 @@
-import { initAuth, login } from "./auth.js";
+import { initAuth, login, register, resetPassword, changePassword, currentUserInfo } from "./auth.js";
 import { loadSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
@@ -9,8 +9,6 @@ const el = {
   loginScreen: document.getElementById("login-screen"),
   app: document.getElementById("app"),
   loginForm: document.getElementById("login-form"),
-  loginError: document.getElementById("login-error"),
-  loginNote: document.getElementById("login-note"),
   tabs: document.querySelectorAll(".tab"),
   chatTab: document.getElementById("chat-tab"),
   settingsTab: document.getElementById("settings-tab"),
@@ -109,37 +107,120 @@ initAuth((user) => {
   } else {
     el.app.classList.add("hidden");
     el.loginScreen.classList.remove("hidden");
-    el.loginNote.textContent = "Welcome back. Sign in to continue your story.";
   }
 });
 
-el.loginForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  el.loginError.textContent = "";
-  const username = document.getElementById("login-username").value;
-  const password = document.getElementById("login-password").value;
-  try {
-    await login(username, password);
-    // onAuthStateChanged callback drives the UI switch.
-  } catch (err) {
-    el.loginError.textContent = "Login failed: " + friendlyAuthError(err);
+function showAuthView(view) {
+  for (const name of ["login", "register", "reset"]) {
+    document.getElementById(`auth-${name}`).hidden = name !== view;
   }
+  for (const id of ["login-error", "register-error", "reset-message"]) {
+    setMessage(id, "");
+  }
+  if (view === "reset") {
+    document.getElementById("reset-email").value = document.getElementById("login-username").value;
+  }
+}
+
+function setMessage(id, message, error = false) {
+  const node = document.getElementById(id);
+  node.textContent = message;
+  node.hidden = !message;
+  node.classList.toggle("error-text", error);
+  node.classList.toggle("success-text", !!message && !error);
+}
+
+async function submitAuth(form, buttonText, action, messageId) {
+  const button = form.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = buttonText;
+  setMessage(messageId, "");
+  try {
+    await action();
+  } catch (err) {
+    setMessage(messageId, friendlyAuthError(err), true);
+  } finally {
+    button.disabled = false;
+    button.textContent = form.dataset.submitLabel;
+  }
+}
+
+for (const button of document.querySelectorAll("[data-auth-view]")) {
+  button.addEventListener("click", () => showAuthView(button.dataset.authView));
+}
+
+for (const [id, label] of [["login-form", "Sign in →"], ["register-form", "Create account →"], ["reset-form", "Send reset link →"], ["change-password-form", "Change password"]]) {
+  document.getElementById(id).dataset.submitLabel = label;
+}
+
+el.loginForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitAuth(el.loginForm, "Signing in…", () => login(
+    document.getElementById("login-username").value,
+    document.getElementById("login-password").value
+  ), "login-error");
+});
+
+document.getElementById("register-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const password = document.getElementById("register-password").value;
+  if (password !== document.getElementById("register-confirm").value) {
+    setMessage("register-error", "Passwords do not match.", true);
+    return;
+  }
+  submitAuth(form, "Creating account…", () => register(
+    document.getElementById("register-email").value, password
+  ), "register-error");
+});
+
+document.getElementById("reset-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitAuth(e.currentTarget, "Sending…", async () => {
+    try {
+      await resetPassword(document.getElementById("reset-email").value);
+    } catch (err) {
+      if (err?.code !== "auth/user-not-found") throw err;
+    }
+    setMessage("reset-message", "If an account uses that email, a reset link is on its way.");
+  }, "reset-message");
+});
+
+document.getElementById("change-password-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const next = document.getElementById("new-password").value;
+  if (next !== document.getElementById("confirm-new-password").value) {
+    setMessage("change-password-message", "New passwords do not match.", true);
+    return;
+  }
+  submitAuth(form, "Updating…", async () => {
+    await changePassword(document.getElementById("current-password").value, next);
+    form.reset();
+    setMessage("change-password-message", "Password changed successfully.");
+  }, "change-password-message");
 });
 
 function friendlyAuthError(err) {
   const code = err?.code ?? "";
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) {
-    return "incorrect email or password.";
+    return "Incorrect email or password.";
   }
-  if (code.includes("invalid-email")) return "invalid email address.";
-  if (code.includes("too-many-requests")) return "too many attempts — try again later.";
+  if (code.includes("invalid-email")) return "Enter a valid email address.";
+  if (code.includes("email-already-in-use")) return "An account already uses this email. Try signing in.";
+  if (code.includes("weak-password")) return "Choose a stronger password of at least 6 characters.";
+  if (code.includes("too-many-requests")) return "Too many attempts. Try again later.";
+  if (code.includes("network-request-failed")) return "Connection failed. Check your internet and try again.";
+  if (code.includes("requires-recent-login")) return "Please sign out and sign in again, then retry.";
+  if (code.includes("user-disabled")) return "This account has been disabled.";
   if (code.includes("operation-not-allowed")) {
-    return "Email/Password sign-in is not enabled in your Firebase project (Authentication → Sign-in method).";
+    return "Email and password authentication is not enabled for this app.";
   }
   if (code.includes("auth/configuration-not-found")) {
-    return "Firebase Authentication is not set up for this project yet.";
+    return "Authentication is not set up for this app yet.";
   }
-  return err.message ?? String(err);
+  return "Something went wrong. Please try again.";
 }
 
 async function enterApp() {
@@ -149,14 +230,13 @@ async function enterApp() {
     state.settings = await loadSettings();
   } catch (e) {
     console.error("Failed to load settings:", e);
-    el.loginNote.textContent = "Warning: could not load your settings — check Firestore rules.";
-    el.loginNote.style.color = "var(--danger)";
     state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
     alert("Could not load your saved settings. Using defaults for this page; check your connection and Firestore rules before saving.");
   }
   initChatView();
   initSidebar();
   initSettingsView();
+  document.getElementById("account-email").textContent = currentUserInfo()?.email ?? "";
   wireTabs();
 }
 

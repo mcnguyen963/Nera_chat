@@ -3,12 +3,14 @@ import {
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
-// Real authentication via Firebase Auth (Email/Password), not a client-side doc compare.
-// Setup (Firebase console): Authentication -> Sign-in method -> enable Email/Password,
-// then add ONE user (e.g. admin@example.com with your password). No password or
-// credentials doc lives in Firestore — rules (request.auth != null) now enforce access.
+// Firebase Authentication owns credentials; Firestore access is scoped by UID.
 
 export function initAuth(callback) {
   return onAuthStateChanged(getAuth(), callback);
@@ -30,6 +32,22 @@ export function currentUserInfo() {
 
 export async function login(email, password) {
   await signInWithEmailAndPassword(getAuth(), email.trim(), password);
+}
+
+export async function register(email, password) {
+  await createUserWithEmailAndPassword(getAuth(), email.trim(), password);
+}
+
+export async function resetPassword(email) {
+  await sendPasswordResetEmail(getAuth(), email.trim());
+}
+
+export async function changePassword(currentPassword, newPassword) {
+  const user = getAuth().currentUser;
+  if (!user?.email) throw new Error("Please sign in again to change your password.");
+  const credential = EmailAuthProvider.credential(user.email, currentPassword);
+  await reauthenticateWithCredential(user, credential);
+  await updatePassword(user, newPassword);
 }
 
 export async function logout() {

@@ -50,6 +50,9 @@ export function initSettingsView() {
   el.importBtn.addEventListener("click", () => el.importFile.click());
   el.importFile.addEventListener("change", handleImport);
   el.exportBtn.addEventListener("click", handleExport);
+  for (const input of document.querySelectorAll('#settings-tab [data-min]')) {
+    input.addEventListener("input", () => input.setCustomValidity(""));
+  }
 
   document.addEventListener("session-changed", fillSessionSection);
   document.addEventListener("settings-changed", fillGlobal);
@@ -102,13 +105,13 @@ function collectConnection() {
     endpoint: el.endpoint.value.trim(),
     apiKey: el.apikey.value.trim(),
     modelId: el.model.value.trim(),
-    maxResponseTokens: Number(el.maxResp.value) || 1024,
+    maxResponseTokens: Number(el.maxResp.value),
     streaming: el.streaming.checked,
     reasoning: {
       enabled: el.reasoningEnabled.checked,
       mode: el.reasoningMode.value,
       effort: el.reasoningEffort.value,
-      maxTokens: Number(el.reasoningMaxTokens.value) || 2000,
+      maxTokens: Number(el.reasoningMaxTokens.value),
     },
   };
 }
@@ -166,19 +169,27 @@ async function handleProfileDelete() {
 }
 
 function collectGlobal() {
-  for (const input of document.querySelectorAll('#settings-tab input[type="number"]')) {
-    if (!input.value.trim() || !input.reportValidity()) {
-      throw new Error("Enter valid values for all token limits and summary settings.");
-    }
+  for (const input of document.querySelectorAll('#settings-tab [data-min]')) {
+    const value = input.value.trim();
+    const number = Number(value);
+    const min = Number(input.dataset.min);
+    const max = input.dataset.max === undefined ? Infinity : Number(input.dataset.max);
+    input.setCustomValidity(
+      !/^[0-9]+$/.test(value) || !Number.isSafeInteger(number) || number < min || number > max
+        ? `Enter a whole number from ${min}${Number.isFinite(max) ? ` to ${max}` : ""}.`
+        : ""
+    );
+    if (!input.reportValidity()) throw new Error("Check the highlighted number field.");
   }
+  if (!el.endpoint.reportValidity()) throw new Error("Enter a valid endpoint URL.");
   const s = {
     ...structuredClone(state.settings),
     ...collectConnection(),
-    maxContextTokens: Number(el.maxContext.value) || 8000,
-    autoSummaryThresholdPercent: Number(el.autoThreshold.value) || 70,
+    maxContextTokens: Number(el.maxContext.value),
+    autoSummaryThresholdPercent: Number(el.autoThreshold.value),
     keepRecentMessagesAfterSummary: Number(el.keepN.value),
-    summarizerMaxTokens: Number(el.summarizerMaxTokens.value) || 100000,
-    summarizerChunkTokens: Number(el.summarizerChunk.value) || 250000,
+    summarizerMaxTokens: Number(el.summarizerMaxTokens.value),
+    summarizerChunkTokens: Number(el.summarizerChunk.value),
     narratorSystemPrompt: el.narratorPrompt.value,
     summarizerSystemPrompt: el.summarizerPrompt.value,
   };

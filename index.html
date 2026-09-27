@@ -12,22 +12,47 @@
 </head>
 <body>
 
-  <!-- Login gate -->
+  <!-- Authentication -->
   <div id="login-screen" class="login-screen hidden">
-    <form id="login-form" class="login-card">
+    <div class="login-card">
       <div class="brand-mark" aria-hidden="true">✳</div>
       <p class="eyebrow">NERA CHAT</p>
-      <h1>A space for your stories.</h1>
-      <p class="muted" id="login-note"></p>
-      <label>Email address
-        <input type="email" id="login-username" autocomplete="username" required />
-      </label>
-      <label>Password
-        <input type="password" id="login-password" autocomplete="current-password" required />
-      </label>
-      <div id="login-error" class="error-text"></div>
-      <button type="submit" class="btn primary">Continue →</button>
-    </form>
+      <section class="auth-panel" id="auth-login">
+        <h1>A space for your stories.</h1>
+        <p class="muted auth-note">Welcome back. Sign in to continue your story.</p>
+        <form id="login-form" class="auth-form">
+          <label>Email address<input type="email" id="login-username" autocomplete="username" inputmode="email" required /></label>
+          <label>Password<input type="password" id="login-password" autocomplete="current-password" required /></label>
+          <button type="button" class="auth-link auth-forgot" data-auth-view="reset">Forgot password?</button>
+          <p id="login-error" class="auth-message error-text" role="alert" hidden></p>
+          <button type="submit" class="btn primary auth-submit">Sign in <span aria-hidden="true">→</span></button>
+        </form>
+        <p class="auth-switch">New to Nera? <button type="button" class="auth-link" data-auth-view="register">Create an account</button></p>
+      </section>
+      <section class="auth-panel" id="auth-register" hidden>
+        <h1>Begin your story.</h1>
+        <p class="muted auth-note">Create an account to keep your stories together.</p>
+        <form id="register-form" class="auth-form">
+          <label>Email address<input type="email" id="register-email" autocomplete="email" inputmode="email" required /></label>
+          <label>Password<input type="password" id="register-password" autocomplete="new-password" minlength="6" required /></label>
+          <label>Confirm password<input type="password" id="register-confirm" autocomplete="new-password" minlength="6" required /></label>
+          <p class="auth-hint">Use at least 6 characters.</p>
+          <p id="register-error" class="auth-message error-text" role="alert" hidden></p>
+          <button type="submit" class="btn primary auth-submit">Create account <span aria-hidden="true">→</span></button>
+        </form>
+        <p class="auth-switch">Already have an account? <button type="button" class="auth-link" data-auth-view="login">Sign in</button></p>
+      </section>
+      <section class="auth-panel" id="auth-reset" hidden>
+        <h1>Reset your password.</h1>
+        <p class="muted auth-note">Enter your email and we’ll send you a reset link.</p>
+        <form id="reset-form" class="auth-form">
+          <label>Email address<input type="email" id="reset-email" autocomplete="email" inputmode="email" required /></label>
+          <p id="reset-message" class="auth-message" role="status" hidden></p>
+          <button type="submit" class="btn primary auth-submit">Send reset link <span aria-hidden="true">→</span></button>
+        </form>
+        <p class="auth-switch"><button type="button" class="auth-link" data-auth-view="login">← Back to sign in</button></p>
+      </section>
+    </div>
   </div>
 
   <!-- App shell -->
@@ -130,6 +155,17 @@
           <button id="btn-back-to-chat" class="btn small" type="button">‹ Back to chat</button>
         </div>
         <div class="settings-heading"><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p class="muted">The right setup for the stories you want to tell.</p></div>
+        <h2>Account</h2>
+        <p id="account-email" class="muted account-email"></p>
+        <form id="change-password-form" class="account-form">
+          <div class="settings-grid">
+            <label>Current password<input type="password" id="current-password" autocomplete="current-password" required /></label>
+            <label>New password<input type="password" id="new-password" autocomplete="new-password" minlength="6" required /></label>
+            <label>Confirm new password<input type="password" id="confirm-new-password" autocomplete="new-password" minlength="6" required /></label>
+          </div>
+          <p id="change-password-message" class="auth-message" role="status" hidden></p>
+          <button type="submit" class="btn primary">Change password</button>
+        </form>
         <h2>Connection</h2>
         <div class="settings-grid">
           <label>Profile
@@ -145,7 +181,7 @@
         </div>
         <div class="settings-grid">
           <label>Endpoint URL
-            <input type="text" id="set-endpoint" placeholder="https://openrouter.ai/api/v1/chat/completions" />
+            <input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" />
           </label>
           <label>API key
             <input type="password" id="set-apikey" autocomplete="off" />
@@ -154,7 +190,7 @@
             <input type="text" id="set-model" placeholder="e.g. anthropic/claude-3.5-sonnet" />
           </label>
           <label>Max response tokens (max_tokens)
-            <input type="number" id="set-max-resp" min="1" />
+            <input type="text" id="set-max-resp" inputmode="numeric" pattern="[0-9]*" data-min="1" required />
           </label>
           <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
         </div>
@@ -180,26 +216,27 @@
             </select>
           </label>
           <label>Reasoning max_tokens (mode = max_tokens)
-            <input type="number" id="set-reasoning-maxtokens" min="1" />
+            <input type="text" id="set-reasoning-maxtokens" inputmode="numeric" pattern="[0-9]*" data-min="1" required />
           </label>
         </div>
 
         <h2>Context &amp; Summarization</h2>
+        <p class="muted numeric-hint">Clear a field and type a new whole number. Values are checked when you save.</p>
         <div class="settings-grid">
           <label>Max context tokens (total budget)
-            <input type="number" id="set-max-context" min="256" />
+            <input type="text" id="set-max-context" inputmode="numeric" pattern="[0-9]*" data-min="256" required />
           </label>
           <label>Auto-summary threshold (%)
-            <input type="number" id="set-auto-threshold" min="1" max="100" />
+            <input type="text" id="set-auto-threshold" inputmode="numeric" pattern="[0-9]*" data-min="1" data-max="100" required />
           </label>
           <label>Keep recent messages after summary
-            <input type="number" id="set-keep-n" min="0" />
+            <input type="text" id="set-keep-n" inputmode="numeric" pattern="[0-9]*" data-min="0" required />
           </label>
           <label>Summarizer max response tokens
-            <input type="number" id="set-summarizer-maxtokens" min="256" />
+            <input type="text" id="set-summarizer-maxtokens" inputmode="numeric" pattern="[0-9]*" data-min="256" required />
           </label>
           <label>Summarizer input chunk (tokens per call)
-            <input type="number" id="set-summarizer-chunk" min="2000" />
+            <input type="text" id="set-summarizer-chunk" inputmode="numeric" pattern="[0-9]*" data-min="2000" required />
           </label>
         </div>
 

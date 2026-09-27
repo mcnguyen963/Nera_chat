@@ -138,16 +138,9 @@ export async function loadSettings() {
   const snap = await getDoc(ref);
   if (snap.exists()) return hydrateProfiles(mergeDefaults(snap.data()));
 
-  // One-time migration: seed this account's settings from the legacy shared
-  // /settings/global doc (falling back to defaults). Everything is then
-  // written to (and only ever read from) the per-user doc.
-  let seed = structuredClone(DEFAULT_SETTINGS);
-  try {
-    const legacy = await getDoc(doc(db, "settings", "global"));
-    if (legacy.exists()) seed = hydrateProfiles(mergeDefaults(legacy.data()));
-  } catch (e) {
-    console.warn("Could not read legacy /settings/global (using defaults):", e);
-  }
+  // New accounts start with their own clean settings. Shared legacy settings
+  // may contain credentials and must never be copied into a new account.
+  const seed = structuredClone(DEFAULT_SETTINGS);
   hydrateProfiles(seed);
   await setDoc(ref, seed);
   return seed;
