@@ -7,12 +7,23 @@ import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { state } from "./state.js";
 
+const PLAN_THREAD_RECOVERY_RULE =
+  " If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears " +
+  "anywhere in the visible conversation history, even though a plan seems to have been " +
+  "set earlier, treat that plan as lost from context. Its exact contents cannot be " +
+  "reconstructed; proceed with no active plan until the user sets a new one.";
+
 export const DEFAULT_SETTINGS = {
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
   modelId: "",
   streaming: true,
-  maxResponseTokens: 1024,
+  maxResponseTokens: 8192,
+  advancedParametersEnabled: false,
+  temperature: null,
+  topP: null,
+  frequencyPenalty: null,
+  presencePenalty: null,
   reasoning: {
     enabled: false,
     mode: "effort", // "effort" | "max_tokens" — mutually exclusive OpenRouter controls
@@ -38,7 +49,8 @@ export const DEFAULT_SETTINGS = {
     "from appearing somewhere in your own hidden output, so it doesn't quietly vanish from " +
     "view over a long conversation. Writing this line is mandatory whenever a plan is " +
     "active, with no exceptions — it's cheap enough that \"it hasn't changed\" is never a " +
-    "reason to skip it. The plan_thread tag is never shown to the user.",
+    "reason to skip it. The plan_thread tag is never shown to the user." +
+    PLAN_THREAD_RECOVERY_RULE,
   summarizerSystemPrompt:
     "You maintain a running summary of a long roleplay story. You are given the previous " +
     "summary (if any) and a transcript of new events. Produce an updated summary that " +
@@ -55,6 +67,11 @@ function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
+  // Existing accounts that kept the former app default receive the new rule.
+  // An edited prompt remains exactly as its author saved it.
+  if (data?.narratorSystemPrompt === DEFAULT_SETTINGS.narratorSystemPrompt.slice(0, -PLAN_THREAD_RECOVERY_RULE.length)) {
+    merged.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
+  }
   return merged;
 }
 
@@ -70,6 +87,11 @@ const PROFILE_CONNECTION_KEYS = [
   "modelId",
   "streaming",
   "maxResponseTokens",
+  "advancedParametersEnabled",
+  "temperature",
+  "topP",
+  "frequencyPenalty",
+  "presencePenalty",
 ];
 
 export function activeProfile(settings) {
@@ -89,7 +111,9 @@ export function mirrorFromActiveProfile(settings) {
   const p = activeProfile(settings);
   if (!p) return;
   for (const k of PROFILE_CONNECTION_KEYS) {
-    settings[k] = p[k] ?? DEFAULT_SETTINGS[k];
+    settings[k] = k === "advancedParametersEnabled" && p[k] === undefined
+      ? ["temperature", "topP", "frequencyPenalty", "presencePenalty"].some((name) => p[name] !== null && p[name] !== undefined && p[name] !== "")
+      : p[k] ?? DEFAULT_SETTINGS[k];
   }
   settings.reasoning = {
     ...structuredClone(DEFAULT_SETTINGS.reasoning),
@@ -133,17 +157,54 @@ function userSettingsRef() {
   return doc(db, "users", currentUid(), "settings", "current");
 }
 
+const cacheKey = () => `roleplay-settings:${currentUid()}`;
+
+function readCachedSettings() {
+  try {
+    const data = JSON.parse(localStorage.getItem(cacheKey()));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheSettings(settings) {
+  try {
+    localStorage.setItem(cacheKey(), JSON.stringify(settings));
+  } catch {
+    // Private browsing or a full storage quota must not prevent using settings.
+  }
+}
+
 export async function loadSettings() {
+  const cached = readCachedSettings();
+  if (cached) return hydrateProfiles(mergeDefaults(cached));
+
   const ref = userSettingsRef();
   const snap = await getDoc(ref);
-  if (snap.exists()) return hydrateProfiles(mergeDefaults(snap.data()));
+  if (snap.exists()) {
+    const settings = hydrateProfiles(mergeDefaults(snap.data()));
+    cacheSettings(settings);
+    return settings;
+  }
 
   // New accounts start with their own clean settings. Shared legacy settings
   // may contain credentials and must never be copied into a new account.
   const seed = structuredClone(DEFAULT_SETTINGS);
   hydrateProfiles(seed);
   await setDoc(ref, seed);
+  cacheSettings(seed);
   return seed;
+}
+
+// Quick controls are device-local. Only an explicit Settings save writes Firestore.
+export function useLocalSettings(settings) {
+  const snapshot = structuredClone(settings);
+  normalizeProfiles(snapshot);
+  mirrorToActiveProfile(snapshot);
+  state.settings = snapshot;
+  cacheSettings(snapshot);
+  document.dispatchEvent(new CustomEvent("settings-changed"));
 }
 
 export async function saveSettings(settings) {
@@ -155,6 +216,7 @@ export async function saveSettings(settings) {
   try {
     await setDoc(userSettingsRef(), snapshot);
     state.settings = snapshot;
+    cacheSettings(snapshot);
     document.dispatchEvent(new CustomEvent("settings-changed"));
   } finally {
     state.settingsSaving = false;

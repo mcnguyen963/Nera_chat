@@ -9,6 +9,12 @@ export function buildRequestBody(settings, messages) {
     messages,
     max_tokens: settings.maxResponseTokens,
   };
+  if (settings.advancedParametersEnabled) {
+    for (const [key, parameter] of [["temperature", "temperature"], ["topP", "top_p"], ["frequencyPenalty", "frequency_penalty"], ["presencePenalty", "presence_penalty"]]) {
+      const value = settings[key];
+      if (value !== null && value !== undefined && value !== "") body[parameter] = Number(value);
+    }
+  }
   const r = settings.reasoning;
   if (r?.enabled) {
     // Never send both effort and max_tokens together (spec §4.1).

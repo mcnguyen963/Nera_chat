@@ -3,7 +3,7 @@ import { loadSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
 import { initChatView, setSession } from "./ui/chat-view.js";
-import { initSettingsView } from "./ui/settings-view.js";
+import { initSettingsView, openSettingsPopup } from "./ui/settings-view.js";
 
 const el = {
   loginScreen: document.getElementById("login-screen"),
@@ -11,7 +11,6 @@ const el = {
   loginForm: document.getElementById("login-form"),
   tabs: document.querySelectorAll(".tab"),
   chatTab: document.getElementById("chat-tab"),
-  settingsTab: document.getElementById("settings-tab"),
   sidebarToggle: document.getElementById("btn-sidebar-toggle"),
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
   topMenuBtn: document.getElementById("btn-top-menu"),
@@ -78,6 +77,8 @@ el.topMenu?.addEventListener("click", (e) => {
   setTopMenuOpen(false);
   if (item.dataset.action === "sessions") {
     setSidebarOpen(true);
+  } else if (item.dataset.action === "settings") {
+    openSettingsPopup(el.topMenuBtn);
   } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary") {
     document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else {
@@ -243,20 +244,15 @@ async function enterApp() {
 function wireTabs() {
   el.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
+      if (tab.dataset.tab === "settings") {
+        openSettingsPopup(tab);
+        document.dispatchEvent(new CustomEvent("sidebar:close"));
+        return;
+      }
       el.tabs.forEach((t) => t.classList.toggle("active", t === tab));
       const name = tab.dataset.tab;
       el.chatTab.classList.toggle("hidden", name !== "chat");
-      el.settingsTab.classList.toggle("hidden", name !== "settings");
-      if (name === "settings") {
-        // Re-fill the This-Session section each time the tab opens.
-        document.dispatchEvent(new CustomEvent("session-changed"));
-      }
       document.dispatchEvent(new CustomEvent("sidebar:close"));
     });
-  });
-
-  // Mobile: the tab bar is hidden, so Settings needs its own way back.
-  document.getElementById("btn-back-to-chat")?.addEventListener("click", () => {
-    document.querySelector('.tab[data-tab="chat"]')?.click();
   });
 }

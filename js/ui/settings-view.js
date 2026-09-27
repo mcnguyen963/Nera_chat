@@ -1,301 +1,350 @@
 import { state } from "../state.js";
-import {
-  saveSettings,
-  normalizeProfiles,
-  activeProfile,
-  mirrorToActiveProfile,
-  mirrorFromActiveProfile,
-} from "../settings.js";
+import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator } from "./chat-view.js";
 
 const el = {};
+const connectionFields = {
+  endpoint: "set-endpoint", apiKey: "set-apikey", modelId: "set-model",
+  maxResponseTokens: "set-max-resp", temperature: "set-temperature", topP: "set-top-p",
+  frequencyPenalty: "set-frequency-penalty", presencePenalty: "set-presence-penalty",
+};
+const contextFields = {
+  maxContextTokens: "set-max-context", autoSummaryThresholdPercent: "set-auto-threshold",
+  keepRecentMessagesAfterSummary: "set-keep-n", summarizerMaxTokens: "set-summarizer-maxtokens",
+  summarizerChunkTokens: "set-summarizer-chunk",
+};
+const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
+let draft;
+let original;
+let panel = "model";
+let opener = null;
+let sessionOriginal = { title: "", longTermPlan: "" };
+let sessionId = null;
+let saving = false;
+
+const input = (id) => document.getElementById(id);
+const raw = (id) => input(id).value;
+const set = (id, value) => { input(id).value = String(value ?? ""); };
 
 export function initSettingsView() {
-  el.endpoint = document.getElementById("set-endpoint");
-  el.apikey = document.getElementById("set-apikey");
-  el.model = document.getElementById("set-model");
-  el.maxResp = document.getElementById("set-max-resp");
-  el.streaming = document.getElementById("set-streaming");
-  el.reasoningEnabled = document.getElementById("set-reasoning-enabled");
-  el.reasoningMode = document.getElementById("set-reasoning-mode");
-  el.reasoningEffort = document.getElementById("set-reasoning-effort");
-  el.reasoningMaxTokens = document.getElementById("set-reasoning-maxtokens");
-  el.maxContext = document.getElementById("set-max-context");
-  el.autoThreshold = document.getElementById("set-auto-threshold");
-  el.keepN = document.getElementById("set-keep-n");
-  el.summarizerMaxTokens = document.getElementById("set-summarizer-maxtokens");
-  el.summarizerChunk = document.getElementById("set-summarizer-chunk");
-  el.narratorPrompt = document.getElementById("set-narrator-prompt");
-  el.summarizerPrompt = document.getElementById("set-summarizer-prompt");
-  el.savedMsg = document.getElementById("settings-saved-msg");
-  el.sessionTitle = document.getElementById("set-session-title");
-  el.sessionPlan = document.getElementById("set-session-plan");
-  el.saveBtn = document.getElementById("btn-save-settings");
-  el.profiles = document.getElementById("set-profiles");
-  el.profileName = document.getElementById("set-profile-name");
-  el.profileCopy = document.getElementById("btn-profile-copy");
-  el.profileDelete = document.getElementById("btn-profile-delete");
-  el.saveSessionBtn = document.getElementById("btn-save-session");
-  el.importBtn = document.getElementById("btn-import-st");
-  el.importFile = document.getElementById("file-import-st");
-  el.exportBtn = document.getElementById("btn-export-st");
-
-  el.saveBtn.addEventListener("click", handleSaveSettings);
-  el.profiles.addEventListener("change", handleProfileSwitch);
-  el.profileCopy.addEventListener("click", handleProfileCopy);
-  el.profileDelete.addEventListener("click", handleProfileDelete);
-  el.saveSessionBtn.addEventListener("click", handleSaveSession);
-  el.importBtn.addEventListener("click", () => el.importFile.click());
-  el.importFile.addEventListener("change", handleImport);
-  el.exportBtn.addEventListener("click", handleExport);
-  for (const input of document.querySelectorAll('#settings-tab [data-min]')) {
-    input.addEventListener("input", () => input.setCustomValidity(""));
-  }
-
-  document.addEventListener("session-changed", fillSessionSection);
-  document.addEventListener("settings-changed", fillGlobal);
-  fillGlobal();
-  fillSessionSection();
+  Object.assign(el, {
+    overlay: input("settings-tab"), content: input("settings-content"), footer: input("settings-footer"),
+    message: input("settings-saved-msg"), save: input("btn-save-settings"), saveSession: input("btn-save-session"),
+    reset: input("btn-reset-settings"), profiles: input("set-profiles"),
+  });
+  input("btn-close-settings").addEventListener("click", closeSettingsPopup);
+  input("settings-backdrop").addEventListener("click", closeSettingsPopup);
+  document.addEventListener("keydown", (event) => {
+    if (el.overlay.classList.contains("hidden")) return;
+    if (event.key === "Escape") { event.preventDefault(); closeSettingsPopup(); }
+    if (event.key !== "Tab") return;
+    const focusables = [...el.overlay.querySelectorAll("button, input, select, textarea")]
+      .filter((node) => !node.disabled && !node.closest(".hidden") && node.getClientRects().length);
+    const first = focusables[0], last = focusables.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((button) =>
+    button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
+  el.profiles.addEventListener("change", () => {
+    capture();
+    draft.activeProfileId = el.profiles.value;
+    mirrorFromActiveProfile(draft);
+    renderProfile();
+    clearMessage();
+  });
+  input("set-reasoning-enabled").addEventListener("change", syncOptionalControls);
+  input("set-reasoning-mode").addEventListener("change", syncOptionalControls);
+  input("set-advanced-enabled").addEventListener("change", syncOptionalControls);
+  input("btn-profile-copy").addEventListener("click", () => {
+    capture();
+    const copy = structuredClone(activeProfile(draft));
+    copy.id = crypto.randomUUID();
+    copy.name += " (copy)";
+    draft.profiles.push(copy);
+    draft.activeProfileId = copy.id;
+    mirrorFromActiveProfile(draft);
+    renderProfile();
+  });
+  input("btn-profile-delete").addEventListener("click", () => {
+    if (draft.profiles.length === 1) return feedback("Keep at least one profile.", true);
+    capture();
+    const current = activeProfile(draft);
+    if (!confirm(`Delete connection profile "${current.name}"?`)) return;
+    draft.profiles = draft.profiles.filter((profile) => profile.id !== current.id);
+    draft.activeProfileId = draft.profiles[0].id;
+    mirrorFromActiveProfile(draft);
+    renderProfile();
+  });
+  el.save.addEventListener("click", handleSaveSettings);
+  el.reset.addEventListener("click", resetPanel);
+  el.saveSession.addEventListener("click", handleSaveSession);
+  input("btn-import-st").addEventListener("click", () => input("file-import-st").click());
+  input("file-import-st").addEventListener("change", handleImport);
+  input("btn-export-st").addEventListener("click", handleExport);
+  document.addEventListener("session-changed", (event) => {
+    if (!el.overlay.classList.contains("hidden") && panel === "story" && !sessionDirty()) fillSession(event);
+  });
+  document.addEventListener("settings-changed", () => {
+    if (el.overlay.classList.contains("hidden")) return;
+    // Chat quick controls may change saved settings while the popup is open.
+    if (!globalDirty()) { original = structuredClone(state.settings); draft = structuredClone(state.settings); renderAll(); }
+  });
 }
 
-// ---------- global settings ----------
-
-function fillGlobal() {
-  const s = state.settings;
-  if (!s) return;
-  fillProfileSelect();
-  el.endpoint.value = s.endpoint ?? "";
-  el.apikey.value = s.apiKey ?? "";
-  el.model.value = s.modelId ?? "";
-  el.maxResp.value = s.maxResponseTokens ?? 1024;
-  el.streaming.checked = !!s.streaming;
-  el.reasoningEnabled.checked = !!s.reasoning?.enabled;
-  el.reasoningMode.value = s.reasoning?.mode ?? "effort";
-  el.reasoningEffort.value = s.reasoning?.effort ?? "medium";
-  el.reasoningMaxTokens.value = s.reasoning?.maxTokens ?? 2000;
-  el.maxContext.value = s.maxContextTokens ?? 8000;
-  el.autoThreshold.value = s.autoSummaryThresholdPercent ?? 70;
-  el.keepN.value = s.keepRecentMessagesAfterSummary ?? 10;
-  el.summarizerMaxTokens.value = s.summarizerMaxTokens ?? 100000;
-  el.summarizerChunk.value = s.summarizerChunkTokens ?? 250000;
-  el.narratorPrompt.value = s.narratorSystemPrompt ?? "";
-  el.summarizerPrompt.value = s.summarizerSystemPrompt ?? "";
+export function openSettingsPopup(trigger = document.activeElement) {
+  if (!el.overlay.classList.contains("hidden")) return;
+  opener = trigger;
+  original = structuredClone(state.settings);
+  draft = structuredClone(state.settings);
+  el.overlay.classList.remove("hidden");
+  el.overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("settings-open");
+  renderAll();
+  capture();
+  original = structuredClone(draft);
+  showPanel("model");
+  input("btn-close-settings").focus();
 }
 
-// ---------- connection profiles ----------
-
-function fillProfileSelect() {
-  const s = state.settings;
-  el.profiles.replaceChildren(
-    ...s.profiles.map((p) => {
-      const o = document.createElement("option");
-      o.value = p.id;
-      o.textContent = p.name;
-      return o;
-    })
-  );
-  el.profiles.value = s.activeProfileId;
-  el.profileName.value = activeProfile(s)?.name ?? "";
+function closeSettingsPopup() {
+  if (saving) return;
+  capture();
+  if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return;
+  el.overlay.classList.add("hidden");
+  el.overlay.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("settings-open");
+  sessionId = null;
+  set("set-session-title", ""); set("set-session-plan", "");
+  for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
+  clearMessage();
+  opener?.focus?.();
 }
 
-function collectConnection() {
-  return {
-    endpoint: el.endpoint.value.trim(),
-    apiKey: el.apikey.value.trim(),
-    modelId: el.model.value.trim(),
-    maxResponseTokens: Number(el.maxResp.value),
-    streaming: el.streaming.checked,
-    reasoning: {
-      enabled: el.reasoningEnabled.checked,
-      mode: el.reasoningMode.value,
-      effort: el.reasoningEffort.value,
-      maxTokens: Number(el.reasoningMaxTokens.value),
-    },
-  };
+function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
+function sessionDirty() {
+  if (sessionId !== state.sessionId) return false;
+  return raw("set-session-title") !== sessionOriginal.title || raw("set-session-plan") !== sessionOriginal.longTermPlan;
+}
+function accountDirty() {
+  return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
 }
 
-// Persist the form's connection fields into the current profile, then switch
-// to the newly selected one and reload the form from it.
-async function handleProfileSwitch() {
-  try {
-    const s = collectGlobal();
-    s.activeProfileId = el.profiles.value;
-    normalizeProfiles(s);
-    mirrorFromActiveProfile(s);
-    await saveSettings(s);
-  } catch (e) {
-    el.profiles.value = state.settings.activeProfileId;
-    flashSaved("Save failed: " + e.message, true);
-  }
+function showPanel(name) {
+  capture();
+  panel = name;
+  document.querySelectorAll("[data-settings-panel]").forEach((button) => {
+    const selected = button.dataset.settingsPanel === name;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-current", selected ? "page" : "false");
+    if (selected) button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
+  document.querySelectorAll("[data-panel]").forEach((section) => section.classList.toggle("hidden", section.dataset.panel !== name));
+  el.content.scrollTop = 0;
+  const global = ["model", "context", "prompts"].includes(name);
+  el.footer.classList.toggle("hidden", !global && name !== "story");
+  el.save.classList.toggle("hidden", !global);
+  el.reset.classList.toggle("hidden", !global);
+  el.saveSession.classList.toggle("hidden", name !== "story");
+  clearMessage();
+  if (name === "story") fillSession();
 }
 
-async function handleProfileCopy() {
-  try {
-    const s = collectGlobal();
-    const cur = activeProfile(s);
-    const copy = {
-      ...structuredClone(cur),
-      id: crypto.randomUUID(),
-      name: cur.name + " (copy)",
+function renderAll() {
+  renderProfile();
+  for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
+  set("set-narrator-prompt", draft.narratorSystemPrompt);
+  set("set-summarizer-prompt", draft.summarizerSystemPrompt);
+}
+function renderProfile() {
+  el.profiles.replaceChildren(...draft.profiles.map((profile) => {
+    const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; return option;
+  }));
+  el.profiles.value = draft.activeProfileId;
+  const profile = activeProfile(draft);
+  set("set-profile-name", profile?.name);
+  for (const [key, id] of Object.entries(connectionFields)) set(id, profile?.[key] ?? draft[key]);
+  input("set-streaming").checked = !!(profile?.streaming ?? draft.streaming);
+  const reasoning = profile?.reasoning ?? draft.reasoning ?? DEFAULT_SETTINGS.reasoning;
+  input("set-reasoning-enabled").checked = !!reasoning.enabled;
+  set("set-reasoning-mode", reasoning.mode);
+  set("set-reasoning-effort", reasoning.effort);
+  set("set-reasoning-maxtokens", reasoning.maxTokens);
+  input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
+  syncOptionalControls();
+}
+function syncOptionalControls() {
+  const thinking = input("set-reasoning-enabled").checked;
+  const maxTokens = thinking && raw("set-reasoning-mode") === "max_tokens";
+  input("thinking-options").classList.toggle("hidden", !thinking);
+  input("thinking-effort-field").classList.toggle("hidden", !thinking || maxTokens);
+  input("thinking-max-field").classList.toggle("hidden", !maxTokens);
+  input("set-reasoning-maxtokens").disabled = !maxTokens;
+  input("set-reasoning-effort").disabled = !thinking || maxTokens;
+  const advanced = input("set-advanced-enabled").checked;
+  input("advanced-options").classList.toggle("hidden", !advanced);
+  input("set-reasoning-enabled").setAttribute("aria-expanded", String(thinking));
+  input("set-advanced-enabled").setAttribute("aria-expanded", String(advanced));
+}
+function capture() {
+  if (!draft) return;
+  const profile = activeProfile(draft);
+  if (profile) {
+    profile.name = raw("set-profile-name").trim() || profile.name || "Default";
+    for (const [key, id] of Object.entries(connectionFields)) profile[key] = raw(id).trim();
+    profile.streaming = input("set-streaming").checked;
+    profile.advancedParametersEnabled = input("set-advanced-enabled").checked;
+    profile.reasoning = {
+      enabled: input("set-reasoning-enabled").checked,
+      mode: raw("set-reasoning-mode"), effort: raw("set-reasoning-effort"),
+      maxTokens: raw("set-reasoning-maxtokens").trim(),
     };
-    s.profiles.push(copy);
-    s.activeProfileId = copy.id;
-    await saveSettings(s);
-    flashSaved("Profile copied ✓");
-  } catch (e) {
-    flashSaved("Save failed: " + e.message, true);
+    mirrorFromActiveProfile(draft);
   }
+  for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
+  draft.narratorSystemPrompt = raw("set-narrator-prompt");
+  draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
 }
 
-async function handleProfileDelete() {
-  try {
-    const s = collectGlobal();
-    if (s.profiles.length <= 1) {
-      flashSaved("Can't delete the last profile", true);
-      return;
+function resetPanel() {
+  capture();
+  if (panel === "model") {
+    const profile = activeProfile(draft);
+    for (const key of ["streaming", "maxResponseTokens", "advancedParametersEnabled", "temperature", "topP", "frequencyPenalty", "presencePenalty"])
+      profile[key] = DEFAULT_SETTINGS[key];
+    profile.reasoning = structuredClone(DEFAULT_SETTINGS.reasoning);
+    mirrorFromActiveProfile(draft);
+    renderProfile();
+  } else if (panel === "context") {
+    for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
+  } else if (panel === "prompts") {
+    draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
+    draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
+    set("set-narrator-prompt", draft.narratorSystemPrompt);
+    set("set-summarizer-prompt", draft.summarizerSystemPrompt);
+  }
+  feedback("Defaults ready. Save to apply.");
+}
+
+function numberField(value, id, min, max, optional = false) {
+  const text = String(value ?? "").trim();
+  if (optional && text === "") return null;
+  const number = Number(text);
+  const valid = text !== "" && Number.isFinite(number) && number >= min && number <= max &&
+    (/^-?(?:\d+\.?\d*|\.\d+)$/.test(text));
+  if (!valid) throw new Error(`${input(id).closest("label").firstChild.textContent.trim()}: enter a number from ${min} to ${max}.`);
+  return number;
+}
+function integerField(value, id) {
+  const field = input(id);
+  const min = Number(field.dataset.min), max = field.dataset.max ? Number(field.dataset.max) : Number.MAX_SAFE_INTEGER;
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text)) || Number(text) < min || Number(text) > max)
+    throw new Error(`${field.closest("label").firstChild.textContent.trim()}: enter a whole number from ${min}${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ""}.`);
+  return Number(text);
+}
+function validatedDraft() {
+  const result = structuredClone(draft);
+  for (const profile of result.profiles) {
+    for (const [key, id] of Object.entries(connectionFields)) {
+      if (key in samplingRanges && profile.advancedParametersEnabled) {
+        const [min, max] = samplingRanges[key];
+        profile[key] = numberField(profile[key], id, min, max, true);
+      } else if (key in samplingRanges && String(profile[key] ?? "").trim() === "") {
+        profile[key] = null;
+      }
     }
-    const cur = activeProfile(s);
-    if (!confirm(`Delete connection profile "${cur.name}"?`)) return;
-    s.profiles = s.profiles.filter((p) => p.id !== s.activeProfileId);
-    s.activeProfileId = s.profiles[0].id;
-    mirrorFromActiveProfile(s);
-    await saveSettings(s);
-    flashSaved("Profile deleted ✓");
-  } catch (e) {
-    flashSaved("Save failed: " + e.message, true);
+    profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
+    if (profile.reasoning.enabled && profile.reasoning.mode === "max_tokens") {
+      profile.reasoning.maxTokens = integerField(profile.reasoning.maxTokens, "set-reasoning-maxtokens");
+    }
+    if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }
+  for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
+  mirrorFromActiveProfile(result);
+  if (result.maxResponseTokens >= result.maxContextTokens) throw new Error("Max context tokens must exceed max response tokens.");
+  return result;
 }
-
-function collectGlobal() {
-  for (const input of document.querySelectorAll('#settings-tab [data-min]')) {
-    const value = input.value.trim();
-    const number = Number(value);
-    const min = Number(input.dataset.min);
-    const max = input.dataset.max === undefined ? Infinity : Number(input.dataset.max);
-    input.setCustomValidity(
-      !/^[0-9]+$/.test(value) || !Number.isSafeInteger(number) || number < min || number > max
-        ? `Enter a whole number from ${min}${Number.isFinite(max) ? ` to ${max}` : ""}.`
-        : ""
-    );
-    if (!input.reportValidity()) throw new Error("Check the highlighted number field.");
-  }
-  if (!el.endpoint.reportValidity()) throw new Error("Enter a valid endpoint URL.");
-  const s = {
-    ...structuredClone(state.settings),
-    ...collectConnection(),
-    maxContextTokens: Number(el.maxContext.value),
-    autoSummaryThresholdPercent: Number(el.autoThreshold.value),
-    keepRecentMessagesAfterSummary: Number(el.keepN.value),
-    summarizerMaxTokens: Number(el.summarizerMaxTokens.value),
-    summarizerChunkTokens: Number(el.summarizerChunk.value),
-    narratorSystemPrompt: el.narratorPrompt.value,
-    summarizerSystemPrompt: el.summarizerPrompt.value,
-  };
-  if (s.maxResponseTokens >= s.maxContextTokens) {
-    throw new Error("Max context tokens must exceed max response tokens.");
-  }
-  normalizeProfiles(s);
-  const cur = activeProfile(s);
-  cur.name = el.profileName.value.trim() || cur.name || "Default";
-  mirrorToActiveProfile(s);
-  return s;
-}
-
 async function handleSaveSettings() {
+  if (saving) return;
+  capture();
+  let validated;
+  try { validated = validatedDraft(); }
+  catch (error) { feedback(error.message, true); return; }
+  saving = true; el.save.disabled = true;
   try {
-    await saveSettings(collectGlobal());
-    flashSaved("Saved ✓");
-    fillSessionSection(); // plan injection text depends on settings only via session; cheap refresh
+    await saveSettings(validated);
+    original = structuredClone(state.settings);
+    draft = structuredClone(state.settings);
+    renderAll();
+    capture();
+    original = structuredClone(draft);
+    feedback("Saved ✓");
     refreshContextIndicator();
-  } catch (e) {
-    flashSaved("Save failed: " + e.message, true);
-  }
+  } catch (error) { feedback("Save failed: " + error.message, true); }
+  finally { saving = false; el.save.disabled = false; }
 }
-
-function flashSaved(text, isError = false) {
-  el.savedMsg.textContent = text;
-  el.savedMsg.style.color = isError ? "var(--danger)" : "var(--ok)";
-  setTimeout(() => { el.savedMsg.textContent = ""; }, 3500);
+function feedback(message, error = false) {
+  el.message.textContent = message;
+  el.message.style.color = error ? "var(--danger)" : "var(--ok)";
 }
+function clearMessage() { if (el.message) el.message.textContent = ""; }
 
-// ---------- this-session settings ----------
-
-async function fillSessionSection(event) {
-  // Skip entirely when the Settings tab is hidden — avoids a getSession() read on
-  // every session/message snapshot (each message write touches the session doc).
-  const tab = document.getElementById("settings-tab");
-  if (tab.classList.contains("hidden")) return;
-  if (!state.sessionId) {
-    el.sessionTitle.value = "";
-    el.sessionPlan.value = "";
+async function fillSession(event) {
+  if (el.overlay.classList.contains("hidden") || !state.sessionId) {
+    sessionId = state.sessionId;
+    sessionOriginal = { title: "", longTermPlan: "" };
+    set("set-session-title", ""); set("set-session-plan", "");
     return;
   }
+  const requestedId = state.sessionId;
+  if (sessionId !== requestedId) {
+    sessionId = requestedId;
+    sessionOriginal = { title: "", longTermPlan: "" };
+    set("set-session-title", ""); set("set-session-plan", "");
+  } else if (sessionDirty()) return;
   try {
-    const sessionId = state.sessionId;
-    const s = event?.detail?.sessionId === sessionId
-      ? event.detail.session
-      : await getSession(sessionId);
-    if (sessionId !== state.sessionId) return;
-    if (!s) {
-      el.sessionTitle.value = "";
-      el.sessionPlan.value = "";
-      return;
-    }
-    if (el.sessionTitle.value !== s.title && document.activeElement !== el.sessionTitle) {
-      el.sessionTitle.value = s.title ?? "";
-    }
-    if (document.activeElement !== el.sessionPlan) {
-      el.sessionPlan.value = s.longTermPlan ?? "";
-    }
-  } catch (e) {
-    console.error("Failed to load session for settings:", e);
-  }
+    const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
+    if (requestedId !== state.sessionId || sessionDirty()) return;
+    sessionId = requestedId;
+    sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "" };
+    set("set-session-title", sessionOriginal.title);
+    set("set-session-plan", sessionOriginal.longTermPlan);
+  } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
-
 async function handleSaveSession() {
-  if (!state.sessionId) return;
-  if (state.busy) {
-    flashSaved("Wait for the current reply or summary before changing the session.", true);
-    return;
-  }
+  if (!state.sessionId) return feedback("Select a story first.", true);
+  if (state.busy) return feedback("Wait for the current reply or summary.", true);
+  if (saving) return;
+  saving = true; el.saveSession.disabled = true;
   try {
-    // Single updateDoc write: title + long-term plan together.
-    await updateSession(state.sessionId, {
-      title: el.sessionTitle.value.trim() || "Untitled",
-      longTermPlan: el.sessionPlan.value,
-    });
-    flashSaved("Session saved ✓");
+    const title = raw("set-session-title").trim() || "Untitled";
+    const longTermPlan = raw("set-session-plan");
+    await updateSession(state.sessionId, { title, longTermPlan });
+    sessionOriginal = { title, longTermPlan };
+    set("set-session-title", title);
+    feedback("Session saved ✓");
     refreshContextIndicator();
-  } catch (e) {
-    flashSaved("Save failed: " + e.message, true);
-  }
+  } catch (error) { feedback("Save failed: " + error.message, true); }
+  finally { saving = false; el.saveSession.disabled = false; }
 }
-
-// ---------- import / export ----------
-
 async function handleImport() {
-  const file = el.importFile.files[0];
-  el.importFile.value = "";
+  const file = input("file-import-st").files[0];
+  input("file-import-st").value = "";
   if (!file) return;
   try {
-    flashSaved("Importing…");
-    const sessionId = await importSillyTavern(file);
-    flashSaved(`Imported ✓`);
-    // Importing into a NEW session; select it via full page reload of sidebar listener.
-    document.dispatchEvent(new CustomEvent("session-imported", { detail: sessionId }));
-    document.getElementById("set-session-title").focus();
-  } catch (e) {
-    flashSaved("Import failed: " + e.message, true);
-  }
+    feedback("Importing…");
+    const id = await importSillyTavern(file);
+    document.dispatchEvent(new CustomEvent("session-imported", { detail: id }));
+    showPanel("story");
+    feedback("Imported ✓");
+    input("set-session-title").focus();
+  } catch (error) { feedback("Import failed: " + error.message, true); }
 }
-
 async function handleExport() {
-  if (!state.sessionId) return;
-  try {
-    await exportSillyTavern(state.sessionId);
-  } catch (e) {
-    flashSaved("Export failed: " + e.message, true);
-  }
+  if (!state.sessionId) return feedback("Select a story first.", true);
+  try { await exportSillyTavern(state.sessionId); }
+  catch (error) { feedback("Export failed: " + error.message, true); }
 }

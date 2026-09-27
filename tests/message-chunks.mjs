@@ -169,6 +169,25 @@ test('migration packs existing messages once and checkpoint reads use chunks', a
   assert.equal(seen.hasEarlier, true);
 });
 
+test('assistant plan thread is stored separately from visible content', async () => {
+  const h = await setup();
+  const saved = await h.api.addMessage('s', {
+    role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion',
+  });
+  let message = (await h.api.getMessages('s'))[0];
+  assert.equal(message.content, 'The door opens.');
+  assert.equal(message.planThread, 'steering toward the reunion');
+  assert.ok(message.tokenCount > message.content.length);
+  await h.api.overwriteMessage('s', saved.id, {
+    content: 'The room is empty.', thinking: null, planThread: 'steering toward the reveal',
+  }, saved.order);
+  message = (await h.api.getMessages('s'))[0];
+  assert.equal(message.planThread, 'steering toward the reveal');
+  await h.api.editMessage('s', saved.id, 'A quiet room.', saved.order);
+  message = (await h.api.getMessages('s'))[0];
+  assert.equal(message.planThread, null);
+});
+
 test('append, edit, split, and delete preserve message order and content', async () => {
   const h = await setup(100);
   await h.api.ensureChunked('s');

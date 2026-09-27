@@ -5,11 +5,12 @@ import * as messagesApi from "../messages.js";
 import { buildContextForRequest, computeContextUsage } from "../context-builder.js";
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
-import { extractPlan, stripPlan } from "../plan-parser.js";
+import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
 import { updateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
+import { loadChatCache, saveChatCache } from "../chat-cache.js";
 import {
-  saveSettings,
+  useLocalSettings,
   normalizeProfiles,
   activeProfile,
   mirrorFromActiveProfile,
@@ -31,7 +32,8 @@ let latestReady = false;
 let historyMessages = null; // full history or the active checkpoint onward
 let historyStartOrder = 0;
 let historyLoading = null;
-const historyCache = new Map(); // keep recently visited sessions in memory
+const historyCache = new Map(); // three most recently visited sessions in memory
+let cacheSaveTimer = null;
 const renderedMessages = new Map();
 
 const el = {};
@@ -120,8 +122,7 @@ export function initChatView() {
 
 // ---------- quick model / thinking chips (composer) ----------
 
-// Quick controls edit the live settings object and persist immediately, so
-// they stay in sync with the Settings tab (which re-reads state.settings).
+// Quick controls update the device cache and live settings without Firestore.
 function initQuickControls() {
   el.chipModel = document.getElementById("btn-model-chip");
   el.chipModelLabel = document.getElementById("chip-model");
@@ -131,21 +132,16 @@ function initQuickControls() {
 
   el.chipModel.addEventListener("click", () => toggleQuickPopover());
 
-  el.quickProfile.addEventListener("change", async () => {
+  el.quickProfile.addEventListener("change", () => {
     const s = structuredClone(state.settings);
     if (!s) return;
     s.activeProfileId = el.quickProfile.value;
     normalizeProfiles(s);
     mirrorFromActiveProfile(s); // load the chosen profile's connection fields
-    try {
-      await saveSettings(s);
-    } catch (e) {
-      refreshQuickChips();
-      showTransientError("Save failed: " + e.message);
-    }
+    useLocalSettings(s);
   });
 
-  el.quickThinking.addEventListener("change", async () => {
+  el.quickThinking.addEventListener("change", () => {
     const s = structuredClone(state.settings);
     if (!s) return;
     const v = el.quickThinking.value;
@@ -158,12 +154,7 @@ function initQuickControls() {
     }
     normalizeProfiles(s);
     mirrorToActiveProfile(s);
-    try {
-      await saveSettings(s);
-    } catch (e) {
-      refreshQuickChips();
-      showTransientError("Save failed: " + e.message);
-    }
+    useLocalSettings(s);
   });
 
   // Close when tapping anywhere outside the popover and the chip.
@@ -228,9 +219,12 @@ export function setSession(sessionId) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
   }
-  if (state.sessionId && historyMessages) {
+  if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
+  if (state.sessionId && session && latestReady) {
+    const snapshot = chatSnapshot();
     historyCache.delete(state.sessionId);
-    historyCache.set(state.sessionId, { messages: historyMessages, startOrder: historyStartOrder });
+    historyCache.set(state.sessionId, snapshot);
+    void saveChatCache(currentUid(), state.sessionId, snapshot);
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   msgUnsub?.();
@@ -246,9 +240,9 @@ export function setSession(sessionId) {
   latestMessageIds = new Set();
   latestReady = false;
   const cachedHistory = historyCache.get(sessionId);
-  historyMessages = cachedHistory?.messages ?? null;
-  historyStartOrder = cachedHistory?.startOrder ?? 0;
-  if (historyMessages) {
+  historyMessages = cachedHistory?.history ?? null;
+  historyStartOrder = 0;
+  if (cachedHistory) {
     historyCache.delete(sessionId);
     historyCache.set(sessionId, cachedHistory);
   }
@@ -262,6 +256,50 @@ export function setSession(sessionId) {
   updateWelcome();
   if (!sessionId) return true;
   el.contextLabel.textContent = "Loading chat…";
+  if (cachedHistory) {
+    restoreCachedChat(sessionId, cachedHistory);
+    return true;
+  }
+  void loadChatCache(currentUid(), sessionId).then((saved) => {
+    if (state.sessionId !== sessionId) return;
+    if (saved?.session && Array.isArray(saved.recent)) {
+      historyCache.set(sessionId, saved);
+      if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+      restoreCachedChat(sessionId, saved);
+    } else {
+      subscribeChat(sessionId);
+    }
+  }).catch(() => {
+    if (state.sessionId === sessionId) subscribeChat(sessionId);
+  });
+  return true;
+}
+
+function chatSnapshot() {
+  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
+}
+
+function queueCacheSave() {
+  if (!session || !latestReady) return;
+  if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    cacheSaveTimer = null;
+    void saveChatCache(currentUid(), state.sessionId, chatSnapshot());
+  }, 250);
+}
+
+function restoreCachedChat(sessionId, saved) {
+  session = saved.session;
+  historyMessages = saved.history ?? null;
+  hasEarlier = saved.hasEarlier;
+  latestReady = true;
+  renderMessages(saved.recent);
+  document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
+  updateIndicator();
+  queueCacheSave(); // refresh recency for the three-entry device cache
+}
+
+function subscribeChat(sessionId) {
 
   sessUnsub = onSnapshot(
     doc(db, "users", currentUid(), "sessions", sessionId),
@@ -279,6 +317,7 @@ export function setSession(sessionId) {
           session.longTermPlan !== previous.longTermPlan) {
         document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
       }
+      queueCacheSave();
     },
     (err) => console.error("Session listener error:", err)
   );
@@ -302,10 +341,10 @@ export function setSession(sessionId) {
       renderMessages(visibleCount <= PAGE_SIZE ? merged.slice(-PAGE_SIZE) : merged);
       if (historyMessages) historyMessages = mergeMessages(historyMessages, latest);
       updateIndicator(); // cached data — no extra Firestore reads
+      queueCacheSave();
     },
     (err) => showTransientError("Could not load chat: " + err.message)
   );
-  return true;
 }
 
 // ---------- rendering ----------
@@ -318,37 +357,25 @@ function mergeMessages(existing, incoming) {
   return [...byId.values()].sort((a, b) => a.order - b.order);
 }
 
-async function ensureHistory({ full = false } = {}) {
-  const checkpoint = !full && session?.activeSummaryMessageId
-    ? (session.breakpointOrder ?? 0)
-    : 0;
-  if (historyMessages && historyStartOrder <= checkpoint &&
-      (!checkpoint || historyMessages.some((m) => m.id === session.activeSummaryMessageId))) {
-    return historyMessages;
-  }
+async function ensureHistory() {
+  if (historyMessages) return historyMessages;
   if (historyLoading) {
     await historyLoading;
-    return ensureHistory({ full });
+    return ensureHistory();
   }
   if (latestReady && !hasEarlier) {
     historyMessages = [...lastMessages];
     historyStartOrder = 0;
+    queueCacheSave();
     return historyMessages;
   }
   const sessionId = state.sessionId;
   historyLoading = (async () => {
-    let startOrder = checkpoint;
-    let messages = checkpoint
-      ? await messagesApi.getMessagesAfterOrder(sessionId, checkpoint)
-      : await messagesApi.getMessages(sessionId);
-    // A broken or deleted checkpoint must not silently omit older context.
-    if (checkpoint && !messages.some((m) => m.id === session.activeSummaryMessageId)) {
-      messages = await messagesApi.getMessages(sessionId);
-      startOrder = 0;
-    }
+    const messages = await messagesApi.getMessages(sessionId);
     if (state.sessionId !== sessionId) throw new Error("Session changed while loading history.");
-    historyMessages = mergeMessages(messages, lastMessages.filter((m) => m.order > startOrder));
-    historyStartOrder = startOrder;
+    historyMessages = mergeMessages(messages, lastMessages);
+    historyStartOrder = 0;
+    queueCacheSave();
     return historyMessages;
   })().finally(() => { historyLoading = null; });
   return historyLoading;
@@ -361,13 +388,10 @@ function applySummaryResult(result) {
     activeSummaryMessageId: result.summaryId,
     breakpointOrder: result.newBreakpointOrder,
   };
-  historyMessages = mergeMessages(
-    historyMessages.filter((m) => m.order > result.newBreakpointOrder),
-    [result.summaryMessage]
-  );
-  historyStartOrder = result.newBreakpointOrder;
+  historyMessages = mergeMessages(historyMessages, [result.summaryMessage]);
   renderMessages(mergeMessages(lastMessages, [result.summaryMessage]));
   updateIndicator();
+  queueCacheSave();
 }
 
 function renderMessages(msgs) {
@@ -420,6 +444,7 @@ function renderMessages(msgs) {
   }
   updateWelcome();
   if (sticky) scrollToEnd();
+  queueCacheSave();
 }
 
 function sameRenderedMessage(a, b) {
@@ -709,8 +734,7 @@ async function runAssistantTurn(opts = {}) {
   if (!settings) return;
   setBusy(true);
   try {
-    const beforeCheckpoint = opts.upToOrder <= (session.breakpointOrder ?? 0);
-    const allMessages = opts.messages ?? await ensureHistory({ full: beforeCheckpoint });
+    const allMessages = opts.messages ?? await ensureHistory();
     const { apiMessages } = await buildContextForRequest(session, settings, { ...opts, messages: allMessages });
     startStreamUI();
 
@@ -725,6 +749,7 @@ async function runAssistantTurn(opts = {}) {
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
     const plan = extractPlan(content);
+    const planThread = extractPlanThread(content);
     const clean = stripPlan(content);
     const finalContent =
       clean || (plan !== null ? "(plan updated — no narrative content in the reply)" : "(empty response)");
@@ -735,26 +760,28 @@ async function runAssistantTurn(opts = {}) {
     let savedMsg;
     if (opts.overwriteId) {
       const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
-        content: finalContent, thinking,
+        content: finalContent, thinking, planThread,
       }, opts.upToOrder);
       const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
-      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, tokenCount };
+      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, tokenCount };
       historyMessages = historyMessages.map((m) =>
-        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, tokenCount } : m
+        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, tokenCount } : m
       );
     } else {
       savedMsg = await messagesApi.addMessage(session.id, {
-        role: "assistant", content: finalContent, thinking,
+        role: "assistant", content: finalContent, thinking, planThread,
       });
       lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
-        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, tokenCount: savedMsg.tokenCount },
+        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, tokenCount: savedMsg.tokenCount },
       ]);
-      historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
+    historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
     }
     renderMessages(lastMessages);
+    queueCacheSave();
 
     if (newPlan !== null) {
       await updateSession(session.id, { longTermPlan: newPlan });
+      session = { ...session, longTermPlan: newPlan };
     }
 
     // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
@@ -858,7 +885,7 @@ async function handleFullSummarize() {
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
-    await ensureHistory({ full: true });
+    await ensureHistory();
     const r = await runSummarization(session, state.settings, {
       messages: historyMessages,
       full: true,
@@ -891,10 +918,8 @@ async function handleResetSummary() {
   try {
     await updateSession(session.id, { activeSummaryMessageId: null, breakpointOrder: 0 });
     session = { ...session, activeSummaryMessageId: null, breakpointOrder: 0 };
-    historyMessages = null;
-    historyStartOrder = 0;
-    historyCache.delete(session.id);
     updateIndicator();
+    queueCacheSave();
     setStatus("Summary checkpoint reset.", true);
   } catch (err) {
     showTransientError("Reset failed: " + (err.message || String(err)));

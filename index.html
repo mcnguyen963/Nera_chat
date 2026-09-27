@@ -149,129 +149,101 @@
         </form>
       </section>
 
-      <!-- Settings tab -->
-      <section id="settings-tab" class="settings-tab hidden">
-        <div class="settings-backbar">
-          <button id="btn-back-to-chat" class="btn small" type="button">‹ Back to chat</button>
-        </div>
-        <div class="settings-heading"><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p class="muted">The right setup for the stories you want to tell.</p></div>
-        <h2>Account</h2>
-        <p id="account-email" class="muted account-email"></p>
-        <form id="change-password-form" class="account-form">
-          <div class="settings-grid">
-            <label>Current password<input type="password" id="current-password" autocomplete="current-password" required /></label>
-            <label>New password<input type="password" id="new-password" autocomplete="new-password" minlength="6" required /></label>
-            <label>Confirm new password<input type="password" id="confirm-new-password" autocomplete="new-password" minlength="6" required /></label>
-          </div>
-          <p id="change-password-message" class="auth-message" role="status" hidden></p>
-          <button type="submit" class="btn primary">Change password</button>
-        </form>
-        <h2>Connection</h2>
-        <div class="settings-grid">
-          <label>Profile
-            <div class="profile-row">
-              <select id="set-profiles"></select>
-              <button id="btn-profile-copy" class="btn small" type="button">Copy</button>
-              <button id="btn-profile-delete" class="btn small danger" type="button">Delete</button>
+      <!-- Settings popup -->
+      <section id="settings-tab" class="settings-overlay hidden" aria-hidden="true">
+        <div id="settings-backdrop" class="settings-backdrop"></div>
+        <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <header class="settings-header">
+            <div><p class="eyebrow">MAKE IT YOURS</p><h1 id="settings-title">Settings</h1></div>
+            <div id="settings-footer" class="settings-footer">
+              <button id="btn-reset-settings" class="btn" type="button"><span class="settings-label-long">Reset defaults</span><span class="settings-label-short">Defaults</span></button>
+              <span id="settings-saved-msg" role="status" aria-live="polite"></span>
+              <button id="btn-save-settings" class="btn primary" type="button"><span class="settings-label-long">Save settings</span><span class="settings-label-short">Save</span></button>
+              <button id="btn-save-session" class="btn primary hidden" type="button"><span class="settings-label-long">Save session</span><span class="settings-label-short">Save</span></button>
             </div>
-          </label>
-          <label>Profile name
-            <input type="text" id="set-profile-name" />
-          </label>
-        </div>
-        <div class="settings-grid">
-          <label>Endpoint URL
-            <input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" />
-          </label>
-          <label>API key
-            <input type="password" id="set-apikey" autocomplete="off" />
-          </label>
-          <label>Model ID
-            <input type="text" id="set-model" placeholder="e.g. anthropic/claude-3.5-sonnet" />
-          </label>
-          <label>Max response tokens (max_tokens)
-            <input type="text" id="set-max-resp" inputmode="numeric" pattern="[0-9]*" data-min="1" required />
-          </label>
-          <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
-        </div>
-
-        <h3>Reasoning / thinking</h3>
-        <div class="settings-grid">
-          <label class="checkbox-label"><input type="checkbox" id="set-reasoning-enabled" /> Enabled</label>
-          <label>Mode
-            <select id="set-reasoning-mode">
-              <option value="effort">effort</option>
-              <option value="max_tokens">max_tokens</option>
-            </select>
-          </label>
-          <label>Effort (used when mode = effort)
-            <select id="set-reasoning-effort">
-              <option value="none">none</option>
-              <option value="minimal">minimal</option>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="xhigh">xhigh</option>
-              <option value="max">max</option>
-            </select>
-          </label>
-          <label>Reasoning max_tokens (mode = max_tokens)
-            <input type="text" id="set-reasoning-maxtokens" inputmode="numeric" pattern="[0-9]*" data-min="1" required />
-          </label>
-        </div>
-
-        <h2>Context &amp; Summarization</h2>
-        <p class="muted numeric-hint">Clear a field and type a new whole number. Values are checked when you save.</p>
-        <div class="settings-grid">
-          <label>Max context tokens (total budget)
-            <input type="text" id="set-max-context" inputmode="numeric" pattern="[0-9]*" data-min="256" required />
-          </label>
-          <label>Auto-summary threshold (%)
-            <input type="text" id="set-auto-threshold" inputmode="numeric" pattern="[0-9]*" data-min="1" data-max="100" required />
-          </label>
-          <label>Keep recent messages after summary
-            <input type="text" id="set-keep-n" inputmode="numeric" pattern="[0-9]*" data-min="0" required />
-          </label>
-          <label>Summarizer max response tokens
-            <input type="text" id="set-summarizer-maxtokens" inputmode="numeric" pattern="[0-9]*" data-min="256" required />
-          </label>
-          <label>Summarizer input chunk (tokens per call)
-            <input type="text" id="set-summarizer-chunk" inputmode="numeric" pattern="[0-9]*" data-min="2000" required />
-          </label>
-        </div>
-
-        <h2>Prompts</h2>
-        <div class="settings-prompts">
-          <label>System prompt
-            <textarea id="set-narrator-prompt" rows="8"></textarea>
-          </label>
-          <label>Summarizer system prompt
-            <textarea id="set-summarizer-prompt" rows="8"></textarea>
-          </label>
-        </div>
-        <div class="settings-actions">
-          <button id="btn-save-settings" class="btn primary">Save settings</button>
-          <span id="settings-saved-msg" class="muted"></span>
-        </div>
-
-        <h2>This Session</h2>
-        <div class="settings-grid">
-          <label>Title
-            <input type="text" id="set-session-title" />
-          </label>
-        </div>
-        <label class="full-label">Story notes &amp; long-term plan
-          <textarea id="set-session-plan" rows="6"></textarea>
-        </label>
-        <div class="settings-actions">
-          <button id="btn-save-session" class="btn primary">Save session</button>
-        </div>
-
-        <h2>Bring your stories with you</h2>
-        <div class="settings-actions">
-          <input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" />
-          <button id="btn-import-st" class="btn">Import story (.jsonl)</button>
-          <button id="btn-export-st" class="btn">Export current session</button>
+            <button id="btn-close-settings" class="settings-close" type="button" aria-label="Close settings">×</button>
+          </header>
+          <div class="settings-body">
+            <nav class="settings-rail" aria-label="Settings categories">
+              <button type="button" data-settings-panel="model" class="selected">Model connection</button>
+              <button type="button" data-settings-panel="context">Context &amp; summaries</button>
+              <button type="button" data-settings-panel="prompts">Prompts</button>
+              <button type="button" data-settings-panel="story">This story</button>
+              <button type="button" data-settings-panel="transfer">Import &amp; export</button>
+              <button type="button" data-settings-panel="account">Account</button>
+            </nav>
+            <div id="settings-content" class="settings-content">
+              <section data-panel="model" class="settings-panel">
+                <h2>Model connection</h2>
+                <div class="settings-grid">
+                  <div class="profile-control"><label for="set-profiles">Profile</label><div class="profile-row"><select id="set-profiles"></select><button id="btn-profile-copy" class="btn small" type="button">Copy</button><button id="btn-profile-delete" class="btn small danger" type="button">Delete</button></div></div>
+                  <label>Profile name<input type="text" id="set-profile-name" /></label>
+                </div>
+                <h3>Connection &amp; thinking</h3>
+                <div class="settings-grid">
+                  <label>Endpoint URL<input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" /></label>
+                  <label>API key<input type="password" id="set-apikey" autocomplete="off" /></label>
+                  <label>Model ID<input type="text" id="set-model" placeholder="e.g. anthropic/claude-3.5-sonnet" /></label>
+                  <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-reasoning-enabled" aria-controls="thinking-options" /> Thinking enabled</label>
+                </div>
+                <div id="thinking-options" class="settings-grid hidden">
+                  <label>Thinking mode<select id="set-reasoning-mode"><option value="effort">effort</option><option value="max_tokens">max_tokens</option></select></label>
+                  <label id="thinking-effort-field">Effort<select id="set-reasoning-effort"><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
+                  <label id="thinking-max-field" class="hidden">Thinking max_tokens<input type="text" id="set-reasoning-maxtokens" inputmode="numeric" data-min="1" required /></label>
+                </div>
+                <h3>Parameters</h3>
+                <div class="settings-grid">
+                  <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
+                  <label>Max response tokens<input type="text" id="set-max-resp" inputmode="numeric" data-min="1" required /></label>
+                </div>
+                <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-advanced-enabled" aria-controls="advanced-options" /> Custom sampling parameters</label>
+                <div id="advanced-options" class="hidden">
+                  <p class="muted">Leave a field blank to use the provider default.</p>
+                  <div class="settings-grid">
+                    <label>Temperature (0–2)<input type="text" id="set-temperature" inputmode="decimal" data-sampling="temperature" placeholder="Provider default" /></label>
+                    <label>Top-p (0–1)<input type="text" id="set-top-p" inputmode="decimal" data-sampling="topP" placeholder="Provider default" /></label>
+                    <label>Frequency penalty (−2–2)<input type="text" id="set-frequency-penalty" inputmode="decimal" data-sampling="frequencyPenalty" placeholder="Provider default" /></label>
+                    <label>Presence penalty (−2–2)<input type="text" id="set-presence-penalty" inputmode="decimal" data-sampling="presencePenalty" placeholder="Provider default" /></label>
+                  </div>
+                </div>
+              </section>
+              <section data-panel="context" class="settings-panel hidden">
+                <h2>Context &amp; summaries</h2>
+                <div class="settings-grid">
+                  <label>Max context tokens (total budget)<input type="text" id="set-max-context" inputmode="numeric" data-min="256" required /></label>
+                  <label>Auto-summary threshold (%)<input type="text" id="set-auto-threshold" inputmode="numeric" data-min="1" data-max="100" required /></label>
+                  <label>Keep recent messages after summary<input type="text" id="set-keep-n" inputmode="numeric" data-min="0" required /></label>
+                  <label>Summarizer max response tokens<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" required /></label>
+                  <label>Summarizer input chunk (tokens per call)<input type="text" id="set-summarizer-chunk" inputmode="numeric" data-min="2000" required /></label>
+                </div>
+              </section>
+              <section data-panel="prompts" class="settings-panel hidden">
+                <h2>Prompts</h2>
+                <div class="settings-prompts">
+                  <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label>
+                  <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label>
+                </div>
+              </section>
+              <section data-panel="story" class="settings-panel hidden">
+                <h2>This story</h2>
+                <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
+                <label class="full-label">Story notes &amp; long-term plan<textarea id="set-session-plan" rows="8"></textarea></label>
+              </section>
+              <section data-panel="transfer" class="settings-panel hidden">
+                <h2>Import &amp; export</h2>
+                <p class="muted">Bring your stories with you.</p>
+                <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button></div>
+              </section>
+              <section data-panel="account" class="settings-panel hidden">
+                <h2>Account</h2><p id="account-email" class="muted account-email"></p>
+                <form id="change-password-form" class="account-form">
+                  <div class="settings-grid"><label>Current password<input type="password" id="current-password" autocomplete="current-password" required /></label><label>New password<input type="password" id="new-password" autocomplete="new-password" minlength="6" required /></label><label>Confirm new password<input type="password" id="confirm-new-password" autocomplete="new-password" minlength="6" required /></label></div>
+                  <p id="change-password-message" class="auth-message" role="status" hidden></p>
+                  <button type="submit" class="btn primary">Change password</button>
+                </form>
+              </section>
+            </div>
+          </div>
         </div>
       </section>
     </main>

@@ -67,7 +67,10 @@ export async function buildContextForRequest(session, settings, opts = {}) {
 
   for (let i = windowed.length - 1; i >= 0; i--) {
     const m = windowed[i];
-    parts.push({ role: m.role, content: m.content });
+    const content = m.role === "assistant" && m.planThread
+      ? `${m.content}\n<plan_thread>${m.planThread}</plan_thread>`
+      : m.content;
+    parts.push({ role: m.role, content });
   }
 
   return {

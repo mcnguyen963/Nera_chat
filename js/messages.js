@@ -29,8 +29,12 @@ function newMsgId() {
 }
 export const newMessageId = newMsgId;
 
-function makeMessage(id, order, { role, content, thinking = null }, tokenCount) {
-  return { id, order, role, content, thinking, tokenCount, createdAt: Timestamp.now(), editedAt: null };
+function makeMessage(id, order, { role, content, thinking = null, planThread = null }, tokenCount) {
+  return { id, order, role, content, thinking, planThread, tokenCount, createdAt: Timestamp.now(), editedAt: null };
+}
+
+function contextText(message) {
+  return message.planThread ? `${message.content}\n<plan_thread>${message.planThread}</plan_thread>` : message.content;
 }
 
 const readySessions = new Set();
@@ -79,7 +83,7 @@ export function ensureChunked(sessionId) {
 // chunk. Only the session document is read on each new message.
 export async function addMessage(sessionId, message, opts = {}) {
   await ensureChunked(sessionId);
-  const tokenCount = await countTokens(message.content);
+  const tokenCount = await countTokens(contextText(message));
   const id = opts.id ?? newMsgId();
   return runTransaction(db, async (tx) => {
     const snap = await tx.get(sessionRef(sessionId));
@@ -255,15 +259,15 @@ async function changeMessage(sessionId, messageId, order, change) {
 export async function editMessage(sessionId, messageId, content, order) {
   const tokenCount = await countTokens(content);
   await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, tokenCount, editedAt: Timestamp.now(),
+    ...message, content, planThread: null, tokenCount, editedAt: Timestamp.now(),
   }));
   return { tokenCount };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking }, order) {
-  const tokenCount = await countTokens(content);
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null }, order) {
+  const tokenCount = await countTokens(contextText({ content, planThread }));
   await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, thinking: thinking ?? null, tokenCount,
+    ...message, content, thinking: thinking ?? null, planThread, tokenCount,
   }));
   return { tokenCount };
 }
