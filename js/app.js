@@ -1,5 +1,5 @@
 import { initAuth, login, register, resetPassword, changePassword, currentUserInfo } from "./auth.js";
-import { loadSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
+import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
 import { initChatView, setSession } from "./ui/chat-view.js";
@@ -237,6 +237,7 @@ async function enterApp() {
   initChatView();
   initSidebar();
   initSettingsView();
+  watchSettings();
   document.getElementById("account-email").textContent = currentUserInfo()?.email ?? "";
   wireTabs();
 }

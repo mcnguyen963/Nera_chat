@@ -1,6 +1,7 @@
 import {
   doc,
-  getDoc,
+  getDocFromServer,
+  onSnapshot,
   setDoc,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
@@ -178,10 +179,14 @@ function cacheSettings(settings) {
 
 export async function loadSettings() {
   const cached = readCachedSettings();
-  if (cached) return hydrateProfiles(mergeDefaults(cached));
-
   const ref = userSettingsRef();
-  const snap = await getDoc(ref);
+  let snap;
+  try {
+    snap = await getDocFromServer(ref);
+  } catch (error) {
+    if (cached) return hydrateProfiles(mergeDefaults(cached));
+    throw error;
+  }
   if (snap.exists()) {
     const settings = hydrateProfiles(mergeDefaults(snap.data()));
     cacheSettings(settings);
@@ -195,6 +200,20 @@ export async function loadSettings() {
   await setDoc(ref, seed);
   cacheSettings(seed);
   return seed;
+}
+
+// Keep an open device current when settings are saved on another device.
+// Ignore local Firestore snapshots so stale/offline data cannot replace a
+// newer server value loaded at startup.
+export function watchSettings() {
+  return onSnapshot(userSettingsRef(), (snap) => {
+    if (!snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
+    const settings = hydrateProfiles(mergeDefaults(snap.data()));
+    if (JSON.stringify(settings) === JSON.stringify(state.settings)) return;
+    state.settings = settings;
+    cacheSettings(settings);
+    document.dispatchEvent(new CustomEvent("settings-changed"));
+  }, (error) => console.error("Failed to sync settings:", error));
 }
 
 // Quick controls are device-local. Only an explicit Settings save writes Firestore.

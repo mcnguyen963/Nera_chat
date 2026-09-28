@@ -55,7 +55,7 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document,
@@ -71,8 +71,9 @@ async function harness() {
   const firestore = {
     doc: (...args) => args, collection() {},
     query: (...args) => { calls.queries.push(args); return args; },
-    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (_ref, callback) => { calls.sessionCallbacks.push(callback); return () => {}; },
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback) => { (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(callback); return () => {}; },
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
+    getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
       if (calls.fail) throw new Error('write denied');
       calls.writes.push(structuredClone(settings));
@@ -293,7 +294,7 @@ test('New accounts have a persisted profile and partial profiles cannot inherit 
   assert.equal(s.apiKey, '');
 });
 
-test('Settings load once per device, and quick model and thinking changes stay local', async () => {
+test('Settings reload from Firestore, while quick model and thinking changes stay local', async () => {
   const h = await harness();
   h.calls.settingsDoc = {
     profiles: [
@@ -313,21 +314,34 @@ test('Settings load once per device, and quick model and thinking changes stay l
   await h.fire('quick-thinking', 'change');
   assert.equal(h.calls.reads, 1);
   assert.equal(h.calls.writes.length, 0);
-  assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
-  assert.equal(h.calls.reads, 1);
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).activeProfileId, 'second');
-  await h.settings.saveSettings(h.state.settings);
+  assert.equal((await h.settings.loadSettings()).modelId, 'model-a');
+  assert.equal(h.calls.reads, 2);
+  await h.settings.saveSettings({ ...h.state.settings, activeProfileId: 'second', modelId: 'model-b' });
   assert.equal(h.calls.writes.length, 1);
+  h.calls.settingsDoc = h.calls.writes[0];
   assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
-  assert.equal(h.calls.reads, 1);
+  assert.equal(h.calls.reads, 3);
 });
 
-test('A new account seeds Firestore only once when device cache is available', async () => {
+test('A new account loads Firestore even when device cache is available', async () => {
   const h = await harness();
   await h.settings.loadSettings();
+  h.calls.settingsDoc = h.calls.writes[0];
   await h.settings.loadSettings();
-  assert.equal(h.calls.reads, 1);
+  assert.equal(h.calls.reads, 2);
   assert.equal(h.calls.writes.length, 1);
+});
+
+test('An open device receives saved settings from another device', async () => {
+  const h = await harness();
+  h.state.settings = await h.settings.loadSettings();
+  h.settings.watchSettings();
+  const remote = { ...h.state.settings, modelId: 'remote-model' };
+  h.settings.mirrorToActiveProfile(remote);
+  h.calls.settingsCallbacks[0]({ exists: () => true, data: () => remote, metadata: { fromCache: false, hasPendingWrites: false } });
+  assert.equal(h.state.settings.modelId, 'remote-model');
+  assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).modelId, 'remote-model');
 });
 
 test('An existing default narrator prompt gains the missing plan thread rule without changing custom prompts', async () => {
