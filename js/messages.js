@@ -188,6 +188,38 @@ export async function getEarlierMessages(sessionId, beforeOrder, pageSize) {
   return found.sort((a, b) => a.order - b.order).slice(-pageSize);
 }
 
+// One bounded chunk at a time for optional past-chat indexing on small devices.
+export async function getRecallPage(sessionId, beforeOrder) {
+  await ensureChunked(sessionId);
+  const snap = await getDocsFromServer(query(
+    chunksCol(sessionId), where("firstOrder", "<", beforeOrder),
+    orderBy("firstOrder", "desc"), limit(1)
+  ));
+  return { chunkId: snap.docs[0]?.id ?? null,
+    messages: (snap.docs[0]?.data().messages ?? [])
+      .filter((message) => message.order < beforeOrder)
+      .sort((a, b) => a.order - b.order) };
+}
+
+export async function getRecallMatches(sessionId, rows) {
+  await ensureChunked(sessionId);
+  const chunkIds = [...new Set(rows.map((row) => row.chunkId).filter(Boolean))];
+  const chunks = new Map(await Promise.all(chunkIds.map(async (id) => {
+    const snap = await getDocFromServer(chunkRef(sessionId, id));
+    return [id, snap.exists() ? snap.data().messages ?? [] : []];
+  })));
+  const missing = rows.filter((row) => !row.chunkId);
+  const found = await Promise.all(missing.map(async (row) => {
+    const snap = await getDocsFromServer(query(chunksCol(sessionId),
+      where("firstOrder", "<=", row.order), orderBy("firstOrder", "desc"), limit(1)));
+    return [row.id, snap.docs[0]?.data().messages.find((m) => m.id === row.id && m.order === row.order)];
+  }));
+  const fallback = new Map(found);
+  return rows.map((row) => (row.chunkId
+    ? chunks.get(row.chunkId)?.find((m) => m.id === row.id && m.order === row.order)
+    : fallback.get(row.id))).filter(Boolean);
+}
+
 export function subscribeLatestMessages(sessionId, callback, onError) {
   let closed = false;
   let unsubscribe = null;

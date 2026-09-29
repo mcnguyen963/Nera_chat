@@ -115,6 +115,12 @@ function render(listEl, sessions) {
       if (!confirm(`Delete session "${s.title}" and all its messages? This cannot be undone.`)) return;
       if (state.sessionId === s.id) setSession(null);
       await deleteSession(s.id);
+      if (state.settings?.chatRecallEnabled) {
+        try {
+          const { invalidateRecallSession } = await import("../chat-recall.js");
+          await invalidateRecallSession(s.id);
+        } catch { /* Optional local cache cannot block session deletion. */ }
+      }
       forgetChatSession(s.id);
     });
 

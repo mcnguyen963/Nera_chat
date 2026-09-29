@@ -5,3 +5,5 @@ js/firebase-config.js
 register.html
 
 .DS_Store
+
+.private

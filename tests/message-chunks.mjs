@@ -188,6 +188,23 @@ test('assistant plan thread is stored separately from visible content', async ()
   assert.equal(message.planThread, null);
 });
 
+test('optional recall reads one chunk at a time and fetches only selected text', async () => {
+  const h = await setup(250);
+  await h.api.ensureChunked('s');
+  const before = h.reads.documents;
+  const page = await h.api.getRecallPage('s', 251);
+  assert.equal(page.messages.length, 50);
+  assert.equal(h.reads.documents - before, 1);
+  const matches = await h.api.getRecallMatches('s', [
+    { id: 'm225', order: 225, chunkId: page.chunkId },
+    { id: 'm249', order: 249, chunkId: page.chunkId },
+  ]);
+  assert.deepEqual(Array.from(matches, (message) => message.content), ['event 225', 'event 249']);
+  assert.equal(h.reads.documents - before, 2);
+  const previous = await h.api.getRecallPage('s', page.messages[0].order);
+  assert.equal(previous.messages.at(-1).order, 200);
+});
+
 test('append, edit, split, and delete preserve message order and content', async () => {
   const h = await setup(100);
   await h.api.ensureChunked('s');

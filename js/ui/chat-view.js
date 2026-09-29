@@ -513,6 +513,12 @@ function renderMessage(m) {
     if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
     await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    if (state.settings?.chatRecallEnabled) {
+      try {
+        const { invalidateRecallSession } = await import("../chat-recall.js");
+        await invalidateRecallSession(state.sessionId);
+      } catch { /* Optional local index cannot block message deletion. */ }
+    }
     if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
   }));
@@ -596,6 +602,12 @@ function startEdit(m, wrap) {
     cancel.disabled = true;
     try {
       const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
+      if (state.settings?.chatRecallEnabled) {
+        try {
+          const { invalidateRecallSession } = await import("../chat-recall.js");
+          await invalidateRecallSession(state.sessionId);
+        } catch { /* Optional local index cannot block message editing. */ }
+      }
       lastMessages = lastMessages.map((item) =>
         item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
       );
@@ -761,7 +773,27 @@ async function runAssistantTurn(opts = {}) {
   setBusy(true);
   try {
     const allMessages = opts.messages ?? await ensureHistory();
-    const { apiMessages } = await buildContextForRequest(session, settings, { ...opts, messages: allMessages });
+    const base = await buildContextForRequest(session, settings, {
+      ...opts, messages: allMessages,
+      recallReserveTokens: settings.chatRecallEnabled === true ? settings.chatRecallBudgetTokens : 0,
+    });
+    let apiMessages = base.apiMessages;
+    if (settings.chatRecallEnabled === true && base.availableRecallTokens > 0) {
+      try {
+        const { findRecalledMessages } = await import("../chat-recall.js");
+        const recall = await findRecalledMessages(session, settings, {
+          messages: allMessages, excludedIds: base.includedMessageIds,
+          upToOrder: opts.upToOrder ?? Infinity, maxTokens: base.availableRecallTokens,
+        });
+        if (recall.messages.length) {
+          ({ apiMessages } = await buildContextForRequest(session, settings, {
+            ...opts, messages: allMessages, recalledMessages: recall.messages,
+            recallBudgetTokens: base.availableRecallTokens,
+          }));
+        }
+        if (recall.warning) setStatus(recall.warning, true);
+      } catch (error) { setStatus("Past chat recall unavailable: " + error.message, true); }
+    }
     startStreamUI();
 
     const { content, thinking } = await chatCompletion({
@@ -808,6 +840,22 @@ async function runAssistantTurn(opts = {}) {
     if (newPlan !== null) {
       await updateSession(session.id, { longTermPlan: newPlan });
       session = { ...session, longTermPlan: newPlan };
+    }
+
+    if (settings.chatRecallEnabled === true && opts.overwriteId) {
+      try {
+        const { invalidateRecallSession } = await import("../chat-recall.js");
+        await invalidateRecallSession(session.id);
+      } catch { /* The next index pass can rebuild. */ }
+    }
+    if (settings.shortMemoryEnabled === true) {
+      try {
+        const { refreshShortMemory } = await import("../short-memory.js");
+        const updated = await refreshShortMemory(session, settings, historyMessages, {
+          overwriteOrder: opts.overwriteId ? opts.upToOrder : null,
+        });
+        if (updated) session = { ...session, ...updated };
+      } catch (error) { setStatus("Short memory update failed: " + error.message, true); }
     }
 
     // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),

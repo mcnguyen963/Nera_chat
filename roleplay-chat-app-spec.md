@@ -111,6 +111,7 @@ or
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `maxContextTokens` | number | `8000` | Total context window budget you're allocating for prompt assembly (set this below your chosen model's real limit) |
+| `autoSummarizationEnabled` | boolean | `false` | Whether context usage can trigger automatic summarization; when off, the context builder still uses its sliding window |
 | `autoSummaryThresholdPercent` | number | `70` | When assembled context reaches this % of `maxContextTokens`, auto-summarization fires |
 | `keepRecentMessagesAfterSummary` | number | `10` | After summarizing, exactly this many most-recent raw messages stay out of the summary and remain in context verbatim |
 

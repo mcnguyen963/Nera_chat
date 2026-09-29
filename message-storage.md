@@ -20,3 +20,14 @@ increases storage until the legacy documents are removed separately.
 The `messageChunks.messages` array is never queried directly. Exempting that
 field from Firestore single-field indexing can reduce index storage and write
 work if Firestore indexes are managed for this project.
+
+Optional past-chat recall builds a device-local IndexedDB index only after the
+feature is enabled and a chat request needs it. It reads one message chunk at a
+time, stores keywords and short snippets, and fetches full text only for the
+highest-ranked matches. Indexing pauses while chat is busy or the page is
+hidden. Semantic search embeds only the keyword shortlist and caches vectors
+locally. The index is disposable; Firestore messages remain the source of truth.
+
+Optional short memory is stored on the session document as `shortMemory` and
+`shortMemoryThroughOrder`. It is updated after assistant turns only when the
+feature is enabled. Both optional memory features are disabled by default.

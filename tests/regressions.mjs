@@ -32,7 +32,7 @@ async function harness() {
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000 };
+      const mins = { 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000, 'set-recall-budget': 1 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
@@ -409,6 +409,57 @@ test('Context uses the checkpoint and every later message supplied by the cache'
   assert.equal(result.apiMessages.at(-1).content, 'turn 149');
 });
 
+test('Optional recall and short memory default off and honor context and regeneration limits', async () => {
+  const h = await harness();
+  assert.equal(h.settings.DEFAULT_SETTINGS.chatRecallEnabled, false);
+  assert.equal(h.settings.DEFAULT_SETTINGS.shortMemoryEnabled, false);
+  assert.equal(h.settings.DEFAULT_SETTINGS.semanticSearchEnabled, false);
+  assert.equal(h.settings.DEFAULT_SETTINGS.chatRecallBudgetTokens, 4000);
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const session = { id: 's', shortMemory: 'Current scene', shortMemoryThroughOrder: 5 };
+  const messages = [{ id: 'recent', order: 10, role: 'user', content: 'New turn', tokenCount: 8 }];
+  const recalledMessages = [
+    { id: 'older', order: 2, role: 'assistant', content: 'Old detail' },
+    { id: 'recent', order: 10, role: 'user', content: 'New turn' },
+  ];
+  const settings = { ...h.state.settings, narratorSystemPrompt: '', maxContextTokens: 600,
+    maxResponseTokens: 100, chatRecallBudgetTokens: 100 };
+  const off = await buildContextForRequest(session, settings, { messages, recalledMessages });
+  assert.equal(off.apiMessages.some((m) => /short memory|Earlier assistant/.test(m.content)), false);
+  const on = await buildContextForRequest(session, {
+    ...settings, shortMemoryEnabled: true, chatRecallEnabled: true,
+  }, { messages, recalledMessages });
+  assert.equal(on.apiMessages.filter((m) => m.content.includes('Earlier assistant')).length, 1);
+  assert.equal(on.apiMessages.some((m) => m.content.includes('Current short memory')), true);
+  assert.ok(on.usedTokens <= settings.maxContextTokens - settings.maxResponseTokens);
+  const regen = await buildContextForRequest(session, {
+    ...settings, shortMemoryEnabled: true, chatRecallEnabled: true,
+  }, { messages, recalledMessages, upToOrder: 5 });
+  assert.equal(regen.apiMessages.some((m) => m.content.includes('Current short memory')), false);
+});
+
+test('Recall reserves room while keeping the latest user message in context', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const settings = { ...h.state.settings, narratorSystemPrompt: '', chatRecallEnabled: true,
+    chatRecallBudgetTokens: 160, maxContextTokens: 600, maxResponseTokens: 100 };
+  const messages = [
+    { id: 'old', order: 1, role: 'assistant', content: 'old', tokenCount: 250 },
+    { id: 'latest', order: 2, role: 'user', content: 'remember the gate', tokenCount: 100 },
+  ];
+  const base = await buildContextForRequest({ id: 's' }, settings, {
+    messages, recallReserveTokens: settings.chatRecallBudgetTokens,
+  });
+  assert.equal(base.includedMessageIds.has('latest'), true);
+  const final = await buildContextForRequest({ id: 's' }, settings, {
+    messages, recallBudgetTokens: base.availableRecallTokens,
+    recalledMessages: [{ id: 'earlier', order: 0, role: 'assistant', content: 'The gate has a hidden key.' }],
+  });
+  assert.equal(final.apiMessages.at(-1).content, 'remember the gate');
+  assert.equal(final.apiMessages.some((m) => m.content.includes('hidden key')), true);
+  assert.ok(final.usedTokens <= settings.maxContextTokens - settings.maxResponseTokens);
+});
+
 test('Streaming plan tags remain hidden even when split across chunks', async () => {
   const h = await harness();
   const { stripPlan } = await h.use('plan-parser.js');
@@ -446,7 +497,7 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   const { shouldAutoSummarize } = await h.use('summarizer.js');
   const result = await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, narratorSystemPrompt: '', maxContextTokens: 1000,
-    maxResponseTokens: 800, autoSummaryThresholdPercent: 90,
+    maxResponseTokens: 800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
   }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]);
   assert.equal(result, true);
 });

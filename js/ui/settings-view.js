@@ -13,14 +13,14 @@ const connectionFields = {
 const contextFields = {
   maxContextTokens: "set-max-context", autoSummaryThresholdPercent: "set-auto-threshold",
   keepRecentMessagesAfterSummary: "set-keep-n", summarizerMaxTokens: "set-summarizer-maxtokens",
-  summarizerChunkTokens: "set-summarizer-chunk",
+  summarizerChunkTokens: "set-summarizer-chunk", chatRecallBudgetTokens: "set-recall-budget",
 };
 const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
 let draft;
 let original;
 let panel = "model";
 let opener = null;
-let sessionOriginal = { title: "", longTermPlan: "" };
+let sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
 let sessionId = null;
 let saving = false;
 
@@ -58,6 +58,9 @@ export function initSettingsView() {
   input("set-reasoning-enabled").addEventListener("change", syncOptionalControls);
   input("set-reasoning-mode").addEventListener("change", syncOptionalControls);
   input("set-advanced-enabled").addEventListener("change", syncOptionalControls);
+  input("set-chat-recall").addEventListener("change", syncMemoryControls);
+  input("set-semantic-search").addEventListener("change", syncMemoryControls);
+  input("btn-clear-short-memory").addEventListener("click", () => set("set-session-memory", ""));
   input("btn-profile-copy").addEventListener("click", () => {
     capture();
     const copy = structuredClone(activeProfile(draft));
@@ -117,7 +120,7 @@ function closeSettingsPopup() {
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
   sessionId = null;
-  set("set-session-title", ""); set("set-session-plan", "");
+  set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
   clearMessage();
   opener?.focus?.();
@@ -126,7 +129,8 @@ function closeSettingsPopup() {
 function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
 function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
-  return raw("set-session-title") !== sessionOriginal.title || raw("set-session-plan") !== sessionOriginal.longTermPlan;
+  return raw("set-session-title") !== sessionOriginal.title || raw("set-session-plan") !== sessionOriginal.longTermPlan ||
+    raw("set-session-memory") !== sessionOriginal.shortMemory;
 }
 function accountDirty() {
   return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
@@ -155,6 +159,14 @@ function showPanel(name) {
 function renderAll() {
   renderProfile();
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
+  input("set-auto-summarization").checked = draft.autoSummarizationEnabled === true;
+  input("set-chat-recall").checked = draft.chatRecallEnabled === true;
+  input("set-semantic-search").checked = draft.semanticSearchEnabled === true;
+  input("set-short-memory").checked = draft.shortMemoryEnabled === true;
+  set("set-embedding-endpoint", draft.embeddingEndpoint);
+  set("set-embedding-key", draft.embeddingApiKey);
+  set("set-embedding-model", draft.embeddingModelId);
+  syncMemoryControls();
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
 }
@@ -188,6 +200,14 @@ function syncOptionalControls() {
   input("set-reasoning-enabled").setAttribute("aria-expanded", String(thinking));
   input("set-advanced-enabled").setAttribute("aria-expanded", String(advanced));
 }
+function syncMemoryControls() {
+  const recall = input("set-chat-recall").checked;
+  const semantic = recall && input("set-semantic-search").checked;
+  input("set-recall-budget").disabled = !recall;
+  input("set-semantic-search").disabled = !recall;
+  for (const id of ["set-embedding-endpoint", "set-embedding-key", "set-embedding-model"])
+    input(id).disabled = !semantic;
+}
 function capture() {
   if (!draft) return;
   const profile = activeProfile(draft);
@@ -204,6 +224,13 @@ function capture() {
     mirrorFromActiveProfile(draft);
   }
   for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
+  draft.autoSummarizationEnabled = input("set-auto-summarization").checked;
+  draft.chatRecallEnabled = input("set-chat-recall").checked;
+  draft.semanticSearchEnabled = input("set-semantic-search").checked;
+  draft.shortMemoryEnabled = input("set-short-memory").checked;
+  draft.embeddingEndpoint = raw("set-embedding-endpoint").trim();
+  draft.embeddingApiKey = raw("set-embedding-key").trim();
+  draft.embeddingModelId = raw("set-embedding-model").trim();
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
 }
@@ -219,6 +246,15 @@ function resetPanel() {
     renderProfile();
   } else if (panel === "context") {
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
+    draft.autoSummarizationEnabled = DEFAULT_SETTINGS.autoSummarizationEnabled;
+    input("set-auto-summarization").checked = draft.autoSummarizationEnabled;
+    for (const key of ["chatRecallEnabled", "semanticSearchEnabled", "shortMemoryEnabled"]) draft[key] = DEFAULT_SETTINGS[key];
+    for (const key of ["embeddingEndpoint", "embeddingApiKey", "embeddingModelId"]) draft[key] = DEFAULT_SETTINGS[key];
+    input("set-chat-recall").checked = false;
+    input("set-semantic-search").checked = false;
+    input("set-short-memory").checked = false;
+    for (const id of ["set-embedding-endpoint", "set-embedding-key", "set-embedding-model"]) set(id, "");
+    syncMemoryControls();
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
@@ -263,6 +299,10 @@ function validatedDraft() {
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
+  if (result.chatRecallEnabled && result.semanticSearchEnabled) {
+    if (!/^https?:\/\//i.test(result.embeddingEndpoint)) throw new Error("Embedding endpoint must start with http:// or https://.");
+    if (!result.embeddingApiKey || !result.embeddingModelId) throw new Error("Enter an embedding API key and model ID for semantic search.");
+  }
   mirrorFromActiveProfile(result);
   if (result.maxResponseTokens >= result.maxContextTokens) throw new Error("Max context tokens must exceed max response tokens.");
   return result;
@@ -275,7 +315,14 @@ async function handleSaveSettings() {
   catch (error) { feedback(error.message, true); return; }
   saving = true; el.save.disabled = true;
   try {
+    const recallJustEnabled = original.chatRecallEnabled !== true && validated.chatRecallEnabled === true;
     await saveSettings(validated);
+    if (recallJustEnabled) {
+      try {
+        const { clearRecallIndex } = await import("../chat-recall.js");
+        await clearRecallIndex();
+      } catch { /* A fresh index will be built when recall runs. */ }
+    }
     original = structuredClone(state.settings);
     draft = structuredClone(state.settings);
     renderAll();
@@ -295,23 +342,25 @@ function clearMessage() { if (el.message) el.message.textContent = ""; }
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
     sessionId = state.sessionId;
-    sessionOriginal = { title: "", longTermPlan: "" };
-    set("set-session-title", ""); set("set-session-plan", "");
+    sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
+    set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
     return;
   }
   const requestedId = state.sessionId;
   if (sessionId !== requestedId) {
     sessionId = requestedId;
-    sessionOriginal = { title: "", longTermPlan: "" };
-    set("set-session-title", ""); set("set-session-plan", "");
+    sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
+    set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
   } else if (sessionDirty()) return;
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
     if (requestedId !== state.sessionId || sessionDirty()) return;
     sessionId = requestedId;
-    sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "" };
+    sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
+      shortMemory: session?.shortMemory ?? "", nextOrder: session?.nextOrder ?? 0 };
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
+    set("set-session-memory", sessionOriginal.shortMemory);
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -322,8 +371,16 @@ async function handleSaveSession() {
   try {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
-    await updateSession(state.sessionId, { title, longTermPlan });
-    sessionOriginal = { title, longTermPlan };
+    const shortMemory = raw("set-session-memory").trim();
+    if (shortMemory.length > 6000) throw new Error("Short memory must be under 6,000 characters.");
+    if (shortMemory !== sessionOriginal.shortMemory && shortMemory) {
+      const { countTokens } = await import("../tokenizer.js");
+      if (await countTokens(shortMemory) > 1200) throw new Error("Short memory must be under 1,200 tokens.");
+    }
+    await updateSession(state.sessionId, { title, longTermPlan,
+      ...(shortMemory !== sessionOriginal.shortMemory
+        ? { shortMemory, shortMemoryThroughOrder: sessionOriginal.nextOrder } : {}) });
+    sessionOriginal = { ...sessionOriginal, title, longTermPlan, shortMemory };
     set("set-session-title", title);
     feedback("Session saved ✓");
     refreshContextIndicator();

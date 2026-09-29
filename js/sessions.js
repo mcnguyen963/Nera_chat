@@ -38,6 +38,8 @@ export async function createSession(title) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     longTermPlan: "",
+    shortMemory: "",
+    shortMemoryThroughOrder: 0,
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1

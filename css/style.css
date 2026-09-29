@@ -291,6 +291,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .settings-panel #advanced-options > .muted { margin: 0 0 15px; }
 .settings-panel .profile-row .btn { min-height: 44px; }
 .settings-panel .settings-actions .btn { min-height: 44px; }
+.settings-panel #btn-clear-short-memory { min-height: 44px; margin-top: 4px; }
 .settings-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; margin-left: auto; min-width: 0; }
 .settings-footer .btn { min-height: 44px; white-space: nowrap; }
 #settings-saved-msg { max-width: 230px; min-width: 0; font-size: 12px; line-height: 1.35; }

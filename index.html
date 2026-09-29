@@ -209,6 +209,24 @@
               </section>
               <section data-panel="context" class="settings-panel hidden">
                 <h2>Context &amp; summaries</h2>
+                <label class="setting-toggle"><input type="checkbox" id="set-auto-summarization" /> Enable automatic summarization</label>
+                <p class="muted">When disabled, the context window keeps the newest messages that fit and leaves older messages out of requests. They remain in chat history.</p>
+                <h3>Past chat recall</h3>
+                <label class="checkbox-label"><input type="checkbox" id="set-chat-recall" /> Inject relevant earlier messages</label>
+                <p class="muted">Searches this story only when enabled. Older chat is indexed gradually while the app is open.</p>
+                <div class="settings-grid">
+                  <label>Recall budget (tokens)<input type="text" id="set-recall-budget" inputmode="numeric" data-min="1" required /></label>
+                </div>
+                <label class="checkbox-label"><input type="checkbox" id="set-semantic-search" /> Improve recall with semantic search</label>
+                <p class="muted">Uses a separate OpenAI-compatible embeddings endpoint to rerank a small set of keyword matches.</p>
+                <div class="settings-grid">
+                  <label>Embedding endpoint<input type="url" id="set-embedding-endpoint" placeholder="https://provider.example/v1/embeddings" /></label>
+                  <label>Embedding model ID<input type="text" id="set-embedding-model" placeholder="Model ID" /></label>
+                  <label>Embedding API key<input type="password" id="set-embedding-key" autocomplete="off" /></label>
+                </div>
+                <h3>Short memory</h3>
+                <label class="checkbox-label"><input type="checkbox" id="set-short-memory" /> Maintain a short memory after each reply</label>
+                <p class="muted">Keeps the current scene and immediate story state in a note you can edit under This story.</p>
                 <div class="settings-grid">
                   <label>Max context tokens (total budget)<input type="text" id="set-max-context" inputmode="numeric" data-min="256" required /></label>
                   <label>Auto-summary threshold (%)<input type="text" id="set-auto-threshold" inputmode="numeric" data-min="1" data-max="100" required /></label>
@@ -228,6 +246,9 @@
                 <h2>This story</h2>
                 <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
                 <label class="full-label">Story notes &amp; long-term plan<textarea id="set-session-plan" rows="8"></textarea></label>
+                <label class="full-label">Short memory<textarea id="set-session-memory" rows="6" placeholder="Current scene, immediate goals, and unresolved beats"></textarea></label>
+                <p class="muted">Saved per story. Used and refreshed only when Short memory is enabled.</p>
+                <button type="button" id="btn-clear-short-memory" class="btn small">Clear short memory</button>
               </section>
               <section data-panel="transfer" class="settings-panel hidden">
                 <h2>Import &amp; export</h2>

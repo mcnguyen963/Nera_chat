@@ -133,6 +133,7 @@ export async function runSummarization(session, settings, opts = {}) {
 
 // Auto-trigger check (spec §8.1): fires after each assistant reply is saved.
 export async function shouldAutoSummarize(session, settings, messages = null) {
+  if (settings.autoSummarizationEnabled !== true) return false;
   const { overThreshold, droppedCount } = await computeContextUsage(session, settings, messages);
   return overThreshold || droppedCount > 0;
 }

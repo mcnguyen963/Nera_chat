@@ -36,6 +36,16 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const parts = [{ role: "system", content: systemText }];
   let used = systemTokens;
 
+  if (settings.shortMemoryEnabled === true && session.shortMemory?.trim() &&
+      (session.shortMemoryThroughOrder ?? 0) < upToOrder) {
+    const memoryText = "Current short memory (recent story state):\n" + session.shortMemory.trim();
+    const memoryCost = await countSystemTokensCached(memoryText);
+    if (memoryCost <= 1300 && used + memoryCost <= settings.maxContextTokens - settings.maxResponseTokens) {
+      parts.push({ role: "system", content: memoryText });
+      used += memoryCost;
+    }
+  }
+
   const summaryMsg = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upToOrder
     ? all.find((m) => m.id === session.activeSummaryMessageId)
     : null;
@@ -44,17 +54,38 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     used += await countSystemTokensCached("Story so far:\n" + summaryMsg.content);
   }
 
-  let budget = settings.maxContextTokens - settings.maxResponseTokens - used;
-  if (budget < 0) budget = 0;
+  const available = Math.max(0, settings.maxContextTokens - settings.maxResponseTokens - used);
+  const eligibleCandidates = all
+    .filter((m) => m.role !== "summary" &&
+      m.order > (summaryMsg ? (session.breakpointOrder ?? 0) : 0) && m.order < upToOrder)
+    .sort((a, b) => b.order - a.order);
+  const latestCandidate = eligibleCandidates[0];
+  const recallLimit = settings.chatRecallEnabled === true
+    ? Math.min(settings.chatRecallBudgetTokens ?? 4000,
+      opts.recallBudgetTokens ?? Infinity,
+      Math.max(0, available - (latestCandidate?.tokenCount ?? 0))) : 0;
+  const recalled = [];
+  const recalledIds = new Set();
+  let recallUsed = 0;
+  if (settings.chatRecallEnabled === true && Array.isArray(opts.recalledMessages)) {
+    for (const m of opts.recalledMessages) {
+      if (m.order >= upToOrder || m.role === "summary" ||
+          m.id === latestCandidate?.id || recalledIds.has(m.id)) continue;
+      const content = `Earlier ${m.role} message (order ${m.order}):\n${m.content}`;
+      const cost = await countTokens(content);
+      if (recallUsed + cost > recallLimit) continue;
+      recallUsed += cost;
+      recalledIds.add(m.id);
+      recalled.push({ role: "system", content, order: m.order });
+    }
+    recalled.sort((a, b) => a.order - b.order);
+    parts.push(...recalled.map(({ role, content }) => ({ role, content })));
+    used += recallUsed;
+  }
+  const reserved = recalled.length ? 0 : Math.min(opts.recallReserveTokens ?? 0, recallLimit);
+  let budget = Math.max(0, available - recallUsed - reserved);
 
-  const candidates = all
-    .filter(
-      (m) =>
-        m.role !== "summary" &&
-        m.order > (summaryMsg ? (session.breakpointOrder ?? 0) : 0) &&
-        m.order < upToOrder
-    )
-    .sort((a, b) => b.order - a.order); // newest first
+  const candidates = eligibleCandidates.filter((m) => !recalledIds.has(m.id));
 
   const windowed = [];
   for (const m of candidates) {
@@ -73,11 +104,15 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     parts.push({ role: m.role, content });
   }
 
+  const includedMessageIds = new Set(windowed.map((m) => m.id));
+
   return {
     apiMessages: parts,
     usedTokens: used,
     windowedCount: windowed.length,
     droppedCount: candidates.length - windowed.length,
+    includedMessageIds,
+    availableRecallTokens: reserved || Math.min(recallLimit, budget),
   };
 }
 
