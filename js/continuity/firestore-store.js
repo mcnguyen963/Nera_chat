@@ -167,6 +167,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
         if (!existing || !head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
         tx.set(root(request.branchId), metadata(prepared.state));
+        tx.update(session, { updatedAt: api.serverTimestamp() });
         tx.set(child(request.branchId, "turns", request.turnId), prepared.turn);
         for (const message of [request.user, request.assistant]) tx.set(child(request.branchId, "messages", message.id), bounded(message));
         for (const event of newEvents)
