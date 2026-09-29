@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, m
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator } from "./chat-view.js";
+import { PET_CATALOG } from "./pet-view.js";
 
 const el = {};
 const connectionFields = {
@@ -23,6 +24,7 @@ let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
 let sessionId = null;
 let saving = false;
+let petChoicesReady = false;
 
 const input = (id) => document.getElementById(id);
 const raw = (id) => input(id).value;
@@ -33,6 +35,7 @@ export function initSettingsView() {
     overlay: input("settings-tab"), content: input("settings-content"), footer: input("settings-footer"),
     message: input("settings-saved-msg"), save: input("btn-save-settings"), saveSession: input("btn-save-session"),
     reset: input("btn-reset-settings"), profiles: input("set-profiles"),
+    petChoices: input("set-pet-choices"),
   });
   input("btn-close-settings").addEventListener("click", closeSettingsPopup);
   input("settings-backdrop").addEventListener("click", closeSettingsPopup);
@@ -60,6 +63,7 @@ export function initSettingsView() {
   input("set-advanced-enabled").addEventListener("change", syncOptionalControls);
   input("set-chat-recall").addEventListener("change", syncMemoryControls);
   input("set-semantic-search").addEventListener("change", syncMemoryControls);
+  el.petChoices.addEventListener("change", () => { capture(); clearMessage(); });
   input("btn-clear-short-memory").addEventListener("click", () => set("set-session-memory", ""));
   input("btn-profile-copy").addEventListener("click", () => {
     capture();
@@ -102,6 +106,7 @@ export function openSettingsPopup(trigger = document.activeElement) {
   opener = trigger;
   original = structuredClone(state.settings);
   draft = structuredClone(state.settings);
+  petChoicesReady = false;
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
@@ -146,8 +151,9 @@ function showPanel(name) {
     if (selected) button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   });
   document.querySelectorAll("[data-panel]").forEach((section) => section.classList.toggle("hidden", section.dataset.panel !== name));
+  if (name === "pets") renderPetChoices(draft.petCharacterIds);
   el.content.scrollTop = 0;
-  const global = ["model", "context", "prompts"].includes(name);
+  const global = ["model", "context", "pets", "prompts"].includes(name);
   el.footer.classList.toggle("hidden", !global && name !== "story");
   el.save.classList.toggle("hidden", !global);
   el.reset.classList.toggle("hidden", !global);
@@ -163,6 +169,7 @@ function renderAll() {
   input("set-chat-recall").checked = draft.chatRecallEnabled === true;
   input("set-semantic-search").checked = draft.semanticSearchEnabled === true;
   input("set-short-memory").checked = draft.shortMemoryEnabled === true;
+  if (petChoicesReady && panel === "pets") renderPetChoices(draft.petCharacterIds);
   set("set-embedding-endpoint", draft.embeddingEndpoint);
   set("set-embedding-key", draft.embeddingApiKey);
   set("set-embedding-model", draft.embeddingModelId);
@@ -186,6 +193,24 @@ function renderProfile() {
   set("set-reasoning-maxtokens", reasoning.maxTokens);
   input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
   syncOptionalControls();
+}
+function renderPetChoices(selectedIds = []) {
+  petChoicesReady = true;
+  const selected = new Set(Array.isArray(selectedIds) ? selectedIds : []);
+  el.petChoices.replaceChildren(...PET_CATALOG.map((pet) => {
+    const label = document.createElement("label");
+    label.className = "pet-choice";
+    const preview = document.createElement("span");
+    preview.className = "pet-choice-preview";
+    preview.setAttribute("aria-hidden", "true");
+    preview.style.backgroundImage = `url("${pet.image}")`;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = pet.id;
+    checkbox.checked = selected.has(pet.id);
+    label.append(checkbox, preview, document.createTextNode(pet.name));
+    return label;
+  }));
 }
 function syncOptionalControls() {
   const thinking = input("set-reasoning-enabled").checked;
@@ -228,6 +253,7 @@ function capture() {
   draft.chatRecallEnabled = input("set-chat-recall").checked;
   draft.semanticSearchEnabled = input("set-semantic-search").checked;
   draft.shortMemoryEnabled = input("set-short-memory").checked;
+  if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.embeddingEndpoint = raw("set-embedding-endpoint").trim();
   draft.embeddingApiKey = raw("set-embedding-key").trim();
   draft.embeddingModelId = raw("set-embedding-model").trim();
@@ -255,6 +281,9 @@ function resetPanel() {
     input("set-short-memory").checked = false;
     for (const id of ["set-embedding-endpoint", "set-embedding-key", "set-embedding-model"]) set(id, "");
     syncMemoryControls();
+  } else if (panel === "pets") {
+    draft.petCharacterIds = structuredClone(DEFAULT_SETTINGS.petCharacterIds);
+    renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;

@@ -16,6 +16,7 @@ import {
   mirrorFromActiveProfile,
   mirrorToActiveProfile,
 } from "../settings.js";
+import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement } from "./pet-view.js";
 
 let msgUnsub = null;
 let sessUnsub = null;
@@ -118,6 +119,7 @@ export function initChatView() {
   });
   updateWelcome();
   initQuickControls();
+  initPetView();
 }
 
 // ---------- quick model / thinking chips (composer) ----------
@@ -489,6 +491,7 @@ function updateWelcome() {
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
+  refreshPetPlacement();
 }
 
 function renderMessage(m) {
@@ -770,8 +773,10 @@ async function handleSend(e) {
 async function runAssistantTurn(opts = {}) {
   const settings = structuredClone(state.settings);
   if (!settings) return;
+  startPetTurn();
   setBusy(true);
   try {
+    startStreamUI();
     const allMessages = opts.messages ?? await ensureHistory();
     const base = await buildContextForRequest(session, settings, {
       ...opts, messages: allMessages,
@@ -794,8 +799,6 @@ async function runAssistantTurn(opts = {}) {
         if (recall.warning) setStatus(recall.warning, true);
       } catch (error) { setStatus("Past chat recall unavailable: " + error.message, true); }
     }
-    startStreamUI();
-
     const { content, thinking } = await chatCompletion({
       settings,
       messages: apiMessages,
@@ -804,6 +807,7 @@ async function runAssistantTurn(opts = {}) {
     });
     streamState?.wrap.remove();
     streamState = null;
+    refreshPetPlacement();
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
     const plan = extractPlan(content);
@@ -875,9 +879,12 @@ async function runAssistantTurn(opts = {}) {
         ui.done();
       }
     }
+    finishPetTurn("ready");
   } catch (err) {
+    finishPetTurn("blocked");
     streamState?.wrap.remove();
     streamState = null;
+    refreshPetPlacement();
     showTransientError(err.message || String(err));
   } finally {
     setBusy(false);
@@ -927,6 +934,7 @@ function streamSummaryUI(label) {
 
 async function handleSummarize() {
   if (busy || !session) return;
+  startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
   try {
@@ -938,7 +946,9 @@ async function handleSummarize() {
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
+    finishPetTurn("ready");
   } catch (err) {
+    finishPetTurn("blocked");
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
@@ -956,6 +966,7 @@ async function handleFullSummarize() {
     )
   )
     return;
+  startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
@@ -971,7 +982,9 @@ async function handleFullSummarize() {
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
+    finishPetTurn("ready");
   } catch (err) {
+    finishPetTurn("blocked");
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
@@ -1009,7 +1022,7 @@ function startStreamUI() {
   const meta = document.createElement("div");
   meta.className = "msg-meta";
   const label = document.createElement("span");
-  label.textContent = "Assistant · streaming…";
+  label.textContent = "Assistant · working…";
   meta.appendChild(label);
   wrap.appendChild(meta);
 

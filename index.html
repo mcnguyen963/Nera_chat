@@ -104,7 +104,7 @@
           </div>
         </div>
         <div id="welcome" class="welcome">
-          <div class="brand-mark welcome-mark" aria-hidden="true">✳</div>
+          <div class="brand-mark welcome-mark" aria-hidden="true"><span class="welcome-default-logo">✳</span><span id="chat-pet" class="chat-pet" aria-hidden="true" hidden></span></div>
           <p class="eyebrow">A LITTLE IMAGINATION. ENDLESS POSSIBILITY.</p>
           <h1>Where will your story go?</h1>
           <p>Build a world, become a character, or see where a conversation takes you.</p>
@@ -167,6 +167,7 @@
             <nav class="settings-rail" aria-label="Settings categories">
               <button type="button" data-settings-panel="model" class="selected">Model connection</button>
               <button type="button" data-settings-panel="context">Context &amp; summaries</button>
+              <button type="button" data-settings-panel="pets">Pets</button>
               <button type="button" data-settings-panel="prompts">Prompts</button>
               <button type="button" data-settings-panel="story">This story</button>
               <button type="button" data-settings-panel="transfer">Import &amp; export</button>
@@ -234,6 +235,11 @@
                   <label>Summarizer max response tokens<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" required /></label>
                   <label>Summarizer input chunk (tokens per call)<input type="text" id="set-summarizer-chunk" inputmode="numeric" data-min="2000" required /></label>
                 </div>
+              </section>
+              <section data-panel="pets" class="settings-panel hidden">
+                <h2>Pets</h2>
+                <p class="muted">Choose one or more companions. When you choose several, one is picked at random for each reply.</p>
+                <div id="set-pet-choices" class="pet-choices"></div>
               </section>
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts</h2>

@@ -7,12 +7,32 @@ import {
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { state } from "./state.js";
+import { DEFAULT_NARRATOR_PROMPT, DEFAULT_SUMMARIZER_PROMPT } from "./default-prompts.js";
 
-const PLAN_THREAD_RECOVERY_RULE =
-  " If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears " +
-  "anywhere in the visible conversation history, even though a plan seems to have been " +
-  "set earlier, treat that plan as lost from context. Its exact contents cannot be " +
-  "reconstructed; proceed with no active plan until the user sets a new one.";
+const LEGACY_DEFAULT_NARRATOR_PROMPT =
+  "You are the narrator of an interactive, ongoing story. Drive the plot forward, " +
+  "stay consistent with everything established so far, and write in vivid prose. " +
+  "You maintain a long-term plan for the story that appears in your system prompt. " +
+  "If the plan changes, include a new <plan>...</plan> block anywhere in your reply; " +
+  "if it has not changed, omit the tag. The plan tag is never shown to the user. " +
+  "PLAN THREAD — cheap, every turn: While a plan is active, include one short line in " +
+  "your hidden output each turn, in the form <plan_thread>brief one-clause reminder of " +
+  "the current target, e.g. \"steering toward: reconciliation scene between A and her " +
+  "father\"</plan_thread>. This is not the full plan restated — a handful of tokens, not " +
+  "a paragraph. Its only job is to make sure the plan is never more than one turn away " +
+  "from appearing somewhere in your own hidden output, so it doesn't quietly vanish from " +
+  "view over a long conversation. Writing this line is mandatory whenever a plan is " +
+  "active, with no exceptions — it's cheap enough that \"it hasn't changed\" is never a " +
+  "reason to skip it. The plan_thread tag is never shown to the user. If, at the start " +
+  "of a turn, neither a <plan> block nor a <plan_thread> line appears anywhere in the " +
+  "visible conversation history, even though a plan seems to have been set earlier, " +
+  "treat that plan as lost from context. Its exact contents cannot be reconstructed; " +
+  "proceed with no active plan until the user sets a new one.";
+const LEGACY_DEFAULT_SUMMARIZER_PROMPT =
+  "You maintain a running summary of a long roleplay story. You are given the previous " +
+  "summary (if any) and a transcript of new events. Produce an updated summary that " +
+  "preserves all characters, relationships, open plot threads, key decisions, and " +
+  "established facts. Be concise but complete. Output only the summary text, no preamble.";
 
 export const DEFAULT_SETTINGS = {
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
@@ -40,31 +60,13 @@ export const DEFAULT_SETTINGS = {
   embeddingApiKey: "",
   embeddingModelId: "",
   shortMemoryEnabled: false,
+  petCharacterIds: [],
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
   summarizerMaxTokens: 100000,
   summarizerChunkTokens: 250000,
-  narratorSystemPrompt:
-    "You are the narrator of an interactive, ongoing story. Drive the plot forward, " +
-    "stay consistent with everything established so far, and write in vivid prose. " +
-    "You maintain a long-term plan for the story that appears in your system prompt. " +
-    "If the plan changes, include a new <plan>...</plan> block anywhere in your reply; " +
-    "if it has not changed, omit the tag. The plan tag is never shown to the user. " +
-    "PLAN THREAD — cheap, every turn: While a plan is active, include one short line in " +
-    "your hidden output each turn, in the form <plan_thread>brief one-clause reminder of " +
-    "the current target, e.g. \"steering toward: reconciliation scene between A and her " +
-    "father\"</plan_thread>. This is not the full plan restated — a handful of tokens, not " +
-    "a paragraph. Its only job is to make sure the plan is never more than one turn away " +
-    "from appearing somewhere in your own hidden output, so it doesn't quietly vanish from " +
-    "view over a long conversation. Writing this line is mandatory whenever a plan is " +
-    "active, with no exceptions — it's cheap enough that \"it hasn't changed\" is never a " +
-    "reason to skip it. The plan_thread tag is never shown to the user." +
-    PLAN_THREAD_RECOVERY_RULE,
-  summarizerSystemPrompt:
-    "You maintain a running summary of a long roleplay story. You are given the previous " +
-    "summary (if any) and a transcript of new events. Produce an updated summary that " +
-    "preserves all characters, relationships, open plot threads, key decisions, and " +
-    "established facts. Be concise but complete. Output only the summary text, no preamble.",
+  narratorSystemPrompt: DEFAULT_NARRATOR_PROMPT,
+  summarizerSystemPrompt: DEFAULT_SUMMARIZER_PROMPT,
 };
 
 function mergeDefaults(data) {
@@ -76,10 +78,12 @@ function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
-  // Existing accounts that kept the former app default receive the new rule.
-  // An edited prompt remains exactly as its author saved it.
-  if (data?.narratorSystemPrompt === DEFAULT_SETTINGS.narratorSystemPrompt.slice(0, -PLAN_THREAD_RECOVERY_RULE.length)) {
+  // Replace the former app defaults, while preserving prompts the user edited.
+  if (data?.narratorSystemPrompt === LEGACY_DEFAULT_NARRATOR_PROMPT) {
     merged.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
+  }
+  if (data?.summarizerSystemPrompt === LEGACY_DEFAULT_SUMMARIZER_PROMPT) {
+    merged.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
   }
   return merged;
 }
