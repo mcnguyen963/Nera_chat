@@ -97,6 +97,20 @@ test("a pronoun follow-up carries forward the character from the latest exchange
   assert.equal(built.selection.records.find((record) => record.id === "rel_A_player").data.trust, "deep distrust");
 });
 
+test("historical author notes stay marked as author instructions in narrator context", async () => {
+  const { state } = await hostileMotherStory();
+  const author = await sourceMessage({ id: "author1", role: "author", order: 1,
+    content: "A distrusts the player." });
+  const assistant = await sourceMessage({ id: "answer2", role: "assistant", order: 2,
+    content: "A waits by the door." });
+  state.throughOrder = 2;
+  const built = await buildContinuityContext({ state, messages: [author, assistant],
+    input: "I speak to her.", settings: settings(), count });
+  assert.deepEqual(JSON.parse(built.apiMessages[1].content),
+    { type: "author_note", content: "A distrusts the player." });
+  assert.equal(built.selection.records.some((record) => record.id === "rel_A_player"), true);
+});
+
 test("state reducer refuses a relationship change without new supported event evidence", async () => {
   const { store, state, setup } = await hostileMotherStory();
   const existing = state.records.find((item) => item.id === "rel_A_player");
@@ -225,6 +239,33 @@ test("Firestore reserves a branch before staging and rejects a competing initial
   assert.equal(documents.get(branchPath).status, "ready");
 });
 
+test("Firestore refuses a turn when the session points at another branch", async () => {
+  const documents = new Map([
+    ["users/u/sessions/s", { continuityEnabled: true, continuityBranchId: "other" }],
+    ["users/u/sessions/s/continuityBranches/main", { status: "ready", revision: 0 }],
+  ]);
+  const api = {
+    doc: (_db, ...parts) => parts.join("/"),
+    runTransaction: async (_db, callback) => {
+      const writes = [];
+      const result = await callback({
+        get: async (path) => ({ exists: () => documents.has(path), data: () => documents.get(path) }),
+        set: (path, value) => writes.push([path, value]),
+      });
+      writes.forEach(([path, value]) => documents.set(path, value));
+      return result;
+    },
+  };
+  const store = createFirestoreStoryStore({ api, db: {}, uid: "u", sessionId: "s" });
+  const user = await sourceMessage({ id: "turn_user", role: "user", order: 1, content: "Hello." });
+  const request = { branchId: "main", expectedActiveBranchId: "main", turnId: "turn",
+    baseRevision: 0, user };
+  await assert.rejects(store.beginTurn(request), /active story branch changed/);
+  assert.equal(documents.has("users/u/sessions/s/continuityBranches/main/turns/turn"), false);
+  documents.get("users/u/sessions/s").continuityBranchId = "main";
+  assert.deepEqual(await store.beginTurn(request), { status: "pending" });
+});
+
 test("model tool calls retrieve character state and plan changes remain proposals", async () => {
   const { state } = await hostileMotherStory();
   const tools = createStoryTools(state);
@@ -319,4 +360,32 @@ test("failed review does not append the user turn or alter relationship state", 
   assert.equal(after.messages.length, 1);
   assert.equal(after.state.records.find((record) => record.id === "rel_A_player").data.trust, "deep distrust");
   assert.equal((await store.readTurn(state.branchId, "turn_fail")).status, "failed");
+});
+
+test("an edited narrator draft is reviewed without a new narrator generation", async () => {
+  const { store, state } = await hostileMotherStory();
+  let calls = 0;
+  const complete = async (request) => {
+    calls++;
+    assert.equal(request.tools, undefined);
+    return { finishReason: "stop", content: JSON.stringify(review(state.branchId, state.revision, "edited_turn")) };
+  };
+  const receipt = await runContinuityTurn({ store, branchId: state.branchId, turnId: "edited_turn",
+    input: "I say hello to A.", draftOverride: "A refuses to answer.",
+    settings: settings(), complete, count });
+  assert.equal(calls, 1);
+  assert.equal(receipt.assistant.content, "A refuses to answer.");
+  assert.equal((await store.load(state.branchId)).state.records.find((item) => item.id === "grievance_A_mother").data.status, "open");
+});
+
+test("an author note cannot succeed without saving any story state", async () => {
+  const store = createMemoryStoryStore();
+  await store.initialize({ state: createStoryState("main") });
+  const complete = async (request) => request.tools
+    ? { finishReason: "stop", content: "The story begins.", toolCalls: [] }
+    : { finishReason: "stop", content: JSON.stringify(review("main", 0, "empty_author")) };
+  await assert.rejects(runContinuityTurn({ store, branchId: "main", turnId: "empty_author",
+    input: "A is cheerful but distrusts the player because they killed her mother.",
+    mode: "author", settings: settings(), complete, count }), /no saved story state/);
+  assert.equal((await store.load("main")).state.revision, 0);
 });

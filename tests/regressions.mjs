@@ -8,7 +8,7 @@ import vm from 'node:vm';
 async function harness() {
   const elements = new Map();
   class Element {
-    value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
+    value = ''; checked = false; hidden = true; style = { setProperty() {}, removeProperty() {} }; children = []; dataset = {};
     classList = { values: new Set(), add(name) { this.values.add(name); }, remove(name) { this.values.delete(name); }, toggle(name, force) { if (force ?? !this.values.has(name)) this.values.add(name); else this.values.delete(name); }, contains(name) { return this.values.has(name); } };
     listeners = {};
     addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
@@ -55,14 +55,14 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], continuityTurns: [], continuityMessages: [], continuityListError: false, settingsDoc: null, fail: false, confirm: true, response: 'summary' };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document,
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
-    window: { addEventListener() {} }, crypto,
+    window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) }, crypto, URL,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, confirm: () => calls.confirm,
+    setTimeout() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, confirm: () => calls.confirm,
     fetch: async (_url, options) => {
       calls.requests.push(JSON.parse(options.body));
       return { ok: true, json: async () => ({ choices: [{ message: { content: calls.response } }] }) };
@@ -90,6 +90,21 @@ async function harness() {
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
     },
+    'continuity/runtime.js': {
+      storyStore: () => ({ listMessages: async () => {
+        if (calls.continuityListError) { calls.continuityListError = false; throw new Error('read interrupted'); }
+        return calls.continuityMessages;
+      } }),
+      watchContinuityHead: (_sessionId, _branchId, callback) => { queueMicrotask(callback); return () => {}; },
+      switchContinuityBranch: async () => {}, enableContinuity: async () => {},
+    },
+    'continuity/turn-controller.js': {
+      runContinuityTurn: async (request) => {
+        calls.continuityTurns.push(request);
+        request.onStatus('accepted');
+        return { status: 'accepted' };
+      },
+    },
   };
   const cache = new Map();
   async function load(path) {
@@ -108,6 +123,14 @@ async function harness() {
     } else {
       module = new vm.SourceTextModule(await readFile(new URL('../js/' + path, import.meta.url), 'utf8'), {
         context, identifier: path,
+        initializeImportMeta(meta) { meta.url = new URL('../js/' + path, import.meta.url).href; },
+        importModuleDynamically: async (specifier, parent) => {
+          const resolved = specifier.startsWith('https:') ? specifier
+            : new URL(specifier, 'https://local/' + parent.identifier).pathname.slice(1);
+          const imported = await load(resolved);
+          if (imported.status !== 'evaluated') await imported.evaluate();
+          return imported;
+        },
       });
     }
     await module.link((specifier, parent) => {
@@ -344,11 +367,10 @@ test('An open device receives saved settings from another device', async () => {
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).modelId, 'remote-model');
 });
 
-test('An existing default narrator prompt gains the missing plan thread rule without changing custom prompts', async () => {
+test('Current narrator default loads and custom prompts stay unchanged', async () => {
   const h = await harness();
   const next = h.settings.DEFAULT_SETTINGS.narratorSystemPrompt;
-  const old = next.slice(0, next.indexOf(' If, at the start of a turn'));
-  h.calls.settingsDoc = { narratorSystemPrompt: old };
+  h.calls.settingsDoc = {};
   assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, next);
   h.localCache.clear();
   h.calls.settingsDoc = { narratorSystemPrompt: 'Custom narrator' };
@@ -525,7 +547,53 @@ test('Opening a chat uses the chunked message subscription', async () => {
   chat.initChatView();
   chat.setSession('story');
   await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ exists: () => true, data: () => ({ title: 'story' }) });
   assert.deepEqual(h.calls.subscriptions, ['story']);
+});
+
+test('A continuity story sends an author note through the reviewed turn path', async () => {
+  const h = await harness();
+  h.state.settings.apiKey = 'test-key';
+  h.state.settings.modelId = 'test-model';
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityBranchId: 'main',
+  }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.el('composer-mode').value = 'author';
+  h.el('chat-input').value = 'A knows the player killed her mother.';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.continuityTurns.length, 1,
+    JSON.stringify(h.el('message-list').children.map((item) => item.textContent)));
+  assert.equal(h.calls.continuityTurns[0].mode, 'author');
+  assert.equal(h.calls.continuityTurns[0].input, 'A knows the player killed her mother.');
+  assert.equal(h.calls.messages.length, 0);
+  assert.equal(h.calls.subscriptions.length, 0);
+});
+
+test('A continuity send reuses its turn ID after an accepted save but failed refresh', async () => {
+  const h = await harness();
+  h.state.settings.apiKey = 'test-key';
+  h.state.settings.modelId = 'test-model';
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityBranchId: 'main',
+  }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.el('composer-mode').value = 'player';
+  h.el('chat-input').value = 'I greet A.';
+  h.calls.continuityListError = true;
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.el('chat-input').value, 'I greet A.');
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.continuityTurns.length, 2);
+  assert.equal(h.calls.continuityTurns[0].turnId, h.calls.continuityTurns[1].turnId);
 });
 
 test('Switching back to a recently opened session reuses its cached messages', async () => {
@@ -550,5 +618,6 @@ test('Switching back to a recently opened session reuses its cached messages', a
   const readsBeforeEvictedReturn = h.calls.subscriptions.length;
   chat.setSession('story-b');
   await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ exists: () => true, data: () => ({ title: 'story-b' }) });
   assert.equal(h.calls.subscriptions.length, readsBeforeEvictedReturn + 1);
 });

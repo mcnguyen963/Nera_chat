@@ -46,7 +46,14 @@ export async function importSillyTavern(file) {
 export async function exportSillyTavern(sessionId) {
   const session = await getSession(sessionId);
   if (!session) throw new Error("No active session to export.");
-  const msgs = (await getMessages(sessionId)).filter((m) => m.role !== "summary");
+  const msgs = session.continuityEnabled
+    ? await (async () => {
+      const { storyStore } = await import("./continuity/runtime.js");
+      const { initial, turns } = await storyStore(sessionId).history(session.continuityBranchId || "main");
+      return [...initial.messages.filter((message) => message.order > 0),
+        ...turns.flatMap((turn) => [turn.user, turn.assistant])].sort((a, b) => a.order - b.order);
+    })()
+    : (await getMessages(sessionId)).filter((m) => m.role !== "summary");
 
   const lines = [
     JSON.stringify({

@@ -1,5 +1,5 @@
 import {
-  doc, getDoc, getDocFromServer, setDoc, updateDoc, deleteDoc, collection, getDocs, getDocsFromServer, query, orderBy,
+  doc, getDocFromServer, setDoc, updateDoc, deleteDoc, collection, getDocs, getDocsFromServer, query, orderBy,
   writeBatch, serverTimestamp, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
@@ -48,7 +48,7 @@ export async function listSessions() {
 }
 
 export async function getSession(sessionId) {
-  const snap = await getDoc(sessionDoc(sessionId));
+  const snap = await getDocFromServer(sessionDoc(sessionId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
@@ -61,6 +61,8 @@ export async function createSession(title) {
     longTermPlan: "",
     shortMemory: "",
     shortMemoryThroughOrder: 0,
+    continuityEnabled: false,
+    continuityBranchId: null,
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1

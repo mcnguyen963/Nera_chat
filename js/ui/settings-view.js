@@ -2,7 +2,7 @@ import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
-import { refreshContextIndicator } from "./chat-view.js";
+import { refreshContextIndicator, setSession, forgetChatSession } from "./chat-view.js";
 import { PET_CATALOG } from "./pet-view.js";
 
 const el = {};
@@ -88,6 +88,37 @@ export function initSettingsView() {
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
+  input("btn-enable-continuity").addEventListener("click", async () => {
+    if (!state.sessionId || state.busy || saving) return;
+    const button = input("btn-enable-continuity");
+    button.disabled = true;
+    try {
+      const id = state.sessionId;
+      const { enableContinuity } = await import("../continuity/runtime.js");
+      await enableContinuity(id);
+      setSession(null, { skipCacheSave: true });
+      forgetChatSession(id);
+      setSession(id, { fresh: true });
+      sessionOriginal.continuityEnabled = true;
+      setContinuityStoryControls(true, 0);
+      await fillSession();
+      feedback("Character continuity enabled for this story.");
+    } catch (error) { feedback(error.message, true); }
+    finally { button.disabled = false; }
+  });
+  input("btn-view-continuity").addEventListener("click", async () => {
+    if (!state.sessionId) return;
+    const preview = input("continuity-state-preview");
+    preview.hidden = false;
+    preview.textContent = "Loading saved state…";
+    try {
+      const current = await getSession(state.sessionId);
+      if (!current?.continuityEnabled) throw new Error("Character continuity is not active.");
+      const { storyStore } = await import("../continuity/runtime.js");
+      const { state: story } = await storyStore(state.sessionId).load(current.continuityBranchId || "main");
+      preview.textContent = JSON.stringify({ revision: story.revision, records: story.records }, null, 2);
+    } catch (error) { preview.textContent = "Could not load state: " + error.message; }
+  });
   input("btn-import-st").addEventListener("click", () => input("file-import-st").click());
   input("file-import-st").addEventListener("change", handleImport);
   input("btn-export-st").addEventListener("click", handleExport);
@@ -175,6 +206,7 @@ function renderAll() {
   set("set-embedding-model", draft.embeddingModelId);
   syncMemoryControls();
   set("set-narrator-prompt", draft.narratorSystemPrompt);
+  set("set-continuity-style", draft.continuityStylePrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
 }
 function renderProfile() {
@@ -258,6 +290,7 @@ function capture() {
   draft.embeddingApiKey = raw("set-embedding-key").trim();
   draft.embeddingModelId = raw("set-embedding-model").trim();
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
+  draft.continuityStylePrompt = raw("set-continuity-style");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
 }
 
@@ -286,8 +319,10 @@ function resetPanel() {
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
+    draft.continuityStylePrompt = DEFAULT_SETTINGS.continuityStylePrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
     set("set-narrator-prompt", draft.narratorSystemPrompt);
+    set("set-continuity-style", draft.continuityStylePrompt);
     set("set-summarizer-prompt", draft.summarizerSystemPrompt);
   }
   feedback("Defaults ready. Save to apply.");
@@ -368,11 +403,24 @@ function feedback(message, error = false) {
 }
 function clearMessage() { if (el.message) el.message.textContent = ""; }
 
+function setContinuityStoryControls(enabled, nextOrder) {
+  input("btn-enable-continuity").hidden = enabled || nextOrder > 0;
+  input("btn-view-continuity").hidden = !enabled;
+  input("continuity-state-preview").hidden = true;
+  input("continuity-setting-status").textContent = enabled ? "Character continuity is active" :
+    nextOrder > 0 ? "Existing stories need a reviewed migration before continuity can be enabled." : "";
+  input("set-session-plan").disabled = enabled;
+  input("set-session-memory").disabled = enabled;
+  input("btn-clear-short-memory").disabled = enabled;
+}
+
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
     sessionId = state.sessionId;
     sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
     set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
+    setContinuityStoryControls(false, 0);
+    input("btn-enable-continuity").hidden = true;
     return;
   }
   const requestedId = state.sessionId;
@@ -380,16 +428,20 @@ async function fillSession(event) {
     sessionId = requestedId;
     sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder: 0 };
     set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
+    setContinuityStoryControls(false, 0);
+    input("btn-enable-continuity").hidden = true;
   } else if (sessionDirty()) return;
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
     if (requestedId !== state.sessionId || sessionDirty()) return;
     sessionId = requestedId;
     sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
-      shortMemory: session?.shortMemory ?? "", nextOrder: session?.nextOrder ?? 0 };
+      shortMemory: session?.shortMemory ?? "", nextOrder: session?.nextOrder ?? 0,
+      continuityEnabled: session?.continuityEnabled === true };
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
     set("set-session-memory", sessionOriginal.shortMemory);
+    setContinuityStoryControls(sessionOriginal.continuityEnabled, sessionOriginal.nextOrder);
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -401,12 +453,13 @@ async function handleSaveSession() {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
     const shortMemory = raw("set-session-memory").trim();
-    if (shortMemory.length > 6000) throw new Error("Short memory must be under 6,000 characters.");
-    if (shortMemory !== sessionOriginal.shortMemory && shortMemory) {
+    if (!sessionOriginal.continuityEnabled && shortMemory.length > 6000)
+      throw new Error("Short memory must be under 6,000 characters.");
+    if (!sessionOriginal.continuityEnabled && shortMemory !== sessionOriginal.shortMemory && shortMemory) {
       const { countTokens } = await import("../tokenizer.js");
       if (await countTokens(shortMemory) > 1200) throw new Error("Short memory must be under 1,200 tokens.");
     }
-    await updateSession(state.sessionId, { title, longTermPlan,
+    await updateSession(state.sessionId, sessionOriginal.continuityEnabled ? { title } : { title, longTermPlan,
       ...(shortMemory !== sessionOriginal.shortMemory
         ? { shortMemory, shortMemoryThroughOrder: sessionOriginal.nextOrder } : {}) });
     sessionOriginal = { ...sessionOriginal, title, longTermPlan, shortMemory };

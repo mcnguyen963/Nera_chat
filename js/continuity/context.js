@@ -53,13 +53,14 @@ export async function buildContinuityContext({ state, messages, input, mode = "p
   settings, stylePrompt = "", tools = [], recentExchanges = 8, count = countTokens, upToOrder = Infinity }) {
   if (state.throughOrder >= upToOrder) throw new Error("Historical generation requires a state snapshot before the target. Fork first.");
   if (!["player", "author"].includes(mode) || typeof input !== "string" || !input.trim()) throw new Error("Invalid current input.");
-  const recentCues = messages.filter((m) => ["user", "assistant"].includes(m.role) &&
+  const recentCues = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) &&
       m.order <= state.throughOrder && m.order < upToOrder)
     .sort((a, b) => a.order - b.order).slice(-2).map((m) => m.content).join("\n");
   const selected = selectContinuity(state, `${input}\n${recentCues}`, characterIds);
-  const system = { role: "system", content: `${NARRATOR_CONTRACT}\n\n${TOOL_POLICY}${stylePrompt ? `\n\nSTYLE PREFERENCES:\n${stylePrompt}` : ""}` };
+  const system = { role: "system", content: `${NARRATOR_CONTRACT}\n\n${TOOL_POLICY}` };
   const current = { role: "user", content: JSON.stringify({ type: "current_turn", branchId: state.branchId,
-    stateRevision: state.revision, mode, state: { records: selected.records, events: selected.events }, playerInput: input }) };
+    stateRevision: state.revision, mode, state: { records: selected.records, events: selected.events },
+    stylePreferences: stylePrompt || "", playerInput: input }) };
   const budget = inputBudget(settings);
   let apiMessages = [system, current];
   let usedTokens = await requestTokenCount(apiMessages, tools, count);
@@ -79,7 +80,8 @@ export async function buildContinuityContext({ state, messages, input, mode = "p
   }
   const included = [];
   for (const exchange of exchanges.slice(-recentExchanges).reverse()) {
-    const entries = exchange.map((m) => ({ role: m.role === "author" ? "user" : m.role, content: m.content }));
+    const entries = exchange.map((m) => ({ role: m.role === "author" ? "user" : m.role,
+      content: m.role === "author" ? JSON.stringify({ type: "author_note", content: m.content }) : m.content }));
     const candidate = [...apiMessages.slice(0, -1), ...entries, ...included, current];
     if (await requestTokenCount(candidate, tools, count) > budget) break;
     included.unshift(...entries);

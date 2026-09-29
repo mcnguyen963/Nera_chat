@@ -1,9 +1,9 @@
 # Continuity scaffold
 
-This folder contains an isolated implementation scaffold for the context and
-character-state redesign. It is not wired into the current chat composer. Existing
-sessions continue through their current pipeline until a migration and UI switch
-are implemented.
+The continuity pipeline is available in the chat UI as a per-story option. It is
+off by default and can be enabled in Settings → This story before the first
+message. Existing stories retain their original pipeline until a reviewed
+transcript migration is built.
 
 ## Verified current-system audit
 
@@ -19,8 +19,8 @@ are implemented.
 
 These are code findings from `js/context-builder.js`, `js/plan-parser.js`,
 `js/ui/chat-view.js`, `js/short-memory.js`, `js/chat-recall.js`, and
-`js/llm-client.js`. The scaffold does not change the legacy behavior for current
-sessions.
+`js/llm-client.js`. The legacy behavior remains available in stories without
+continuity enabled.
 
 ## Turn contract
 
@@ -46,7 +46,7 @@ always last, and old exchanges are kept whole and chronological.
 
 ```js
 [
-  { role: "system", content: NARRATOR_CONTRACT + TOOL_POLICY + stylePreferences },
+  { role: "system", content: NARRATOR_CONTRACT + TOOL_POLICY },
   { role: "user", content: JSON.stringify({
       type: "application_reference",
       futurePossibilities: [/* agenda records, each marked occurred: false */],
@@ -58,7 +58,7 @@ always last, and old exchanges are kept whole and chronological.
   { role: "user", content: JSON.stringify({
       type: "current_turn", branchId, stateRevision, mode,
       state: { records: selectedRecords, events: selectedEvents },
-      playerInput,
+      stylePreferences, playerInput,
   }) },
 ]
 ```
@@ -99,19 +99,19 @@ never evidence that a planned event occurred.
 | `firestore-store.js` | SDK-injected persistent repository under each user's session |
 | `turn-controller.js` | Narrator, tool, reviewer, repair, and accepted-turn orchestration |
 
-The Firestore adapter receives Firebase's modular functions through `api`. For the
-current app, pass `doc`, `collection`, `getDocFromServer`, `getDocsFromServer`,
-`query`, `orderBy`, `limit`, `runTransaction`, and `writeBatch`, plus the existing
-`db`, signed-in UID, and session ID. The adapter uses the existing per-user session
-security boundary and never stores API keys in continuity documents.
+The Firestore adapter receives Firebase's modular functions through `api`.
+`runtime.js` connects it to the app's existing Firebase instance and authenticated
+session. It uses the existing per-user session security boundary and never stores
+API keys in continuity documents.
 
 ## Initializing a branch
 
-Initialize a branch only after an explicit UI or migration flow creates its initial
-state. An empty branch is valid; authored character cards, setup facts, and initial
-relationships should be created with source messages carrying role `author`, then
-validated through the same event and record schemas. Never infer missing profile
-details from a character's name.
+Settings → This story → Enable character continuity initializes an empty `main`
+branch for an empty story. Choose **Author note** next to the composer to establish
+characters, relationships, and corrections. Choose **In story** for player actions.
+Author notes use source role `author` and pass through the same review and state
+validation as other turns. An author note fails if the review saves no event and
+record update. Never infer missing profile details from a name.
 
 ```js
 import * as firestore from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -130,10 +130,10 @@ const initializationId = crypto.randomUUID(); // keep for retrying this creation
 await store.initialize({ state: createStoryState("main"), initializationId });
 ```
 
-Call `runContinuityTurn` only after the model profile and story branch are selected.
-Use a new `turnId` for each input and reuse it only to retry that exact input.
-`mode: "author"` marks deliberate out-of-character setup or correction; it does
-not parse author tags out of ordinary roleplay text.
+The chat adapter calls `runContinuityTurn` with the selected model profile and
+active branch. It uses a new `turnId` for each input. `mode: "author"` marks an
+explicit out-of-character setup or correction; ordinary roleplay text is never
+parsed for author tags.
 
 ## State rules enforced in code
 
@@ -226,10 +226,10 @@ snapshot. Before large-scale use, add paged event retrieval and periodic
 materialized checkpoints. Full-history fork/replay is an explicit operation and
 reads that branch's event and message history.
 
-SillyTavern JSONL currently contains only the transcript. It does not export these
-continuity records. Do not migrate an existing story or offer “enable continuity”
-in Settings until the UI, staged backfill, conflict display, native backup, and
-active chat integration are implemented.
+SillyTavern JSONL exports the active branch's transcript, including author notes,
+but does not preserve continuity records. Imported JSONL stories remain on the
+legacy path. Duplicate story copies all accepted continuity branches and records.
+An existing story cannot enable continuity until a reviewed migration is built.
 
 ## Provider and prompt notes
 
@@ -248,24 +248,25 @@ as a style prompt in this mode. Supply only creative style preferences alongside
 the application-controlled narrator contract. User edits to existing prompt
 settings are preserved; prompt migration and UI reconciliation are a separate step.
 
-The current turn controller does not render streaming prose: it waits for review
-before returning the accepted response. It is not yet connected to `chat-view.js`,
-the session settings screen, import/export, or live Firestore data. Those are
-deliberate integration tasks, not active features.
+The current turn controller does not render streaming prose: the UI shows the
+accepted response after review. Settings exposes a read-only view of saved state.
+The legacy plan and short-memory fields are disabled for continuity stories;
+manual and automatic transcript summarization are also skipped there.
 
-## Integration phases
+Edit, regenerate, and rewind fork at the turn before the selected message. The
+new branch becomes active only after a revised turn is accepted, except rewind,
+which activates the earlier snapshot immediately. Later turns remain in the old
+branch. This prevents their events and knowledge from affecting the revised story.
 
-1. **Domain pilot:** use the in-memory store and authored fixtures; collect human
-   judgments on relationship transitions, knowledge leaks, and player agency.
-2. **Storage and migration:** add emulator coverage, backfill one selected session
-   into a new branch, show provenance/conflicts, and add continuity data to native
-   backup/restore. Keep the original transcript untouched.
-3. **Opt-in chat adapter:** route one explicitly enabled session through
-   `runContinuityTurn`, map model settings to the required token budgets, display
-   accepted narration after review, and expose author correction / branch controls.
-4. **Broader rollout:** only after evaluation, add paging/checkpoints and migrate
-   additional sessions. Leave legacy sessions on the old path until explicitly
-   migrated.
+## Remaining operational limits
+
+The opt-in chat adapter, author notes, saved-state inspection, active-branch
+export, and branch-aware edits are implemented. Live provider and Firestore
+emulator behavior still need validation in a signed-in deployment. The store
+pages transcript display, but ordinary turns still read all event and state
+documents; large stories need materialized checkpoints or indexed retrieval.
+JSONL is transcript-only, so it is not a full continuity backup. Existing story
+migration needs reviewed backfill and conflict handling before it can be enabled.
 
 The default path makes one narrator request plus one continuity-review request;
 tool retrieval adds a request only when needed, and an invalid draft can add one
@@ -275,6 +276,6 @@ output can reduce parse failures but is optional and must be verified per endpoi
 
 The deterministic tests cover persistence of A's grievance, strict knowledge
 acquisition, event provenance, rejected forgiveness and repair, tool request
-ordering, plan proposals, retries, and branch forks. They do not establish that a
-real reviewer model will consistently judge nuanced apologies; that requires a
-human-scored narrative evaluation set before enabling the UI path.
+ordering, plan proposals, retries, branch forks, and the UI's continuity route.
+They do not establish that a real reviewer model will consistently judge nuanced
+apologies; a human-scored narrative evaluation set remains necessary.

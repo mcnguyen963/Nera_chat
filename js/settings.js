@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
   summarizerMaxTokens: 100000,
   summarizerChunkTokens: 250000,
   narratorSystemPrompt: DEFAULT_NARRATOR_PROMPT,
+  continuityStylePrompt: "",
   summarizerSystemPrompt: DEFAULT_SUMMARIZER_PROMPT,
 };
 

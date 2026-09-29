@@ -35,7 +35,20 @@ let historyStartOrder = 0;
 let historyLoading = null;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
+let continuityRefresh = 0;
+let watchedBranchId;
+let continuityRetry = null;
+let continuityModules = null;
 const renderedMessages = new Map();
+
+function loadContinuity() {
+  return continuityModules ??= Promise.all([
+    import("../continuity/runtime.js"),
+    import("../continuity/turn-controller.js"),
+    import("../continuity/store.js"),
+  ]).then(([runtime, controller, store]) => ({ ...runtime, ...controller, ...store }))
+    .catch((error) => { continuityModules = null; throw error; });
+}
 
 const el = {};
 
@@ -44,6 +57,7 @@ export function initChatView() {
   el.input = document.getElementById("chat-input");
   el.composer = document.getElementById("composer");
   el.sendBtn = document.getElementById("btn-send");
+  el.mode = document.getElementById("composer-mode");
   el.summarizeBtn = document.getElementById("btn-summarize");
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
@@ -68,7 +82,9 @@ export function initChatView() {
       const cachedEarlier = historyMessages && historyStartOrder === 0
         ? historyMessages.filter((m) => m.order < beforeOrder)
         : null;
-      const older = cachedEarlier
+      const older = session?.continuityEnabled
+        ? await (await loadContinuity()).storyStore(sessionId).listMessages(session.continuityBranchId || "main", beforeOrder, PAGE_SIZE)
+        : cachedEarlier
         ? cachedEarlier.slice(-PAGE_SIZE)
         : await messagesApi.getEarlierMessages(sessionId, beforeOrder, PAGE_SIZE);
       if (state.sessionId !== sessionId) return;
@@ -215,14 +231,14 @@ function refreshQuickChips() {
     : s.modelId || "Model not set";
 }
 
-export function setSession(sessionId) {
+export function setSession(sessionId, opts = {}) {
   if (state.sessionId === sessionId) return true;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
   }
   if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
-  if (state.sessionId && session && latestReady) {
+  if (state.sessionId && session && latestReady && !opts.skipCacheSave) {
     const snapshot = chatSnapshot();
     historyCache.delete(state.sessionId);
     historyCache.set(state.sessionId, snapshot);
@@ -232,6 +248,8 @@ export function setSession(sessionId) {
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
+  watchedBranchId = undefined;
+  ++continuityRefresh;
   state.sessionId = sessionId;
   session = null;
   streamState = null;
@@ -241,7 +259,7 @@ export function setSession(sessionId) {
   hasEarlier = false;
   latestMessageIds = new Set();
   latestReady = false;
-  const cachedHistory = historyCache.get(sessionId);
+  const cachedHistory = opts.fresh ? null : historyCache.get(sessionId);
   historyMessages = cachedHistory?.history ?? null;
   historyStartOrder = 0;
   if (cachedHistory) {
@@ -260,8 +278,13 @@ export function setSession(sessionId) {
   updateWelcome();
   if (!sessionId) return true;
   el.contextLabel.textContent = "Loading chat…";
+  if (opts.fresh) {
+    subscribeChat(sessionId);
+    return true;
+  }
   if (cachedHistory) {
     restoreCachedChat(sessionId, cachedHistory);
+    if (savedContinuity(cachedHistory)) subscribeChat(sessionId);
     return true;
   }
   void loadChatCache(currentUid(), sessionId).then((saved) => {
@@ -270,6 +293,7 @@ export function setSession(sessionId) {
       historyCache.set(sessionId, saved);
       if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
       restoreCachedChat(sessionId, saved);
+      if (savedContinuity(saved)) subscribeChat(sessionId);
     } else {
       subscribeChat(sessionId);
     }
@@ -278,6 +302,8 @@ export function setSession(sessionId) {
   });
   return true;
 }
+
+function savedContinuity(saved) { return saved?.session?.continuityEnabled === true; }
 
 function chatSnapshot() {
   return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
@@ -311,6 +337,14 @@ function subscribeChat(sessionId) {
       if (state.sessionId !== sessionId) return;
       const previous = session;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      const branchId = session?.continuityEnabled ? session.continuityBranchId || "main" : null;
+      if (branchId !== watchedBranchId) {
+        msgUnsub?.();
+        msgUnsub = null;
+        watchedBranchId = branchId;
+        if (branchId) subscribeContinuity(sessionId, branchId);
+        else subscribeLegacyMessages(sessionId);
+      }
       if (!session || !previous ||
           session.longTermPlan !== previous.longTermPlan ||
           session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
@@ -326,6 +360,29 @@ function subscribeChat(sessionId) {
     (err) => console.error("Session listener error:", err)
   );
 
+}
+
+async function subscribeContinuity(sessionId, branchId) {
+  let runtime;
+  try { runtime = await loadContinuity(); }
+  catch (error) { showTransientError("Could not load character continuity: " + error.message); return; }
+  if (state.sessionId !== sessionId || watchedBranchId !== branchId) return;
+  const store = runtime.storyStore(sessionId);
+  msgUnsub = runtime.watchContinuityHead(sessionId, branchId, async () => {
+    const run = ++continuityRefresh;
+    try {
+      const latest = await store.listMessages(branchId, Infinity, PAGE_SIZE);
+      if (run !== continuityRefresh || state.sessionId !== sessionId || watchedBranchId !== branchId) return;
+      latestReady = true;
+      hasEarlier = latest.length === PAGE_SIZE;
+      historyMessages = null;
+      renderMessages(latest);
+      updateIndicator();
+    } catch (error) { showTransientError("Could not load continuity story: " + error.message); }
+  }, (error) => showTransientError("Could not watch continuity story: " + error.message));
+}
+
+function subscribeLegacyMessages(sessionId) {
   msgUnsub = messagesApi.subscribeLatestMessages(
     sessionId,
     ({ messages: latest, hasEarlier: olderExists }) => {
@@ -490,6 +547,11 @@ function updateWelcome() {
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
+  el.mode.hidden = !session?.continuityEnabled;
+  el.summarizeBtn.hidden = Boolean(session?.continuityEnabled);
+  document.querySelectorAll('[data-action="summarize-full"], [data-action="reset-summary"]').forEach((item) => {
+    item.hidden = Boolean(session?.continuityEnabled);
+  });
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
   refreshPetPlacement();
 }
@@ -502,19 +564,25 @@ function renderMessage(m) {
   meta.className = "msg-meta";
   const label = document.createElement("span");
   label.textContent =
-    m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
+    m.role === "user" ? "You" : m.role === "author" ? "Author note" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
   if (m.editedAt) label.textContent += " (edited)";
   meta.appendChild(label);
 
   const actions = document.createElement("span");
   actions.className = "msg-actions";
   actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
-  if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
+  if (m.role === "user" || m.role === "author" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
-  actions.appendChild(actionBtn("Delete", "del", async () => {
+  actions.appendChild(actionBtn(session?.continuityEnabled ? "Rewind" : "Delete", "del", async () => {
     if (busy) return;
-    if (!confirm("Delete this message permanently?")) return;
+    if (!confirm(session?.continuityEnabled
+      ? "Rewind to before this turn? Later turns will leave the active story."
+      : "Delete this message permanently?")) return;
+    if (session?.continuityEnabled) {
+      await reviseContinuityTurn(m, "delete");
+      return;
+    }
     await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
     if (state.settings?.chatRecallEnabled) {
       try {
@@ -528,7 +596,8 @@ function renderMessage(m) {
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
-      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
+      if (session?.continuityEnabled) void reviseContinuityTurn(m, "regenerate");
+      else runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
     }));
   }
   meta.appendChild(actions);
@@ -604,6 +673,11 @@ function startEdit(m, wrap) {
     save.disabled = true;
     cancel.disabled = true;
     try {
+      if (session?.continuityEnabled) {
+        if (!await reviseContinuityTurn(m, "edit", text)) return;
+        editingState = null;
+        return;
+      }
       const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
       if (state.settings?.chatRecallEnabled) {
         try {
@@ -717,6 +791,14 @@ function showToast(text, ok) {
 
 export async function updateIndicator() {
   if (!session || !state.settings || !latestReady) return;
+  if (session.continuityEnabled) {
+    ++indicatorRun;
+    el.contextFill.style.width = "0%";
+    el.contextFill.classList.remove("over");
+    el.contextThreshold.style.left = "0%";
+    el.contextLabel.textContent = "Character continuity active · " + (lastMessages.length || 0) + " recent messages";
+    return;
+  }
   const run = ++indicatorRun;
   const usage = await computeContextUsage(session, state.settings, historyMessages ?? lastMessages);
   if (run !== indicatorRun) return; // a newer computation superseded this one
@@ -749,6 +831,10 @@ async function handleSend(e) {
   el.input.style.height = "auto";
   setBusy(true);
   try {
+    if (session.continuityEnabled) {
+      await sendContinuityTurn(text, el.mode.value);
+      return;
+    }
     await ensureHistory();
     const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
     // Bridge until the snapshot arrives so the context build includes the user turn
@@ -764,10 +850,74 @@ async function handleSend(e) {
     // potentially miss the just-committed user message.
     await runAssistantTurn({ messages: historyMessages });
   } catch (err) {
+    if (session?.continuityEnabled) el.input.value = text;
     showTransientError(err.message || String(err));
   } finally {
     setBusy(false);
   }
+}
+
+async function sendContinuityTurn(input, mode, options = {}) {
+  startPetTurn();
+  try {
+    const { storyStore, runContinuityTurn, switchContinuityBranch } = await loadContinuity();
+    const branchId = options.branchId ?? session.continuityBranchId ?? "main";
+    const store = storyStore(session.id);
+    const retry = !options.branchId && continuityRetry && continuityRetry.sessionId === session.id &&
+      continuityRetry.branchId === branchId && continuityRetry.input === input &&
+      continuityRetry.mode === mode ? continuityRetry : null;
+    const turnId = retry?.turnId ?? `turn_${crypto.randomUUID().replaceAll("-", "")}`;
+    if (!options.branchId) continuityRetry = { sessionId: session.id, branchId, input, mode, turnId };
+    const receipt = await runContinuityTurn({ store, branchId,
+      turnId, input,
+      mode, settings: structuredClone(state.settings), stylePrompt: state.settings.continuityStylePrompt || "",
+      draftOverride: options.draftOverride ?? null,
+      expectedActiveBranchId: options.previousBranchId ?? branchId,
+      onStatus: (phase) => setStatus({ building_context: "Building story context…",
+        generating: "Narrating…", reviewing: "Checking continuity…", repairing: "Repairing narration…",
+        saving: "Saving story…", accepted: "Story saved.", failed: "Story turn failed." }[phase] || phase, phase === "accepted") });
+    if (options.branchId) {
+      await switchContinuityBranch(session.id, options.previousBranchId, branchId, options.previousRevision);
+    } else {
+      const latest = await store.listMessages(branchId, Infinity, PAGE_SIZE);
+      renderMessages(latest);
+      hasEarlier = latest.length === PAGE_SIZE;
+      continuityRetry = null;
+    }
+    finishPetTurn("ready");
+    return receipt;
+  } catch (error) {
+    finishPetTurn("blocked");
+    throw error;
+  }
+}
+
+async function reviseContinuityTurn(message, action, replacement = null) {
+  if (busy) return;
+  const activeSession = session;
+  const priorBranch = activeSession.continuityBranchId || "main";
+  setBusy(true);
+  try {
+    const { storyStore, forkAtRevision, switchContinuityBranch } = await loadContinuity();
+    const store = storyStore(activeSession.id);
+    const { initial, turns } = await store.history(priorBranch);
+    const previousRevision = turns.at(-1)?.revision ?? initial.state.revision;
+    const original = turns.find((turn) => turn.user.id === message.id || turn.assistant.id === message.id);
+    if (!original) throw new Error("The selected message has no accepted story turn.");
+    const branchId = `branch_${crypto.randomUUID().replaceAll("-", "")}`;
+    await forkAtRevision(store, priorBranch, original.baseRevision, branchId);
+    if (action === "delete") {
+      await switchContinuityBranch(activeSession.id, priorBranch, branchId, previousRevision);
+      setStatus("Story forked before the selected turn.", true);
+    } else {
+      const input = action === "edit" && message.role !== "assistant" ? replacement : original.user.content;
+      const draftOverride = action === "edit" && message.role === "assistant" ? replacement : null;
+      await sendContinuityTurn(input, original.user.role === "author" ? "author" : "player",
+        { branchId, previousBranchId: priorBranch, previousRevision, draftOverride });
+    }
+  } catch (error) { showTransientError(error.message || String(error)); return false; }
+  finally { setBusy(false); }
+  return true;
 }
 
 async function runAssistantTurn(opts = {}) {
@@ -933,7 +1083,7 @@ function streamSummaryUI(label) {
 }
 
 async function handleSummarize() {
-  if (busy || !session) return;
+  if (busy || !session || session.continuityEnabled) return;
   startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
@@ -959,7 +1109,7 @@ async function handleSummarize() {
 // Full-history summary: ignores the checkpoint and folds in every message
 // from the very start, replacing the active summary (local-only action).
 async function handleFullSummarize() {
-  if (busy || !session) return;
+  if (busy || !session || session.continuityEnabled) return;
   if (
     !confirm(
       "Summarize the ENTIRE chat history from the start? This replaces the current summary and may take a while."
@@ -995,7 +1145,7 @@ async function handleFullSummarize() {
 // Reset the summary checkpoint: no summary is injected and every message
 // becomes context again (local-only action, no LLM call).
 async function handleResetSummary() {
-  if (busy || !session) return;
+  if (busy || !session || session.continuityEnabled) return;
   if (
     !confirm(
       "Reset the summary checkpoint? The summary will stop being injected and the full history will be sent again (may exceed context until re-summarized)."

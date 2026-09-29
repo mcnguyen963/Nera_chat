@@ -25,6 +25,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
   if (!uid || !sessionId || [uid, sessionId].some((value) => typeof value !== "string" || value.includes("/")))
     throw new Error("An account and session are required.");
   const base = ["users", uid, "sessions", sessionId, "continuityBranches"];
+  const session = api.doc(db, "users", uid, "sessions", sessionId);
   const root = (branchId) => { validate(id, branchId); return api.doc(db, ...base, branchId); };
   const child = (branchId, group, key) => { validate(id, key); return api.doc(db, ...base, branchId, group, key); };
   const all = async (branchId, group) => (await api.getDocsFromServer(api.collection(db, ...base, branchId, group))).docs.map((doc) => doc.data());
@@ -98,6 +99,15 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       const result = await api.getDocFromServer(child(branchId, "turns", turnId));
       return result.exists() ? result.data() : null;
     },
+    async listMessages(branchId, beforeOrder = Infinity, pageSize = 100) {
+      const constraints = [api.orderBy("order", "desc")];
+      if (Number.isFinite(beforeOrder)) constraints.push(api.where("order", "<", beforeOrder));
+      constraints.push(api.limit(pageSize));
+      const page = await api.getDocsFromServer(api.query(
+        api.collection(db, ...base, branchId, "messages"), ...constraints));
+      return page.docs.map((item) => item.data()).filter((item) => item.order > 0)
+        .sort((a, b) => a.order - b.order);
+    },
     async readSources(branchId, sourceIds) {
       const docs = await Promise.all([...new Set(sourceIds)].map(async (sourceId) => {
         validate(id, sourceId);
@@ -112,11 +122,15 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       await verifyMessages([request.user]);
       bounded(request);
       return api.runTransaction(db, async (tx) => {
+        const activeSession = await tx.get(session);
         const head = await tx.get(root(request.branchId));
         const run = await tx.get(child(request.branchId, "turns", request.turnId));
         const existing = run.exists() ? run.data() : null;
         checkRetry(existing, request);
         if (existing?.status === "accepted") return acceptedReceipt(existing);
+        if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
+            activeSession.data().continuityBranchId !== request.expectedActiveBranchId)
+          throw new Error("The active story branch changed on another device.");
         if (!head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
         tx.set(child(request.branchId, "turns", request.turnId), { ...request, status: "pending" });
@@ -141,11 +155,15 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       const size = writes.reduce((bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length, 0);
       if (size > MAX_COMMIT_BYTES) throw new Error("Continuity turn exceeds the Firestore commit limit.");
       return api.runTransaction(db, async (tx) => {
+        const activeSession = await tx.get(session);
         const head = await tx.get(root(request.branchId));
         const run = await tx.get(child(request.branchId, "turns", request.turnId));
         const existing = run.exists() ? run.data() : null;
         checkRetry(existing, request);
         if (existing?.status === "accepted") return acceptedReceipt(existing);
+        if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
+            activeSession.data().continuityBranchId !== request.expectedActiveBranchId)
+          throw new Error("The active story branch changed on another device.");
         if (!existing || !head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
         tx.set(root(request.branchId), metadata(prepared.state));

@@ -123,6 +123,7 @@
               <button type="button" id="btn-model-chip" class="composer-chip" aria-haspopup="true">
                 <span class="model-dot" aria-hidden="true"></span><span id="chip-model" class="chip-label">Model</span><span aria-hidden="true">⌄</span>
               </button>
+              <select id="composer-mode" class="composer-chip" aria-label="Message mode" hidden><option value="player">In story</option><option value="author">Author note</option></select>
               <span class="composer-spacer"></span>
               <button type="submit" id="btn-send" class="composer-send" aria-label="Send"><span aria-hidden="true">↑</span></button>
             </div>
@@ -244,13 +245,19 @@
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts</h2>
                 <div class="settings-prompts">
-                  <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label>
-                  <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label>
+                  <label>System prompt (standard stories)<textarea id="set-narrator-prompt" rows="12"></textarea></label>
+                  <label>Character continuity style preferences<textarea id="set-continuity-style" rows="5" placeholder="Optional prose style for continuity stories. Character state and safety rules are managed by the app."></textarea></label>
+                  <label>Summarizer system prompt (standard stories)<textarea id="set-summarizer-prompt" rows="12"></textarea></label>
                 </div>
               </section>
               <section data-panel="story" class="settings-panel hidden">
                 <h2>This story</h2>
                 <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
+                <div class="settings-actions"><button type="button" id="btn-enable-continuity" class="btn">Enable character continuity</button><span id="continuity-setting-status" class="muted"></span></div>
+                <p class="muted">Available before the first message. Adds reviewed character state and story event tracking to this story. Uses a second model request for each turn.</p>
+                <p class="muted">After enabling it, choose “Author note” beside the composer to establish characters, relationships, and corrections. Use “In story” for your character's actions.</p>
+                <button type="button" id="btn-view-continuity" class="btn small" hidden>View saved story state</button>
+                <pre id="continuity-state-preview" class="continuity-state-preview" hidden></pre>
                 <label class="full-label">Story notes &amp; long-term plan<textarea id="set-session-plan" rows="8"></textarea></label>
                 <label class="full-label">Short memory<textarea id="set-session-memory" rows="6" placeholder="Current scene, immediate goals, and unresolved beats"></textarea></label>
                 <p class="muted">Saved per story. Used and refreshed only when Short memory is enabled.</p>
