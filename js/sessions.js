@@ -16,6 +16,27 @@ function sessionsCol() {
   return collection(db, "users", currentUid(), "sessions");
 }
 
+async function copyCollection(sourcePath, destinationPath, include = () => true) {
+  const snap = await getDocsFromServer(collection(db, ...sourcePath));
+  const docs = snap.docs.filter(include);
+  for (let i = 0; i < docs.length; i += 20) {
+    const batch = writeBatch(db);
+    docs.slice(i, i + 20).forEach((item) => {
+      batch.set(doc(db, ...destinationPath, item.id), item.data());
+    });
+    await batch.commit();
+  }
+}
+
+async function deleteCollection(path) {
+  const snap = await getDocsFromServer(collection(db, ...path));
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    snap.docs.slice(i, i + 400).forEach((item) => batch.delete(item.ref));
+    await batch.commit();
+  }
+}
+
 function newId(prefix) {
   return prefix + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -61,14 +82,23 @@ export async function renameSession(sessionId, title) {
 }
 
 export async function deleteSession(sessionId) {
+  const owner = currentUid();
   // Migrated sessions retain their legacy docs for recovery. Delete both trees.
   for (const name of ["messageChunks", "messages"]) {
-    const snap = await getDocsFromServer(collection(db, "users", currentUid(), "sessions", sessionId, name));
+    const snap = await getDocsFromServer(collection(db, "users", owner, "sessions", sessionId, name));
     for (let i = 0; i < snap.docs.length; i += 450) {
       const batch = writeBatch(db);
       snap.docs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
       await batch.commit();
     }
+  }
+  const branchesPath = ["users", owner, "sessions", sessionId, "continuityBranches"];
+  const branches = await getDocsFromServer(collection(db, ...branchesPath));
+  for (const branch of branches.docs) {
+    for (const group of ["checkpoints", "events", "messages", "records", "turns"]) {
+      await deleteCollection([...branchesPath, branch.id, group]);
+    }
+    await deleteDoc(doc(db, ...branchesPath, branch.id));
   }
   await deleteDoc(sessionDoc(sessionId));
 }
@@ -83,8 +113,7 @@ export function subscribeSessions(callback, onError) {
   );
 }
 
-// Duplicate the session metadata and its message chunks. Embedded message ids
-// and orders stay the same, preserving the summary checkpoint pointers.
+// Duplicate session metadata, chunks, and optional continuity branches.
 export async function duplicateSession(sourceId) {
   await ensureChunked(sourceId);
   const sourceSnap = await getDocFromServer(sessionDoc(sourceId));
@@ -96,14 +125,6 @@ export async function duplicateSession(sourceId) {
 
   const id = newId("sess");
   const { id: _omit, createdAt: _c, updatedAt: _u, ...fields } = source;
-  await setDoc(sessionDoc(id), {
-    ...fields,
-    title: (source.title || "Session") + " (copy)",
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    nextOrder: source.nextOrder ?? 0,
-  });
-
   const docs = msgsSnap.docs;
   // Chunk payloads can be large; keep each commit well below the 10 MiB cap.
   for (let i = 0; i < docs.length; i += 6) {
@@ -113,5 +134,26 @@ export async function duplicateSession(sourceId) {
     });
     await batch.commit();
   }
+  const sourceBranchesPath = ["users", currentUid(), "sessions", sourceId, "continuityBranches"];
+  const destinationBranchesPath = ["users", currentUid(), "sessions", id, "continuityBranches"];
+  const branches = await getDocsFromServer(collection(db, ...sourceBranchesPath));
+  for (const branch of branches.docs) {
+    if (branch.data().status !== "ready") continue;
+    for (const group of ["checkpoints", "events", "messages", "records", "turns"]) {
+      await copyCollection([...sourceBranchesPath, branch.id, group], [...destinationBranchesPath, branch.id, group],
+        (item) => group !== "turns" || item.data().status === "accepted");
+    }
+    const after = await getDocFromServer(branch.ref);
+    if (!after.exists() || after.data().status !== "ready" || after.data().revision !== branch.data().revision)
+      throw new Error("Continuity branch changed while duplicating; retry the copy.");
+    await setDoc(doc(db, ...destinationBranchesPath, branch.id), branch.data());
+  }
+  await setDoc(sessionDoc(id), {
+    ...fields,
+    title: (source.title || "Session") + " (copy)",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    nextOrder: source.nextOrder ?? 0,
+  });
   return id;
 }
