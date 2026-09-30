@@ -11,6 +11,7 @@ import { runContinuityTurn } from "../js/continuity/turn-controller.js";
 import { prepareContinuityMigration } from "../js/continuity/migration.js";
 import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody } from "../js/llm-client.js";
+import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, validate } from "../js/continuity/schema.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
 
@@ -923,4 +924,56 @@ test("migration refusals report one extraction attempt rather than two rejected 
         patch: { branchId: packet.branchId, baseRevision: packet.baseRevision, turnId: packet.turnId, events: [], operations: [] } }) };
     } }), /Migration state extraction rejected the note: Clarify/);
   assert.equal(calls, 1);
+});
+
+function migrationProfileReview(packet, facts) {
+  const author = packet.sources.find((source) => source.role === "author");
+  const ref = (quote) => ({ messageId: author.id, revision: author.revision, contentHash: author.contentHash, quote });
+  const events = facts.map((fact, i) => ({ id: `profile_event_${i}`, kind: "author_setup",
+    description: fact, entityIds: ["char_A"], sources: [ref(fact)], supersedes: [] }));
+  const operations = facts.slice(0, 16).map((fact, i) => ({ type: "put_record", record: {
+    id: `fact_${i}`, kind: "world_fact", data: { proposition: fact, entityIds: ["char_A"], visibility: "public" },
+  }, expectedVersion: 0, reason: "Author-established fact.", eventIds: [events[i].id], sources: [ref(fact)] }));
+  operations.push({ type: "put_record", record: { id: "char_A", kind: "character", data: {
+    name: "A", aliases: [], controller: "narrator", personality: "", background: facts.join("\n"),
+    voice: "", emotion: "", condition: "", goals: [], intentions: [],
+  } }, expectedVersion: 0, reason: "Author establishes A's complete history.",
+  eventIds: events.map((event) => event.id), sources: [ref(facts[0])] });
+  return review(packet.branchId, packet.baseRevision, packet.turnId, events, operations);
+}
+
+test("migration preserves more than fifty event references on a single profile through validation and replay", async () => {
+  const facts = Array.from({ length: 60 }, (_, i) => `A acquired artifact ${i}.`);
+  const note = facts.join("\n");
+  const complete = async (request) => {
+    const schema = JSON.parse(request.messages[0].content.split("\nSCHEMA:\n")[1]);
+    assert.equal(schema.properties.patch.properties.operations.items.properties.eventIds.maxItems, 500);
+    const packet = JSON.parse(request.messages[1].content);
+    return { finishReason: "stop", content: JSON.stringify(migrationProfileReview(packet, facts)) };
+  };
+  const prepared = await prepareContinuityMigration({ legacyMessages: [
+    { id: "old", order: 1, role: "assistant", content: "A waits in the archive." },
+  ], authorNote: note, settings: settings({ maxResponseTokens: 16384 }), complete, count });
+  assert.equal(prepared.state.records[16].eventIds.length, 60);
+  assert.equal(prepared.state.records[16].data.background, note);
+  const store = createMemoryStoryStore();
+  await store.initialize({ state: createStoryState("main") });
+  await runContinuityTurn({ store, branchId: "main", turnId: "profile_migration", mode: "author", input: note,
+    migrationReview: true, draftOverride: "Migration note received.", settings: settings(), complete, count });
+  const replayed = await forkAtRevision(store, "main", 1, "profile_replay");
+  assert.deepEqual(replayed.state.records[16].eventIds, prepared.state.records[16].eventIds);
+});
+
+test("migration event reference bounds remain explicit and normal turns retain their smaller cap", async () => {
+  const source = await sourceMessage({ id: "author", role: "author", order: 1, content: "A acquired artifact 0." });
+  const packet = { branchId: "main", baseRevision: 0, turnId: "limits", sources: [source] };
+  const candidate = migrationProfileReview(packet, [source.content]);
+  const op = candidate.patch.operations.at(-1);
+  op.eventIds = Array.from({ length: 51 }, (_, i) => `event_${i}`);
+  validate(MIGRATION_REVIEW_SCHEMA, candidate);
+  assert.throws(() => validate(REVIEW_SCHEMA, candidate), /received 51; expected 1 to 50 items/);
+  op.eventIds = [];
+  assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, candidate), /received 0; expected 1 to 500 items/);
+  op.eventIds = Array.from({ length: 501 }, (_, i) => `event_${i}`);
+  assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, candidate), /received 501; expected 1 to 500 items/);
 });

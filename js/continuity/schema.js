@@ -28,13 +28,14 @@ export const RECORD_DATA = {
 
 export const RECORD_SCHEMA = { anyOf: Object.entries(RECORD_DATA).map(([kind, data]) =>
   object({ id, kind: { const: kind }, data })) };
-export const OPERATION_SCHEMA = object({ type: { const: "put_record" }, record: RECORD_SCHEMA,
-  expectedVersion: integer, reason: string(), eventIds: { ...list(id), minItems: 1 },
+const operationSchema = (maxEventIds) => object({ type: { const: "put_record" }, record: RECORD_SCHEMA,
+  expectedVersion: integer, reason: string(), eventIds: { ...list(id, maxEventIds), minItems: 1 },
   sources: { ...list(SOURCE_SCHEMA, 10), minItems: 1 } });
+export const OPERATION_SCHEMA = operationSchema(50);
 // Normal turns remain small; a one-time migration can establish substantially
 // more records. The reducer accepts either bounded shape for branch replay.
 const patchSchema = (maxItems) => object({ branchId: id, baseRevision: integer, turnId: id,
-  events: list(EVENT_SCHEMA, maxItems), operations: list(OPERATION_SCHEMA, maxItems) });
+  events: list(EVENT_SCHEMA, maxItems), operations: list(operationSchema(maxItems), maxItems) });
 export const PATCH_SCHEMA = patchSchema(500);
 export const REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
   violations: list(string()), patch: patchSchema(50) });
@@ -62,7 +63,8 @@ export function validate(schema, value, path = "value") {
     }
   } else if (schema.type === "array") {
     if (!Array.isArray(value)) fail("expected array");
-    if (value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity)) fail("array length out of bounds");
+    if (value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity))
+      fail(`array length out of bounds (received ${value.length}; expected ${schema.minItems ?? 0} to ${schema.maxItems ?? "unlimited"} items)`);
     value.forEach((item, index) => validate(schema.items, item, `${path}[${index}]`));
   } else if (schema.type === "string") {
     if (typeof value !== "string") fail("expected string");
