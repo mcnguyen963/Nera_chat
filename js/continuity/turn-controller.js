@@ -1,4 +1,4 @@
-import { chatCompletion } from "../llm-client.js";
+import { chatCompletion, completionProgress } from "../llm-client.js";
 import { countTokens } from "../tokenizer.js";
 import { sourceMessage } from "./state.js";
 import { buildContinuityContext, requestTokenCount, inputBudget } from "./context.js";
@@ -12,7 +12,7 @@ import { acceptedReceipt, validateReview } from "./store.js";
 export async function runContinuityTurn({ store, branchId, turnId, input, settings, mode = "player",
   stylePrompt = "", characterIds = [], signal, complete = chatCompletion, count = countTokens,
   structuredOutputs = false, onStatus = () => {}, draftOverride = null,
-  expectedActiveBranchId = branchId }) {
+  expectedActiveBranchId = branchId, migrationReview = false, onProgress = () => {} }) {
   if (!["player", "author"].includes(mode) || !input?.trim()) throw new Error("Invalid turn input.");
   // Retries of an accepted operation return the stored result without another
   // paid completion. An idempotency key cannot be reused for different input.
@@ -29,7 +29,7 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
   try {
     signal?.throwIfAborted();
     onStatus("building_context");
-    const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
+    const built = await buildContinuityContext({ state: snapshot.state, messages: migrationReview ? [] : snapshot.messages,
       input, mode, settings, stylePrompt, characterIds, tools: NARRATOR_TOOLS, count });
     let violations = [];
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -59,7 +59,7 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       sourceIds.add(assistant.id);
       // Include neighboring accepted text for causal interpretation, plus exact
       // sources of protected facts. No slicing across an evidence boundary.
-      snapshot.messages.slice(-4).forEach((m) => sourceIds.add(m.id));
+      if (!migrationReview) snapshot.messages.slice(-4).forEach((m) => sourceIds.add(m.id));
       const archivedSources = await store.readSources(branchId, [...sourceIds]);
       const sourceMessages = new Map([...snapshot.messages, ...archivedSources, user, assistant].map((message) => [message.id, message]));
       const refs = [...records, ...events].flatMap((record) => record.sources);
@@ -71,15 +71,24 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       }));
       const reviewInput = { branchId, baseRevision: request.baseRevision, turnId,
         priorState: { records, events }, sources, planProposals: executor.proposals };
-      const reviewMessages = [{ role: "system", content: REVIEWER_CONTRACT + "\nSCHEMA:\n" + JSON.stringify(REVIEW_SCHEMA) },
+      const migrationPolicy = migrationReview ? "\nMIGRATION OUTPUT DISCIPLINE:\nConvert only the current author note into compact state. Archived transcript is not needed. Produce each record once, merge related facts where their meaning remains distinct, use short exact evidence excerpts (never copy the whole note), short descriptions and reasons, and no repeated prose or reasoning. Stop immediately after the complete JSON object. This is state extraction, not a new played scene. If the note cannot be represented completely within the schema limits, reject it with a concrete request to split or shorten the note; never silently omit important state." : "";
+      const reviewMessages = [{ role: "system", content: REVIEWER_CONTRACT + migrationPolicy + "\nSCHEMA:\n" + JSON.stringify(REVIEW_SCHEMA) },
         { role: "user", content: JSON.stringify(reviewInput) }];
-      const reviewSettings = { ...settings, streaming: false,
+      const reviewSettings = { ...settings, streaming: migrationReview,
         maxResponseTokens: settings.continuityReviewMaxTokens ?? 4096,
         reasoning: { ...settings.reasoning, enabled: false } };
       const responseFormat = structuredOutputs ? { type: "json_schema", json_schema: { name: "continuity_review", strict: true, schema: REVIEW_SCHEMA } } : undefined;
       const reviewCost = await requestTokenCount(reviewMessages, [], count) + (responseFormat ? await count(JSON.stringify(responseFormat)) : 0);
       if (reviewCost > inputBudget(reviewSettings)) throw new Error("Continuity review exceeds its context budget.");
-      const reviewed = await complete({ settings: reviewSettings, messages: reviewMessages, responseFormat, signal });
+      const reviewed = await complete({ settings: reviewSettings, messages: reviewMessages, responseFormat, signal, onProgress });
+      onProgress({ ...completionProgress(reviewed), maxOutputTokens: reviewSettings.maxResponseTokens });
+      if (reviewed.finishReason === "length") {
+        const reasoning = reviewed.usage?.completion_tokens_details?.reasoning_tokens;
+        const total = reviewed.usage?.completion_tokens;
+        throw new Error(`State extraction reached its ${reviewSettings.maxResponseTokens.toLocaleString()} token output limit` +
+          (Number.isFinite(total) ? ` (${total.toLocaleString()} output tokens${Number.isFinite(reasoning) ? `, ${reasoning.toLocaleString()} reasoning` : ""})` : "") +
+          ". No state was saved. Check the received text/reasoning counts; reduce thinking or repeated content before increasing the limit. Large author notes may need to be split.");
+      }
       requireCompletedResponse(reviewed);
       let review;
       try { review = JSON.parse(reviewed.content); } catch { throw new Error("Continuity reviewer returned invalid JSON."); }

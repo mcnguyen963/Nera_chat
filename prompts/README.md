@@ -84,3 +84,27 @@ request only when the user chooses it. Edited narration uses the Reviewed path.
 Balanced trades an extra request and repeated input tokens for targeted retrieval;
 it does not independently catch every semantic mistake. Reviewed retains its
 separate reviewer and retrieval loop; Saver retains its single-request workflow.
+
+
+## Migration response length and progress
+
+Migration sends the reviewed author note and a neutral migration marker to the
+state reviewer, without historical dialogue or the editable narrator prompt.
+The transcript is copied locally as archival messages. The reviewer is asked
+for compact state, short exact evidence excerpts, and one operation per record.
+Migration uses the configured review output limit, falling back to the normal
+maximum response setting; a small input does not determine output size.
+
+The migration panel shows received text tokens as a character-based estimate
+while streaming, then displays provider-reported output and reasoning token
+counts when available, the finish reason, and the requested output limit.
+These counts remain visible on truncation. Estimated received text tokens are
+not a billing measurement. Hidden reasoning cannot be counted until the provider
+reports it. OpenRouter requests explicitly send reasoning.enabled=false when
+thinking is disabled, rather than relying on the provider's default. Providers
+or models can still impose their own reasoning requirements.
+
+A length finish is rejected before state publication and does not cause a paid
+automatic retry. Check the text/reasoning split before raising the response
+limit. Long or repetitive extraction notes can require simplifying or splitting
+state setup; do not solve a small-note runaway by repeatedly increasing limits.

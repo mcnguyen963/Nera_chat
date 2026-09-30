@@ -261,10 +261,11 @@
                 <p class="muted">After enabling it, choose “Author note” beside the composer to establish characters, relationships, and corrections. Use “In story” for your character's actions.</p>
                 <button type="button" id="btn-open-migration" class="btn small" hidden>Create continuity copy of this story</button>
                 <div id="migration-panel" hidden>
-                  <p class="muted">Your original story stays intact. Paste a note you reviewed against its transcript. Review sends the note and recent history to your configured model to build character state for a new copy; earlier messages remain read-only history.</p>
+                  <p class="muted">Your original story stays intact. Paste a note you reviewed against its transcript. Review sends only the reviewed note to your configured model to build character state for a new copy; the transcript remains read-only history.</p>
                   <label class="full-label">Reviewed author note<textarea id="migration-note" rows="10" placeholder="Current canon, each character's knowledge and relationships, unresolved consequences, and current scene."></textarea></label>
                   <label>Mode for the new story<select id="migration-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="saver">Saver · one request per turn</option></select></label>
                   <div class="settings-actions"><button type="button" id="btn-preview-migration" class="btn">Review migration state</button><button type="button" id="btn-publish-migration" class="btn primary" hidden>Create continuity copy</button></div>
+                  <p id="migration-token-progress" class="muted" role="status" aria-live="polite" hidden></p>
                   <pre id="migration-preview" class="continuity-state-preview" hidden></pre>
                 </div>
                 <button type="button" id="btn-view-continuity" class="btn small" hidden>View saved story state</button>

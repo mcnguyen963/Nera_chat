@@ -502,6 +502,8 @@ function resetMigrationPanel() {
   input("migration-panel").hidden = true;
   input("migration-preview").hidden = true;
   input("migration-preview").textContent = "";
+  input("migration-token-progress").hidden = true;
+  input("migration-token-progress").textContent = "";
   input("btn-publish-migration").hidden = true;
 }
 
@@ -730,6 +732,9 @@ async function handlePreviewMigration() {
   saving = true;
   input("btn-preview-migration").disabled = true;
   input("btn-publish-migration").hidden = true;
+  const progress = input("migration-token-progress");
+  progress.hidden = false;
+  progress.textContent = "Waiting for the model…";
   try {
     const source = await getSession(sourceId);
     if (!source || source.continuityEnabled) throw new Error("Select a standard story to migrate.");
@@ -739,7 +744,18 @@ async function handlePreviewMigration() {
     const legacyMessages = await getMessagesReadOnly(sourceId);
     const prepared = await prepareContinuityMigration({ legacyMessages, authorNote: note,
       settings: structuredClone(state.settings),
-      onStatus: (phase) => feedback(`Reviewing migration: ${phase.replaceAll("_", " ")}…`) });
+      onStatus: (phase) => feedback(`Reviewing migration: ${phase.replaceAll("_", " ")}…`),
+      onProgress: (stats) => {
+        const parts = [`Received ~${Math.ceil(stats.receivedCharacters / 4).toLocaleString()} text tokens (estimate)`];
+        const total = stats.usage?.completion_tokens;
+        const thinking = stats.usage?.completion_tokens_details?.reasoning_tokens;
+        if (Number.isFinite(total)) parts.push(`${total.toLocaleString()} output tokens reported`);
+        if (Number.isFinite(thinking)) parts.push(`${thinking.toLocaleString()} reasoning tokens reported`);
+        else if (stats.reasoningCharacters) parts.push(`~${Math.ceil(stats.reasoningCharacters / 4).toLocaleString()} reasoning tokens received (estimate)`);
+        if (stats.finishReason) parts.push(`finish: ${stats.finishReason}`);
+        if (stats.maxOutputTokens) parts.push(`limit: ${stats.maxOutputTokens.toLocaleString()}`);
+        progress.textContent = parts.join(" · ");
+      } });
     if (state.sessionId !== sourceId || raw("migration-note").trim() !== note)
       throw new Error("Story or migration note changed during review. Preview it again.");
     preparedMigration = { sourceId, note, title: `${source.title || "Story"} (continuity)`, prepared };

@@ -127,6 +127,8 @@ async function harness() {
     'continuity/migration.js': {
       prepareContinuityMigration: async (request) => {
         calls.migrationPreviews.push(request);
+        request.onProgress?.({ receivedCharacters: 400, reasoningCharacters: 0, finishReason: 'stop',
+          maxOutputTokens: 8192, usage: { completion_tokens: 150, completion_tokens_details: { reasoning_tokens: 50 } } });
         return { sourceMessageCount: request.legacyMessages.length, skippedSummaryCount: 0,
           state: { throughOrder: 4, records: [{ id: 'char_A' }], events: [{ id: 'death' }] }, messages: [] };
       },
@@ -354,6 +356,9 @@ test('existing story migration previews read-only history before publishing a se
   h.el('migration-note').value = 'A distrusts the player because the player killed her mother.';
   await h.fire('btn-preview-migration');
   assert.equal(h.calls.migrationPreviews.length, 1);
+  assert.equal(h.el('migration-token-progress').hidden, false);
+  assert.match(h.el('migration-token-progress').textContent, /150 output tokens reported/);
+  assert.match(h.el('migration-token-progress').textContent, /50 reasoning tokens reported/);
   assert.equal(h.calls.migrationPreviews[0].legacyMessages[0].content, 'I arrive.');
   assert.match(h.el('migration-preview').textContent, /"events"/);
   assert.equal(h.calls.migrationPublishes.length, 0);

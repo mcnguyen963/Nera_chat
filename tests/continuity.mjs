@@ -456,7 +456,8 @@ test("migration rejects a message too large for continuity storage before callin
 test("migration refuses state derived only from the unreviewed old narration", async () => {
   const complete = async (request) => {
     const packet = JSON.parse(request.messages[1].content);
-    const old = packet.sources.find((source) => source.id === "legacy_1");
+    assert.ok(!packet.sources.some((source) => source.id === "legacy_1"));
+    const old = await sourceMessage({ id: "legacy_1", role: "assistant", order: 1, content: "A waits by the door." });
     const ref = { messageId: old.id, revision: old.revision, contentHash: old.contentHash,
       quote: "A waits by the door." };
     const event = { id: "old_scene", kind: "observation", description: "A waits by the door.",
@@ -848,4 +849,30 @@ test("legacy Firestore state converts once without changing story revision or de
   assert.ok(!h.reads.includes(h.base + "/records"));
   h.documents.delete(h.base + "/recordChunks/chunk_000000");
   await assert.rejects(h.store.load("main"), /Missing or invalid/);
+});
+
+
+test("migration excludes archived history and prose preferences, streams extraction, and reports truncated usage", async () => {
+  const progress = [];
+  let calls = 0;
+  await assert.rejects(prepareContinuityMigration({
+    legacyMessages: [{ id: "old", order: 1, role: "assistant", content: "ARCHIVED_SECRET_HISTORY" }],
+    authorNote: "A is grieving.", settings: settings({ endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      continuityStylePrompt: "CUSTOM_NARRATOR_PROMPT", reasoning: { enabled: true, effort: "high" } }), count,
+    onProgress: (stats) => progress.push(stats), complete: async (request) => {
+      calls++;
+      assert.equal(request.settings.streaming, true);
+      assert.equal(request.settings.reasoning.enabled, false);
+      assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { enabled: false });
+      assert.ok(!JSON.stringify(request.messages).includes("ARCHIVED_SECRET_HISTORY"));
+      assert.ok(!JSON.stringify(request.messages).includes("CUSTOM_NARRATOR_PROMPT"));
+      assert.equal(JSON.parse(request.messages[1].content).sources.length, 2);
+      return { finishReason: "length", content: '{"patch":', thinking: "thinking", usage: {
+        completion_tokens: 2000, completion_tokens_details: { reasoning_tokens: 1900 } } };
+    },
+  }), /1,900 reasoning/);
+  assert.equal(calls, 1, "Truncation must not trigger an automatic paid retry");
+  assert.equal(progress.at(-1).usage.completion_tokens, 2000);
+  assert.equal(progress.at(-1).finishReason, "length");
+  assert.equal(progress.at(-1).receivedCharacters, 9);
 });

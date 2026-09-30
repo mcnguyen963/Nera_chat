@@ -7,7 +7,7 @@ import { MAX_DOCUMENT_BYTES, validateInitialStoryStorage } from "./firestore-sto
 // publication. Earlier transcript text remains available as archival context,
 // but it is not silently promoted into character knowledge or canonical state.
 export async function prepareContinuityMigration({ legacyMessages, authorNote, settings,
-  complete, count, onStatus = () => {} }) {
+  complete, count, onStatus = () => {}, onProgress = () => {} }) {
   if (!authorNote?.trim()) throw new Error("Write or paste a reviewed author note first.");
   if (!Array.isArray(legacyMessages)) throw new Error("Story transcript is missing.");
   if (legacyMessages.some((item) => !["user", "assistant", "summary"].includes(item.role)))
@@ -33,7 +33,7 @@ export async function prepareContinuityMigration({ legacyMessages, authorNote, s
   await store.initialize({ state, messages });
   const turnId = `migration_${crypto.randomUUID().replaceAll("-", "")}`;
   await runContinuityTurn({ store, branchId: "main", turnId, input: authorNote.trim(),
-    mode: "author", settings: { ...settings,
+    mode: "author", migrationReview: true, onProgress, settings: { ...settings,
       continuityReviewMaxTokens: settings.continuityReviewMaxTokens ?? settings.maxResponseTokens },
     draftOverride: "Migration note received. No new story event or player action occurred.",
     ...(complete ? { complete } : {}), ...(count ? { count } : {}), onStatus });

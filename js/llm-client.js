@@ -24,10 +24,23 @@ export function buildRequestBody(settings, messages, options = {}) {
       body.reasoning = { max_tokens: r.maxTokens };
     }
   }
+  // Omitting reasoning is not equivalent to disabling a model's default thinking.
+  // This is OpenRouter's extension; avoid sending it to unrelated API servers.
+  if (r?.enabled === false && isOpenRouter(settings.endpoint)) body.reasoning = { enabled: false };
   if (options.tools?.length) body.tools = options.tools;
   if (options.toolChoice !== undefined) body.tool_choice = options.toolChoice;
   if (options.responseFormat) body.response_format = options.responseFormat;
   return body;
+}
+
+function isOpenRouter(endpoint) {
+  try { return new URL(endpoint).hostname === "openrouter.ai"; } catch { return false; }
+}
+
+export function completionProgress(result, complete = true) {
+  return { receivedCharacters: result.content?.length ?? 0,
+    reasoningCharacters: result.thinking?.length ?? 0,
+    usage: result.usage ?? null, finishReason: result.finishReason ?? null, complete };
 }
 
 function headers(settings) {
@@ -70,11 +83,11 @@ async function nonStreamedCompletion(options) {
 }
 
 async function streamedCompletion(options) {
-  const { settings, messages, onDelta, onReasoning, signal } = options;
+  const { settings, messages, onDelta, onReasoning, onProgress, signal } = options;
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify({ ...buildRequestBody(settings, messages, options), stream: true }),
+    body: JSON.stringify({ ...buildRequestBody(settings, messages, options), stream: true, ...(isOpenRouter(settings.endpoint) ? { stream_options: { include_usage: true } } : {}) }),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
@@ -84,6 +97,7 @@ async function streamedCompletion(options) {
   let usage = null;
   let finishReason = null;
   const calls = new Map();
+  let lastProgress = 0;
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -127,6 +141,12 @@ async function streamedCompletion(options) {
     }
     // Final content chunk or a trailing usage-only chunk carries usage.
     if (json.usage) usage = json.usage;
+    const now = Date.now();
+    if (onProgress && (now - lastProgress >= 250 || json.usage || choice?.finish_reason)) {
+      lastProgress = now;
+      onProgress({ receivedCharacters: content.length, reasoningCharacters: thinking.length,
+        usage, finishReason, complete: false });
+    }
   };
 
   try {
