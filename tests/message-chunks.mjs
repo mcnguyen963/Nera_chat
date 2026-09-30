@@ -169,6 +169,20 @@ test('migration packs existing messages once and checkpoint reads use chunks', a
   assert.equal(seen.hasEarlier, true);
 });
 
+test('continuity migration reads either source storage format without modifying the source', async () => {
+  const h = await setup(3);
+  const before = structuredClone(h.documents.get(h.sessionPath));
+  assert.deepEqual((await h.api.getMessagesReadOnly('s')).map((item) => item.content),
+    ['event 1', 'event 2', 'event 3']);
+  assert.deepEqual(h.documents.get(h.sessionPath), before);
+  assert.equal([...h.documents.keys()].some((path) => path.includes('/messageChunks/')), false);
+  await h.api.ensureChunked('s');
+  const afterUpgrade = structuredClone(h.documents.get(h.sessionPath));
+  assert.deepEqual((await h.api.getMessagesReadOnly('s')).map((item) => item.content),
+    ['event 1', 'event 2', 'event 3']);
+  assert.deepEqual(h.documents.get(h.sessionPath), afterUpgrade);
+});
+
 test('assistant plan thread is stored separately from visible content', async () => {
   const h = await setup();
   const saved = await h.api.addMessage('s', {

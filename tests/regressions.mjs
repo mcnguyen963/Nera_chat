@@ -21,6 +21,7 @@ async function harness() {
     closest() { return { firstChild: { textContent: this.id } }; }
     getClientRects() { return [1]; }
     querySelectorAll() { return []; }
+    querySelector() { return null; }
     appendChild(child) { child.remove(); this.children.push(child); child.parentNode = this; return child; }
     insertBefore(child, anchor) { child.remove(); const index = anchor ? this.children.indexOf(anchor) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
     append(...children) { this.children.push(...children); }
@@ -55,12 +56,13 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], continuityTurns: [], continuityMessages: [], continuityListError: false, settingsDoc: null, fail: false, confirm: true, response: 'summary' };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], continuityTurns: [], continuityMessages: [], continuityListError: false, settingsDoc: null, fail: false, confirm: true, response: 'summary', migrationSource: null, migrationTranscript: [], migrationPreviews: [], migrationPublishes: [], saverTurns: [], saverRequireReview: false };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document,
+    MutationObserver: class { observe() {} disconnect() {} },
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
-    window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) }, crypto, URL,
+    window: { addEventListener() {}, setTimeout() {}, clearTimeout() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) }, crypto, URL,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     setTimeout() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, confirm: () => calls.confirm,
     fetch: async (_url, options) => {
@@ -83,15 +85,17 @@ async function harness() {
     'db.js': { db: {} },
     'auth.js': { currentUid: () => 'test-user' },
     'tokenizer.js': { countTokens: async (text) => text.length },
-    'sessions.js': { getSession: async () => ({ title: 'Story', longTermPlan: 'Old plan' }), updateSession: async (...args) => { calls.sessionWrites.push(args); } },
+    'sessions.js': { getSession: async () => calls.migrationSource ?? ({ title: 'Story', longTermPlan: 'Old plan' }), updateSession: async (...args) => { calls.sessionWrites.push(args); } },
     'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
-      getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
+      getMessages: async () => [], getMessagesReadOnly: async () => calls.migrationTranscript,
+      getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
     },
     'continuity/runtime.js': {
       storyStore: () => ({ listMessages: async () => {
+        calls.continuityLists = (calls.continuityLists ?? 0) + 1;
         if (calls.continuityListError) { calls.continuityListError = false; throw new Error('read interrupted'); }
         return calls.continuityMessages;
       } }),
@@ -104,6 +108,26 @@ async function harness() {
         request.onStatus('accepted');
         return { status: 'accepted' };
       },
+    },
+    'continuity/saver.js': {
+      runSaverTurn: async (request) => {
+        calls.saverTurns.push(request);
+        const status = calls.saverRequireReview ? 'needs_state_review' : 'accepted';
+        request.onStatus(status);
+        return { status, turnId: request.turnId,
+          user: { id: `${request.turnId}_user`, role: 'user', content: request.input, order: 1 },
+          assistant: { id: `${request.turnId}_assistant`, role: 'assistant', content: 'A waits.', order: 2 } };
+      },
+    },
+    'continuity/migration.js': {
+      prepareContinuityMigration: async (request) => {
+        calls.migrationPreviews.push(request);
+        return { sourceMessageCount: request.legacyMessages.length, skippedSummaryCount: 0,
+          state: { throughOrder: 4, records: [{ id: 'char_A' }], events: [{ id: 'death' }] }, messages: [] };
+      },
+    },
+    'continuity/migration-runtime.js': {
+      publishContinuityMigration: async (request) => { calls.migrationPublishes.push(request); return 'copy-id'; },
     },
   };
   const cache = new Map();
@@ -308,6 +332,37 @@ test('Story footer saves the active story and transfer actions remain wired', as
   assert.equal(h.calls.imports.length, 1);
 });
 
+test('existing story migration previews read-only history before publishing a selected copy', async () => {
+  const h = await harness();
+  h.state.sessionId = 'old-story';
+  h.state.settings.modelId = 'test-model';
+  h.state.settings.apiKey = 'test-key';
+  h.calls.migrationSource = { title: 'Old story', nextOrder: 2, continuityEnabled: false };
+  h.calls.migrationTranscript = [{ id: 'm1', order: 1, role: 'user', content: 'I arrive.' }];
+  const selected = [];
+  h.document.addEventListener('session-imported', (event) => selected.push(event.detail));
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story');
+  await Promise.resolve();
+  assert.equal(h.el('btn-open-migration').hidden, false);
+  await h.fire('btn-open-migration');
+  h.el('migration-note').value = 'A distrusts the player because the player killed her mother.';
+  await h.fire('btn-preview-migration');
+  assert.equal(h.calls.migrationPreviews.length, 1);
+  assert.equal(h.calls.migrationPreviews[0].legacyMessages[0].content, 'I arrive.');
+  assert.match(h.el('migration-preview').textContent, /"events"/);
+  assert.equal(h.calls.migrationPublishes.length, 0);
+  h.el('migration-note').value += ' More detail.';
+  await h.fire('btn-publish-migration');
+  assert.equal(h.calls.migrationPublishes.length, 0);
+  h.el('migration-note').value = 'A distrusts the player because the player killed her mother.';
+  h.el('migration-mode').value = 'saver';
+  await h.fire('btn-publish-migration');
+  assert.equal(h.calls.migrationPublishes.length, 1);
+  assert.equal(h.calls.migrationPublishes[0].continuityMode, 'saver');
+  assert.deepEqual(selected, ['copy-id']);
+});
+
 test('New accounts have a persisted profile and partial profiles cannot inherit another key', async () => {
   const h = await harness();
   const loaded = await h.settings.loadSettings();
@@ -375,6 +430,19 @@ test('Current narrator default loads and custom prompts stay unchanged', async (
   h.localCache.clear();
   h.calls.settingsDoc = { narratorSystemPrompt: 'Custom narrator' };
   assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, 'Custom narrator');
+});
+
+test('Continuity prose defaults load while saved custom or blank preferences are preserved', async () => {
+  const h = await harness();
+  const next = h.settings.DEFAULT_SETTINGS.continuityStylePrompt;
+  assert.ok(next.length > 0);
+  h.calls.settingsDoc = {};
+  assert.equal((await h.settings.loadSettings()).continuityStylePrompt, next);
+  for (const saved of ['Custom continuity prose', '']) {
+    h.localCache.clear();
+    h.calls.settingsDoc = { continuityStylePrompt: saved };
+    assert.equal((await h.settings.loadSettings()).continuityStylePrompt, saved);
+  }
 });
 
 for (const keep of [0, 1, 3]) {
@@ -530,7 +598,8 @@ test('Empty chat enables writing only after a story is selected', async () => {
   chat.initChatView();
   assert.equal(h.el('welcome').hidden, false);
   assert.equal(h.el('btn-welcome-new').hidden, false);
-  assert.equal(h.el('chat-input').disabled, true);
+  assert.equal(h.el('chat-input').disabled, true,
+    JSON.stringify(h.el('message-list').children.map((item) => item.textContent)));
   assert.equal(h.el('btn-send').disabled, true);
   assert.equal(chat.setSession('story'), true);
   assert.equal(h.el('btn-welcome-new').hidden, true);
@@ -585,15 +654,63 @@ test('A continuity send reuses its turn ID after an accepted save but failed ref
   h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
     title: 'story', continuityEnabled: true, continuityBranchId: 'main',
   }) });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let attempt = 0; !h.calls.continuityLists && attempt < 100; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.ok(h.calls.continuityLists, 'Initial continuity history loaded before injecting the send refresh failure');
   h.el('composer-mode').value = 'player';
   h.el('chat-input').value = 'I greet A.';
   h.calls.continuityListError = true;
   await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  assert.equal(h.el('chat-input').value, 'I greet A.');
+  assert.equal(h.el('chat-input').value, 'I greet A.', JSON.stringify({ turns: h.calls.continuityTurns.length,
+    readError: h.calls.continuityListError, messages: h.el('message-list').children.map((item) => item.textContent) }));
   await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
   assert.equal(h.calls.continuityTurns.length, 2);
   assert.equal(h.calls.continuityTurns[0].turnId, h.calls.continuityTurns[1].turnId);
+});
+
+test('Saver routes through one turn handler and pending review keeps the composer blocked', async () => {
+  const h = await harness();
+  h.state.settings.apiKey = 'test-key';
+  h.state.settings.modelId = 'test-model';
+  h.calls.saverRequireReview = true;
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityBranchId: 'main',
+    continuityMode: 'saver', continuitySaverReviewEveryTurn: true,
+  }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.el('composer-mode').value = 'player';
+  h.el('chat-input').value = 'I wait.';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.saverTurns.length, 1);
+  assert.equal(h.calls.saverTurns[0].reviewEveryTurn, true);
+  assert.equal(h.calls.continuityTurns.length, 0);
+  assert.equal(h.el('chat-input').disabled, true,
+    JSON.stringify(h.el('message-list').children.map((item) => item.textContent)));
+  assert.equal(h.el('btn-send').disabled, true);
+  h.el('chat-input').value = 'Continue.';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.saverTurns.length, 1);
+});
+
+test('Saver mode and review preference are saved per story from Settings', async () => {
+  const h = await harness();
+  h.state.sessionId = 'story';
+  h.calls.migrationSource = { title: 'story', continuityEnabled: true, continuityMode: 'reviewed' };
+  const view = await h.use('ui/settings-view.js');
+  view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story'); await Promise.resolve();
+  assert.equal(h.el('continuity-mode-controls').hidden, false);
+  assert.equal(h.el('set-saver-review-every-turn').checked, false);
+  h.el('set-continuity-mode').value = 'saver';
+  await h.fire('set-continuity-mode', 'change');
+  h.el('set-saver-review-every-turn').checked = true;
+  await h.fire('set-saver-review-every-turn', 'change');
+  assert.deepEqual(structuredClone(h.calls.sessionWrites), [
+    ['story', { continuityMode: 'saver' }], ['story', { continuitySaverReviewEveryTurn: true }],
+  ]);
 });
 
 test('Switching back to a recently opened session reuses its cached messages', async () => {

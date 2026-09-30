@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, m
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator, setSession, forgetChatSession } from "./chat-view.js";
-import { PET_CATALOG } from "./pet-view.js";
+import { loadPetCatalog } from "./pet-view.js";
 
 const el = {};
 const connectionFields = {
@@ -25,6 +25,13 @@ let sessionOriginal = { title: "", longTermPlan: "", shortMemory: "", nextOrder:
 let sessionId = null;
 let saving = false;
 let petChoicesReady = false;
+let petCatalog = [];
+let petLoadRequest = 0;
+let preparedMigration = null;
+let editorState = null;
+let editorPending = null;
+let editorDirty = false;
+let editorRows = [];
 
 const input = (id) => document.getElementById(id);
 const raw = (id) => input(id).value;
@@ -64,6 +71,9 @@ export function initSettingsView() {
   input("set-chat-recall").addEventListener("change", syncMemoryControls);
   input("set-semantic-search").addEventListener("change", syncMemoryControls);
   el.petChoices.addEventListener("change", () => { capture(); clearMessage(); });
+  input("set-pet-movement").addEventListener("change", () => { capture(); clearMessage(); });
+  input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
+  document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
   input("btn-clear-short-memory").addEventListener("click", () => set("set-session-memory", ""));
   input("btn-profile-copy").addEventListener("click", () => {
     capture();
@@ -116,9 +126,58 @@ export function initSettingsView() {
       if (!current?.continuityEnabled) throw new Error("Character continuity is not active.");
       const { storyStore } = await import("../continuity/runtime.js");
       const { state: story } = await storyStore(state.sessionId).load(current.continuityBranchId || "main");
-      preview.textContent = JSON.stringify({ revision: story.revision, records: story.records }, null, 2);
+      preview.textContent = JSON.stringify({ revision: story.revision,
+        records: story.records, events: story.events }, null, 2);
     } catch (error) { preview.textContent = "Could not load state: " + error.message; }
   });
+  input("set-continuity-mode").addEventListener("change", async () => {
+    if (!state.sessionId || saving || state.busy) return;
+    const id = state.sessionId;
+    const value = raw("set-continuity-mode");
+    try {
+      if (!sessionOriginal.continuityEnabled || !["reviewed", "saver"].includes(value))
+        throw new Error("Select a continuity story and a valid mode.");
+      await updateSession(id, { continuityMode: value });
+      sessionOriginal.continuityMode = value;
+      feedback(`${value === "saver" ? "Saver" : "Reviewed"} mode selected for future turns.`);
+    } catch (error) {
+      set("set-continuity-mode", sessionOriginal.continuityMode || "reviewed");
+      feedback("Could not change mode: " + error.message, true);
+    }
+  });
+  input("set-saver-review-every-turn").addEventListener("change", async () => {
+    if (!state.sessionId || saving || state.busy) return;
+    const checked = input("set-saver-review-every-turn").checked;
+    try {
+      if (!sessionOriginal.continuityEnabled) throw new Error("Select a continuity story.");
+      await updateSession(state.sessionId, { continuitySaverReviewEveryTurn: checked });
+      sessionOriginal.continuitySaverReviewEveryTurn = checked;
+      feedback(checked ? "Every Saver turn will wait for your review." : "Saver will save valid turns automatically.");
+    } catch (error) {
+      input("set-saver-review-every-turn").checked = sessionOriginal.continuitySaverReviewEveryTurn === true;
+      feedback("Could not change Saver review setting: " + error.message, true);
+    }
+  });
+  input("btn-load-continuity-editor").addEventListener("click", loadContinuityEditor);
+  input("btn-save-continuity-editor").addEventListener("click", saveContinuityEditor);
+  input("btn-accept-continuity-proposal").addEventListener("click", acceptContinuityProposal);
+  input("btn-repair-continuity").addEventListener("click", repairContinuityEditor);
+  document.addEventListener("open-continuity-editor", () => {
+    openSettingsPopup();
+    showPanel("story");
+    void loadContinuityEditor();
+  });
+  input("btn-open-migration").addEventListener("click", () => {
+    input("migration-panel").hidden = false;
+    input("migration-note").focus();
+  });
+  input("migration-note").addEventListener("input", () => {
+    preparedMigration = null;
+    input("btn-publish-migration").hidden = true;
+    input("migration-preview").hidden = true;
+  });
+  input("btn-preview-migration").addEventListener("click", handlePreviewMigration);
+  input("btn-publish-migration").addEventListener("click", handlePublishMigration);
   input("btn-import-st").addEventListener("click", () => input("file-import-st").click());
   input("file-import-st").addEventListener("change", handleImport);
   input("btn-export-st").addEventListener("click", handleExport);
@@ -132,7 +191,7 @@ export function initSettingsView() {
   });
 }
 
-export function openSettingsPopup(trigger = document.activeElement) {
+export function openSettingsPopup(trigger = document.activeElement, options = {}) {
   if (!el.overlay.classList.contains("hidden")) return;
   opener = trigger;
   original = structuredClone(state.settings);
@@ -141,10 +200,11 @@ export function openSettingsPopup(trigger = document.activeElement) {
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
+  document.dispatchEvent(new CustomEvent("settings-visibility-changed"));
   renderAll();
   capture();
   original = structuredClone(draft);
-  showPanel("model");
+  showPanel(options.panel === "pets" ? "pets" : "model");
   input("btn-close-settings").focus();
 }
 
@@ -155,8 +215,11 @@ function closeSettingsPopup() {
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
+  document.dispatchEvent(new CustomEvent("settings-visibility-changed"));
   sessionId = null;
   set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
+  resetMigrationPanel();
+  resetContinuityEditor();
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
   clearMessage();
   opener?.focus?.();
@@ -166,7 +229,7 @@ function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(origina
 function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
   return raw("set-session-title") !== sessionOriginal.title || raw("set-session-plan") !== sessionOriginal.longTermPlan ||
-    raw("set-session-memory") !== sessionOriginal.shortMemory;
+    raw("set-session-memory") !== sessionOriginal.shortMemory || Boolean(raw("migration-note").trim()) || editorDirty;
 }
 function accountDirty() {
   return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
@@ -174,6 +237,8 @@ function accountDirty() {
 
 function showPanel(name) {
   capture();
+  petChoicesReady = false;
+  const petRequest = ++petLoadRequest;
   panel = name;
   document.querySelectorAll("[data-settings-panel]").forEach((button) => {
     const selected = button.dataset.settingsPanel === name;
@@ -182,7 +247,17 @@ function showPanel(name) {
     if (selected) button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   });
   document.querySelectorAll("[data-panel]").forEach((section) => section.classList.toggle("hidden", section.dataset.panel !== name));
-  if (name === "pets") renderPetChoices(draft.petCharacterIds);
+  if (name === "pets") {
+    el.petChoices.textContent = "Loading pets…";
+    void loadPetCatalog().then((pets) => {
+      if (petRequest !== petLoadRequest || panel !== "pets" || el.overlay.classList.contains("hidden")) return;
+      petCatalog = pets;
+      renderPetChoices(draft.petCharacterIds);
+    }).catch((error) => {
+      if (petRequest === petLoadRequest && panel === "pets")
+        el.petChoices.textContent = error.message || "Could not load pets.";
+    });
+  }
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
   el.footer.classList.toggle("hidden", !global && name !== "story");
@@ -200,6 +275,7 @@ function renderAll() {
   input("set-chat-recall").checked = draft.chatRecallEnabled === true;
   input("set-semantic-search").checked = draft.semanticSearchEnabled === true;
   input("set-short-memory").checked = draft.shortMemoryEnabled === true;
+  set("set-pet-movement", draft.petMovement === "stay" ? "stay" : "roam");
   if (petChoicesReady && panel === "pets") renderPetChoices(draft.petCharacterIds);
   set("set-embedding-endpoint", draft.embeddingEndpoint);
   set("set-embedding-key", draft.embeddingApiKey);
@@ -229,7 +305,7 @@ function renderProfile() {
 function renderPetChoices(selectedIds = []) {
   petChoicesReady = true;
   const selected = new Set(Array.isArray(selectedIds) ? selectedIds : []);
-  el.petChoices.replaceChildren(...PET_CATALOG.map((pet) => {
+  const choices = petCatalog.map((pet) => {
     const label = document.createElement("label");
     label.className = "pet-choice";
     const preview = document.createElement("span");
@@ -242,7 +318,20 @@ function renderPetChoices(selectedIds = []) {
     checkbox.checked = selected.has(pet.id);
     label.append(checkbox, preview, document.createTextNode(pet.name));
     return label;
-  }));
+  });
+  if (!choices.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No pet sheets found in resources/pets.";
+    choices.push(empty);
+  }
+  if ([...selected].some((id) => !petCatalog.some((pet) => pet.id === id))) {
+    const missing = document.createElement("p");
+    missing.className = "muted";
+    missing.textContent = "A selected pet is no longer available. Saving will remove it.";
+    choices.push(missing);
+  }
+  el.petChoices.replaceChildren(...choices);
 }
 function syncOptionalControls() {
   const thinking = input("set-reasoning-enabled").checked;
@@ -285,6 +374,7 @@ function capture() {
   draft.chatRecallEnabled = input("set-chat-recall").checked;
   draft.semanticSearchEnabled = input("set-semantic-search").checked;
   draft.shortMemoryEnabled = input("set-short-memory").checked;
+  draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.embeddingEndpoint = raw("set-embedding-endpoint").trim();
   draft.embeddingApiKey = raw("set-embedding-key").trim();
@@ -316,6 +406,8 @@ function resetPanel() {
     syncMemoryControls();
   } else if (panel === "pets") {
     draft.petCharacterIds = structuredClone(DEFAULT_SETTINGS.petCharacterIds);
+    draft.petMovement = DEFAULT_SETTINGS.petMovement;
+    set("set-pet-movement", draft.petMovement);
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
@@ -403,12 +495,162 @@ function feedback(message, error = false) {
 }
 function clearMessage() { if (el.message) el.message.textContent = ""; }
 
+function resetMigrationPanel() {
+  preparedMigration = null;
+  set("migration-note", "");
+  set("migration-mode", "reviewed");
+  input("migration-panel").hidden = true;
+  input("migration-preview").hidden = true;
+  input("migration-preview").textContent = "";
+  input("btn-publish-migration").hidden = true;
+}
+
+function resetContinuityEditor() {
+  editorState = editorPending = null;
+  editorDirty = false;
+  editorRows = [];
+  input("continuity-editor-body").hidden = true;
+  input("continuity-state-rows").replaceChildren();
+  set("continuity-new-record", "");
+  input("continuity-editor-status").textContent = "";
+}
+
+async function loadContinuityEditor() {
+  if (!state.sessionId) return;
+  const id = state.sessionId;
+  const body = input("continuity-editor-body");
+  const status = input("continuity-editor-status");
+  status.textContent = "Loading state…";
+  try {
+    const current = await getSession(id);
+    if (!current?.continuityEnabled) throw new Error("Select a continuity story.");
+    const { storyStore } = await import("../continuity/runtime.js");
+    const store = storyStore(id);
+    const branchId = current.continuityBranchId || "main";
+    const loaded = await store.load(branchId);
+    const pending = await store.readPending(branchId);
+    if (state.sessionId !== id) return;
+    editorState = { sessionId: id, branchId, revision: loaded.state.revision, records: loaded.state.records };
+    editorPending = pending?.status === "needs_state_review" ? pending : null;
+    editorDirty = false;
+    editorRows = [];
+    const operations = Array.isArray(editorPending?.proposal?.operations) ? editorPending.proposal.operations : [];
+    const suggested = new Map(operations
+      .filter((operation) => typeof operation?.record?.id === "string" &&
+        ["character", "relationship", "belief", "consequence", "scene", "agenda", "world_fact"].includes(operation.record.kind))
+      .map((operation) => [operation.record.id, operation.record]));
+    const saved = new Map(loaded.state.records.map((record) => [record.id, record]));
+    const ids = [...new Set([...saved.keys(), ...suggested.keys()])];
+    const tbody = input("continuity-state-rows");
+    tbody.replaceChildren();
+    for (const recordId of ids) {
+      const old = saved.get(recordId);
+      const proposal = suggested.get(recordId) ?? old;
+      const row = document.createElement("tr");
+      const label = document.createElement("th");
+      label.textContent = `${old?.kind ?? proposal.kind} · ${recordId}`;
+      const prior = document.createElement("td");
+      const priorText = document.createElement("pre");
+      priorText.textContent = old ? JSON.stringify(old.data, null, 2) : "New record";
+      prior.appendChild(priorText);
+      const next = document.createElement("td");
+      const field = document.createElement("textarea");
+      field.rows = 5;
+      field.setAttribute("aria-label", `Proposed ${recordId} data`);
+      field.value = JSON.stringify(proposal.data, null, 2);
+      field.addEventListener("input", () => { editorDirty = true; });
+      next.appendChild(field);
+      const proof = document.createElement("td");
+      const proofText = document.createElement("pre");
+      const operation = operations.find((item) => item?.record?.id === recordId);
+      proofText.textContent = JSON.stringify(operation
+        ? { reason: operation.reason, events: operation.eventIds, evidence: operation.evidence }
+        : { events: old?.eventIds ?? [], sources: old?.sources ?? [] }, null, 2);
+      proof.appendChild(proofText);
+      row.append(label, prior, next, proof);
+      tbody.appendChild(row);
+      editorRows.push({ id: recordId, kind: old?.kind ?? proposal.kind, field });
+    }
+    input("continuity-new-record").addEventListener("input", () => { editorDirty = true; }, { once: true });
+    set("continuity-new-record", "");
+    input("btn-repair-continuity").hidden = !editorPending;
+    input("btn-accept-continuity-proposal").hidden = !editorPending;
+    status.textContent = editorPending
+      ? `Narration saved; state needs review: ${editorPending.error || "Invalid state update"}`
+      : `Revision ${loaded.state.revision} · ${ids.length} records`;
+    body.hidden = false;
+  } catch (error) { status.textContent = "Could not load state: " + error.message; }
+}
+
+async function saveContinuityEditor() {
+  if (!editorState || saving || state.busy || state.sessionId !== editorState.sessionId) return;
+  saving = true;
+  const button = input("btn-save-continuity-editor");
+  button.disabled = true;
+  try {
+    const records = editorRows.map(({ id, kind, field }) => ({ id, kind, data: JSON.parse(field.value) }));
+    const extra = raw("continuity-new-record").trim();
+    if (extra) records.push(JSON.parse(extra));
+    if (new Set(records.map((record) => record.id)).size !== records.length)
+      throw new Error("Duplicate record ID in the editor.");
+    const { storyStore } = await import("../continuity/runtime.js");
+    const { saveManualState } = await import("../continuity/saver.js");
+    await saveManualState({ store: storyStore(editorState.sessionId), branchId: editorState.branchId,
+      records, pendingTurnId: editorPending?.turnId ?? null, expectedRevision: editorState.revision });
+    editorDirty = false;
+    await loadContinuityEditor();
+    feedback("Author correction saved.");
+  } catch (error) { feedback("State correction failed: " + error.message, true); }
+  finally { saving = false; button.disabled = false; }
+}
+
+async function repairContinuityEditor() {
+  if (!editorState || !editorPending || saving || state.busy || state.sessionId !== editorState.sessionId) return;
+  if (editorDirty) return feedback("Save your author corrections before requesting model repair.", true);
+  if (!state.settings?.modelId || !state.settings?.apiKey)
+    return feedback("Set a model and API key before requesting state repair.", true);
+  saving = true;
+  const button = input("btn-repair-continuity");
+  button.disabled = true;
+  try {
+    const { storyStore } = await import("../continuity/runtime.js");
+    const { repairSaverTurn } = await import("../continuity/saver.js");
+    await repairSaverTurn({ store: storyStore(editorState.sessionId), branchId: editorState.branchId,
+      turnId: editorPending.turnId, settings: structuredClone(state.settings) });
+    editorDirty = false;
+    await loadContinuityEditor();
+    feedback("Saved narration and repaired state.");
+  } catch (error) { feedback("State repair failed: " + error.message, true); }
+  finally { saving = false; button.disabled = false; }
+}
+
+async function acceptContinuityProposal() {
+  if (!editorState || !editorPending || saving || state.busy || state.sessionId !== editorState.sessionId) return;
+  if (editorDirty) return feedback("Use Save author correction to apply your edited values.", true);
+  saving = true;
+  const button = input("btn-accept-continuity-proposal");
+  button.disabled = true;
+  try {
+    const { storyStore } = await import("../continuity/runtime.js");
+    const { acceptSaverPending } = await import("../continuity/saver.js");
+    await acceptSaverPending({ store: storyStore(editorState.sessionId), branchId: editorState.branchId,
+      turnId: editorPending.turnId });
+    editorDirty = false;
+    await loadContinuityEditor();
+    feedback("Proposed story state accepted.");
+  } catch (error) { feedback("Could not accept state: " + error.message, true); }
+  finally { saving = false; button.disabled = false; }
+}
+
 function setContinuityStoryControls(enabled, nextOrder) {
   input("btn-enable-continuity").hidden = enabled || nextOrder > 0;
+  input("btn-open-migration").hidden = enabled || nextOrder === 0;
   input("btn-view-continuity").hidden = !enabled;
+  input("continuity-mode-controls").hidden = !enabled;
+  input("continuity-editor").hidden = !enabled;
   input("continuity-state-preview").hidden = true;
   input("continuity-setting-status").textContent = enabled ? "Character continuity is active" :
-    nextOrder > 0 ? "Existing stories need a reviewed migration before continuity can be enabled." : "";
+    nextOrder > 0 ? "Create a reviewed continuity copy to keep this transcript." : "";
   input("set-session-plan").disabled = enabled;
   input("set-session-memory").disabled = enabled;
   input("btn-clear-short-memory").disabled = enabled;
@@ -421,6 +663,8 @@ async function fillSession(event) {
     set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
     setContinuityStoryControls(false, 0);
     input("btn-enable-continuity").hidden = true;
+    resetMigrationPanel();
+    resetContinuityEditor();
     return;
   }
   const requestedId = state.sessionId;
@@ -430,6 +674,8 @@ async function fillSession(event) {
     set("set-session-title", ""); set("set-session-plan", ""); set("set-session-memory", "");
     setContinuityStoryControls(false, 0);
     input("btn-enable-continuity").hidden = true;
+    resetMigrationPanel();
+    resetContinuityEditor();
   } else if (sessionDirty()) return;
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
@@ -437,10 +683,14 @@ async function fillSession(event) {
     sessionId = requestedId;
     sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
       shortMemory: session?.shortMemory ?? "", nextOrder: session?.nextOrder ?? 0,
-      continuityEnabled: session?.continuityEnabled === true };
+      continuityEnabled: session?.continuityEnabled === true,
+      continuityMode: session?.continuityMode || "reviewed",
+      continuitySaverReviewEveryTurn: session?.continuitySaverReviewEveryTurn === true };
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
     set("set-session-memory", sessionOriginal.shortMemory);
+    set("set-continuity-mode", sessionOriginal.continuityMode);
+    input("set-saver-review-every-turn").checked = sessionOriginal.continuitySaverReviewEveryTurn;
     setContinuityStoryControls(sessionOriginal.continuityEnabled, sessionOriginal.nextOrder);
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
@@ -469,6 +719,69 @@ async function handleSaveSession() {
   } catch (error) { feedback("Save failed: " + error.message, true); }
   finally { saving = false; el.saveSession.disabled = false; }
 }
+
+async function handlePreviewMigration() {
+  if (!state.sessionId || saving || state.busy) return;
+  const sourceId = state.sessionId;
+  const note = raw("migration-note").trim();
+  if (!note) return feedback("Paste a reviewed author note first.", true);
+  if (!state.settings?.modelId || !state.settings?.apiKey)
+    return feedback("Set a model and API key before reviewing the migration.", true);
+  saving = true;
+  input("btn-preview-migration").disabled = true;
+  input("btn-publish-migration").hidden = true;
+  try {
+    const source = await getSession(sourceId);
+    if (!source || source.continuityEnabled) throw new Error("Select a standard story to migrate.");
+    const [{ getMessagesReadOnly }, { prepareContinuityMigration }] = await Promise.all([
+      import("../messages.js"), import("../continuity/migration.js"),
+    ]);
+    const legacyMessages = await getMessagesReadOnly(sourceId);
+    const prepared = await prepareContinuityMigration({ legacyMessages, authorNote: note,
+      settings: structuredClone(state.settings),
+      onStatus: (phase) => feedback(`Reviewing migration: ${phase.replaceAll("_", " ")}…`) });
+    if (state.sessionId !== sourceId || raw("migration-note").trim() !== note)
+      throw new Error("Story or migration note changed during review. Preview it again.");
+    preparedMigration = { sourceId, note, title: `${source.title || "Story"} (continuity)`, prepared };
+    const preview = input("migration-preview");
+    preview.textContent = JSON.stringify({
+      sourceMessages: prepared.sourceMessageCount,
+      skippedSummaries: prepared.skippedSummaryCount,
+      throughOrder: prepared.state.throughOrder,
+      records: prepared.state.records,
+      events: prepared.state.events,
+    }, null, 2);
+    preview.hidden = false;
+    input("btn-publish-migration").hidden = false;
+    feedback("Review the saved state below, then create the copy.");
+  } catch (error) {
+    preparedMigration = null;
+    feedback("Migration review failed: " + error.message, true);
+  } finally {
+    saving = false;
+    input("btn-preview-migration").disabled = false;
+  }
+}
+
+async function handlePublishMigration() {
+  const proposal = preparedMigration;
+  if (!proposal || proposal.sourceId !== state.sessionId ||
+      proposal.note !== raw("migration-note").trim() || saving || state.busy)
+    return feedback("Preview this migration again before creating a copy.", true);
+  saving = true;
+  input("btn-publish-migration").disabled = true;
+  try {
+    const { publishContinuityMigration } = await import("../continuity/migration-runtime.js");
+    const id = await publishContinuityMigration({ title: proposal.title,
+      sourceSessionId: proposal.sourceId, prepared: proposal.prepared,
+      continuityMode: raw("migration-mode") });
+    resetMigrationPanel();
+    document.dispatchEvent(new CustomEvent("session-imported", { detail: id }));
+    feedback("Continuity copy created and selected. Review its saved state before continuing.");
+  } catch (error) { feedback("Could not create continuity copy: " + error.message, true); }
+  finally { saving = false; input("btn-publish-migration").disabled = false; }
+}
+
 async function handleImport() {
   const file = input("file-import-st").files[0];
   input("file-import-st").value = "";

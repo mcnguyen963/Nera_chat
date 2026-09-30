@@ -16,7 +16,7 @@ import {
   mirrorFromActiveProfile,
   mirrorToActiveProfile,
 } from "../settings.js";
-import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement } from "./pet-view.js";
+import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 
 let msgUnsub = null;
 let sessUnsub = null;
@@ -46,7 +46,8 @@ function loadContinuity() {
     import("../continuity/runtime.js"),
     import("../continuity/turn-controller.js"),
     import("../continuity/store.js"),
-  ]).then(([runtime, controller, store]) => ({ ...runtime, ...controller, ...store }))
+    import("../continuity/saver.js"),
+  ]).then(([runtime, controller, store, saver]) => ({ ...runtime, ...controller, ...store, ...saver }))
     .catch((error) => { continuityModules = null; throw error; });
 }
 
@@ -355,6 +356,9 @@ function subscribeChat(sessionId) {
           session.longTermPlan !== previous.longTermPlan) {
         document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
       }
+      if (branchId && session?.continuityPendingTurnId !== previous?.continuityPendingTurnId)
+        void refreshPendingContinuity(sessionId, branchId);
+      updateWelcome();
       queueCacheSave();
     },
     (err) => console.error("Session listener error:", err)
@@ -377,9 +381,29 @@ async function subscribeContinuity(sessionId, branchId) {
       hasEarlier = latest.length === PAGE_SIZE;
       historyMessages = null;
       renderMessages(latest);
+      await refreshPendingContinuity(sessionId, branchId);
       updateIndicator();
     } catch (error) { showTransientError("Could not load continuity story: " + error.message); }
   }, (error) => showTransientError("Could not watch continuity story: " + error.message));
+}
+
+async function refreshPendingContinuity(sessionId, branchId) {
+  if (state.sessionId !== sessionId || watchedBranchId !== branchId) return;
+  const current = session?.continuityPendingTurnId;
+  const normal = lastMessages.filter((message) => !message.pendingSaver);
+  if (!current) {
+    if (normal.length !== lastMessages.length) renderMessages(normal);
+    return;
+  }
+  try {
+    const { storyStore } = await loadContinuity();
+    const pending = await storyStore(sessionId).readTurn(branchId, current);
+    if (state.sessionId !== sessionId || watchedBranchId !== branchId ||
+        session?.continuityPendingTurnId !== current) return;
+    if (pending?.status === "needs_state_review") renderMessages(mergeMessages(lastMessages.filter((message) => !message.pendingSaver), [
+      { ...pending.user, pendingSaver: true }, { ...pending.assistant, pendingSaver: true },
+    ]));
+  } catch (error) { showTransientError("Could not load pending narration: " + error.message); }
 }
 
 function subscribeLegacyMessages(sessionId) {
@@ -417,6 +441,9 @@ export function syncActiveSession(metadata) {
   if (session.title !== previous.title || session.longTermPlan !== previous.longTermPlan) {
     document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId: session.id, session } }));
   }
+  if (session.continuityEnabled && session.continuityPendingTurnId !== previous.continuityPendingTurnId)
+    void refreshPendingContinuity(session.id, session.continuityBranchId || "main");
+  updateWelcome();
   if (session.longTermPlan !== previous.longTermPlan ||
       session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
       session.breakpointOrder !== previous.breakpointOrder) updateIndicator();
@@ -534,7 +561,8 @@ function renderMessages(msgs) {
 
 function sameRenderedMessage(a, b) {
   return a.role === b.role && a.content === b.content && a.thinking === b.thinking &&
-    Boolean(a.editedAt) === Boolean(b.editedAt);
+    Boolean(a.editedAt) === Boolean(b.editedAt) && Boolean(a.pendingSaver) === Boolean(b.pendingSaver) &&
+    Boolean(a.audit) === Boolean(b.audit);
 }
 
 function updateWelcome() {
@@ -545,8 +573,8 @@ function updateWelcome() {
   if (newStory) newStory.hidden = Boolean(state.sessionId);
   document.getElementById("chat-tab")?.classList.toggle("is-empty", empty);
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
-  el.input.disabled = !state.sessionId;
-  el.sendBtn.disabled = busy || !state.sessionId;
+  el.input.disabled = !state.sessionId || Boolean(session?.continuityPendingTurnId);
+  el.sendBtn.disabled = busy || !state.sessionId || Boolean(session?.continuityPendingTurnId);
   el.mode.hidden = !session?.continuityEnabled;
   el.summarizeBtn.hidden = Boolean(session?.continuityEnabled);
   document.querySelectorAll('[data-action="summarize-full"], [data-action="reset-summary"]').forEach((item) => {
@@ -565,16 +593,19 @@ function renderMessage(m) {
   const label = document.createElement("span");
   label.textContent =
     m.role === "user" ? "You" : m.role === "author" ? "Author note" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
+  if (m.archived) label.textContent += " · history";
+  if (m.pendingSaver) label.textContent += " · needs state review";
+  if (m.audit) label.textContent += " · state correction";
   if (m.editedAt) label.textContent += " (edited)";
   meta.appendChild(label);
 
   const actions = document.createElement("span");
   actions.className = "msg-actions";
   actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
-  if (m.role === "user" || m.role === "author" || m.role === "assistant" || m.role === "summary") {
+  if (!m.archived && !m.pendingSaver && !m.audit && (m.role === "user" || m.role === "author" || m.role === "assistant" || m.role === "summary")) {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
-  actions.appendChild(actionBtn(session?.continuityEnabled ? "Rewind" : "Delete", "del", async () => {
+  if (!m.archived && !m.pendingSaver && !m.audit) actions.appendChild(actionBtn(session?.continuityEnabled ? "Rewind" : "Delete", "del", async () => {
     if (busy) return;
     if (!confirm(session?.continuityEnabled
       ? "Rewind to before this turn? Later turns will leave the active story."
@@ -593,7 +624,11 @@ function renderMessage(m) {
     if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
   }));
-  if (m.role === "assistant") {
+  if (m.role === "assistant" && m.pendingSaver) {
+    actions.appendChild(actionBtn("Review state", null, () =>
+      document.dispatchEvent(new CustomEvent("open-continuity-editor"))));
+  }
+  if (m.role === "assistant" && !m.archived && !m.pendingSaver) {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
       if (session?.continuityEnabled) void reviseContinuityTurn(m, "regenerate");
@@ -819,7 +854,7 @@ export const refreshContextIndicator = updateIndicator;
 
 async function handleSend(e) {
   e.preventDefault();
-  if (busy || !session || editingState) return;
+  if (busy || !session || editingState || session.continuityPendingTurnId) return;
   const text = el.input.value.trim();
   if (!text) return;
   const settings = structuredClone(state.settings);
@@ -858,9 +893,9 @@ async function handleSend(e) {
 }
 
 async function sendContinuityTurn(input, mode, options = {}) {
-  startPetTurn();
+  const petTurn = startPetTurn();
   try {
-    const { storyStore, runContinuityTurn, switchContinuityBranch } = await loadContinuity();
+    const { storyStore, runContinuityTurn, runSaverTurn, switchContinuityBranch } = await loadContinuity();
     const branchId = options.branchId ?? session.continuityBranchId ?? "main";
     const store = storyStore(session.id);
     const retry = !options.branchId && continuityRetry && continuityRetry.sessionId === session.id &&
@@ -868,32 +903,46 @@ async function sendContinuityTurn(input, mode, options = {}) {
       continuityRetry.mode === mode ? continuityRetry : null;
     const turnId = retry?.turnId ?? `turn_${crypto.randomUUID().replaceAll("-", "")}`;
     if (!options.branchId) continuityRetry = { sessionId: session.id, branchId, input, mode, turnId };
-    const receipt = await runContinuityTurn({ store, branchId,
+    const turnRunner = session.continuityMode === "saver" && options.draftOverride == null
+      ? runSaverTurn : runContinuityTurn;
+    const receipt = await turnRunner({ store, branchId,
       turnId, input,
       mode, settings: structuredClone(state.settings), stylePrompt: state.settings.continuityStylePrompt || "",
+      reviewEveryTurn: session.continuitySaverReviewEveryTurn === true,
       draftOverride: options.draftOverride ?? null,
       expectedActiveBranchId: options.previousBranchId ?? branchId,
-      onStatus: (phase) => setStatus({ building_context: "Building story context…",
+      onStatus: (phase) => {
+        updatePetPhase(phase === "generating" ? "writing" : "thinking", petTurn);
+        setStatus({ building_context: "Building story context…",
         generating: "Narrating…", reviewing: "Checking continuity…", repairing: "Repairing narration…",
-        saving: "Saving story…", accepted: "Story saved.", failed: "Story turn failed." }[phase] || phase, phase === "accepted") });
-    if (options.branchId) {
+        saving: "Saving story…", accepted: "Story saved.", failed: "Story turn failed.",
+        needs_state_review: "Narration saved. Review its state before continuing." }[phase] || phase, phase === "accepted"); } });
+    if (options.branchId && receipt.status !== "needs_state_review") {
       await switchContinuityBranch(session.id, options.previousBranchId, branchId, options.previousRevision);
     } else {
       const latest = await store.listMessages(branchId, Infinity, PAGE_SIZE);
-      renderMessages(latest);
+      renderMessages(receipt.status === "needs_state_review"
+        ? mergeMessages(latest, [{ ...receipt.user, pendingSaver: true },
+          { ...receipt.assistant, pendingSaver: true }]) : latest);
+      if (receipt.status === "needs_state_review") {
+        session = { ...session, continuityBranchId: branchId, continuityPendingTurnId: turnId };
+        updateWelcome();
+      }
       hasEarlier = latest.length === PAGE_SIZE;
       continuityRetry = null;
     }
-    finishPetTurn("ready");
+    finishPetTurn("ready", petTurn);
     return receipt;
   } catch (error) {
-    finishPetTurn("blocked");
+    finishPetTurn("blocked", petTurn);
     throw error;
   }
 }
 
 async function reviseContinuityTurn(message, action, replacement = null) {
   if (busy) return;
+  if (session?.continuityPendingTurnId)
+    return showTransientError("Resolve the pending Saver state before editing or rewinding another turn.");
   const activeSession = session;
   const priorBranch = activeSession.continuityBranchId || "main";
   setBusy(true);
@@ -923,7 +972,7 @@ async function reviseContinuityTurn(message, action, replacement = null) {
 async function runAssistantTurn(opts = {}) {
   const settings = structuredClone(state.settings);
   if (!settings) return;
-  startPetTurn();
+  const petTurn = startPetTurn();
   setBusy(true);
   try {
     startStreamUI();
@@ -952,9 +1001,10 @@ async function runAssistantTurn(opts = {}) {
     const { content, thinking } = await chatCompletion({
       settings,
       messages: apiMessages,
-      onDelta: (t) => { streamState && appendStream("content", t); },
-      onReasoning: (t) => { streamState && appendStream("thinking", t); },
+      onDelta: (t) => { updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
+      onReasoning: (t) => { updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
     });
+    updatePetPhase("saving", petTurn);
     streamState?.wrap.remove();
     streamState = null;
     refreshPetPlacement();
@@ -1020,8 +1070,8 @@ async function runAssistantTurn(opts = {}) {
       try {
         const r = await runSummarization(fresh, settings, {
           messages: historyMessages,
-          onDelta: ui.onDelta,
-          onReasoning: ui.onReasoning,
+          onDelta: (text) => { updatePetPhase("writing", petTurn); ui.onDelta(text); },
+          onReasoning: (text) => { updatePetPhase("thinking", petTurn); ui.onReasoning(text); },
         });
         applySummaryResult(r);
         setStatus(r.skipped ? r.reason : "Summary updated.", true);
@@ -1029,9 +1079,9 @@ async function runAssistantTurn(opts = {}) {
         ui.done();
       }
     }
-    finishPetTurn("ready");
+    finishPetTurn("ready", petTurn);
   } catch (err) {
-    finishPetTurn("blocked");
+    finishPetTurn("blocked", petTurn);
     streamState?.wrap.remove();
     streamState = null;
     refreshPetPlacement();
@@ -1084,21 +1134,21 @@ function streamSummaryUI(label) {
 
 async function handleSummarize() {
   if (busy || !session || session.continuityEnabled) return;
-  startPetTurn();
+  const petTurn = startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
   try {
     await ensureHistory();
     const r = await runSummarization(session, state.settings, {
       messages: historyMessages,
-      onDelta: ui.onDelta,
-      onReasoning: ui.onReasoning,
+      onDelta: (text) => { updatePetPhase("writing", petTurn); ui.onDelta(text); },
+      onReasoning: (text) => { updatePetPhase("thinking", petTurn); ui.onReasoning(text); },
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
-    finishPetTurn("ready");
+    finishPetTurn("ready", petTurn);
   } catch (err) {
-    finishPetTurn("blocked");
+    finishPetTurn("blocked", petTurn);
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
@@ -1116,7 +1166,7 @@ async function handleFullSummarize() {
     )
   )
     return;
-  startPetTurn();
+  const petTurn = startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
@@ -1124,17 +1174,17 @@ async function handleFullSummarize() {
     const r = await runSummarization(session, state.settings, {
       messages: historyMessages,
       full: true,
-      onDelta: ui.onDelta,
-      onReasoning: ui.onReasoning,
+      onDelta: (text) => { updatePetPhase("writing", petTurn); ui.onDelta(text); },
+      onReasoning: (text) => { updatePetPhase("thinking", petTurn); ui.onReasoning(text); },
       onProgress: (multi, i, total) => {
         if (multi) ui.setLabel(`Summarizing part ${i}/${total}…`);
       },
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
-    finishPetTurn("ready");
+    finishPetTurn("ready", petTurn);
   } catch (err) {
-    finishPetTurn("blocked");
+    finishPetTurn("blocked", petTurn);
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
@@ -1205,6 +1255,7 @@ function appendStream(kind, text) {
       if (streamState !== current) return;
       const sticky = isNearBottom();
       current.content.textContent = stripPlan(current.contentText);
+      invalidatePetLayout();
       current.thinkingBody.textContent = current.thinkingText.slice(-4000);
       if (sticky) scrollToEnd();
     });
@@ -1215,7 +1266,7 @@ function appendStream(kind, text) {
 
 function setBusy(b) {
   busy = state.busy = b;
-  el.sendBtn.disabled = b;
+  el.sendBtn.disabled = b || !state.sessionId || Boolean(session?.continuityPendingTurnId);
   el.summarizeBtn.disabled = b;
 }
 

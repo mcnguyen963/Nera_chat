@@ -31,12 +31,19 @@ export function prepareCommit(snapshot, pending, request) {
   validateReview(request.review, request);
   if (request.user.order !== snapshot.state.throughOrder + 1 || request.assistant.order !== request.user.order + 1 ||
       request.assistant.role !== "assistant") throw new Error("Invalid turn message order.");
-  const messages = [...snapshot.messages, request.user, request.assistant];
+  if (request.authorCorrection && (request.authorCorrection.role !== "author" ||
+      request.authorCorrection.order !== request.assistant.order + 1))
+    throw new Error("Invalid manual author correction order.");
+  const messages = [...snapshot.messages, request.user, request.assistant,
+    ...(request.authorCorrection ? [request.authorCorrection] : [])];
   if (new Set(messages.map((m) => m.id)).size !== messages.length) throw new Error("Duplicate message IDs.");
-  const state = applyContinuityPatch(snapshot.state, request.review.patch, { messages, throughOrder: request.assistant.order });
+  const state = applyContinuityPatch(snapshot.state, request.review.patch, { messages,
+    throughOrder: request.authorCorrection?.order ?? request.assistant.order,
+    currentAuthorOrder: request.authorCorrection?.order, currentInputOrder: request.user.order });
   const turn = { turnId: request.turnId, branchId: state.branchId, baseRevision: request.baseRevision,
     revision: state.revision, status: "accepted", user: request.user, assistant: request.assistant,
-    review: request.review, trace: request.trace ?? null };
+    review: request.review, authorCorrection: request.authorCorrection ?? null,
+    trace: pending.trace || request.trace ? { ...pending.trace, ...request.trace } : null };
   return { state, messages, turn };
 }
 
@@ -78,16 +85,33 @@ export function createMemoryStoryStore() {
       return structuredClone(branch(branchId).messages.filter((message) => wanted.has(message.id)));
     },
     async readTurn(branchId, turnId) { return structuredClone(branch(branchId).turns.get(turnId) ?? null); },
+    async readPending(branchId) {
+      return structuredClone([...branch(branchId).turns.values()].find((turn) => turn.status === "needs_state_review") ?? null);
+    },
     async beginTurn(request) {
       await verifyMessages([request.user]);
       const data = branch(request.branchId);
+      if ([...data.turns.values()].some((turn) => turn.status === "needs_state_review" && turn.turnId !== request.turnId))
+        throw new Error("Resolve the pending Saver turn before continuing.");
       const existing = data.turns.get(request.turnId);
       checkRetry(existing, request);
       if (existing?.status === "accepted") return acceptedReceipt(existing);
+      if (existing?.status === "needs_state_review")
+        throw new Error("Resolve the pending Saver turn before continuing.");
       if (data.state.revision !== request.baseRevision) throw new Error("Stale branch revision.");
       validate(id, request.turnId);
       data.turns.set(request.turnId, structuredClone({ ...request, status: "pending" }));
       return { status: "pending" };
+    },
+    async savePendingDraft(request, assistant, proposal, error, trace = null) {
+      const data = branch(request.branchId);
+      const pending = data.turns.get(request.turnId);
+      checkPending({ state: data.state }, pending, request);
+      if (pending.status === "accepted") throw new Error("Saver turn was resolved on another device.");
+      if (pending.status === "needs_state_review" && pending.assistant?.contentHash !== assistant.contentHash)
+        throw new Error("A different Saver draft is already pending.");
+      data.turns.set(request.turnId, structuredClone({ ...pending, expectedActiveBranchId: request.branchId, assistant,
+        proposal, trace, error: String(error).slice(0, 2000), status: "needs_state_review" }));
     },
     async commitTurn(request) {
       await verifyMessages([request.user, request.assistant]);
@@ -95,6 +119,8 @@ export function createMemoryStoryStore() {
       const existing = data.turns.get(request.turnId);
       checkRetry(existing, request);
       if (existing?.status === "accepted") return acceptedReceipt(existing);
+      if (existing?.assistant && existing.assistant.contentHash !== request.assistant.contentHash)
+        throw new Error("Pending narration changed during resolution.");
       const sourceIds = [...new Set(request.review.patch.events.flatMap((event) => event.sources.map((ref) => ref.messageId))
         .concat(request.review.patch.operations.flatMap((operation) => operation.sources.map((ref) => ref.messageId))))];
       const wanted = new Set(sourceIds);
@@ -108,7 +134,8 @@ export function createMemoryStoryStore() {
     },
     async failTurn(branchId, turnId, error) {
       const pending = branch(branchId).turns.get(turnId);
-      if (pending && pending.status !== "accepted") Object.assign(pending, { status: "failed", error: String(error).slice(0, 2000) });
+      if (pending && !["accepted", "needs_state_review"].includes(pending.status))
+        Object.assign(pending, { status: "failed", error: String(error).slice(0, 2000) });
     },
     async history(branchId) {
       const data = branch(branchId);
@@ -128,7 +155,10 @@ export async function forkAtRevision(store, sourceBranchId, revision, newBranchI
   let messages = structuredClone(initial.messages);
   for (const turn of turns.filter((t) => t.revision <= revision)) {
     messages.push(turn.user, turn.assistant);
-    state = applyContinuityPatch(state, turn.review.patch, { messages, throughOrder: turn.assistant.order });
+    if (turn.authorCorrection) messages.push(turn.authorCorrection);
+    state = applyContinuityPatch(state, turn.review.patch, { messages,
+      throughOrder: turn.authorCorrection?.order ?? turn.assistant.order,
+      currentAuthorOrder: turn.authorCorrection?.order, currentInputOrder: turn.user.order });
   }
   state.branchId = newBranchId;
   await store.initialize({ state, messages, parent: { branchId: sourceBranchId, revision } });

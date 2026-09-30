@@ -2,12 +2,18 @@ import { assertUsableState, createStoryState, verifyStateSources } from "./state
 import { verifyMessages, prepareCommit, acceptedReceipt, checkRetry } from "./store.js";
 import { validate, id } from "./schema.js";
 
-const MAX_DOCUMENT_BYTES = 250 * 1024;
+export const MAX_DOCUMENT_BYTES = 250 * 1024;
 const MAX_COMMIT_BYTES = 6 * 1024 * 1024;
 function bounded(value) {
   if (new TextEncoder().encode(JSON.stringify(value)).length > MAX_DOCUMENT_BYTES)
     throw new Error("Continuity document exceeds the scaffold storage limit.");
   return value;
+}
+export function validateInitialStoryStorage({ state, messages, parent = null }) {
+  bounded({ state, parent });
+  state.records.forEach(bounded);
+  state.events.forEach(bounded);
+  messages.forEach(bounded);
 }
 function metadata(state) {
   return { schemaVersion: state.schemaVersion, branchId: state.branchId, revision: state.revision,
@@ -36,9 +42,9 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       validate(id, initializationId);
       await verifyMessages(messages);
       verifyStateSources(state, messages);
-      const genesis = bounded({ state, parent });
+      validateInitialStoryStorage({ state, messages, parent });
+      const genesis = { state, parent };
       const initializationHash = await fingerprint({ state, messages, parent });
-      state.records.forEach(bounded); state.events.forEach(bounded); messages.forEach(bounded);
       const entries = [
         ...state.records.map((record) => ["records", record.id, record]),
         ...state.events.map((event) => ["events", event.id, event]),
@@ -99,6 +105,11 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       const result = await api.getDocFromServer(child(branchId, "turns", turnId));
       return result.exists() ? result.data() : null;
     },
+    async readPending(branchId) {
+      const active = await api.getDocFromServer(session);
+      const turnId = active.exists() ? active.data().continuityPendingTurnId : null;
+      return turnId ? store.readTurn(branchId, turnId) : null;
+    },
     async listMessages(branchId, beforeOrder = Infinity, pageSize = 100) {
       const constraints = [api.orderBy("order", "desc")];
       if (Number.isFinite(beforeOrder)) constraints.push(api.where("order", "<", beforeOrder));
@@ -128,20 +139,52 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
         const existing = run.exists() ? run.data() : null;
         checkRetry(existing, request);
         if (existing?.status === "accepted") return acceptedReceipt(existing);
+        if (existing?.status === "needs_state_review")
+          throw new Error("Resolve the pending Saver turn before continuing.");
         if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
             activeSession.data().continuityBranchId !== request.expectedActiveBranchId)
           throw new Error("The active story branch changed on another device.");
+        if (activeSession.data().continuityPendingTurnId &&
+            activeSession.data().continuityPendingTurnId !== request.turnId)
+          throw new Error("Resolve the pending Saver turn before continuing.");
         if (!head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
         tx.set(child(request.branchId, "turns", request.turnId), { ...request, status: "pending" });
         return { status: "pending" };
       });
     },
+    async savePendingDraft(request, assistant, proposal, error, trace = null) {
+      await verifyMessages([request.user, assistant]);
+      const pending = { ...request, expectedActiveBranchId: request.branchId, assistant, proposal, trace,
+        error: String(error).slice(0, 2000), status: "needs_state_review" };
+      bounded(pending);
+      await api.runTransaction(db, async (tx) => {
+        const active = await tx.get(session);
+        const head = await tx.get(root(request.branchId));
+        const turn = await tx.get(child(request.branchId, "turns", request.turnId));
+        if (!active.exists() || !active.data().continuityEnabled ||
+            active.data().continuityBranchId !== request.expectedActiveBranchId ||
+            (active.data().continuityPendingTurnId && active.data().continuityPendingTurnId !== request.turnId) ||
+            !head.exists() || head.data().revision !== request.baseRevision || !turn.exists())
+          throw new Error("Story changed while saving the pending Saver turn.");
+        checkRetry(turn.data(), request);
+        if (turn.data().status === "accepted")
+          throw new Error("Saver turn was resolved on another device.");
+        if (turn.data().assistant && turn.data().assistant.contentHash !== assistant.contentHash)
+          throw new Error("A different Saver draft is already pending.");
+        tx.set(child(request.branchId, "turns", request.turnId), pending);
+        tx.update(session, { continuityBranchId: request.branchId,
+          continuityPendingTurnId: request.turnId, updatedAt: api.serverTimestamp() });
+      });
+    },
     async commitTurn(request) {
-      await verifyMessages([request.user, request.assistant]);
+      await verifyMessages([request.user, request.assistant,
+        ...(request.authorCorrection ? [request.authorCorrection] : [])]);
       const pending = await store.readTurn(request.branchId, request.turnId);
       checkRetry(pending, request);
       if (pending?.status === "accepted") return acceptedReceipt(pending);
+      if (pending?.assistant && pending.assistant.contentHash !== request.assistant.contentHash)
+        throw new Error("Pending narration changed during resolution.");
       const snapshot = await store.load(request.branchId);
       const sourceIds = [...new Set(request.review.patch.events.flatMap((event) => event.sources.map((ref) => ref.messageId))
         .concat(request.review.patch.operations.flatMap((operation) => operation.sources.map((ref) => ref.messageId))))];
@@ -151,6 +194,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       const newEvents = prepared.state.events.filter((event) => request.review.patch.events.some((item) => item.id === event.id));
       const changedRecords = prepared.state.records.filter((record) => request.review.patch.operations.some((op) => op.record.id === record.id));
       const writes = [metadata(prepared.state), prepared.turn, request.user, request.assistant,
+        ...(request.authorCorrection ? [request.authorCorrection] : []),
         ...newEvents, ...changedRecords].map(bounded);
       const size = writes.reduce((bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length, 0);
       if (size > MAX_COMMIT_BYTES) throw new Error("Continuity turn exceeds the Firestore commit limit.");
@@ -164,12 +208,17 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
         if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
             activeSession.data().continuityBranchId !== request.expectedActiveBranchId)
           throw new Error("The active story branch changed on another device.");
+        if (activeSession.data().continuityPendingTurnId &&
+            activeSession.data().continuityPendingTurnId !== request.turnId)
+          throw new Error("Another Saver turn is awaiting state review.");
         if (!existing || !head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
         tx.set(root(request.branchId), metadata(prepared.state));
-        tx.update(session, { updatedAt: api.serverTimestamp() });
+        tx.update(session, { continuityPendingTurnId: null, updatedAt: api.serverTimestamp() });
         tx.set(child(request.branchId, "turns", request.turnId), prepared.turn);
-        for (const message of [request.user, request.assistant]) tx.set(child(request.branchId, "messages", message.id), bounded(message));
+        for (const message of [request.user, request.assistant,
+          ...(request.authorCorrection ? [request.authorCorrection] : [])])
+          tx.set(child(request.branchId, "messages", message.id), bounded(message));
         for (const event of newEvents)
           tx.set(child(request.branchId, "events", event.id), event);
         for (const record of changedRecords)
@@ -180,7 +229,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
     async failTurn(branchId, turnId, error) {
       await api.runTransaction(db, async (tx) => {
         const run = await tx.get(child(branchId, "turns", turnId));
-        if (run.exists() && run.data().status !== "accepted")
+        if (run.exists() && !["accepted", "needs_state_review"].includes(run.data().status))
           tx.update(child(branchId, "turns", turnId), { status: "failed", error: String(error).slice(0, 2000) });
       });
     },

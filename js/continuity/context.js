@@ -50,25 +50,27 @@ export function inputBudget(settings) {
 }
 
 export async function buildContinuityContext({ state, messages, input, mode = "player", characterIds = [],
-  settings, stylePrompt = "", tools = [], recentExchanges = 8, count = countTokens, upToOrder = Infinity }) {
+  settings, stylePrompt = "", tools = [], policy = TOOL_POLICY,
+  recentExchanges = 8, count = countTokens, upToOrder = Infinity }) {
   if (state.throughOrder >= upToOrder) throw new Error("Historical generation requires a state snapshot before the target. Fork first.");
   if (!["player", "author"].includes(mode) || typeof input !== "string" || !input.trim()) throw new Error("Invalid current input.");
   const recentCues = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) &&
       m.order <= state.throughOrder && m.order < upToOrder)
     .sort((a, b) => a.order - b.order).slice(-2).map((m) => m.content).join("\n");
   const selected = selectContinuity(state, `${input}\n${recentCues}`, characterIds);
-  const system = { role: "system", content: `${NARRATOR_CONTRACT}\n\n${TOOL_POLICY}` };
+  const system = { role: "system", content: NARRATOR_CONTRACT };
+  const policyMessage = { role: "system", content: policy };
   const current = { role: "user", content: JSON.stringify({ type: "current_turn", branchId: state.branchId,
     stateRevision: state.revision, mode, state: { records: selected.records, events: selected.events },
     stylePreferences: stylePrompt || "", playerInput: input }) };
   const budget = inputBudget(settings);
-  let apiMessages = [system, current];
+  let apiMessages = [system, policyMessage, current];
   let usedTokens = await requestTokenCount(apiMessages, tools, count);
   if (usedTokens > budget) throw new Error("The current input and essential character state exceed the context budget. Increase the budget or shorten the input.");
   const reference = { role: "user", content: JSON.stringify({ type: "application_reference",
     futurePossibilities: selected.futurePossibilities, focus: selected.focus }) };
-  if (selected.futurePossibilities.length && await requestTokenCount([system, reference, current], tools, count) <= budget)
-    apiMessages.splice(1, 0, reference);
+  if (selected.futurePossibilities.length && await requestTokenCount([system, policyMessage, reference, current], tools, count) <= budget)
+    apiMessages.splice(2, 0, reference);
   // Accepted exchanges are kept whole, newest first during budget selection.
   const history = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) && m.order <= state.throughOrder && m.order < upToOrder)
     .sort((a, b) => a.order - b.order);

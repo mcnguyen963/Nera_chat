@@ -93,6 +93,8 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       }
       const proposals = new Map(executor.proposals.map((proposal) => [proposal.agendaId, proposal]));
       for (const operation of review.patch.operations.filter((op) => op.record.kind === "agenda")) {
+        if (mode === "author" && operation.sources.some((source) =>
+          source.messageId === user.id && source.contentHash === user.contentHash)) continue;
         const proposal = proposals.get(operation.record.id);
         if (!proposal || operation.expectedVersion !== proposal.expectedVersion ||
             JSON.stringify(operation.record.data) !== JSON.stringify(proposal.agenda))

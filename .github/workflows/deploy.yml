@@ -35,6 +35,9 @@ jobs:
           };
           EOF
 
+      - name: List built-in pets
+        run: python3 scripts/generate-pet-manifest.py
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

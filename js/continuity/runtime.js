@@ -56,6 +56,8 @@ export async function switchContinuityBranch(sessionId, expectedBranchId, nextBr
     if (!current.exists() || !current.data().continuityEnabled ||
         current.data().continuityBranchId !== expectedBranchId)
       throw new Error("The active story branch changed on another device.");
+    if (current.data().continuityPendingTurnId)
+      throw new Error("Resolve the pending Saver turn before switching branches.");
     if (!next.exists() || next.data().status !== "ready")
       throw new Error("The revised story branch is unavailable.");
     if (!previous.exists() || previous.data().revision !== expectedRevision)

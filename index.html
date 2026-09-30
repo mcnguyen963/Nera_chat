@@ -241,6 +241,9 @@
                 <h2>Pets</h2>
                 <p class="muted">Choose one or more companions. When you choose several, one is picked at random for each reply.</p>
                 <div id="set-pet-choices" class="pet-choices"></div>
+                <label class="pet-movement-field">Movement<select id="set-pet-movement"><option value="roam">Explore the page</option><option value="stay">Stay beside Assistant</option></select></label>
+                <p class="muted">Tap your companion to play. Hold for options, or hold and drag to move it. Exploring pauses while menus are open.</p>
+                <button type="button" id="btn-restore-pet" class="btn small">Show hidden pet</button>
               </section>
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts</h2>
@@ -254,10 +257,31 @@
                 <h2>This story</h2>
                 <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
                 <div class="settings-actions"><button type="button" id="btn-enable-continuity" class="btn">Enable character continuity</button><span id="continuity-setting-status" class="muted"></span></div>
-                <p class="muted">Available before the first message. Adds reviewed character state and story event tracking to this story. Uses a second model request for each turn.</p>
+                <p class="muted">Available before the first message. Adds character state and story event tracking. Choose Reviewed for an independent model check or Saver for one request per turn.</p>
                 <p class="muted">After enabling it, choose “Author note” beside the composer to establish characters, relationships, and corrections. Use “In story” for your character's actions.</p>
+                <button type="button" id="btn-open-migration" class="btn small" hidden>Create continuity copy of this story</button>
+                <div id="migration-panel" hidden>
+                  <p class="muted">Your original story stays intact. Paste a note you reviewed against its transcript. Review sends the note and recent history to your configured model to build character state for a new copy; earlier messages remain read-only history.</p>
+                  <label class="full-label">Reviewed author note<textarea id="migration-note" rows="10" placeholder="Current canon, each character's knowledge and relationships, unresolved consequences, and current scene."></textarea></label>
+                  <label>Mode for the new story<select id="migration-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <div class="settings-actions"><button type="button" id="btn-preview-migration" class="btn">Review migration state</button><button type="button" id="btn-publish-migration" class="btn primary" hidden>Create continuity copy</button></div>
+                  <pre id="migration-preview" class="continuity-state-preview" hidden></pre>
+                </div>
                 <button type="button" id="btn-view-continuity" class="btn small" hidden>View saved story state</button>
                 <pre id="continuity-state-preview" class="continuity-state-preview" hidden></pre>
+                <div id="continuity-mode-controls" hidden>
+                  <label>Continuity mode<select id="set-continuity-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <label><input type="checkbox" id="set-saver-review-every-turn" /> Review every Saver turn before saving its state</label>
+                  <p class="muted">Saver saves narration and state together. If state needs review, the next turn waits until you resolve it.</p>
+                </div>
+                <div id="continuity-editor" hidden>
+                  <div class="settings-actions"><button type="button" id="btn-load-continuity-editor" class="btn small">Edit character and story state</button><span id="continuity-editor-status" class="muted"></span></div>
+                  <div id="continuity-editor-body" hidden>
+                    <div class="continuity-table-wrap"><table class="continuity-state-table"><thead><tr><th>Record</th><th>Saved value</th><th>Proposed value</th><th>Evidence</th></tr></thead><tbody id="continuity-state-rows"></tbody></table></div>
+                    <label class="full-label">Add a record (JSON with id, kind, data)<textarea id="continuity-new-record" rows="4"></textarea></label>
+                    <div class="settings-actions"><button type="button" id="btn-accept-continuity-proposal" class="btn primary" hidden>Accept proposed state</button><button type="button" id="btn-save-continuity-editor" class="btn">Save author correction</button><button type="button" id="btn-repair-continuity" class="btn" hidden>Ask LLM to repair state</button></div>
+                  </div>
+                </div>
                 <label class="full-label">Story notes &amp; long-term plan<textarea id="set-session-plan" rows="8"></textarea></label>
                 <label class="full-label">Short memory<textarea id="set-session-memory" rows="6" placeholder="Current scene, immediate goals, and unresolved beats"></textarea></label>
                 <p class="muted">Saved per story. Used and refreshed only when Short memory is enabled.</p>

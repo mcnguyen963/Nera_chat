@@ -78,7 +78,7 @@ export function assertUsableState(state) {
 // Pure reducer. Absence from a patch means unchanged, including old grievances.
 // Source checks validate provenance, not semantic entailment; the reviewer is
 // responsible for judging whether a quoted development justifies the change.
-export function applyContinuityPatch(state, patch, { messages, throughOrder }) {
+export function applyContinuityPatch(state, patch, { messages, throughOrder, currentAuthorOrder, currentInputOrder }) {
   assertUsableState(state);
   validate(PATCH_SCHEMA, patch);
   if (patch.branchId !== state.branchId || patch.baseRevision !== state.revision)
@@ -86,14 +86,15 @@ export function applyContinuityPatch(state, patch, { messages, throughOrder }) {
   if (!Number.isSafeInteger(throughOrder) || throughOrder < state.throughOrder ||
       (throughOrder === state.throughOrder && state.revision !== 0))
     throw new Error("Cannot apply a turn to an earlier state. Fork first.");
-  const inputOrder = throughOrder === 0 ? 0 : throughOrder - 1;
+  const inputOrder = currentInputOrder ?? (throughOrder === 0 ? 0 : throughOrder - 1);
+  const authorOrder = currentAuthorOrder ?? inputOrder;
   const next = structuredClone(state);
   const newIds = new Set();
   for (const event of patch.events) {
     if (newIds.has(event.id) || next.events.some((item) => item.id === event.id)) throw new Error("Duplicate event ID.");
     checkSources(event.sources, messages);
     if (["author_setup", "author_correction"].includes(event.kind) &&
-        !currentEvidence(event.sources, messages, "author", inputOrder))
+        !currentEvidence(event.sources, messages, "author", authorOrder))
       throw new Error("An author event requires the current explicit author input.");
     if (["outcome", "observation"].includes(event.kind) &&
         !event.sources.some((ref) => messages.some((m) => m.id === ref.messageId && m.revision === ref.revision &&
@@ -127,7 +128,7 @@ export function applyContinuityPatch(state, patch, { messages, throughOrder }) {
       return entities.some((entityId) => (state.records.some((record) => record.kind === "character" && record.id === entityId) ||
         (incoming.kind === "character" && incoming.id === entityId)) && !event.entityIds.includes(entityId));
     })) throw new Error("Event evidence does not identify every character in " + incoming.id);
-    const isAuthor = currentEvidence(op.sources, messages, "author", inputOrder);
+    const isAuthor = currentEvidence(op.sources, messages, "author", authorOrder);
     if (old?.kind === "character") {
       const baseline = ["name", "aliases", "controller", "personality", "background", "voice"];
       if (!isAuthor && baseline.some((key) => JSON.stringify(old.data[key]) !== JSON.stringify(incoming.data[key])))

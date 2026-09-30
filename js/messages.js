@@ -155,6 +155,16 @@ export async function getMessages(sessionId) {
   return flatten(await getDocsFromServer(query(chunksCol(sessionId), orderBy("firstOrder", "asc"))));
 }
 
+// Migration previews must not upgrade or otherwise write to the source story.
+export async function getMessagesReadOnly(sessionId) {
+  const session = await getDocFromServer(sessionRef(sessionId));
+  if (!session.exists()) throw new Error("Source story no longer exists.");
+  if (session.data().storageVersion === 2)
+    return flatten(await getDocsFromServer(query(chunksCol(sessionId), orderBy("firstOrder", "asc"))));
+  const old = await getDocsFromServer(query(legacyMessagesCol(sessionId), orderBy("order", "asc")));
+  return old.docs.map((item) => ({ id: item.id, ...item.data() }));
+}
+
 export async function getMessagesAfterOrder(sessionId, breakpointOrder) {
   await ensureChunked(sessionId);
   const snap = await getDocsFromServer(query(

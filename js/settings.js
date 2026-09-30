@@ -8,6 +8,7 @@ import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { state } from "./state.js";
 import { DEFAULT_NARRATOR_PROMPT, DEFAULT_SUMMARIZER_PROMPT } from "./default-prompts.js";
+import { DEFAULT_CONTINUITY_STYLE_PROMPT } from "./continuity/prompts.js";
 
 const LEGACY_DEFAULT_NARRATOR_PROMPT =
   "You are the narrator of an interactive, ongoing story. Drive the plot forward, " +
@@ -61,12 +62,13 @@ export const DEFAULT_SETTINGS = {
   embeddingModelId: "",
   shortMemoryEnabled: false,
   petCharacterIds: [],
+  petMovement: "roam",
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
   summarizerMaxTokens: 100000,
   summarizerChunkTokens: 250000,
   narratorSystemPrompt: DEFAULT_NARRATOR_PROMPT,
-  continuityStylePrompt: "",
+  continuityStylePrompt: DEFAULT_CONTINUITY_STYLE_PROMPT,
   summarizerSystemPrompt: DEFAULT_SUMMARIZER_PROMPT,
 };
 

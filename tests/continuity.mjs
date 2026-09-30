@@ -6,6 +6,8 @@ import { createMemoryStoryStore, forkAtRevision } from "../js/continuity/store.j
 import { createFirestoreStoryStore } from "../js/continuity/firestore-store.js";
 import { createStoryTools, NARRATOR_TOOLS, runNarratorTools } from "../js/continuity/tools.js";
 import { runContinuityTurn } from "../js/continuity/turn-controller.js";
+import { prepareContinuityMigration } from "../js/continuity/migration.js";
+import { runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody } from "../js/llm-client.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
@@ -106,7 +108,9 @@ test("historical author notes stay marked as author instructions in narrator con
   state.throughOrder = 2;
   const built = await buildContinuityContext({ state, messages: [author, assistant],
     input: "I speak to her.", settings: settings(), count });
-  assert.deepEqual(JSON.parse(built.apiMessages[1].content),
+  assert.equal(built.apiMessages[0].role, "system");
+  assert.equal(built.apiMessages[1].role, "system");
+  assert.deepEqual(JSON.parse(built.apiMessages[2].content),
     { type: "author_note", content: "A distrusts the player." });
   assert.equal(built.selection.records.some((record) => record.id === "rel_A_player"), true);
 });
@@ -388,4 +392,238 @@ test("an author note cannot succeed without saving any story state", async () =>
     input: "A is cheerful but distrusts the player because they killed her mother.",
     mode: "author", settings: settings(), complete, count }), /no saved story state/);
   assert.equal((await store.load("main")).state.revision, 0);
+});
+
+test("migration keeps old dialogue as archive and saves hostile character state from a reviewed note", async () => {
+  const note = "A is normally cheerful. The player killed A's mother. A knows the player killed her mother and deeply distrusts them. A may ask for accountability later.";
+  const legacyMessages = [
+    { id: "old1", order: 1, role: "user", content: "I enter the village." },
+    { id: "old2", order: 2, role: "assistant", content: "A watches from the doorway." },
+    { id: "summary", order: 3, role: "summary", content: "Story so far..." },
+  ];
+  const complete = async (request) => {
+    assert.equal(request.tools, undefined);
+    const packet = JSON.parse(request.messages[1].content);
+    const author = packet.sources.find((source) => source.role === "author");
+    const ref = { messageId: author.id, revision: author.revision,
+      contentHash: author.contentHash, quote: "The player killed A's mother." };
+    const event = { id: "death_setup", kind: "author_setup", description: "The player killed A's mother; A knows it.",
+      entityIds: ["char_A", "player"], sources: [ref], supersedes: [] };
+    const character = (id, name, controller) => ({ id, kind: "character", data: {
+      name, aliases: [], controller, personality: id === "char_A" ? "Normally cheerful." : "",
+      background: "", voice: "", emotion: "", condition: "", goals: [], intentions: [],
+    } });
+    const records = [character("char_A", "A", "narrator"), character("player", "Player", "player"),
+      { id: "rel_A_player", kind: "relationship", data: { from: "char_A", to: "player",
+        trust: "deep distrust", affection: "", hostility: "strong", boundaries: [] } },
+      { id: "grievance_A", kind: "consequence", data: { holder: "char_A", target: "player",
+        category: "grievance", description: "The player killed A's mother.", status: "open" } },
+      { id: "belief_A", kind: "belief", data: { holder: "char_A", proposition: "The player killed A's mother.",
+        stance: "knows", acquisition: "Established by author; method unspecified." } },
+      { id: "agenda_A", kind: "agenda", data: { direction: "A may ask for accountability later.",
+        participants: ["char_A", "player"], prerequisites: ["A chooses to raise it."],
+        opportunity: "A speaks when ready.", status: "available", origin: "author" } },
+    ];
+    const operations = records.map((record) => ({ type: "put_record", record, expectedVersion: 0,
+      reason: "Reviewed migration note.", eventIds: [event.id], sources: [ref] }));
+    return { finishReason: "stop", content: JSON.stringify(review("main", 0, packet.turnId, [event], operations)) };
+  };
+  const prepared = await prepareContinuityMigration({ legacyMessages, authorNote: note,
+    settings: settings(), complete, count });
+  assert.equal(prepared.sourceMessageCount, 2);
+  assert.equal(prepared.skippedSummaryCount, 1);
+  assert.deepEqual(prepared.messages.slice(0, 2).map((message) => message.content),
+    ["I enter the village.", "A watches from the doorway."]);
+  assert.equal(prepared.messages.every((message) => message.archived), true);
+  assert.equal(prepared.state.throughOrder, 4);
+  assert.equal(prepared.state.records.find((record) => record.id === "rel_A_player").data.trust, "deep distrust");
+  assert.equal(prepared.state.records.find((record) => record.id === "grievance_A").data.status, "open");
+  assert.equal(prepared.state.records.find((record) => record.id === "agenda_A").data.origin, "author");
+});
+
+test("migration rejects a message too large for continuity storage before calling a model", async () => {
+  let calls = 0;
+  await assert.rejects(prepareContinuityMigration({
+    legacyMessages: [{ id: "large", order: 1, role: "assistant", content: "x".repeat(260 * 1024) }],
+    authorNote: "The scene is ongoing.", settings: settings(), count,
+    complete: async () => { calls++; throw new Error("Model should not run."); },
+  }), /exceeds continuity storage limits/);
+  assert.equal(calls, 0);
+});
+
+test("migration refuses state derived only from the unreviewed old narration", async () => {
+  const complete = async (request) => {
+    const packet = JSON.parse(request.messages[1].content);
+    const old = packet.sources.find((source) => source.id === "legacy_1");
+    const ref = { messageId: old.id, revision: old.revision, contentHash: old.contentHash,
+      quote: "A waits by the door." };
+    const event = { id: "old_scene", kind: "observation", description: "A waits by the door.",
+      entityIds: ["char_A"], sources: [ref], supersedes: [] };
+    const record = { id: "char_A", kind: "character", data: { name: "A", aliases: [],
+      controller: "narrator", personality: "", background: "", voice: "", emotion: "",
+      condition: "", goals: [], intentions: [] } };
+    const operation = { type: "put_record", record, expectedVersion: 0,
+      reason: "Copied from old narration.", eventIds: [event.id], sources: [ref] };
+    return { finishReason: "stop", content: JSON.stringify(review("main", 0, packet.turnId,
+      [event], [operation])) };
+  };
+  await assert.rejects(prepareContinuityMigration({
+    legacyMessages: [{ id: "old", order: 1, role: "assistant", content: "A waits by the door." }],
+    authorNote: "A is present.", settings: settings(), complete, count,
+  }), /must cite the reviewed author note/);
+});
+
+test("Saver makes one model request and commits an ordinary turn without tools", async () => {
+  const { store } = await hostileMotherStory();
+  let calls = 0;
+  const receipt = await runSaverTurn({ store, branchId: "main", turnId: "saver_normal",
+    input: "I ask A about the weather.", settings: settings(), count,
+    complete: async (request) => {
+      calls++;
+      assert.equal(request.tools, undefined);
+      assert.equal(request.messages[0].role, "system");
+      assert.equal(request.messages[1].role, "system");
+      return { finishReason: "stop", content: JSON.stringify({
+        narration: "A keeps her distance and answers curtly.", events: [], operations: [],
+      }) };
+    } });
+  assert.equal(calls, 1);
+  assert.equal(receipt.status, "accepted");
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === "rel_A_player").data.trust,
+    "deep distrust");
+});
+
+test("Saver keeps suspect relationship narration pending until the author edits its state", async () => {
+  const { store } = await hostileMotherStory();
+  const old = (await store.load("main")).state.records.find((r) => r.id === "rel_A_player");
+  const changed = { id: old.id, kind: old.kind, data: { ...old.data, trust: "friendly" } };
+  const proposal = { narration: "A smiles and says she forgives the player.",
+    events: [{ id: "quick_forgiveness", kind: "outcome", description: "A forgives the player.",
+      entityIds: ["char_A", "player"], evidence: [{ from: "narration", quote: "A smiles and says she forgives the player." }],
+      supersedes: [] }],
+    operations: [{ record: changed, reason: "A said she forgave the player.",
+      eventIds: ["quick_forgiveness"], evidence: [{ from: "narration", quote: "A smiles and says she forgives the player." }] }] };
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "saver_suspect",
+    input: "I wave to A.", settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify(proposal) }) });
+  assert.equal(result.status, "needs_state_review");
+  await store.failTurn("main", "saver_suspect", "Late generation callback failed");
+  assert.equal((await store.readPending("main")).status, "needs_state_review");
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === old.id).data.trust, "deep distrust");
+  await assert.rejects(runSaverTurn({ store, branchId: "main", turnId: "another_turn",
+    input: "I leave.", settings: settings(), count,
+    complete: async () => { throw new Error("No model call expected"); } }), /pending Saver turn/);
+  const current = await store.load("main");
+  await saveManualState({ store, branchId: "main", pendingTurnId: "saver_suspect",
+    records: current.state.records.map((r) => ({ id: r.id, kind: r.kind, data: r.data })) });
+  const after = await store.load("main");
+  assert.equal(after.state.throughOrder, result.assistant.order);
+  assert.equal(after.state.records.find((r) => r.id === old.id).data.trust, "deep distrust");
+  assert.equal((await store.readPending("main")), null);
+});
+
+test("Saver can require user approval of every valid turn", async () => {
+  const { store } = await hostileMotherStory();
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "saver_reviewed",
+    input: "I wait.", reviewEveryTurn: true, settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A watches from the doorway.", events: [], operations: [],
+    }) }) });
+  assert.equal(result.status, "needs_state_review");
+  const accepted = await acceptSaverPending({ store, branchId: "main", turnId: result.turnId });
+  assert.equal(accepted.status, "accepted");
+  assert.equal((await store.readPending("main")), null);
+});
+
+test("manual Saver corrections carry author provenance through branch replay", async () => {
+  const { store } = await hostileMotherStory();
+  const pending = await runSaverTurn({ store, branchId: "main", turnId: "manual_pending",
+    input: "I wait.", reviewEveryTurn: true, settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A stands silently.", events: [], operations: [],
+    }) }) });
+  const before = await store.load("main");
+  const records = before.state.records.map((r) => ({ id: r.id, kind: r.kind,
+    data: r.id === "char_A" ? { ...r.data, personality: "Cheerful with friends; guarded with strangers." } : r.data }));
+  await saveManualState({ store, branchId: "main", records, expectedRevision: before.state.revision,
+    pendingTurnId: pending.turnId });
+  const after = await store.load("main");
+  const corrected = after.state.records.find((r) => r.id === "char_A");
+  assert.equal(corrected.sources[0].messageId, "manual_pending_author");
+  assert.equal(after.messages.at(-1).role, "author");
+  assert.equal(after.messages.at(-1).audit, true);
+  const fork = await forkAtRevision(store, "main", after.state.revision, "manual_fork");
+  assert.equal(fork.state.records.find((r) => r.id === "char_A").data.personality, corrected.data.personality);
+  assert.equal(fork.state.throughOrder, after.state.throughOrder);
+  await assert.rejects(saveManualState({ store, branchId: "main", records,
+    expectedRevision: before.state.revision }), /changed on another device/);
+});
+
+test("explicit Saver repair uses one reviewer request and keeps the saved narration", async () => {
+  const { store } = await hostileMotherStory();
+  const pending = await runSaverTurn({ store, branchId: "main", turnId: "repair_pending",
+    input: "I wait.", reviewEveryTurn: true, settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A refuses to approach.", events: [], operations: [],
+    }) }) });
+  let calls = 0;
+  const receipt = await repairSaverTurn({ store, branchId: "main", turnId: pending.turnId,
+    settings: settings(), count, complete: async (request) => {
+      calls++;
+      assert.equal(request.tools, undefined);
+      const packet = JSON.parse(request.messages[1].content);
+      assert.equal(packet.narration, "A refuses to approach.");
+      return { finishReason: "stop", content: JSON.stringify(review("main", 1, pending.turnId)) };
+    } });
+  assert.equal(calls, 1);
+  assert.equal(receipt.assistant.content, pending.assistant.content);
+  assert.equal((await store.readPending("main")), null);
+});
+
+test("Firestore reload preserves a pending Saver turn and clears its lock atomically on approval", async () => {
+  const documents = new Map();
+  const snap = (path) => ({ exists: () => documents.has(path), data: () => structuredClone(documents.get(path)) });
+  const api = {
+    doc: (_db, ...parts) => parts.join("/"), collection: (_db, ...parts) => parts.join("/"),
+    query: (target) => target, orderBy: () => null, limit: () => null,
+    getDocFromServer: async (path) => snap(path),
+    getDocsFromServer: async (path) => ({ docs: [...documents.keys()]
+      .filter((key) => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/"))
+      .map((key) => ({ data: () => structuredClone(documents.get(key)) })) }),
+    serverTimestamp: () => "now",
+    runTransaction: async (_db, callback) => {
+      const changes = [];
+      const result = await callback({ get: async (path) => snap(path),
+        set: (path, data) => changes.push([path, data]),
+        update: (path, data) => changes.push([path, { ...documents.get(path), ...data }]) });
+      changes.forEach(([path, data]) => documents.set(path, structuredClone(data)));
+      return result;
+    },
+    writeBatch: () => {
+      const changes = [];
+      return { set: (path, data) => changes.push([path, data]),
+        commit: async () => changes.forEach(([path, data]) => documents.set(path, structuredClone(data))) };
+    },
+  };
+  const sessionPath = "users/u/sessions/s";
+  documents.set(sessionPath, { continuityEnabled: true, continuityBranchId: "main" });
+  const { state, setup } = await hostileMotherStory();
+  const createStore = () => createFirestoreStoryStore({ api, db: {}, uid: "u", sessionId: "s" });
+  const store = createStore();
+  await store.initialize({ state, messages: [setup], initializationId: "init_pending" });
+  const pending = await runSaverTurn({ store, branchId: "main", turnId: "persisted_pending",
+    input: "I wait.", reviewEveryTurn: true, settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A remains distant.", events: [], operations: [],
+    }) }) });
+  const reloaded = createStore();
+  assert.equal((await reloaded.readPending("main")).assistant.content, "A remains distant.");
+  assert.equal((await reloaded.load("main")).state.revision, 1);
+  assert.equal(documents.get(sessionPath).continuityPendingTurnId, pending.turnId);
+  const another = await sourceMessage({ id: "another_user", role: "user", content: "Continue.", order: 1 });
+  await assert.rejects(reloaded.beginTurn({ branchId: "main", expectedActiveBranchId: "main",
+    turnId: "another", baseRevision: 1, user: another }), /pending Saver turn/);
+  await acceptSaverPending({ store: reloaded, branchId: "main", turnId: pending.turnId });
+  assert.equal(documents.get(sessionPath).continuityPendingTurnId, null);
+  assert.equal((await createStore().load("main")).state.revision, 2);
 });

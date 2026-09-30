@@ -44,7 +44,8 @@ function newId(prefix) {
 export async function listSessions() {
   const q = query(sessionsCol(), orderBy("updatedAt", "desc"));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+    .filter((session) => session.migrationStatus !== "staging");
 }
 
 export async function getSession(sessionId) {
@@ -52,7 +53,7 @@ export async function getSession(sessionId) {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
-export async function createSession(title) {
+export async function createSession(title, options = {}) {
   const id = newId("sess");
   const data = {
     title: title || "New Session",
@@ -63,6 +64,9 @@ export async function createSession(title) {
     shortMemoryThroughOrder: 0,
     continuityEnabled: false,
     continuityBranchId: null,
+    continuityMode: "reviewed",
+    continuitySaverReviewEveryTurn: false,
+    continuityPendingTurnId: null,
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1
@@ -70,6 +74,7 @@ export async function createSession(title) {
     activeChunkId: null,
     activeChunkBytes: 0,
     activeChunkCount: 0,
+    ...(options.migrationStatus === "staging" ? { migrationStatus: "staging" } : {}),
   };
   await setDoc(sessionDoc(id), data);
   return id;
@@ -110,7 +115,8 @@ export function subscribeSessions(callback, onError) {
   return onSnapshot(
     q,
     // Map the QuerySnapshot to plain objects — the UI expects an array of sessions.
-    (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((session) => session.migrationStatus !== "staging")),
     onError
   );
 }

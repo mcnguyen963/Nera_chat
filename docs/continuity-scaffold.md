@@ -2,8 +2,8 @@
 
 The continuity pipeline is available in the chat UI as a per-story option. It is
 off by default and can be enabled in Settings → This story before the first
-message. Existing stories retain their original pipeline until a reviewed
-transcript migration is built.
+message. Existing stories can create a separate continuity copy after a reviewed
+author note is converted into structured state. The original story remains intact.
 
 ## Verified current-system audit
 
@@ -15,7 +15,7 @@ transcript migration is built.
 | Short memory | `context-builder.js` can prepend `session.shortMemory` when enabled. It can repeat the summary or omit durable relationship consequences. | Do not feed it in the new path. Character/relationship records replace its role as mutable state. |
 | Chat recall | The optional recall module fetches selected earlier messages when enabled. Useful for exact callbacks, but retrieval does not determine who knows the retrieved fact. | Keep optional for narrative quotations and details; retrieved material remains evidence and does not update beliefs by itself. |
 | Recent-message window | The context builder takes whole messages newest-first for fitting, then restores chronology. | Keep the bounded-window idea; new selection also injects all compact active-character state before history. |
-| Tool use | The existing narrator request sends only messages. The new `llm-client.js` accepts optional API `tools`, `tool_choice`, and `response_format`. | Use API tools for retrieval and proposed agenda edits. Put tool-use policy in the system contract; keep tool definitions in the request's `tools` field. |
+| Tool use | The existing narrator request sends only messages. The new `llm-client.js` accepts optional API `tools`, `tool_choice`, and `response_format`. | Reviewed mode uses API tools for retrieval and agenda proposals. Tool instructions are an independent system message; tool definitions stay in the request's `tools` field. |
 
 These are code findings from `js/context-builder.js`, `js/plan-parser.js`,
 `js/ui/chat-view.js`, `js/short-memory.js`, `js/chat-recall.js`, and
@@ -39,6 +39,47 @@ Calls to the LLM run outside Firestore transaction callbacks. Tool effects are
 read-only, except plan updates, which remain proposals until the reviewer returns
 an accepted record update.
 
+## Saver mode
+
+The complete default prompt collection is in [prompts/README.md](../prompts/README.md),
+including separate narrator, tool-use, Saver, reviewer, prose-style, and transcript
+migration instructions. Runtime exports are rebuilt with
+`node js/continuity/build-prompts.mjs`; tool and output policies remain independent
+system messages. The legacy narrator's plan-tag rules are not used by this path.
+
+Settings → This story → Continuity mode selects **Reviewed** (the default) or
+**Saver** for future turns. Saver makes one model request with no callable tools,
+no automatic model repair, and no separate short-memory or summary request. The
+response contains visible narration and proposed event/record changes. Evidence
+uses short `input`/`narration` labels; the app supplies source hashes and versions.
+Only narration is shown in Chat. Local validation checks the patch before saving.
+
+Saver normally saves valid turns automatically. **Review every Saver turn** is an
+optional per-story checkbox, off by default. Validation failures and changes to
+an open grievance, promise, loyalty, conflict, or associated relationship save the
+narration as a pending turn. That does not prove the prose is wrong: the local
+validator cannot judge every semantic contradiction. Saver has less independent
+checking than Reviewed mode, and it does not promise half the tokens or cost.
+
+A pending narration and its proposal are stored durably in the turn document.
+The accepted state remains unchanged, and a session lock blocks the next turn,
+including on another device. Chat labels the reply **needs state review** and
+offers **Review state**. The state table is also available at any time in Settings.
+It shows saved/proposed values and evidence. **Accept proposed state** validates
+and commits the existing proposal without another model request. **Save author
+correction** records explicit manual edits and their source note. **Ask LLM to
+repair state** makes one additional reviewer request using the saved narration;
+it never regenerates narration or retries automatically. Failed repairs keep the
+pending turn available. Invalid JSON without identifiable narration cannot be
+saved as a pending reply.
+
+Manual edits use the same event/provenance checks and branch transactions as model
+updates. An author correction attached to pending narration is stored as an audit
+source after that reply and replayed with the turn. The table rejects stale
+revisions. A Saver draft on an edited branch activates that provisional branch
+and locks it for resolution; the original branch remains available in storage.
+Request usage is stored in turn traces, including pending turns and explicit repair.
+
 ## Exact per-turn message order
 
 The narrator request is assembled in this order. The current player input is
@@ -46,7 +87,8 @@ always last, and old exchanges are kept whole and chronological.
 
 ```js
 [
-  { role: "system", content: NARRATOR_CONTRACT + TOOL_POLICY },
+  { role: "system", content: NARRATOR_CONTRACT },
+  { role: "system", content: TOOL_POLICY }, // independent message; Saver uses SAVER_POLICY + its output schema
   { role: "user", content: JSON.stringify({
       type: "application_reference",
       futurePossibilities: [/* agenda records, each marked occurred: false */],
@@ -229,7 +271,30 @@ reads that branch's event and message history.
 SillyTavern JSONL exports the active branch's transcript, including author notes,
 but does not preserve continuity records. Imported JSONL stories remain on the
 legacy path. Duplicate story copies all accepted continuity branches and records.
-An existing story cannot enable continuity until a reviewed migration is built.
+
+## Continuing an existing story
+
+Open Settings → This story → Create continuity copy of this story. Paste a
+transcript-derived author note that you have checked against the old game. Preview
+the state, select **Reviewed** or **Saver** for the new story, then create the copy.
+Both modes support the new character and agenda state; Saver manages changes in
+its single response. Preview uses one continuity reviewer request and builds the
+state in memory. It shows the
+proposed records and events with provenance, plus the number of transcript messages copied. Nothing is written
+to a new story until **Create continuity copy** is clicked.
+
+The copy keeps the old user and narrator messages as read-only history, skips
+summary checkpoints, and seeds state from the reviewed note. Its initial author
+note and neutral migration marker are also read-only. Later turns use the normal
+continuity pipeline and can be edited or branched. The original story is never
+modified. This is a snapshot of the transcript at preview time; any later changes
+to the original do not flow into the copy.
+
+The note is the explicit author source for structured state. Original JSONL
+message numbers are not treated as proof of character knowledge or outcomes in
+the new branch. Review the preview carefully: an external LLM extraction can miss
+or misclassify old events. Large individual messages and oversized state snapshots
+fail before publication rather than being silently truncated.
 
 ## Provider and prompt notes
 
@@ -249,7 +314,8 @@ the application-controlled narrator contract. User edits to existing prompt
 settings are preserved; prompt migration and UI reconciliation are a separate step.
 
 The current turn controller does not render streaming prose: the UI shows the
-accepted response after review. Settings exposes a read-only view of saved state.
+accepted response after review, or pending Saver narration awaiting resolution.
+Settings exposes saved-state inspection and an author correction table.
 The legacy plan and short-memory fields are disabled for continuity stories;
 manual and automatic transcript summarization are also skipped there.
 
@@ -261,12 +327,13 @@ branch. This prevents their events and knowledge from affecting the revised stor
 ## Remaining operational limits
 
 The opt-in chat adapter, author notes, saved-state inspection, active-branch
-export, and branch-aware edits are implemented. Live provider and Firestore
+export, branch-aware edits, and reviewed copy migration are implemented. Live provider and Firestore
 emulator behavior still need validation in a signed-in deployment. The store
 pages transcript display, but ordinary turns still read all event and state
 documents; large stories need materialized checkpoints or indexed retrieval.
-JSONL is transcript-only, so it is not a full continuity backup. Existing story
-migration needs reviewed backfill and conflict handling before it can be enabled.
+JSONL is transcript-only, so it is not a full continuity backup. Copy migration
+uses an explicit author note rather than reviewing every historical event. Direct
+in-place conversion and full historical provenance backfill remain unavailable.
 
 The default path makes one narrator request plus one continuity-review request;
 tool retrieval adds a request only when needed, and an invalid draft can add one
