@@ -76,7 +76,6 @@ export function initPetView() {
   if (!old || root) return;
   old.remove();
   document.querySelector("#welcome .welcome-mark")?.removeAttribute("aria-hidden");
-  document.querySelector(".welcome-default-logo")?.setAttribute("aria-hidden", "true");
   layer = document.createElement("div");
   layer.className = "pet-layer";
   root = document.createElement("button");

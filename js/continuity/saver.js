@@ -1,3 +1,5 @@
+import { prepareBalancedContext, BALANCED_TOOLS } from "./balanced.js";
+import { BALANCED_PREPARE_POLICY } from "./prompts.js";
 import { chatCompletion } from "../llm-client.js";
 import { countTokens } from "../tokenizer.js";
 import { buildContinuityContext, selectContinuity, requestTokenCount, inputBudget } from "./context.js";
@@ -48,7 +50,7 @@ function protectedChange(state, patch, mode) {
 
 export async function runSaverTurn({ store, branchId, turnId, input, settings, mode = "player",
   stylePrompt = "", reviewEveryTurn = false, expectedActiveBranchId = branchId, complete = chatCompletion,
-  count = countTokens, onStatus = () => {}, signal }) {
+  count = countTokens, onStatus = () => {}, signal, balanced = false }) {
   if (!["player", "author"].includes(mode) || !input?.trim()) throw new Error("Invalid Saver input.");
   const existing = await store.readTurn(branchId, turnId);
   if (existing && (existing.user.content !== input || existing.user.role !== (mode === "author" ? "author" : "user")))
@@ -69,7 +71,12 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     onStatus("building_context");
     const policy = `${SAVER_POLICY}\nJSON SCHEMA:\n${JSON.stringify(SAVER_OUTPUT_SCHEMA)}`;
     const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
-      input, mode, settings, stylePrompt, policy, tools: [], count });
+      input, mode, settings, stylePrompt, policy: balanced ? BALANCED_PREPARE_POLICY : policy, tools: balanced ? BALANCED_TOOLS : [], count });
+    let preparation = null;
+    if (balanced) {
+      onStatus("preparing");
+      preparation = await prepareBalancedContext({ built, state: snapshot.state, settings, policy, complete, count, signal });
+    }
     onStatus("generating");
     const response = await complete({ settings: { ...settings, streaming: false }, messages: built.apiMessages, signal });
     if (response.finishReason !== "stop" || response.toolCalls?.length) throw new Error("Saver response is incomplete.");
@@ -80,7 +87,7 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
       throw new Error("Saver returned no complete narration.");
     const assistant = await sourceMessage({ id: `${turnId}_assistant`, role: "assistant",
       content: output.narration, order: user.order + 1 });
-    const trace = { ...built.trace, mode: "saver", model: settings.modelId, modelUsage: response.usage ?? null };
+    const trace = { ...built.trace, mode: balanced ? "balanced" : "saver", preparation: preparation, model: settings.modelId, modelUsage: response.usage ?? null };
     let review;
     try {
       const patch = compileProposal(output, snapshot.state, turnId, user, assistant);
@@ -100,7 +107,7 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
       return { status: "needs_state_review", turnId, user, assistant, error: error.message };
     }
     if (reviewEveryTurn) {
-      const reason = "Review every Saver turn is enabled for this story.";
+      const reason = "Review every turn is enabled for this story.";
       await store.savePendingDraft(request, assistant, output, reason, trace);
       onStatus("needs_state_review");
       return { status: "needs_state_review", turnId, user, assistant, error: reason };
@@ -236,4 +243,9 @@ export async function saveManualState({ store, branchId, records, pendingTurnId 
     review: { verdict: "accept", violations: [], patch: { branchId,
       baseRevision: request.baseRevision, turnId, events, operations } },
     trace: { mode: "manual_author_correction" } });
+}
+
+// Shares atomic saves, protected-state checks, pending review, and retry handling.
+export function runBalancedTurn(options) {
+  return runSaverTurn({ ...options, balanced: true });
 }

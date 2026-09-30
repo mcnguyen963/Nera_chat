@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { prepareBalancedContext, BALANCED_TOOLS } from "../js/continuity/balanced.js";
+import { BALANCED_PREPARE_POLICY } from "../js/continuity/prompts.js";
 import { buildContinuityContext } from "../js/continuity/context.js";
 import { createStoryState, sourceMessage, sourceRef, applyContinuityPatch } from "../js/continuity/state.js";
 import { createMemoryStoryStore, forkAtRevision } from "../js/continuity/store.js";
@@ -7,7 +9,7 @@ import { createFirestoreStoryStore } from "../js/continuity/firestore-store.js";
 import { createStoryTools, NARRATOR_TOOLS, runNarratorTools } from "../js/continuity/tools.js";
 import { runContinuityTurn } from "../js/continuity/turn-controller.js";
 import { prepareContinuityMigration } from "../js/continuity/migration.js";
-import { runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
+import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody } from "../js/llm-client.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
@@ -626,4 +628,133 @@ test("Firestore reload preserves a pending Saver turn and clears its lock atomic
   await acceptSaverPending({ store: reloaded, branchId: "main", turnId: pending.turnId });
   assert.equal(documents.get(sessionPath).continuityPendingTurnId, null);
   assert.equal((await createStore().load("main")).state.revision, 2);
+});
+
+
+test("Balanced batches lookups then narrates in exactly two requests and retries for free", async () => {
+  const { store } = await hostileMotherStory();
+  let calls = 0;
+  const options = { store, branchId: "main", turnId: "balanced_batch", input: "I wave to A.",
+    settings: settings(), count, stylePrompt: "My custom narrator style",
+    complete: async (request) => {
+      calls++;
+      assert.equal(request.messages[0].role, "system");
+      assert.equal(request.messages[1].role, "system");
+      assert.ok(request.messages[0].content.includes("PLAYER AGENCY"));
+      if (calls === 1) {
+        assert.deepEqual(request.tools.map((t) => t.function.name), ["get_character", "search_story_events"]);
+        assert.equal(request.toolChoice, "auto");
+        assert.ok(request.messages[1].content.includes("single batch"));
+        return { finishReason: "tool_calls", content: "Never publish this preparation text.", toolCalls: [
+          { id: "lookup_A", type: "function", function: { name: "get_character", arguments: JSON.stringify({ characterId: "char_A" }) } },
+          { id: "lookup_event", type: "function", function: { name: "search_story_events", arguments: JSON.stringify({ query: "mother" }) } },
+        ] };
+      }
+      assert.equal(request.tools, undefined);
+      assert.equal(request.messages.filter((m) => m.role === "tool").length, 2);
+      assert.ok(request.messages.some((m) => m.role === "tool" && m.content.includes("deep distrust")));
+      assert.ok(!JSON.stringify(request.messages).includes("Never publish this preparation text"));
+      assert.ok(request.messages[1].content.includes("JSON SCHEMA"));
+      assert.ok(request.messages.some((m) => m.content?.includes("My custom narrator style")));
+      return { finishReason: "stop", content: JSON.stringify({ narration: "A keeps her distance.", events: [], operations: [] }) };
+    } };
+  assert.equal((await runBalancedTurn(options)).status, "accepted");
+  assert.equal(calls, 2);
+  await runBalancedTurn(options);
+  assert.equal(calls, 2);
+  const snapshot = await store.load("main");
+  assert.equal(snapshot.state.records.find((r) => r.id === "grievance_A_mother").data.status, "open");
+  assert.ok(!snapshot.messages.some((m) => m.role === "tool"));
+});
+
+test("Balanced no-lookup turns still use two calls and honor review every turn", async () => {
+  const { store } = await hostileMotherStory();
+  let calls = 0;
+  const result = await runBalancedTurn({ store, branchId: "main", turnId: "balanced_review", input: "I wait.",
+    settings: settings(), count, reviewEveryTurn: true, complete: async () => {
+      calls++;
+      return { finishReason: "stop", content: calls === 1 ? "Ready" : JSON.stringify({ narration: "A waits.", events: [], operations: [] }) };
+    } });
+  assert.equal(calls, 2);
+  assert.equal(result.status, "needs_state_review");
+  assert.equal((await acceptSaverPending({ store, branchId: "main", turnId: result.turnId })).status, "accepted");
+});
+
+test("Balanced refuses write tools before narration and leaves canonical state unchanged", async () => {
+  const { store } = await hostileMotherStory();
+  const before = (await store.load("main")).state;
+  let calls = 0;
+  await assert.rejects(runBalancedTurn({ store, branchId: "main", turnId: "balanced_write", input: "I wait.",
+    settings: settings(), count, complete: async () => {
+      calls++;
+      return { finishReason: "tool_calls", toolCalls: [{ id: "write", type: "function",
+        function: { name: "propose_plan_update", arguments: "{}" } }] };
+    } }), /read-only/);
+  assert.equal(calls, 1);
+  assert.deepEqual((await store.load("main")).state, before);
+});
+
+test("Balanced passes failed lookups as missing information without an extra model round", async () => {
+  const { store } = await hostileMotherStory();
+  let calls = 0;
+  await runBalancedTurn({ store, branchId: "main", turnId: "balanced_error", input: "I wait.", settings: settings(), count,
+    complete: async (request) => {
+      if (++calls === 1) return { finishReason: "tool_calls", toolCalls: [{ id: "bad_args", type: "function",
+        function: { name: "get_character", arguments: "{" } }] };
+      assert.ok(JSON.parse(request.messages.find((m) => m.role === "tool").content).error);
+      return { finishReason: "stop", content: JSON.stringify({ narration: "The room stays quiet.", events: [], operations: [] }) };
+    } });
+  assert.equal(calls, 2);
+});
+
+test("Balanced routes unsupported forgiveness into pending review", async () => {
+  const { store } = await hostileMotherStory();
+  const old = (await store.load("main")).state.records.find((r) => r.id === "rel_A_player");
+  const narration = "A says she forgives the player.";
+  let calls = 0;
+  const result = await runBalancedTurn({ store, branchId: "main", turnId: "balanced_forgiveness", input: "I wave.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: ++calls === 1 ? "Ready" : JSON.stringify({
+      narration, events: [{ id: "forgive", kind: "outcome", description: narration,
+        entityIds: ["char_A", "player"], supersedes: [], evidence: [{ from: "narration", quote: narration }] }],
+      operations: [{ record: { id: old.id, kind: old.kind, data: { ...old.data, trust: "friendly" } },
+        reason: "She forgave them.", eventIds: ["forgive"], evidence: [{ from: "narration", quote: narration }] }],
+    }) }) });
+  assert.equal(result.status, "needs_state_review");
+  assert.equal(calls, 2);
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === old.id).data.trust, "deep distrust");
+});
+
+test("Balanced budget overflow after retrieval fails without saving or narrating", async () => {
+  const { store } = await hostileMotherStory();
+  const before = (await store.load("main")).state;
+  let calls = 0;
+  const budgetCount = async (text) => text.includes('"tool_call_id"') ? 100000 : Math.ceil(text.length / 4);
+  // Count the tool result itself, which contains the retrieved found flag.
+  const countResults = async (text) => text.includes('"found":true') ? 100000 : budgetCount(text);
+  await assert.rejects(runBalancedTurn({ store, branchId: "main", turnId: "balanced_overflow", input: "I wait.",
+    settings: settings(), count: countResults, complete: async () => {
+      calls++;
+      return { finishReason: "tool_calls", toolCalls: [{ id: "large", type: "function",
+        function: { name: "get_character", arguments: '{"characterId":"char_A"}' } }] };
+    } }), /tool results exceed/);
+  assert.equal(calls, 1);
+  assert.deepEqual((await store.load("main")).state, before);
+});
+
+
+test("Balanced tracks an off-scene character retrieved outside the initial selection", async () => {
+  const { state } = await hostileMotherStory();
+  const built = await buildContinuityContext({ state, messages: [], input: "I wait.", settings: settings(),
+    policy: BALANCED_PREPARE_POLICY, tools: BALANCED_TOOLS, count });
+  assert.ok(!built.trace.recordIds.includes("char_A"));
+  await prepareBalancedContext({ built, state, settings: settings(), policy: "Narration output policy", count,
+    complete: async (request) => {
+      const directory = JSON.parse(request.messages.find((m) => m.content?.includes('"character_directory"')).content);
+      assert.ok(directory.characters.some((c) => c.id === "char_A"));
+      return { finishReason: "tool_calls", toolCalls: [{ id: "offscene", type: "function",
+        function: { name: "get_character", arguments: '{"characterId":"char_A"}' } }] };
+    } });
+  assert.ok(built.trace.recordIds.includes("char_A"));
+  assert.ok(built.trace.eventIds.includes("A_knows"));
+  assert.ok(built.apiMessages.some((m) => m.role === "tool" && m.content.includes("grieving")));
 });

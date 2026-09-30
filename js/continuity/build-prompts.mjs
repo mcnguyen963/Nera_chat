@@ -6,6 +6,7 @@ const entries = [
   ["NARRATOR_CONTRACT", "continuity-narrator.md"],
   ["TOOL_POLICY", "continuity-tools.md"],
   ["SAVER_POLICY", "continuity-saver.md"],
+  ["BALANCED_PREPARE_POLICY", "continuity-balanced.md"],
   ["REVIEWER_CONTRACT", "continuity-reviewer.md"],
   ["DEFAULT_CONTINUITY_STYLE_PROMPT", "continuity-style.md"],
 ];

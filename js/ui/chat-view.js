@@ -895,7 +895,7 @@ async function handleSend(e) {
 async function sendContinuityTurn(input, mode, options = {}) {
   const petTurn = startPetTurn();
   try {
-    const { storyStore, runContinuityTurn, runSaverTurn, switchContinuityBranch } = await loadContinuity();
+    const { storyStore, runContinuityTurn, runSaverTurn, runBalancedTurn, switchContinuityBranch } = await loadContinuity();
     const branchId = options.branchId ?? session.continuityBranchId ?? "main";
     const store = storyStore(session.id);
     const retry = !options.branchId && continuityRetry && continuityRetry.sessionId === session.id &&
@@ -903,8 +903,9 @@ async function sendContinuityTurn(input, mode, options = {}) {
       continuityRetry.mode === mode ? continuityRetry : null;
     const turnId = retry?.turnId ?? `turn_${crypto.randomUUID().replaceAll("-", "")}`;
     if (!options.branchId) continuityRetry = { sessionId: session.id, branchId, input, mode, turnId };
-    const turnRunner = session.continuityMode === "saver" && options.draftOverride == null
-      ? runSaverTurn : runContinuityTurn;
+    const turnRunner = options.draftOverride != null ? runContinuityTurn
+      : session.continuityMode === "balanced" ? runBalancedTurn
+      : session.continuityMode === "saver" ? runSaverTurn : runContinuityTurn;
     const receipt = await turnRunner({ store, branchId,
       turnId, input,
       mode, settings: structuredClone(state.settings), stylePrompt: state.settings.continuityStylePrompt || "",
@@ -913,7 +914,7 @@ async function sendContinuityTurn(input, mode, options = {}) {
       expectedActiveBranchId: options.previousBranchId ?? branchId,
       onStatus: (phase) => {
         updatePetPhase(phase === "generating" ? "writing" : "thinking", petTurn);
-        setStatus({ building_context: "Building story context…",
+        setStatus({ building_context: "Building story context…", preparing: "Looking up story context…",
         generating: "Narrating…", reviewing: "Checking continuity…", repairing: "Repairing narration…",
         saving: "Saving story…", accepted: "Story saved.", failed: "Story turn failed.",
         needs_state_review: "Narration saved. Review its state before continuing." }[phase] || phase, phase === "accepted"); } });
@@ -942,7 +943,7 @@ async function sendContinuityTurn(input, mode, options = {}) {
 async function reviseContinuityTurn(message, action, replacement = null) {
   if (busy) return;
   if (session?.continuityPendingTurnId)
-    return showTransientError("Resolve the pending Saver state before editing or rewinding another turn.");
+    return showTransientError("Resolve the pending story state before editing or rewinding another turn.");
   const activeSession = session;
   const priorBranch = activeSession.continuityBranchId || "main";
   setBusy(true);

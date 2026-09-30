@@ -57,7 +57,7 @@ test('migration can create a Saver story and rejects an unsupported mode before 
   assert.equal(h.session.continuityMode, 'saver');
   assert.equal(h.session.continuitySaverReviewEveryTurn, false);
   const invalid = await harness();
-  await assert.rejects(invalid.publish({ ...request, continuityMode: 'unknown' }), /Choose Reviewed or Saver/);
+  await assert.rejects(invalid.publish({ ...request, continuityMode: 'unknown' }), /Choose Reviewed, Balanced or Saver/);
   assert.equal(invalid.calls.length, 0);
 });
 
@@ -71,4 +71,12 @@ test('migration recognizes a successful publish after its acknowledgment is lost
   const h = await harness({ failUpdate: true, updateSucceeded: true });
   assert.equal(await h.publish(request), 'copy-id');
   assert.deepEqual(h.calls.map(([action]) => action), ['create', 'initialize', 'publish']);
+});
+
+
+test('migration publishes a Balanced story without changing review defaults', async () => {
+  const h = await harness();
+  await h.publish({ ...request, continuityMode: 'balanced' });
+  assert.equal(h.session.continuityMode, 'balanced');
+  assert.equal(h.session.continuitySaverReviewEveryTurn, false);
 });

@@ -103,7 +103,6 @@ input[type="checkbox"] { accent-color: #dededb; width: 16px; height: 16px; }
 .top-menu-item:hover { background: #303030; }
 .welcome { margin: auto auto 0; width: min(760px, 100%); padding: 35px 25px 26px; text-align: center; }
 .welcome-mark { display: flex; justify-content: center; font-size: 49px; margin-bottom: 22px; }
-.has-pet .welcome-default-logo { display: none; }
 .pet-home-slot { display: inline-block; flex: none; width: 64px; height: 64px; }
 .pet-home-slot.pet-welcome-slot { width: 208px; height: 208px; }
 .welcome .eyebrow { font-size: 9px; letter-spacing: .17em; }

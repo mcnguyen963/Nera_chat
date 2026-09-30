@@ -5,7 +5,7 @@ import { storyStore } from "./runtime.js";
 // untouched. A staging session is hidden from the sidebar until branch data is
 // ready, and a failed publication is removed when possible.
 export async function publishContinuityMigration({ title, sourceSessionId, prepared, continuityMode = "reviewed" }) {
-  if (!["reviewed", "saver"].includes(continuityMode)) throw new Error("Choose Reviewed or Saver for the new story.");
+  if (!["reviewed", "saver", "balanced"].includes(continuityMode)) throw new Error("Choose Reviewed, Balanced or Saver for the new story.");
   if (!prepared?.state || !Array.isArray(prepared.messages) ||
       prepared.state.branchId !== "main" || prepared.state.revision < 1)
     throw new Error("Preview and review the migration before creating the story copy.");

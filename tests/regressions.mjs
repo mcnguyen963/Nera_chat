@@ -110,6 +110,11 @@ async function harness() {
       },
     },
     'continuity/saver.js': {
+      runBalancedTurn: async (request) => {
+        calls.continuityTurns.push({ ...request, balanced: true });
+        request.onStatus('accepted');
+        return { status: 'accepted' };
+      },
       runSaverTurn: async (request) => {
         calls.saverTurns.push(request);
         const status = calls.saverRequireReview ? 'needs_state_review' : 'accepted';
@@ -737,4 +742,32 @@ test('Switching back to a recently opened session reuses its cached messages', a
   await new Promise((resolve) => setTimeout(resolve, 0));
   h.calls.sessionCallbacks.at(-1)?.({ exists: () => true, data: () => ({ title: 'story-b' }) });
   assert.equal(h.calls.subscriptions.length, readsBeforeEvictedReturn + 1);
+});
+
+
+test('Balanced setting persists and chat routes it to the two-stage runner', async () => {
+  const h = await harness();
+  h.calls.migrationSource = { title: 'story', continuityEnabled: true, continuityMode: 'reviewed' };
+  h.state.sessionId = 'story';
+  const settingsView = await h.use('ui/settings-view.js');
+  settingsView.initSettingsView(); settingsView.openSettingsPopup();
+  await h.fire('nav-story'); await Promise.resolve();
+  h.el('set-continuity-mode').value = 'balanced';
+  await h.fire('set-continuity-mode', 'change');
+  assert.deepEqual(structuredClone(h.calls.sessionWrites.at(-1)), ['story', { continuityMode: 'balanced' }]);
+  h.state.sessionId = null;
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.state.settings.apiKey = 'test-key';
+  h.state.settings.modelId = 'test-model';
+  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityMode: 'balanced', continuityBranchId: 'main',
+  }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.el('composer-mode').value = 'player';
+  h.el('chat-input').value = 'I wait.';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.continuityTurns.at(-1)?.balanced, true);
+  assert.equal(h.calls.saverTurns.length, 0);
 });

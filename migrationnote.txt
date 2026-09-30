@@ -1,0 +1,65 @@
+### 1\. Back up your current story
+
+Open the ongoing roleplay and export its transcript through **Settings → Transfer**. Keep that file.
+
+### 2\. Generate a story-state note
+
+Give an LLM:
+
+- Your exported JSON/JSONL transcript.
+- The contents of the transcript extraction prompt (prompts/migration-transcript.md).
+- Character cards or setting notes, if available.
+
+Ask it to produce the migration author note. You can also fill the author-note template (prompts/migration-author-note.md) yourself.
+
+### 3\. Check the note carefully
+
+Verify these before proceeding:
+
+- The current scene and where play stopped.
+- Each important character’s current relationships and goals.
+- Grievances, promises, loyalties, and unresolved conflicts.
+- Who knows each secret—and who doesn’t.
+- Future plans are marked **not yet occurred**.
+- No invented player actions or unsupported forgiveness.
+
+Remove placeholders and resolve important contradictions.
+
+### 4\. Open migration
+
+With your **original story selected**, go to:
+
+**Settings → This story → Create continuity copy of this story**
+
+Paste the completed note into **Reviewed author note**. Paste the resulting story facts, not the extraction prompt.
+
+### 5\. Preview the state
+
+Click **Review migration state**. This makes a model request using your configured model and API key.
+
+Inspect the generated records. If something is wrong, edit your note and preview again.
+
+### 6\. Choose the mode
+
+- **Saver:** one request per normal turn, with automatic saving of valid updates.
+- **Reviewed:** narration followed by a separate continuity check.
+
+For Saver, you can enable **Review every Saver turn** afterward if you want manual approval each turn.
+
+### 7\. Create the new story
+
+Click **Create continuity copy**.
+
+The app creates and selects a new continuity story. Your original remains intact, and its transcript is preserved in the copy as read-only history.
+
+### 8\. Check before continuing
+
+In the new story, open:
+
+**Settings → This story → Edit character and story state**
+
+Check the important records once more. Use **Save author correction** if needed.
+
+Then choose **In story** beside the composer and continue from the pending interaction. Use **Author note** for later setup or corrections.
+
+**You only submit the migration note once.** The system maintains state afterward.

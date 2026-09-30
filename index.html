@@ -59,7 +59,7 @@
   <div id="app" class="app hidden">
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
-        <a class="brand" href="./" aria-label="Nera Chat home"><span class="brand-mark" aria-hidden="true">✳</span> Nera<span class="brand-dot">Chat</span></a>
+        <a class="brand" href="./" aria-label="Nera Chat home">Nera<span class="brand-dot">Chat</span></a>
       </div>
       <button id="btn-new-session" class="btn new-session" title="New session"><span aria-hidden="true">＋</span> New story <span class="new-arrow" aria-hidden="true">↗</span></button>
       <div class="sidebar-label">Your stories</div>
@@ -104,7 +104,7 @@
           </div>
         </div>
         <div id="welcome" class="welcome">
-          <div class="brand-mark welcome-mark" aria-hidden="true"><span class="welcome-default-logo">✳</span><span id="chat-pet" class="chat-pet" aria-hidden="true" hidden></span></div>
+          <div class="brand-mark welcome-mark" aria-hidden="true"><span id="chat-pet" class="chat-pet" aria-hidden="true" hidden></span></div>
           <p class="eyebrow">A LITTLE IMAGINATION. ENDLESS POSSIBILITY.</p>
           <h1>Where will your story go?</h1>
           <p>Build a world, become a character, or see where a conversation takes you.</p>
@@ -263,16 +263,16 @@
                 <div id="migration-panel" hidden>
                   <p class="muted">Your original story stays intact. Paste a note you reviewed against its transcript. Review sends the note and recent history to your configured model to build character state for a new copy; earlier messages remain read-only history.</p>
                   <label class="full-label">Reviewed author note<textarea id="migration-note" rows="10" placeholder="Current canon, each character's knowledge and relationships, unresolved consequences, and current scene."></textarea></label>
-                  <label>Mode for the new story<select id="migration-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <label>Mode for the new story<select id="migration-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="saver">Saver · one request per turn</option></select></label>
                   <div class="settings-actions"><button type="button" id="btn-preview-migration" class="btn">Review migration state</button><button type="button" id="btn-publish-migration" class="btn primary" hidden>Create continuity copy</button></div>
                   <pre id="migration-preview" class="continuity-state-preview" hidden></pre>
                 </div>
                 <button type="button" id="btn-view-continuity" class="btn small" hidden>View saved story state</button>
                 <pre id="continuity-state-preview" class="continuity-state-preview" hidden></pre>
                 <div id="continuity-mode-controls" hidden>
-                  <label>Continuity mode<select id="set-continuity-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
-                  <label><input type="checkbox" id="set-saver-review-every-turn" /> Review every Saver turn before saving its state</label>
-                  <p class="muted">Saver saves narration and state together. If state needs review, the next turn waits until you resolve it.</p>
+                  <label>Continuity mode<select id="set-continuity-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <label><input type="checkbox" id="set-saver-review-every-turn" /> Review every Saver or Balanced turn before saving its state</label>
+                  <p class="muted">Saver and Balanced save narration and state together. If state needs review, the next turn waits until you resolve it.</p>
                 </div>
                 <div id="continuity-editor" hidden>
                   <div class="settings-actions"><button type="button" id="btn-load-continuity-editor" class="btn small">Edit character and story state</button><span id="continuity-editor-status" class="muted"></span></div>

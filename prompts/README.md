@@ -6,9 +6,10 @@ Do not paste the entire collection into the editable narrator prompt field.
 
 | Prompt | Where it is used |
 |---|---|
-| [Narrator](continuity-narrator.md) | First system message for Reviewed and Saver turns |
+| [Narrator](continuity-narrator.md) | First system message for Reviewed, Saver and Balanced turns |
 | [Reviewed tools](continuity-tools.md) | Independent second system message in Reviewed mode; API tool schemas remain separate request fields |
 | [Saver](continuity-saver.md) | Independent second system message in Saver mode, followed by its generated output schema |
+| [Balanced preparation](continuity-balanced.md) | Independent second system message for the first Balanced request; one batch of read-only API tools. The second request uses the Saver output policy and schema |
 | [State reviewer](continuity-reviewer.md) | System message for Reviewed checks, explicit Saver state repair, and migration-state preparation, followed by the review schema |
 | [Prose style](continuity-style.md) | Default editable Continuity prose preferences in Settings; included as stylePreferences in the current-turn data packet |
 | [Transcript migration](migration-transcript.md) | Copy to an external LLM with a JSON/JSONL transcript to produce the author note for migration; this prompt is not automatically called or injected each turn |
@@ -23,7 +24,7 @@ Do not paste the entire collection into the editable narrator prompt field.
    consequential uncertain assertions before treating the note as author canon.
 3. Open **Settings → This story → Create continuity copy of this story** and paste
    the reviewed note. The app makes one state-review request to prepare records.
-4. Check the preview, select Reviewed or Saver, and create the copy. The original
+4. Check the preview, select Reviewed, Balanced or Saver, and create the copy. The original
    story is preserved. Use the state table to make further author corrections.
 
 The extraction prompt creates reference prose for human review. The runtime
@@ -32,7 +33,7 @@ paste extraction instructions in place of a completed state note.
 
 ## Defaults and editing
 
-The five runtime defaults are exported from `js/continuity/prompts.js`.
+The runtime defaults are exported from `js/continuity/prompts.js`.
 After editing a Markdown source, run:
 
 ```sh
@@ -56,3 +57,30 @@ These prompts improve the behavioral instructions; they do not guarantee model
 compliance or replace local validation. Saver has no independent semantic check
 on ordinary auto-saved turns. Changing an open consequence or its relationship
 can still require review even when the development is justified.
+
+
+## Balanced mode
+
+Select **Settings → This story → Continuity mode → Balanced** for an enabled
+continuity story, or select it when creating a migration copy. Existing stories
+keep their selected mode. Balanced makes two model requests on a normal turn:
+
+1. Context preparation requests up to eight read tools in one batch, or returns
+   Ready when no lookup is needed. A compact character directory supplies valid
+   IDs; current scene state and relevant consequences are already included.
+2. Narration receives the tool results and returns the Saver narration/state
+   JSON. Updates are validated and saved atomically after narration.
+
+There is no additional retrieval round or automatic semantic reviewer. Failed
+lookups remain missing information. Context overflow fails safely rather than
+silently dropping essential state. Tool calls and preparation prose are never
+saved as story dialogue. Plans are proposed as structured agenda operations in
+request two, not written during preparation. The mode shares Saver's pending
+review, manual correction, repair, branching and retry behavior. **Review every
+Saver or Balanced turn** is optional; protected consequence/relationship changes
+and invalid proposals still require review. Explicit state repair adds a model
+request only when the user chooses it. Edited narration uses the Reviewed path.
+
+Balanced trades an extra request and repeated input tokens for targeted retrieval;
+it does not independently catch every semantic mistake. Reviewed retains its
+separate reviewer and retrieval loop; Saver retains its single-request workflow.

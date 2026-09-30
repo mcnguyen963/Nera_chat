@@ -135,11 +135,11 @@ export function initSettingsView() {
     const id = state.sessionId;
     const value = raw("set-continuity-mode");
     try {
-      if (!sessionOriginal.continuityEnabled || !["reviewed", "saver"].includes(value))
+      if (!sessionOriginal.continuityEnabled || !["reviewed", "saver", "balanced"].includes(value))
         throw new Error("Select a continuity story and a valid mode.");
       await updateSession(id, { continuityMode: value });
       sessionOriginal.continuityMode = value;
-      feedback(`${value === "saver" ? "Saver" : "Reviewed"} mode selected for future turns.`);
+      feedback(`${{ saver: "Saver", balanced: "Balanced", reviewed: "Reviewed" }[value]} mode selected for future turns.`);
     } catch (error) {
       set("set-continuity-mode", sessionOriginal.continuityMode || "reviewed");
       feedback("Could not change mode: " + error.message, true);
@@ -152,10 +152,10 @@ export function initSettingsView() {
       if (!sessionOriginal.continuityEnabled) throw new Error("Select a continuity story.");
       await updateSession(state.sessionId, { continuitySaverReviewEveryTurn: checked });
       sessionOriginal.continuitySaverReviewEveryTurn = checked;
-      feedback(checked ? "Every Saver turn will wait for your review." : "Saver will save valid turns automatically.");
+      feedback(checked ? "Every Saver or Balanced turn will wait for your review." : "Saver and Balanced will save valid turns automatically.");
     } catch (error) {
       input("set-saver-review-every-turn").checked = sessionOriginal.continuitySaverReviewEveryTurn === true;
-      feedback("Could not change Saver review setting: " + error.message, true);
+      feedback("Could not change turn review setting: " + error.message, true);
     }
   });
   input("btn-load-continuity-editor").addEventListener("click", loadContinuityEditor);
