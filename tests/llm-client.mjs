@@ -39,3 +39,19 @@ test("stream reports received text and usage even when the model finishes with l
     assert.equal(progress.at(-1).usage.completion_tokens_details.reasoning_tokens, 8100);
   } finally { globalThis.fetch = original; }
 });
+
+test("alternate reasoning fields stay separate from final JSON without duplicating primary reasoning", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const [message, expected] of [
+      [{ content: '{"ok":true}', reasoning_content: "Thinking via alias" }, "Thinking via alias"],
+      [{ content: '{"ok":true}', reasoning_details: [{ type: "reasoning.text", text: "Detailed thinking" }] }, "Detailed thinking"],
+      [{ content: '{"ok":true}', reasoning: "Primary", reasoning_details: [{ type: "reasoning.text", text: "Primary" }] }, "Primary"],
+    ]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message, finish_reason: "stop" }] }));
+      const result = await chatCompletion({ settings: { ...settings, streaming: false }, messages: [] });
+      assert.deepEqual(JSON.parse(result.content), { ok: true });
+      assert.equal(result.thinking, expected);
+    }
+  } finally { globalThis.fetch = original; }
+});

@@ -43,6 +43,13 @@ export function completionProgress(result, complete = true) {
     usage: result.usage ?? null, finishReason: result.finishReason ?? null, complete };
 }
 
+function reasoningText(message) {
+  if (typeof message.reasoning === "string" && message.reasoning) return message.reasoning;
+  if (typeof message.reasoning_content === "string" && message.reasoning_content) return message.reasoning_content;
+  return (message.reasoning_details ?? []).filter((detail) => detail.type === "reasoning.text" || detail.type === "reasoning.summary")
+    .map((detail) => detail.text ?? detail.summary ?? "").join("");
+}
+
 function headers(settings) {
   return {
     "Content-Type": "application/json",
@@ -75,7 +82,7 @@ async function nonStreamedCompletion(options) {
   const msg = data.choices?.[0]?.message ?? {};
   return {
     content: msg.content ?? "",
-    thinking: msg.reasoning ?? null,
+    thinking: reasoningText(msg) || null,
     usage: data.usage ?? null,
     toolCalls: msg.tool_calls ?? [],
     finishReason: data.choices?.[0]?.finish_reason ?? null,
@@ -135,9 +142,10 @@ async function streamedCompletion(options) {
       content += delta.content;
       onDelta?.(delta.content);
     }
-    if (delta.reasoning) {
-      thinking += delta.reasoning;
-      onReasoning?.(delta.reasoning);
+    const reasoning = reasoningText(delta);
+    if (reasoning) {
+      thinking += reasoning;
+      onReasoning?.(reasoning);
     }
     // Final content chunk or a trailing usage-only chunk carries usage.
     if (json.usage) usage = json.usage;

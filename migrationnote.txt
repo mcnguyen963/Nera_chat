@@ -12,18 +12,7 @@ Give an LLM:
 
 Ask it to produce the migration author note. You can also fill the author-note template (prompts/migration-author-note.md) yourself.
 
-### 3\. Check the note carefully
-
-Verify these before proceeding:
-
-- The current scene and where play stopped.
-- Each important character’s current relationships and goals.
-- Grievances, promises, loyalties, and unresolved conflicts.
-- Who knows each secret—and who doesn’t.
-- Future plans are marked **not yet occurred**.
-- No invented player actions or unsupported forgiveness.
-
-Remove placeholders and resolve important contradictions.
+for
 
 ### 4\. Open migration
 

@@ -41,6 +41,14 @@ export const REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
   violations: list(string()), patch: patchSchema(50) });
 export const MIGRATION_REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
   violations: list(string()), patch: PATCH_SCHEMA });
+// Model-facing migration evidence contains quotes only. The application builds
+// authoritative source IDs, revisions and hashes from the reviewed author note.
+const migrationSources = { ...list(object({ quote: string(8000) }), 10), minItems: 1 };
+export const MIGRATION_OUTPUT_SCHEMA = object({ verdict: choice("accept", "reject"),
+  violations: list(string()), patch: object({ ...PATCH_SCHEMA.properties,
+    events: list(object({ ...EVENT_SCHEMA.properties, sources: migrationSources }), 500),
+    operations: list(object({ ...PATCH_SCHEMA.properties.operations.items.properties, sources: migrationSources }), 500),
+  }) });
 
 // Some reviewers repeat patch fields at the top level or flatten the envelope.
 // Move only known fields; never infer acceptance, drop state, or prefer one

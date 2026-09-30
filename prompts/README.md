@@ -111,3 +111,47 @@ A length finish is rejected before state publication and does not cause a paid
 automatic retry. Check the text/reasoning split before raising the response
 limit. Long or repetitive extraction notes can require simplifying or splitting
 state setup; do not solve a small-note runaway by repeatedly increasing limits.
+
+
+Migration evidence references use quote-only objects in the model response. The
+app constructs message IDs, revisions, and content hashes from the reviewed note
+before validation and storage. This avoids asking the model to copy hashes many
+times. Quotes must still be exact, nonempty passages from that note; paraphrases
+and references to other messages are rejected before state is saved. Saved records
+retain complete source references for verification and replay.
+
+
+Migration now explicitly enables thinking using your configured effort or token
+budget (medium effort if none is configured). Thinking stays in the separate
+reasoning channel and is counted in the migration progress indicator; only final
+content is parsed as state JSON. Migration requests JSON-object output by default
+and still validates the complete state and evidence locally. A single enclosing
+JSON Markdown fence can be stripped, but malformed JSON and truncation remain
+failures without publication or automatic retries. Balanced's first lookup call
+continues to disable thinking; this migration change does not affect it.
+
+
+## Correcting and reusing migration output
+
+The migration panel keeps the completed model response even if JSON parsing,
+source validation, semantic review, or the finish-reason check fails. Edit
+**Model output / edited migration JSON**, then click **Validate edited output ·
+no LLM call**. This reuses the original transcript snapshot, author note and turn
+ID and runs local schema, provenance, state and storage validation. It makes no
+model request and does not publish a copy until **Create continuity copy**.
+Human review supplies the semantic judgment when applying edited output; local
+validation cannot independently judge whether a quote entails a proposed fact.
+Evidence must still be exact passages from the author note. An edited rejection
+must contain a valid acceptance and supported state before it can be used.
+
+Thinking is available separately as reference, and is not parsed or archived as
+story state. Editing the output invalidates any prior preview. Changing the
+source author note requires restoring the original note or generating a new
+response. Failed edits remain in the editor for further correction.
+
+The latest response stays in memory in this tab, including across closing and
+reopening Settings. **Download recovery file** saves the transcript snapshot,
+author note, response and turn ID locally, without connection credentials.
+After a reload, select the original story and use **Load recovery file** to
+restore it, edit, and validate without paying for regeneration. Responses from
+before this feature was installed cannot be recovered from the app retroactively.

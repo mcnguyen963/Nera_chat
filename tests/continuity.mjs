@@ -869,8 +869,9 @@ test("migration excludes archived history and prose preferences, streams extract
     onProgress: (stats) => progress.push(stats), complete: async (request) => {
       calls++;
       assert.equal(request.settings.streaming, true);
-      assert.equal(request.settings.reasoning.enabled, false);
-      assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { enabled: false });
+      assert.equal(request.settings.reasoning.enabled, true);
+      assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { effort: "high" });
+      assert.deepEqual(request.responseFormat, { type: "json_object" });
       assert.ok(!JSON.stringify(request.messages).includes("ARCHIVED_SECRET_HISTORY"));
       assert.ok(!JSON.stringify(request.messages).includes("CUSTOM_NARRATOR_PROMPT"));
       assert.equal(JSON.parse(request.messages[1].content).sources.length, 2);
@@ -1020,3 +1021,84 @@ test('migration normalization recognizes identical duplicated patch data regardl
   assert.deepEqual(normalized.patch.events, canonical.patch.events);
   assert.equal(Object.hasOwn(normalized, 'events'), false);
 });
+
+for (const evidenceMode of ["quote_only", "incorrect_hash_and_revision"]) {
+  test(`migration builds authoritative provenance from ${evidenceMode} evidence`, async () => {
+    const note = "A acquired artifact 0.";
+    const prepared = await prepareContinuityMigration({ legacyMessages: [
+      { id: "old", order: 1, role: "assistant", content: "A waits." },
+    ], authorNote: note, settings: settings(), count, complete: async (request) => {
+      const schema = JSON.parse(request.messages[0].content.split("\nSCHEMA:\n")[1]);
+      assert.deepEqual(Object.keys(schema.properties.patch.properties.events.items.properties.sources.items.properties), ["quote"]);
+      const packet = JSON.parse(request.messages[1].content);
+      const output = migrationProfileReview(packet, [note]);
+      for (const item of [...output.patch.events, ...output.patch.operations]) {
+        item.sources = evidenceMode === "quote_only" ? [{ quote: note }]
+          : item.sources.map((ref) => ({ ...ref, revision: 999, contentHash: "wrong-model-generated-hash" }));
+      }
+      return { finishReason: "stop", content: JSON.stringify(output) };
+    } });
+    const author = prepared.messages.find((message) => message.role === "author");
+    for (const item of [...prepared.state.records, ...prepared.state.events]) {
+      for (const ref of item.sources) assert.deepEqual(ref, sourceRef(author, note));
+    }
+  });
+}
+
+test("migration still rejects paraphrased evidence and never retries it automatically", async () => {
+  let calls = 0;
+  await assert.rejects(prepareContinuityMigration({ legacyMessages: [
+    { id: "old", order: 1, role: "assistant", content: "A waits." },
+  ], authorNote: "A acquired artifact 0.", settings: settings(), count, complete: async (request) => {
+    calls++;
+    const output = migrationProfileReview(JSON.parse(request.messages[1].content), ["A acquired artifact 0."]);
+    output.patch.events[0].sources = [{ quote: "A found the first artifact." }];
+    return { finishReason: "stop", content: JSON.stringify(output) };
+  } }), /Migration evidence for profile_event_0 is not an exact quote/);
+  assert.equal(calls, 1);
+});
+
+test("migration enables configured thinking but parses and archives only final JSON content", async () => {
+  const note = "A acquired artifact 0.";
+  const prepared = await prepareContinuityMigration({ legacyMessages: [
+    { id: "old", order: 1, role: "assistant", content: "A waits." },
+  ], authorNote: note, settings: settings({ reasoning: { enabled: false, mode: "effort", effort: "high" } }), count,
+  complete: async (request) => {
+    assert.equal(request.settings.reasoning.enabled, true);
+    assert.equal(request.settings.reasoning.effort, "high");
+    assert.deepEqual(request.responseFormat, { type: "json_object" });
+    const output = migrationProfileReview(JSON.parse(request.messages[1].content), [note]);
+    return { finishReason: "stop", thinking: "PRIVATE_THINKING_NOT_STORY", content: "```json\n" + JSON.stringify(output) + "\n```" };
+  } });
+  assert.equal(prepared.state.records.length, 2);
+  assert.ok(!JSON.stringify(prepared.messages).includes("PRIVATE_THINKING_NOT_STORY"));
+  assert.ok(!JSON.stringify(prepared.state).includes("PRIVATE_THINKING_NOT_STORY"));
+});
+
+for (const finishReason of ["stop", "length"]) {
+  test(`failed migration ${finishReason} response can be corrected and reused without an LLM call`, async () => {
+    const note = "A acquired artifact 0.";
+    const legacyMessages = [{ id: "old", order: 1, role: "assistant", content: "A waits." }];
+    let recovery, corrected, calls = 0;
+    await assert.rejects(prepareContinuityMigration({ legacyMessages, authorNote: note, settings: settings(), count,
+      onReviewOutput: (value) => { recovery = value; }, complete: async (request) => {
+        calls++;
+        corrected = migrationProfileReview(JSON.parse(request.messages[1].content), [note]);
+        return { finishReason, content: '{"incomplete":', thinking: "Recovered reasoning" };
+      } }));
+    assert.equal(recovery.content, '{"incomplete":');
+    assert.equal(recovery.thinking, "Recovered reasoning");
+    const prepared = await prepareContinuityMigration({ legacyMessages, authorNote: note,
+      settings: settings({ maxContextTokens: 10, maxResponseTokens: 100000 }), count,
+      migrationTurnId: recovery.turnId, reviewOutputOverride: JSON.stringify(corrected),
+      complete: async () => { calls++; throw new Error("A paid call must never occur"); } });
+    assert.equal(calls, 1);
+    assert.equal(prepared.state.records.length, 2);
+    assert.ok(!JSON.stringify(prepared.messages).includes("Recovered reasoning"));
+    corrected.patch.events[0].sources = [{ quote: "Invented evidence" }];
+    await assert.rejects(prepareContinuityMigration({ legacyMessages, authorNote: note, settings: settings(), count,
+      migrationTurnId: recovery.turnId, reviewOutputOverride: JSON.stringify(corrected),
+      complete: async () => { calls++; throw new Error("A paid call must never occur"); } }), /not an exact quote/);
+    assert.equal(calls, 1);
+  });
+}

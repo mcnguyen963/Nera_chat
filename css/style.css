@@ -366,3 +366,6 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 }
 #migration-panel textarea, #migration-panel select { display: block; max-width: 100%; }
 #continuity-mode-controls { display: grid; gap: 16px; margin-top: 16px; }
+
+#migration-output-editor { display: grid; gap: 12px; min-width: 0; }
+#migration-output { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

@@ -127,6 +127,7 @@ async function harness() {
     'continuity/migration.js': {
       prepareContinuityMigration: async (request) => {
         calls.migrationPreviews.push(request);
+        request.onReviewOutput?.({ content: "bad json", thinking: "Reference thinking", turnId: "migration_test", finishReason: "stop" });
         request.onProgress?.({ receivedCharacters: 400, reasoningCharacters: 0, finishReason: 'stop',
           maxOutputTokens: 8192, usage: { completion_tokens: 150, completion_tokens_details: { reasoning_tokens: 50 } } });
         return { sourceMessageCount: request.legacyMessages.length, skippedSummaryCount: 0,
@@ -776,4 +777,57 @@ test('Balanced setting persists and chat routes it to the two-stage runner', asy
   await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
   assert.equal(h.calls.continuityTurns.at(-1)?.balanced, true);
   assert.equal(h.calls.saverTurns.length, 0);
+});
+
+
+test('migration output editing invalidates preview and validates locally without generating again', async () => {
+  const h = await harness();
+  h.state.sessionId = 'story'; h.state.settings.apiKey = 'key'; h.state.settings.modelId = 'model';
+  h.calls.migrationSource = { title: 'story', nextOrder: 2, continuityEnabled: false };
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story'); await Promise.resolve();
+  h.el('migration-note').value = 'A is present.';
+  await h.fire('btn-preview-migration');
+  assert.equal(h.el('migration-output').value, 'bad json');
+  assert.equal(h.el('migration-output-editor').hidden, false);
+  h.el('migration-output').value = '{"corrected":true}';
+  await h.fire('migration-output', 'input');
+  assert.equal(h.el('btn-publish-migration').hidden, true);
+  await h.fire('btn-validate-migration-output');
+  const local = h.calls.migrationPreviews.at(-1);
+  assert.equal(local.reviewOutputOverride, '{"corrected":true}');
+  assert.equal(local.migrationTurnId, 'migration_test');
+  assert.equal(local.onReviewOutput, undefined);
+  assert.equal(h.el('btn-publish-migration').hidden, false);
+  h.el('migration-note').value = 'A is elsewhere.';
+  await h.fire('migration-note', 'input');
+  const before = h.calls.migrationPreviews.length;
+  await h.fire('btn-validate-migration-output');
+  assert.equal(h.calls.migrationPreviews.length, before);
+});
+
+test('a recovery file restores migration output for the original story without a model request', async () => {
+  const h = await harness();
+  h.state.sessionId = 'story';
+  h.calls.migrationSource = { title: 'story', nextOrder: 2, continuityEnabled: false };
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story'); await Promise.resolve();
+  const recovery = { version: 1, sourceId: 'story', note: 'A is present.', title: 'story (continuity)',
+    legacyMessages: [{ id: 'old', order: 1, role: 'assistant', content: 'A waits.' }],
+    output: { content: '{"edited":true}', thinking: 'Reference thinking', turnId: 'migration_restored' } };
+  const fileInput = h.el('file-migration-output');
+  fileInput.files = [{ text: async () => JSON.stringify(recovery) }];
+  await fileInput.dispatchEvent({ type: 'change', target: fileInput });
+  assert.equal(h.el('migration-note').value, 'A is present.');
+  assert.equal(h.el('migration-output').value, '{"edited":true}');
+  assert.equal(h.calls.migrationPreviews.length, 0);
+  await h.fire('btn-validate-migration-output');
+  assert.equal(h.calls.migrationPreviews.at(-1).migrationTurnId, 'migration_restored');
+  assert.equal(h.calls.migrationPreviews.at(-1).reviewOutputOverride, '{"edited":true}');
+  assert.equal(h.el('btn-publish-migration').hidden, false);
+  const before = h.el('migration-output').value;
+  recovery.sourceId = 'other-story'; recovery.output.content = 'Wrong story';
+  fileInput.files = [{ text: async () => JSON.stringify(recovery) }];
+  await fileInput.dispatchEvent({ type: 'change', target: fileInput });
+  assert.equal(h.el('migration-output').value, before);
 });

@@ -28,6 +28,7 @@ let petChoicesReady = false;
 let petCatalog = [];
 let petLoadRequest = 0;
 let preparedMigration = null;
+let migrationRecovery = null;
 let editorState = null;
 let editorPending = null;
 let editorDirty = false;
@@ -175,6 +176,46 @@ export function initSettingsView() {
     preparedMigration = null;
     input("btn-publish-migration").hidden = true;
     input("migration-preview").hidden = true;
+  });
+  input("migration-output").addEventListener("input", () => {
+    if (migrationRecovery?.sourceId === state.sessionId) migrationRecovery.output.content = raw("migration-output");
+    preparedMigration = null;
+    input("btn-publish-migration").hidden = true;
+    input("migration-preview").hidden = true;
+  });
+  input("btn-validate-migration-output").addEventListener("click", handleValidateMigrationOutput);
+  input("btn-load-migration-output").addEventListener("click", () => input("file-migration-output").click());
+  input("file-migration-output").addEventListener("change", async (event) => {
+    if (saving || state.busy) return;
+    try {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const saved = JSON.parse(await file.text());
+      if (saved.version !== 1 || saved.sourceId !== state.sessionId || typeof saved.note !== "string" ||
+          !Array.isArray(saved.legacyMessages) || typeof saved.output?.content !== "string" ||
+          typeof saved.output?.turnId !== "string" || typeof saved.title !== "string")
+        throw new Error("Choose a migration recovery file for the currently selected original story.");
+      const current = await getSession(state.sessionId);
+      if (!current || current.continuityEnabled || saved.sourceId !== state.sessionId)
+        throw new Error("Select the original standard story before restoring its response.");
+      if (saving || state.busy) throw new Error("Wait for the current request before restoring a recovery file.");
+      migrationRecovery = saved;
+      preparedMigration = null;
+      input("btn-publish-migration").hidden = true;
+      input("migration-preview").hidden = true;
+      restoreMigrationOutput();
+      feedback("Recovery file loaded. Edit or validate its output without another LLM request.");
+    } catch (error) { feedback("Could not load migration output: " + error.message, true); }
+    finally { event.target.value = ""; }
+  });
+  input("btn-save-migration-output").addEventListener("click", () => {
+    if (migrationRecovery?.sourceId !== state.sessionId) return;
+    migrationRecovery.output.content = raw("migration-output");
+    const blob = new Blob([JSON.stringify({ ...migrationRecovery, version: 1 }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url; link.download = "migration-recovery.json"; link.click();
+    URL.revokeObjectURL(url);
   });
   input("btn-preview-migration").addEventListener("click", handlePreviewMigration);
   input("btn-publish-migration").addEventListener("click", handlePublishMigration);
@@ -505,6 +546,20 @@ function resetMigrationPanel() {
   input("migration-token-progress").hidden = true;
   input("migration-token-progress").textContent = "";
   input("btn-publish-migration").hidden = true;
+  input("migration-output-editor").hidden = true;
+  input("migration-thinking-panel").hidden = true;
+  set("migration-output", "");
+  input("migration-thinking").textContent = "";
+}
+
+function restoreMigrationOutput() {
+  if (migrationRecovery?.sourceId !== state.sessionId) return;
+  set("migration-note", migrationRecovery.note);
+  input("migration-panel").hidden = false;
+  input("migration-output-editor").hidden = false;
+  set("migration-output", migrationRecovery.output.content);
+  input("migration-thinking").textContent = migrationRecovery.output.thinking || "";
+  input("migration-thinking-panel").hidden = !migrationRecovery.output.thinking;
 }
 
 function resetContinuityEditor() {
@@ -694,6 +749,7 @@ async function fillSession(event) {
     set("set-continuity-mode", sessionOriginal.continuityMode);
     input("set-saver-review-every-turn").checked = sessionOriginal.continuitySaverReviewEveryTurn;
     setContinuityStoryControls(sessionOriginal.continuityEnabled, sessionOriginal.nextOrder);
+    if (!sessionOriginal.continuityEnabled && input("migration-output-editor").hidden) restoreMigrationOutput();
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -744,6 +800,16 @@ async function handlePreviewMigration() {
     const legacyMessages = await getMessagesReadOnly(sourceId);
     const prepared = await prepareContinuityMigration({ legacyMessages, authorNote: note,
       settings: structuredClone(state.settings),
+      onReviewOutput: (output) => {
+        migrationRecovery = { sourceId, note, title: `${source.title || "Story"} (continuity)`, legacyMessages, output };
+        if (state.sessionId === sourceId) {
+          // Do not replace a changed author note while a response was in flight.
+          input("migration-output-editor").hidden = false;
+          set("migration-output", output.content);
+          input("migration-thinking").textContent = output.thinking || "";
+          input("migration-thinking-panel").hidden = !output.thinking;
+        }
+      },
       onStatus: (phase) => feedback(`Reviewing migration: ${phase.replaceAll("_", " ")}…`),
       onProgress: (stats) => {
         const parts = [`Received ~${Math.ceil(stats.receivedCharacters / 4).toLocaleString()} text tokens (estimate)`];
@@ -779,6 +845,41 @@ async function handlePreviewMigration() {
   }
 }
 
+
+async function handleValidateMigrationOutput() {
+  if (saving || state.busy) return;
+  const recovery = migrationRecovery;
+  if (!recovery || recovery.sourceId !== state.sessionId)
+    return feedback("Generate a migration response for this story first.", true);
+  if (raw("migration-note").trim() !== recovery.note)
+    return feedback("Restore the author note used for this response, or review the changed note with the model.", true);
+  const content = raw("migration-output");
+  recovery.output.content = content;
+  saving = true;
+  input("btn-validate-migration-output").disabled = true;
+  preparedMigration = null;
+  input("btn-publish-migration").hidden = true;
+  input("migration-preview").hidden = true;
+  try {
+    const current = await getSession(recovery.sourceId);
+    if (!current || current.continuityEnabled) throw new Error("Select the original standard story.");
+    const { prepareContinuityMigration } = await import("../continuity/migration.js");
+    const prepared = await prepareContinuityMigration({ legacyMessages: recovery.legacyMessages, authorNote: recovery.note,
+      settings: structuredClone(state.settings), migrationTurnId: recovery.output.turnId, reviewOutputOverride: content,
+      complete: async () => { throw new Error("Edited output validation must not call the model."); } });
+    if (state.sessionId !== recovery.sourceId || raw("migration-note").trim() !== recovery.note || raw("migration-output") !== content)
+      throw new Error("Migration draft changed while validating. Validate it again.");
+    preparedMigration = { sourceId: recovery.sourceId, note: recovery.note, title: recovery.title, prepared };
+    const preview = input("migration-preview");
+    preview.textContent = JSON.stringify({ sourceMessages: prepared.sourceMessageCount, skippedSummaries: prepared.skippedSummaryCount,
+      throughOrder: prepared.state.throughOrder, records: prepared.state.records, events: prepared.state.events }, null, 2);
+    preview.hidden = false;
+    input("btn-publish-migration").hidden = false;
+    feedback("Edited output validated without an LLM call. Review the state below, then create the copy.");
+  } catch (error) { feedback("Edited output failed validation: " + error.message, true); }
+  finally { saving = false; input("btn-validate-migration-output").disabled = false; }
+}
+
 async function handlePublishMigration() {
   const proposal = preparedMigration;
   if (!proposal || proposal.sourceId !== state.sessionId ||
@@ -791,6 +892,7 @@ async function handlePublishMigration() {
     const id = await publishContinuityMigration({ title: proposal.title,
       sourceSessionId: proposal.sourceId, prepared: proposal.prepared,
       continuityMode: raw("migration-mode") });
+    migrationRecovery = null;
     resetMigrationPanel();
     document.dispatchEvent(new CustomEvent("session-imported", { detail: id }));
     feedback("Continuity copy created and selected. Review its saved state before continuing.");
