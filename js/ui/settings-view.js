@@ -810,7 +810,9 @@ async function handlePreviewMigration() {
           input("migration-thinking-panel").hidden = !output.thinking;
         }
       },
-      onStatus: (phase) => feedback(`Reviewing migration: ${phase.replaceAll("_", " ")}…`),
+      onStatus: (phase) => feedback(phase === "reviewing" ? "Model is generating migration output…"
+        : phase === "validating_output" ? "Model response finished. Validating output…"
+        : `Reviewing migration: ${phase.replaceAll("_", " ")}…`),
       onProgress: (stats) => {
         const parts = [`Received ~${Math.ceil(stats.receivedCharacters / 4).toLocaleString()} text tokens (estimate)`];
         const total = stats.usage?.completion_tokens;

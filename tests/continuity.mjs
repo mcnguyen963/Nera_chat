@@ -10,7 +10,7 @@ import { createStoryTools, NARRATOR_TOOLS, runNarratorTools } from "../js/contin
 import { runContinuityTurn } from "../js/continuity/turn-controller.js";
 import { prepareContinuityMigration } from "../js/continuity/migration.js";
 import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
-import { buildRequestBody } from "../js/llm-client.js";
+import { buildRequestBody, chatCompletion } from "../js/llm-client.js";
 import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, normalizeMigrationReview, validate } from "../js/continuity/schema.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
@@ -1102,3 +1102,32 @@ for (const finishReason of ["stop", "length"]) {
     assert.equal(calls, 1);
   });
 }
+
+
+test("malformed migration JSON never interrupts generation; the full response is captured after stream completion", async () => {
+  const previousFetch = globalThis.fetch;
+  let received, canceled = 0, delivered = 0;
+  const pieces = ["INVALID JSON", " keep receiving", " until the final token"];
+  const events = [...pieces.map((content) => ({ choices: [{ delta: { content } }] })),
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    { choices: [], usage: { completion_tokens: 123 } }];
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    pull(controller) {
+      assert.equal(received, undefined, "No JSON validation/capture while model output is still arriving");
+      if (delivered < events.length) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(events[delivered++])}\n\n`));
+      else controller.close();
+    },
+    cancel() { canceled++; },
+  }));
+  try {
+    await assert.rejects(prepareContinuityMigration({ legacyMessages: [
+      { id: "old", order: 1, role: "assistant", content: "A waits." },
+    ], authorNote: "A is present.", settings: settings({ apiKey: "test", endpoint: "https://openrouter.ai/api/v1/chat/completions" }), count,
+    complete: chatCompletion, onReviewOutput: (output) => { received = output; },
+    }), /invalid JSON/);
+    assert.equal(delivered, events.length);
+    assert.equal(canceled, 0);
+    assert.equal(received.content, pieces.join(""));
+    assert.equal(received.usage.completion_tokens, 123);
+  } finally { globalThis.fetch = previousFetch; }
+});

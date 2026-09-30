@@ -95,10 +95,11 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       if (migrationReview) onReviewOutput({ content: reviewed.content ?? "", thinking: reviewed.thinking ?? "",
         usage: reviewed.usage ?? null, finishReason: reviewed.finishReason, turnId });
       onProgress({ ...completionProgress(reviewed), maxOutputTokens: reviewSettings.maxResponseTokens });
+      if (migrationReview) onStatus("validating_output");
       if (reviewed.finishReason === "length") {
         const reasoning = reviewed.usage?.completion_tokens_details?.reasoning_tokens;
         const total = reviewed.usage?.completion_tokens;
-        throw new Error(`State extraction reached its ${reviewSettings.maxResponseTokens.toLocaleString()} token output limit` +
+        throw new Error(`The provider ended state extraction at the ${reviewSettings.maxResponseTokens.toLocaleString()} token output limit` +
           (Number.isFinite(total) ? ` (${total.toLocaleString()} output tokens${Number.isFinite(reasoning) ? `, ${reasoning.toLocaleString()} reasoning` : ""})` : "") +
           ". No state was saved. Check the received text/reasoning counts; reduce thinking or repeated content before increasing the limit. Large author notes may need to be split.");
       }

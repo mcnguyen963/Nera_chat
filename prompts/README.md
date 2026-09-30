@@ -155,3 +155,10 @@ author note, response and turn ID locally, without connection credentials.
 After a reload, select the original story and use **Load recovery file** to
 restore it, edit, and validate without paying for regeneration. Responses from
 before this feature was installed cannot be recovered from the app retroactively.
+
+
+Migration receives the complete model response before parsing or validating state
+JSON. Invalid JSON fragments during generation do not cancel the model request.
+The UI distinguishes generation from validation after response completion. A
+provider `length` finish means the provider hit the requested output limit; its
+received output is still preserved for manual correction.
