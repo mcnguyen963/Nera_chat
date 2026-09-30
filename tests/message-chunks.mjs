@@ -265,3 +265,12 @@ test('duplicating and deleting continuity stories includes state chunks and reta
   assert.equal([...h.documents.keys()].some((path) => path.startsWith(h.sessionPath + '/')), false);
   assert.equal(h.documents.has(copy + '/recordChunks/chunk_000000'), true);
 });
+
+
+test('new stories default to Balanced while continuity remains opt-in', async () => {
+  const h = await setup();
+  const storyId = await h.sessions.createSession('New story');
+  const saved = h.documents.get(`users/u/sessions/${storyId}`);
+  assert.equal(saved.continuityMode, 'balanced');
+  assert.equal(saved.continuityEnabled, false);
+});

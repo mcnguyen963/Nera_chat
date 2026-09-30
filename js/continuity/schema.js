@@ -31,9 +31,14 @@ export const RECORD_SCHEMA = { anyOf: Object.entries(RECORD_DATA).map(([kind, da
 export const OPERATION_SCHEMA = object({ type: { const: "put_record" }, record: RECORD_SCHEMA,
   expectedVersion: integer, reason: string(), eventIds: { ...list(id), minItems: 1 },
   sources: { ...list(SOURCE_SCHEMA, 10), minItems: 1 } });
-export const PATCH_SCHEMA = object({ branchId: id, baseRevision: integer, turnId: id,
-  events: list(EVENT_SCHEMA), operations: list(OPERATION_SCHEMA) });
+// Normal turns remain small; a one-time migration can establish substantially
+// more records. The reducer accepts either bounded shape for branch replay.
+const patchSchema = (maxItems) => object({ branchId: id, baseRevision: integer, turnId: id,
+  events: list(EVENT_SCHEMA, maxItems), operations: list(OPERATION_SCHEMA, maxItems) });
+export const PATCH_SCHEMA = patchSchema(500);
 export const REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
+  violations: list(string()), patch: patchSchema(50) });
+export const MIGRATION_REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
   violations: list(string()), patch: PATCH_SCHEMA });
 
 // Deliberately limited to the JSON Schema vocabulary emitted above. Unknown

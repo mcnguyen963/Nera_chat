@@ -30,7 +30,7 @@ export async function enableContinuity(sessionId) {
     const current = await tx.get(ref);
     if (!current.exists() || (current.data().nextOrder ?? 0) !== 0)
       throw new Error("Story changed during continuity setup.");
-    tx.update(ref, { continuityEnabled: true, continuityBranchId: "main",
+    tx.update(ref, { continuityEnabled: true, continuityBranchId: "main", continuityMode: "balanced",
       updatedAt: firestore.serverTimestamp() });
   });
 }

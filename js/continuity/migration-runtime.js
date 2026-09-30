@@ -4,7 +4,7 @@ import { storyStore } from "./runtime.js";
 // Publish only a user-reviewed, fully prepared snapshot. The source story is
 // untouched. A staging session is hidden from the sidebar until branch data is
 // ready, and a failed publication is removed when possible.
-export async function publishContinuityMigration({ title, sourceSessionId, prepared, continuityMode = "reviewed" }) {
+export async function publishContinuityMigration({ title, sourceSessionId, prepared, continuityMode = "balanced" }) {
   if (!["reviewed", "saver", "balanced"].includes(continuityMode)) throw new Error("Choose Reviewed, Balanced or Saver for the new story.");
   if (!prepared?.state || !Array.isArray(prepared.messages) ||
       prepared.state.branchId !== "main" || prepared.state.revision < 1)

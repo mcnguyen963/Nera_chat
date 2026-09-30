@@ -636,7 +636,8 @@ test("Balanced batches lookups then narrates in exactly two requests and retries
   const { store } = await hostileMotherStory();
   let calls = 0;
   const options = { store, branchId: "main", turnId: "balanced_batch", input: "I wave to A.",
-    settings: settings(), count, stylePrompt: "My custom narrator style",
+    settings: settings({ endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      reasoning: { enabled: true, mode: "effort", effort: "high" } }), count, stylePrompt: "My custom narrator style",
     complete: async (request) => {
       calls++;
       assert.equal(request.messages[0].role, "system");
@@ -645,6 +646,8 @@ test("Balanced batches lookups then narrates in exactly two requests and retries
       if (calls === 1) {
         assert.deepEqual(request.tools.map((t) => t.function.name), ["get_character", "search_story_events"]);
         assert.equal(request.toolChoice, "auto");
+        assert.equal(request.settings.reasoning.enabled, false);
+        assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { enabled: false });
         assert.ok(request.messages[1].content.includes("single batch"));
         return { finishReason: "tool_calls", content: "Never publish this preparation text.", toolCalls: [
           { id: "lookup_A", type: "function", function: { name: "get_character", arguments: JSON.stringify({ characterId: "char_A" }) } },
@@ -652,6 +655,8 @@ test("Balanced batches lookups then narrates in exactly two requests and retries
         ] };
       }
       assert.equal(request.tools, undefined);
+      assert.equal(request.settings.reasoning.enabled, true);
+      assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { effort: "high" });
       assert.equal(request.messages.filter((m) => m.role === "tool").length, 2);
       assert.ok(request.messages.some((m) => m.role === "tool" && m.content.includes("deep distrust")));
       assert.ok(!JSON.stringify(request.messages).includes("Never publish this preparation text"));
@@ -663,6 +668,7 @@ test("Balanced batches lookups then narrates in exactly two requests and retries
   assert.equal(calls, 2);
   await runBalancedTurn(options);
   assert.equal(calls, 2);
+  assert.equal(options.settings.reasoning.enabled, true);
   const snapshot = await store.load("main");
   assert.equal(snapshot.state.records.find((r) => r.id === "grievance_A_mother").data.status, "open");
   assert.ok(!snapshot.messages.some((m) => m.role === "tool"));
@@ -875,4 +881,46 @@ test("migration excludes archived history and prose preferences, streams extract
   assert.equal(progress.at(-1).usage.completion_tokens, 2000);
   assert.equal(progress.at(-1).finishReason, "length");
   assert.equal(progress.at(-1).receivedCharacters, 9);
+});
+
+test("migration accepts more than fifty distinct facts and preserves them through replay", async () => {
+  const facts = Array.from({ length: 60 }, (_, i) => `Region ${i} has its own treaty.`);
+  const note = facts.join("\n");
+  const complete = async (request) => {
+    assert.ok(request.messages[0].content.includes('"maxItems":500'));
+    assert.ok(request.messages[0].content.includes("brevity is a preference"));
+    const packet = JSON.parse(request.messages[1].content);
+    const author = packet.sources.find((source) => source.role === "author");
+    const ref = (quote) => ({ messageId: author.id, revision: author.revision, contentHash: author.contentHash, quote });
+    const events = facts.map((fact, i) => ({ id: `treaty_event_${i}`, kind: "author_setup", description: fact,
+      entityIds: [], sources: [ref(fact)], supersedes: [] }));
+    const operations = facts.map((fact, i) => ({ type: "put_record", record: { id: `treaty_${i}`, kind: "world_fact",
+      data: { proposition: fact, entityIds: [], visibility: "public" } }, expectedVersion: 0,
+      reason: "Author-established treaty.", eventIds: [`treaty_event_${i}`], sources: [ref(fact)] }));
+    return { finishReason: "stop", content: JSON.stringify(review(packet.branchId, packet.baseRevision, packet.turnId, events, operations)) };
+  };
+  const prepared = await prepareContinuityMigration({ legacyMessages: [{ id: "old", order: 1, role: "assistant", content: "The council waits." }],
+    authorNote: note, settings: settings({ maxResponseTokens: 16384 }), complete, count });
+  assert.equal(prepared.state.records.length, 60);
+  assert.equal(prepared.state.events.length, 60);
+  assert.deepEqual(prepared.state.records.map((r) => r.data.proposition), facts);
+  const store = createMemoryStoryStore();
+  await store.initialize({ state: createStoryState("main"), messages: [] });
+  await runContinuityTurn({ store, branchId: "main", turnId: "large_migration", mode: "author", input: note,
+    migrationReview: true, draftOverride: "Migration note received.", settings: settings({ maxResponseTokens: 16384 }), complete, count });
+  const replayed = await forkAtRevision(store, "main", 1, "replayed_migration");
+  assert.equal(replayed.state.records.length, 60);
+});
+
+test("migration refusals report one extraction attempt rather than two rejected narrator drafts", async () => {
+  let calls = 0;
+  await assert.rejects(prepareContinuityMigration({ legacyMessages: [{ id: "old", order: 1, role: "assistant", content: "The scene waits." }],
+    authorNote: "The scene is both empty and occupied at the same instant.", settings: settings(), count,
+    complete: async (request) => {
+      calls++;
+      const packet = JSON.parse(request.messages[1].content);
+      return { finishReason: "stop", content: JSON.stringify({ verdict: "reject", violations: ["Clarify the contradictory scene occupancy."],
+        patch: { branchId: packet.branchId, baseRevision: packet.baseRevision, turnId: packet.turnId, events: [], operations: [] } }) };
+    } }), /Migration state extraction rejected the note: Clarify/);
+  assert.equal(calls, 1);
 });

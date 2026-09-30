@@ -1,5 +1,5 @@
 import { createStoryState, assertUsableState, applyContinuityPatch, sourceMessage, verifyStateSources } from "./state.js";
-import { REVIEW_SCHEMA, validate, id } from "./schema.js";
+import { REVIEW_SCHEMA, MIGRATION_REVIEW_SCHEMA, validate, id } from "./schema.js";
 
 export async function verifyMessages(messages) {
   if (new Set(messages.map((m) => m.id)).size !== messages.length) throw new Error("Duplicate source message IDs.");
@@ -9,8 +9,8 @@ export async function verifyMessages(messages) {
   }
 }
 
-export function validateReview(review, { branchId, baseRevision, turnId }) {
-  validate(REVIEW_SCHEMA, review);
+export function validateReview(review, { branchId, baseRevision, turnId, migrationReview = false }) {
+  validate(migrationReview ? MIGRATION_REVIEW_SCHEMA : REVIEW_SCHEMA, review);
   if (review.verdict !== "accept" || review.violations.length) throw new Error("Continuity review rejected the draft.");
   if (review.patch.branchId !== branchId || review.patch.baseRevision !== baseRevision || review.patch.turnId !== turnId)
     throw new Error("Review does not match this turn and branch.");

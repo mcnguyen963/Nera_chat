@@ -353,6 +353,7 @@ test('existing story migration previews read-only history before publishing a se
   await Promise.resolve();
   assert.equal(h.el('btn-open-migration').hidden, false);
   await h.fire('btn-open-migration');
+  assert.equal(h.el('migration-mode').value, 'balanced');
   h.el('migration-note').value = 'A distrusts the player because the player killed her mother.';
   await h.fire('btn-preview-migration');
   assert.equal(h.calls.migrationPreviews.length, 1);

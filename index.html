@@ -257,13 +257,13 @@
                 <h2>This story</h2>
                 <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
                 <div class="settings-actions"><button type="button" id="btn-enable-continuity" class="btn">Enable character continuity</button><span id="continuity-setting-status" class="muted"></span></div>
-                <p class="muted">Available before the first message. Adds character state and story event tracking. Choose Reviewed for an independent model check or Saver for one request per turn.</p>
+                <p class="muted">Available before the first message. Adds character state and story event tracking. Balanced is the default: lookup then narration in two requests. Choose Reviewed for an independent model check or Saver for one request per turn.</p>
                 <p class="muted">After enabling it, choose “Author note” beside the composer to establish characters, relationships, and corrections. Use “In story” for your character's actions.</p>
                 <button type="button" id="btn-open-migration" class="btn small" hidden>Create continuity copy of this story</button>
                 <div id="migration-panel" hidden>
                   <p class="muted">Your original story stays intact. Paste a note you reviewed against its transcript. Review sends only the reviewed note to your configured model to build character state for a new copy; the transcript remains read-only history.</p>
                   <label class="full-label">Reviewed author note<textarea id="migration-note" rows="10" placeholder="Current canon, each character's knowledge and relationships, unresolved consequences, and current scene."></textarea></label>
-                  <label>Mode for the new story<select id="migration-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <label>Mode for the new story<select id="migration-mode"><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
                   <div class="settings-actions"><button type="button" id="btn-preview-migration" class="btn">Review migration state</button><button type="button" id="btn-publish-migration" class="btn primary" hidden>Create continuity copy</button></div>
                   <p id="migration-token-progress" class="muted" role="status" aria-live="polite" hidden></p>
                   <pre id="migration-preview" class="continuity-state-preview" hidden></pre>
@@ -271,7 +271,7 @@
                 <button type="button" id="btn-view-continuity" class="btn small" hidden>View saved story state</button>
                 <pre id="continuity-state-preview" class="continuity-state-preview" hidden></pre>
                 <div id="continuity-mode-controls" hidden>
-                  <label>Continuity mode<select id="set-continuity-mode"><option value="reviewed">Reviewed · narrator and reviewer</option><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <label>Continuity mode<select id="set-continuity-mode"><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
                   <label><input type="checkbox" id="set-saver-review-every-turn" /> Review every Saver or Balanced turn before saving its state</label>
                   <p class="muted">Saver and Balanced save narration and state together. If state needs review, the next turn waits until you resolve it.</p>
                 </div>

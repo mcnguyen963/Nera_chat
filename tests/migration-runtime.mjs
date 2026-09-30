@@ -48,7 +48,7 @@ test('migration publishes a staged copy only after branch initialization', async
   assert.deepEqual(h.calls.map(([action]) => action), ['create', 'initialize', 'publish']);
   assert.equal(h.session.continuityEnabled, true);
   assert.equal(h.session.migrationStatus, 'ready');
-  assert.equal(h.session.continuityMode, 'reviewed');
+  assert.equal(h.session.continuityMode, 'balanced');
 });
 
 test('migration can create a Saver story and rejects an unsupported mode before writing', async () => {
@@ -79,4 +79,11 @@ test('migration publishes a Balanced story without changing review defaults', as
   await h.publish({ ...request, continuityMode: 'balanced' });
   assert.equal(h.session.continuityMode, 'balanced');
   assert.equal(h.session.continuitySaverReviewEveryTurn, false);
+});
+
+
+test('migration respects an explicit Reviewed selection despite the Balanced default', async () => {
+  const h = await harness();
+  await h.publish({ ...request, continuityMode: 'reviewed' });
+  assert.equal(h.session.continuityMode, 'reviewed');
 });

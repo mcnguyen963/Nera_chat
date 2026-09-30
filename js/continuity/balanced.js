@@ -15,7 +15,8 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
   if (await requestTokenCount(messages, BALANCED_TOOLS, count) > budget)
     throw new Error("Balanced preparation exceeds the context budget.");
   signal?.throwIfAborted();
-  const response = await complete({ settings: { ...settings, streaming: false }, messages,
+  const response = await complete({ settings: { ...settings, streaming: false,
+    reasoning: { ...settings.reasoning, enabled: false } }, messages,
     tools: BALANCED_TOOLS, toolChoice: "auto", signal });
   requireCompletedResponse(response, true);
   const calls = response.toolCalls ?? [];

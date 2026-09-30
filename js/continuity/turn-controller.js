@@ -4,7 +4,7 @@ import { sourceMessage } from "./state.js";
 import { buildContinuityContext, requestTokenCount, inputBudget } from "./context.js";
 import { NARRATOR_TOOLS, createStoryTools, runNarratorTools, requireCompletedResponse } from "./tools.js";
 import { REVIEWER_CONTRACT } from "./prompts.js";
-import { REVIEW_SCHEMA, validate } from "./schema.js";
+import { REVIEW_SCHEMA, MIGRATION_REVIEW_SCHEMA, validate } from "./schema.js";
 import { acceptedReceipt, validateReview } from "./store.js";
 
 // Separate entry point: no legacy summary, short-memory or plan-tag writes.
@@ -23,7 +23,7 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
   const snapshot = await store.load(branchId);
   const user = await sourceMessage({ id: `${turnId}_user`, role: mode === "author" ? "author" : "user", content: input, order: snapshot.state.throughOrder + 1 });
   const request = { branchId, turnId, baseRevision: snapshot.state.revision,
-    expectedActiveBranchId, user };
+    expectedActiveBranchId, user, migrationReview };
   const started = await store.beginTurn(request);
   if (started.status === "accepted") return started;
   try {
@@ -71,13 +71,14 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       }));
       const reviewInput = { branchId, baseRevision: request.baseRevision, turnId,
         priorState: { records, events }, sources, planProposals: executor.proposals };
-      const migrationPolicy = migrationReview ? "\nMIGRATION OUTPUT DISCIPLINE:\nConvert only the current author note into compact state. Archived transcript is not needed. Produce each record once, merge related facts where their meaning remains distinct, use short exact evidence excerpts (never copy the whole note), short descriptions and reasons, and no repeated prose or reasoning. Stop immediately after the complete JSON object. This is state extraction, not a new played scene. If the note cannot be represented completely within the schema limits, reject it with a concrete request to split or shorten the note; never silently omit important state." : "";
-      const reviewMessages = [{ role: "system", content: REVIEWER_CONTRACT + migrationPolicy + "\nSCHEMA:\n" + JSON.stringify(REVIEW_SCHEMA) },
+      const migrationPolicy = migrationReview ? "\nMIGRATION OUTPUT DISCIPLINE:\nConvert the current author note into established state. Archived transcript is not needed. Preserve consequential distinctions; brevity is a preference, not an additional output restriction. Produce each record once, use short exact evidence excerpts (never copy the whole note), and avoid repeated descriptions or reasoning. Stop after the complete JSON object. This is state extraction, not a new played scene. Do not reject merely because the note is long, detailed, or would require many records. There is no extra compact-output cap. The migration schema permits up to 500 operations and 500 events. Use that capacity when needed, keep different directional relationships, beliefs and unresolved consequences separate, and do not silently omit consequential state. Only reject for a concrete unresolved contradiction or a demonstrable schema limitation; identify the exact field and limit rather than speculating about response length." : "";
+      const reviewSchema = migrationReview ? MIGRATION_REVIEW_SCHEMA : REVIEW_SCHEMA;
+      const reviewMessages = [{ role: "system", content: REVIEWER_CONTRACT + migrationPolicy + "\nSCHEMA:\n" + JSON.stringify(reviewSchema) },
         { role: "user", content: JSON.stringify(reviewInput) }];
       const reviewSettings = { ...settings, streaming: migrationReview,
         maxResponseTokens: settings.continuityReviewMaxTokens ?? 4096,
         reasoning: { ...settings.reasoning, enabled: false } };
-      const responseFormat = structuredOutputs ? { type: "json_schema", json_schema: { name: "continuity_review", strict: true, schema: REVIEW_SCHEMA } } : undefined;
+      const responseFormat = structuredOutputs ? { type: "json_schema", json_schema: { name: "continuity_review", strict: true, schema: reviewSchema } } : undefined;
       const reviewCost = await requestTokenCount(reviewMessages, [], count) + (responseFormat ? await count(JSON.stringify(responseFormat)) : 0);
       if (reviewCost > inputBudget(reviewSettings)) throw new Error("Continuity review exceeds its context budget.");
       const reviewed = await complete({ settings: reviewSettings, messages: reviewMessages, responseFormat, signal, onProgress });
@@ -92,7 +93,7 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       requireCompletedResponse(reviewed);
       let review;
       try { review = JSON.parse(reviewed.content); } catch { throw new Error("Continuity reviewer returned invalid JSON."); }
-      validate(REVIEW_SCHEMA, review);
+      validate(reviewSchema, review);
       if (review.patch.branchId !== branchId || review.patch.baseRevision !== request.baseRevision || review.patch.turnId !== turnId)
         throw new Error("Review does not match the pending turn.");
       for (const operation of review.patch.operations) {
@@ -128,7 +129,9 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       onStatus("accepted");
       return result;
     }
-    throw new Error("Continuity review rejected both drafts: " + violations.join("; "));
+    throw new Error((migrationReview ? "Migration state extraction rejected the note: "
+      : draftOverride !== null ? "Continuity review rejected the supplied draft: "
+      : "Continuity review rejected both drafts: ") + violations.join("; "));
   } catch (error) {
     await store.failTurn(branchId, turnId, error.message).catch(() => {});
     onStatus("failed");

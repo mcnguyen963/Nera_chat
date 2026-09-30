@@ -64,7 +64,7 @@ export async function createSession(title, options = {}) {
     shortMemoryThroughOrder: 0,
     continuityEnabled: false,
     continuityBranchId: null,
-    continuityMode: "reviewed",
+    continuityMode: "balanced",
     continuitySaverReviewEveryTurn: false,
     continuityPendingTurnId: null,
     activeSummaryMessageId: null,

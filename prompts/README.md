@@ -62,11 +62,12 @@ can still require review even when the development is justified.
 ## Balanced mode
 
 Select **Settings → This story → Continuity mode → Balanced** for an enabled
-continuity story, or select it when creating a migration copy. Existing stories
-keep their selected mode. Balanced makes two model requests on a normal turn:
+continuity story, or select it when creating a migration copy. Balanced is the default when enabling continuity or creating a migration copy.
+Existing enabled stories keep their saved mode. Balanced makes two model requests on a normal turn:
 
 1. Context preparation requests up to eight read tools in one batch, or returns
-   Ready when no lookup is needed. A compact character directory supplies valid
+   Ready when no lookup is needed. Thinking is disabled for this request; narration
+   keeps your configured thinking setting. A compact character directory supplies valid
    IDs; current scene state and relevant consequences are already included.
 2. Narration receives the tool results and returns the Saver narration/state
    JSON. Updates are validated and saved atomically after narration.
@@ -90,8 +91,10 @@ separate reviewer and retrieval loop; Saver retains its single-request workflow.
 
 Migration sends the reviewed author note and a neutral migration marker to the
 state reviewer, without historical dialogue or the editable narrator prompt.
-The transcript is copied locally as archival messages. The reviewer is asked
-for compact state, short exact evidence excerpts, and one operation per record.
+The transcript is copied locally as archival messages. The reviewer preserves consequential state using short exact evidence excerpts
+and one operation per record. Migration allows up to 500 records and 500 events,
+while ordinary reviewed turns retain their 50-operation and 50-event limits.
+Brevity is a preference, not a reason to reject a detailed note.
 Migration uses the configured review output limit, falling back to the normal
 maximum response setting; a small input does not determine output size.
 

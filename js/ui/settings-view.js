@@ -498,7 +498,7 @@ function clearMessage() { if (el.message) el.message.textContent = ""; }
 function resetMigrationPanel() {
   preparedMigration = null;
   set("migration-note", "");
-  set("migration-mode", "reviewed");
+  set("migration-mode", "balanced");
   input("migration-panel").hidden = true;
   input("migration-preview").hidden = true;
   input("migration-preview").textContent = "";
