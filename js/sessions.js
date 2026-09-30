@@ -102,7 +102,7 @@ export async function deleteSession(sessionId) {
   const branchesPath = ["users", owner, "sessions", sessionId, "continuityBranches"];
   const branches = await getDocsFromServer(collection(db, ...branchesPath));
   for (const branch of branches.docs) {
-    for (const group of ["checkpoints", "events", "messages", "records", "turns"]) {
+    for (const group of ["checkpoints", "events", "messages", "records", "recordChunks", "turns"]) {
       await deleteCollection([...branchesPath, branch.id, group]);
     }
     await deleteDoc(doc(db, ...branchesPath, branch.id));
@@ -147,12 +147,14 @@ export async function duplicateSession(sourceId) {
   const branches = await getDocsFromServer(collection(db, ...sourceBranchesPath));
   for (const branch of branches.docs) {
     if (branch.data().status !== "ready") continue;
-    for (const group of ["checkpoints", "events", "messages", "records", "turns"]) {
+    for (const group of ["checkpoints", "events", "messages", "records", "recordChunks", "turns"]) {
+      if (group === "records" && branch.data().recordStorageVersion === 2) continue;
       await copyCollection([...sourceBranchesPath, branch.id, group], [...destinationBranchesPath, branch.id, group],
         (item) => group !== "turns" || item.data().status === "accepted");
     }
     const after = await getDocFromServer(branch.ref);
-    if (!after.exists() || after.data().status !== "ready" || after.data().revision !== branch.data().revision)
+    if (!after.exists() || after.data().status !== "ready" || after.data().revision !== branch.data().revision ||
+        after.data().recordStorageVersion !== branch.data().recordStorageVersion)
       throw new Error("Continuity branch changed while duplicating; retry the copy.");
     await setDoc(doc(db, ...destinationBranchesPath, branch.id), branch.data());
   }

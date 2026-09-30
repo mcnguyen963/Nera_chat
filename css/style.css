@@ -357,3 +357,12 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .settings-panel .profile-row select { flex-basis: 100%; }
   .settings-prompts textarea { width: 100%; min-height: clamp(260px, 45vh, 420px); }
 }
+
+/* Keep migration fields in document flow, including a resized author note. */
+#migration-panel { display: grid; gap: 16px; min-width: 0; }
+#migration-panel > label, #continuity-mode-controls > label {
+  display: flex; flex-direction: column; gap: 9px; min-width: 0;
+  font-size: 12px; color: #a4a4a4; line-height: 1.5;
+}
+#migration-panel textarea, #migration-panel select { display: block; max-width: 100%; }
+#continuity-mode-controls { display: grid; gap: 16px; margin-top: 16px; }

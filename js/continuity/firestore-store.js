@@ -1,3 +1,4 @@
+import { packRecordChunks, unpackRecordChunks } from "./record-chunks.js";
 import { assertUsableState, createStoryState, verifyStateSources } from "./state.js";
 import { verifyMessages, prepareCommit, acceptedReceipt, checkRetry } from "./store.js";
 import { validate, id } from "./schema.js";
@@ -15,9 +16,9 @@ export function validateInitialStoryStorage({ state, messages, parent = null }) 
   state.events.forEach(bounded);
   messages.forEach(bounded);
 }
-function metadata(state) {
+function metadata(state, recordChunkCount) {
   return { schemaVersion: state.schemaVersion, branchId: state.branchId, revision: state.revision,
-    throughOrder: state.throughOrder, status: "ready" };
+    throughOrder: state.throughOrder, status: "ready", recordStorageVersion: 2, recordChunkCount };
 }
 async function fingerprint(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
@@ -44,9 +45,10 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       verifyStateSources(state, messages);
       validateInitialStoryStorage({ state, messages, parent });
       const genesis = { state, parent };
+      const recordChunks = packRecordChunks(state.records);
       const initializationHash = await fingerprint({ state, messages, parent });
       const entries = [
-        ...state.records.map((record) => ["records", record.id, record]),
+        ...recordChunks.map((chunk) => ["recordChunks", chunk.id, chunk]),
         ...state.events.map((event) => ["events", event.id, event]),
         ...messages.map((message) => ["messages", message.id, message]),
       ];
@@ -61,7 +63,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
             throw new Error("Continuity branch already exists or has different initialization data.");
           return;
         }
-        tx.set(root(state.branchId), { ...metadata(state), status: "initializing",
+        tx.set(root(state.branchId), { ...metadata(state, recordChunks.length), status: "initializing",
           initializationId, initializationHash });
       });
       for (let i = 0; i < entries.length; i += 20) {
@@ -76,7 +78,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
             reserved.data().initializationId !== initializationId ||
             reserved.data().initializationHash !== initializationHash)
           throw new Error("Continuity branch initialization changed.");
-        tx.set(root(state.branchId), metadata(state));
+        tx.set(root(state.branchId), metadata(state, recordChunks.length));
         tx.set(child(state.branchId, "checkpoints", "initial"), genesis);
       });
     },
@@ -86,18 +88,43 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       for (let attempt = 0; attempt < 3; attempt++) {
         const before = await api.getDocFromServer(root(branchId));
         if (!before.exists() || before.data().status !== "ready") throw new Error("Continuity branch is not ready.");
-        const [records, events, page] = await Promise.all([all(branchId, "records"), all(branchId, "events"),
+        if (before.data().recordStorageVersion !== 2) {
+          if (before.data().recordStorageVersion != null)
+            throw new Error("Unsupported continuity record storage version.");
+          // Legacy data remains intact; chunks and the format marker publish in
+          // one revision-guarded transaction, so incomplete conversion is invisible.
+          const legacyRecords = await all(branchId, "records");
+          const chunks = packRecordChunks(legacyRecords);
+          const totalBytes = chunks.reduce((size, chunk) => size + new TextEncoder().encode(JSON.stringify(chunk)).length, 0);
+          if (chunks.length > 450 || totalBytes > MAX_COMMIT_BYTES)
+            throw new Error("Legacy continuity state is too large for automatic chunk conversion.");
+          await api.runTransaction(db, async (tx) => {
+            const head = await tx.get(root(branchId));
+            if (!head.exists() || head.data().status !== "ready" || head.data().revision !== before.data().revision)
+              return;
+            if (head.data().recordStorageVersion === 2) return;
+            if (head.data().recordStorageVersion != null)
+              throw new Error("Unsupported continuity record storage version.");
+            for (const chunk of chunks) tx.set(child(branchId, "recordChunks", chunk.id), chunk);
+            tx.set(root(branchId), { ...head.data(), recordStorageVersion: 2, recordChunkCount: chunks.length });
+          });
+          continue;
+        }
+        const [recordChunks, events, page] = await Promise.all([all(branchId, "recordChunks"), all(branchId, "events"),
           api.getDocsFromServer(api.query(api.collection(db, ...base, branchId, "messages"),
             api.orderBy("order", "desc"), api.limit(24)))]);
         const messages = page.docs.map((doc) => doc.data()).sort((a, b) => a.order - b.order);
         const after = await api.getDocFromServer(root(branchId));
         if (!after.exists() || after.data().status !== "ready") throw new Error("Continuity branch is not ready.");
         if (before.data().revision !== after.data().revision) continue;
-        const { status: _status, ...head } = after.data();
+        if (after.data().recordStorageVersion !== 2 || after.data().recordChunkCount !== before.data().recordChunkCount) continue;
+        const records = unpackRecordChunks(recordChunks, after.data().recordChunkCount);
+        const { status: _status, recordStorageVersion: _storage, recordChunkCount: _count, ...head } = after.data();
         const state = assertUsableState({ ...head, records,
           events: events.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id)) });
         await verifyMessages(messages);
-        return { state, messages: messages.sort((a, b) => a.order - b.order) };
+        return { state, messages: messages.sort((a, b) => a.order - b.order),
+          recordChunks: recordChunks.sort((a, b) => a.id.localeCompare(b.id)) };
       }
       throw new Error("Story changed while loading; retry with the latest revision.");
     },
@@ -192,10 +219,13 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
       const uniqueSources = new Map([...snapshot.messages, ...sourceMessages].map((message) => [message.id, message]));
       const prepared = prepareCommit({ ...snapshot, messages: [...uniqueSources.values()] }, pending, request);
       const newEvents = prepared.state.events.filter((event) => request.review.patch.events.some((item) => item.id === event.id));
-      const changedRecords = prepared.state.records.filter((record) => request.review.patch.operations.some((op) => op.record.id === record.id));
-      const writes = [metadata(prepared.state), prepared.turn, request.user, request.assistant,
+      const recordChunks = packRecordChunks(prepared.state.records, snapshot.recordChunks);
+      const previousChunks = new Map(snapshot.recordChunks.map((chunk) => [chunk.id, JSON.stringify(chunk)]));
+      const changedChunks = recordChunks.filter((chunk) => previousChunks.get(chunk.id) !== JSON.stringify(chunk));
+      const writes = [metadata(prepared.state, recordChunks.length), prepared.turn, request.user, request.assistant,
         ...(request.authorCorrection ? [request.authorCorrection] : []),
-        ...newEvents, ...changedRecords].map(bounded);
+        ...newEvents, ...changedChunks].map(bounded);
+      if (writes.length + 1 > 450) throw new Error("Continuity turn has too many Firestore writes.");
       const size = writes.reduce((bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length, 0);
       if (size > MAX_COMMIT_BYTES) throw new Error("Continuity turn exceeds the Firestore commit limit.");
       return api.runTransaction(db, async (tx) => {
@@ -213,7 +243,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
           throw new Error("Another Saver turn is awaiting state review.");
         if (!existing || !head.exists() || head.data().status !== "ready" || head.data().revision !== request.baseRevision)
           throw new Error("Stale or unavailable branch revision.");
-        tx.set(root(request.branchId), metadata(prepared.state));
+        tx.set(root(request.branchId), metadata(prepared.state, recordChunks.length));
         tx.update(session, { continuityPendingTurnId: null, updatedAt: api.serverTimestamp() });
         tx.set(child(request.branchId, "turns", request.turnId), prepared.turn);
         for (const message of [request.user, request.assistant,
@@ -221,8 +251,8 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
           tx.set(child(request.branchId, "messages", message.id), bounded(message));
         for (const event of newEvents)
           tx.set(child(request.branchId, "events", event.id), event);
-        for (const record of changedRecords)
-          tx.set(child(request.branchId, "records", record.id), record);
+        for (const chunk of changedChunks)
+          tx.set(child(request.branchId, "recordChunks", chunk.id), chunk);
         return acceptedReceipt(prepared.turn);
       });
     },

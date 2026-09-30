@@ -758,3 +758,94 @@ test("Balanced tracks an off-scene character retrieved outside the initial selec
   assert.ok(built.trace.eventIds.includes("A_knows"));
   assert.ok(built.apiMessages.some((m) => m.role === "tool" && m.content.includes("grieving")));
 });
+
+function chunkFirestoreHarness() {
+  const documents = new Map(), reads = [], writes = [];
+  const snap = (path) => ({ exists: () => documents.has(path), data: () => structuredClone(documents.get(path)) });
+  const api = {
+    doc: (_db, ...parts) => parts.join("/"), collection: (_db, ...parts) => parts.join("/"),
+    query: (target) => target, orderBy: () => null, limit: () => null,
+    getDocFromServer: async (path) => { reads.push(path); return snap(path); },
+    getDocsFromServer: async (path) => {
+      reads.push(path);
+      return { docs: [...documents.keys()].filter((key) => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/"))
+        .map((key) => ({ data: () => structuredClone(documents.get(key)) })) };
+    },
+    serverTimestamp: () => "now",
+    runTransaction: async (_db, callback) => {
+      const changes = [];
+      const result = await callback({ get: async (path) => snap(path),
+        set: (path, data) => changes.push([path, data]),
+        update: (path, data) => changes.push([path, { ...documents.get(path), ...data }]) });
+      changes.forEach(([path, data]) => { writes.push(path); documents.set(path, structuredClone(data)); });
+      return result;
+    },
+    writeBatch: () => {
+      const changes = [];
+      return { set: (path, data) => changes.push([path, data]), commit: async () => {
+        changes.forEach(([path, data]) => { writes.push(path); documents.set(path, structuredClone(data)); });
+      } };
+    },
+  };
+  const base = "users/u/sessions/s/continuityBranches/main";
+  documents.set("users/u/sessions/s", { continuityEnabled: true, continuityBranchId: "main" });
+  return { documents, reads, writes, base,
+    store: createFirestoreStoryStore({ api, db: {}, uid: "u", sessionId: "s" }) };
+}
+
+test("Firestore groups characters and their related state into one read and writes only changed chunks", async () => {
+  const h = chunkFirestoreHarness();
+  const { state, setup } = await hostileMotherStory();
+  await h.store.initialize({ state, messages: [setup], initializationId: "init_chunks" });
+  assert.equal(h.writes.filter((path) => path.includes("/recordChunks/")).length, 1);
+  assert.equal(h.writes.filter((path) => path.includes("/records/")).length, 0);
+  const loaded = await h.store.load("main");
+  assert.deepEqual({ ...loaded.state, events: [...loaded.state.events].sort((a, b) => a.id.localeCompare(b.id)), records: [...loaded.state.records].sort((a, b) => a.id.localeCompare(b.id)) },
+    { ...state, events: [...state.events].sort((a, b) => a.id.localeCompare(b.id)), records: [...state.records].sort((a, b) => a.id.localeCompare(b.id)) });
+  assert.ok(h.reads.includes(h.base + "/recordChunks"));
+  assert.ok(!h.reads.includes(h.base + "/records"));
+  h.writes.length = 0;
+  await runSaverTurn({ store: h.store, branchId: "main", turnId: "chunk_update", mode: "author",
+    input: "A is tense and the player is injured.", settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "The current conditions are recorded.",
+      events: [{ id: "conditions", kind: "author_setup", description: "A is tense and the player is injured.",
+        entityIds: ["char_A", "player"], supersedes: [], evidence: [{ from: "input", quote: "A is tense and the player is injured." }] }],
+      operations: ["char_A", "player"].map((id) => {
+        const old = state.records.find((r) => r.id === id);
+        return { record: { id, kind: "character", data: { ...old.data,
+          ...(id === "char_A" ? { emotion: "tense" } : { condition: "injured" }) } }, reason: "Author establishes conditions.",
+          eventIds: ["conditions"], evidence: [{ from: "input", quote: "A is tense and the player is injured." }] };
+      }),
+    }) }) });
+  assert.equal(h.writes.filter((path) => path.includes("/recordChunks/")).length, 1);
+  assert.equal((await h.store.load("main")).state.records.find((r) => r.id === "char_A").data.emotion, "tense");
+  h.writes.length = 0;
+  await runSaverTurn({ store: h.store, branchId: "main", turnId: "chunk_unchanged", input: "I wait.", settings: settings(), count,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration: "A stays distant.", events: [], operations: [] }) }) });
+  assert.equal(h.writes.filter((path) => path.includes("/recordChunks/")).length, 0);
+});
+
+test("legacy Firestore state converts once without changing story revision or deleting source records", async () => {
+  const h = chunkFirestoreHarness();
+  const { state, setup } = await hostileMotherStory();
+  await h.store.initialize({ state, messages: [setup], initializationId: "init_legacy" });
+  const head = h.documents.get(h.base);
+  delete head.recordStorageVersion; delete head.recordChunkCount;
+  for (const key of [...h.documents.keys()]) if (key.includes("/recordChunks/")) h.documents.delete(key);
+  state.records.forEach((record) => h.documents.set(h.base + "/records/" + record.id, record));
+  h.writes.length = 0;
+  const loaded = (await h.store.load("main")).state;
+  assert.deepEqual({ ...loaded, events: [...loaded.events].sort((a, b) => a.id.localeCompare(b.id)), records: [...loaded.records].sort((a, b) => a.id.localeCompare(b.id)) },
+    { ...state, events: [...state.events].sort((a, b) => a.id.localeCompare(b.id)), records: [...state.records].sort((a, b) => a.id.localeCompare(b.id)) });
+  assert.equal(h.documents.get(h.base).recordStorageVersion, 2);
+  assert.equal(h.documents.get(h.base).revision, state.revision);
+  assert.equal(h.writes.filter((path) => path.includes("/recordChunks/")).length, 1);
+  assert.ok(h.documents.has(h.base + "/records/char_A"));
+  h.reads.length = 0; h.writes.length = 0;
+  await h.store.load("main");
+  assert.equal(h.writes.length, 0);
+  assert.ok(!h.reads.includes(h.base + "/records"));
+  h.documents.delete(h.base + "/recordChunks/chunk_000000");
+  await assert.rejects(h.store.load("main"), /Missing or invalid/);
+});

@@ -253,8 +253,24 @@ event IDs, and exact source references):
 
 Continuity data lives below
 `users/{uid}/sessions/{sessionId}/continuityBranches/{branchId}` in separate
-`records`, `events`, `messages`, `turns`, and `checkpoints` collections. Creation
-reserves a branch as `initializing`, stages child documents, and publishes it as
+`recordChunks`, `events`, `messages`, `turns`, and `checkpoints` collections.
+Current character profiles, relationships, beliefs, consequences, and other state
+records share chunks capped at 100 records or 250 KiB of UTF-8 JSON. A normal
+small story uses one state chunk. Only changed chunks are written on acceptance;
+a turn with no state changes writes no state chunks. Records retain their own
+versions and provenance inside a chunk. Growth spills into additional chunks
+without shifting unrelated existing chunks.
+
+Older continuity branches convert their per-record `records` collection on first
+load. Chunks and `recordStorageVersion: 2` publish in one revision-guarded
+transaction. Legacy documents are retained but are no longer read by normal turns.
+Conversion does not change the story revision, transcript, or initial checkpoint.
+Duplicate copies the active chunks; deletion also removes both storage formats.
+Missing chunks fail visibly rather than silently falling back to stale records.
+Events remain separate documents, so historical event reads still grow with the
+story; this change reduces current-state document operations only.
+
+Creation reserves a branch as `initializing`, stages child documents, and publishes it as
 `ready` with its initial checkpoint. A partial initialization cannot be loaded;
 retry it with the same initialization ID and unchanged input. Accepted
 turn records are bounded below 250 KiB, and a branch head revision protects

@@ -250,3 +250,18 @@ test('duplicating and deleting a migrated session handles chunks and legacy docs
   assert.equal([...h.documents.keys()].some((path) => path.startsWith(h.sessionPath + '/')), false);
   assert.equal((await h.api.getMessages(copyId)).length, 250);
 });
+
+test('duplicating and deleting continuity stories includes state chunks and retained legacy records', async () => {
+  const h = await setup();
+  const branch = h.sessionPath + '/continuityBranches/main';
+  h.documents.set(branch, { status: 'ready', revision: 1, recordStorageVersion: 2, recordChunkCount: 1 });
+  h.documents.set(branch + '/recordChunks/chunk_000000', { id: 'chunk_000000', records: [{ id: 'char_A', data: { name: 'A' } }] });
+  h.documents.set(branch + '/records/char_A', { id: 'char_A', data: { name: 'Obsolete A' } });
+  const copyId = await h.sessions.duplicateSession('s');
+  const copy = `users/u/sessions/${copyId}/continuityBranches/main`;
+  assert.equal(h.documents.get(copy + '/recordChunks/chunk_000000').records[0].data.name, 'A');
+  assert.equal(h.documents.has(copy + '/records/char_A'), false);
+  await h.sessions.deleteSession('s');
+  assert.equal([...h.documents.keys()].some((path) => path.startsWith(h.sessionPath + '/')), false);
+  assert.equal(h.documents.has(copy + '/recordChunks/chunk_000000'), true);
+});
