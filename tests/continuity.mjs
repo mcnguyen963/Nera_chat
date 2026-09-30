@@ -11,7 +11,7 @@ import { runContinuityTurn } from "../js/continuity/turn-controller.js";
 import { prepareContinuityMigration } from "../js/continuity/migration.js";
 import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody } from "../js/llm-client.js";
-import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, validate } from "../js/continuity/schema.js";
+import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, normalizeMigrationReview, validate } from "../js/continuity/schema.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
 
@@ -976,4 +976,47 @@ test("migration event reference bounds remain explicit and normal turns retain t
   assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, candidate), /received 0; expected 1 to 500 items/);
   op.eventIds = Array.from({ length: 501 }, (_, i) => `event_${i}`);
   assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, candidate), /received 501; expected 1 to 500 items/);
+});
+
+for (const shape of ['repeated metadata', 'flattened patch']) {
+  test(`migration accepts ${shape} without losing state or making another model request`, async () => {
+    const facts = Array.from({ length: 60 }, (_, i) => `A acquired artifact ${i}.`);
+    let calls = 0;
+    const prepared = await prepareContinuityMigration({ legacyMessages: [
+      { id: 'old', order: 1, role: 'assistant', content: 'A waits in the archive.' },
+    ], authorNote: facts.join('\n'), settings: settings(), count, complete: async (request) => {
+      calls++;
+      const packet = JSON.parse(request.messages[1].content);
+      const candidate = migrationProfileReview(packet, facts);
+      const output = shape === 'repeated metadata'
+        ? { ...candidate, branchId: candidate.patch.branchId, baseRevision: candidate.patch.baseRevision, turnId: candidate.patch.turnId }
+        : { verdict: candidate.verdict, violations: candidate.violations, ...candidate.patch };
+      return { finishReason: 'stop', content: JSON.stringify(output) };
+    } });
+    assert.equal(calls, 1);
+    assert.equal(prepared.state.records.length, 17);
+    assert.equal(prepared.state.events.length, 60);
+    assert.equal(prepared.state.records[16].eventIds.length, 60);
+    assert.equal(prepared.state.records[16].data.background, facts.join('\n'));
+  });
+}
+
+test('migration normalization rejects conflicts and retains unknown fields for strict validation', () => {
+  const canonical = review('main', 0, 'normalize');
+  assert.throws(() => normalizeMigrationReview({ ...canonical, branchId: 'other' }), /Conflicting migration review field: branchId/);
+  assert.throws(() => normalizeMigrationReview({ ...canonical, events: [{ id: 'extra' }] }), /Conflicting migration review field: events/);
+  const unknown = normalizeMigrationReview({ ...canonical, branchId: 'main', commentary: 'Extra output' });
+  assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, unknown), /unknown field commentary/);
+  const missing = normalizeMigrationReview({ ...canonical.patch });
+  assert.throws(() => validate(MIGRATION_REVIEW_SCHEMA, missing), /missing verdict/);
+  assert.throws(() => normalizeMigrationReview({ ...canonical, patch: null, branchId: 'main' }), /patch must be an object/);
+  assert.equal(Object.hasOwn(canonical, 'branchId'), false, 'Normalization does not mutate the original response');
+});
+
+test('migration normalization recognizes identical duplicated patch data regardless of object key order', () => {
+  const canonical = review('main', 0, 'identical');
+  canonical.patch.events = [{ id: 'same', description: 'Same data' }];
+  const normalized = normalizeMigrationReview({ ...canonical, events: [{ description: 'Same data', id: 'same' }] });
+  assert.deepEqual(normalized.patch.events, canonical.patch.events);
+  assert.equal(Object.hasOwn(normalized, 'events'), false);
 });

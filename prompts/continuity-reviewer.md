@@ -25,7 +25,7 @@ A draft's own declaration that a character forgave the player is not sufficient 
 
 EXTRACTION
 
-Return only JSON matching the appended review schema. For accept, verdict="accept" and violations=[]. For reject, verdict="reject", concrete violations, and an empty events/operations patch. In either case, copy branchId, baseRevision, and turnId exactly from the input.
+Return only JSON matching the appended review schema. The only top-level fields are verdict, violations, and patch. Put branchId, baseRevision, turnId, events, and operations inside patch; do not repeat them at the top level. For accept, verdict="accept" and violations=[]. For reject, verdict="reject", concrete violations, and an empty events/operations patch. In either case, copy branchId, baseRevision, and turnId exactly from the input into patch.
 
 Do not reject harmless prose solely because it introduces no persistent state. An accepted ordinary turn may have an empty patch. A current author note that establishes or corrects state must produce supported events and operations rather than an empty acknowledgement.
 

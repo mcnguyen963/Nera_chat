@@ -42,6 +42,32 @@ export const REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
 export const MIGRATION_REVIEW_SCHEMA = object({ verdict: choice("accept", "reject"),
   violations: list(string()), patch: PATCH_SCHEMA });
 
+// Some reviewers repeat patch fields at the top level or flatten the envelope.
+// Move only known fields; never infer acceptance, drop state, or prefer one
+// conflicting value. The complete schema and evidence checks still run afterward.
+export function normalizeMigrationReview(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const keys = Object.keys(PATCH_SCHEMA.properties).filter((key) => Object.hasOwn(value, key));
+  if (!keys.length) return value;
+  if (Object.hasOwn(value, "patch") && (!value.patch || typeof value.patch !== "object" || Array.isArray(value.patch)))
+    throw new Error("Migration reviewer patch must be an object.");
+  const normalized = { ...value, patch: { ...(value.patch ?? {}) } };
+  for (const key of keys) {
+    if (Object.hasOwn(normalized.patch, key) && !sameJSON(normalized.patch[key], value[key]))
+      throw new Error(`Conflicting migration review field: ${key}`);
+    normalized.patch[key] = value[key];
+    delete normalized[key];
+  }
+  return normalized;
+}
+
+function sameJSON(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameJSON(a[key], b[key]));
+}
+
 // Deliberately limited to the JSON Schema vocabulary emitted above. Unknown
 // provider output must pass the same checks even without structured outputs.
 export function validate(schema, value, path = "value") {

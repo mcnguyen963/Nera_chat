@@ -4,7 +4,7 @@ import { sourceMessage } from "./state.js";
 import { buildContinuityContext, requestTokenCount, inputBudget } from "./context.js";
 import { NARRATOR_TOOLS, createStoryTools, runNarratorTools, requireCompletedResponse } from "./tools.js";
 import { REVIEWER_CONTRACT } from "./prompts.js";
-import { REVIEW_SCHEMA, MIGRATION_REVIEW_SCHEMA, validate } from "./schema.js";
+import { REVIEW_SCHEMA, MIGRATION_REVIEW_SCHEMA, normalizeMigrationReview, validate } from "./schema.js";
 import { acceptedReceipt, validateReview } from "./store.js";
 
 // Separate entry point: no legacy summary, short-memory or plan-tag writes.
@@ -93,6 +93,7 @@ export async function runContinuityTurn({ store, branchId, turnId, input, settin
       requireCompletedResponse(reviewed);
       let review;
       try { review = JSON.parse(reviewed.content); } catch { throw new Error("Continuity reviewer returned invalid JSON."); }
+      if (migrationReview) review = normalizeMigrationReview(review);
       validate(reviewSchema, review);
       if (review.patch.branchId !== branchId || review.patch.baseRevision !== request.baseRevision || review.patch.turnId !== turnId)
         throw new Error("Review does not match the pending turn.");
