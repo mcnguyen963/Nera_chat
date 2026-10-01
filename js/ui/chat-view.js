@@ -537,7 +537,9 @@ function renderMessages(msgs) {
     editingState = null; // the edited message was deleted remotely
   }
   const sticky = isNearBottom();
-  const visible = msgs.slice(-visibleCount);
+  // Migration author notes remain stored as provenance, but are not story dialogue.
+  const displayable = msgs.filter((message) => !(message.archived && message.role === "author"));
+  const visible = displayable.slice(-visibleCount);
   const visibleIds = new Set(visible.map((m) => m.id));
   for (const [id, entry] of renderedMessages) {
     if (!visibleIds.has(id)) {
@@ -564,7 +566,7 @@ function renderMessages(msgs) {
     }
     anchor = entry.node;
   }
-  if (hasEarlier || msgs.length > visible.length) {
+  if (hasEarlier || displayable.length > visible.length) {
     el.earlierBtn.textContent = "Show earlier messages";
     if (el.earlierBtn.parentNode !== el.list || el.earlierBtn.nextSibling !== anchor) {
       el.list.insertBefore(el.earlierBtn, anchor);
