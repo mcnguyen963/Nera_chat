@@ -1,6 +1,6 @@
 import { packRecordChunks, unpackRecordChunks } from "./record-chunks.js";
 import { assertUsableState, createStoryState, verifyStateSources } from "./state.js";
-import { verifyMessages, prepareCommit, acceptedReceipt, checkRetry } from "./store.js";
+import { verifyMessages, prepareCommit, acceptedReceipt, checkRetry, changePendingDraft } from "./store.js";
 import { validate, id } from "./schema.js";
 
 export const MAX_DOCUMENT_BYTES = 250 * 1024;
@@ -166,6 +166,7 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
         const existing = run.exists() ? run.data() : null;
         checkRetry(existing, request);
         if (existing?.status === "accepted") return acceptedReceipt(existing);
+        if (existing?.status === "rejected") throw new Error("This draft was rejected. Start a new turn.");
         if (existing?.status === "needs_state_review")
           throw new Error("Resolve the pending Saver turn before continuing.");
         if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
@@ -195,13 +196,31 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
             !head.exists() || head.data().revision !== request.baseRevision || !turn.exists())
           throw new Error("Story changed while saving the pending Saver turn.");
         checkRetry(turn.data(), request);
-        if (turn.data().status === "accepted")
+        if (["accepted", "rejected"].includes(turn.data().status))
           throw new Error("Saver turn was resolved on another device.");
         if (turn.data().assistant && turn.data().assistant.contentHash !== assistant.contentHash)
           throw new Error("A different Saver draft is already pending.");
         tx.set(child(request.branchId, "turns", request.turnId), pending);
         tx.update(session, { continuityBranchId: request.branchId,
           continuityPendingTurnId: request.turnId, updatedAt: api.serverTimestamp() });
+      });
+    },
+    async changePendingDraft(request) {
+      if (request.assistant) await verifyMessages([request.assistant]);
+      return api.runTransaction(db, async (tx) => {
+        const active = await tx.get(session);
+        const head = await tx.get(root(request.branchId));
+        const turn = await tx.get(child(request.branchId, "turns", request.turnId));
+        if (!active.exists() || !active.data().continuityEnabled ||
+            active.data().continuityBranchId !== request.expectedActiveBranchId ||
+            active.data().continuityPendingTurnId !== request.turnId ||
+            !head.exists() || head.data().status !== "ready" || !turn.exists())
+          throw new Error("Pending draft changed on another device.");
+        const changed = bounded(changePendingDraft(turn.data(), request, head.data()));
+        tx.set(child(request.branchId, "turns", request.turnId), changed);
+        tx.update(session, { continuityPendingTurnId: request.action === "reject" ? null : request.turnId,
+          updatedAt: api.serverTimestamp() });
+        return changed;
       });
     },
     async commitTurn(request) {
@@ -235,6 +254,9 @@ export function createFirestoreStoryStore({ api, db, uid, sessionId }) {
         const existing = run.exists() ? run.data() : null;
         checkRetry(existing, request);
         if (existing?.status === "accepted") return acceptedReceipt(existing);
+        if (!["pending", "needs_state_review"].includes(existing?.status)) throw new Error("This draft was already resolved.");
+        if (existing.assistant && existing.assistant.contentHash !== request.assistant.contentHash)
+          throw new Error("Pending narration changed during resolution.");
         if (!activeSession.exists() || !activeSession.data().continuityEnabled ||
             activeSession.data().continuityBranchId !== request.expectedActiveBranchId)
           throw new Error("The active story branch changed on another device.");

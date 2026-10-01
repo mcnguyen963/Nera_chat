@@ -119,6 +119,10 @@ async function harness() {
       },
     },
     'continuity/saver.js': {
+      rejectSaverPending: async (request) => {
+        calls.rejectedPending = request;
+        return { user: { role: 'user', content: calls.saverTurns.at(-1).input } };
+      },
       runBalancedTurn: async (request) => {
         calls.continuityTurns.push({ ...request, balanced: true });
         request.onStatus('accepted');
@@ -927,4 +931,35 @@ test('Continuity context shows positive token usage before sending and keeps mes
   assert.equal(h.calls.continuityStateLoads, reads);
   assert.equal(h.calls.continuityTurns.length, 0);
   assert.equal(h.calls.requests.length, 0);
+});
+
+
+test('Pending narration exposes edit, rejection and regeneration and reject restores input without generating', async () => {
+  const h = await harness();
+  h.state.settings.apiKey = 'test-key'; h.state.settings.modelId = 'test-model';
+  h.calls.saverRequireReview = true;
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityBranchId: 'main', continuityMode: 'saver',
+  }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.el('composer-mode').value = 'player'; h.el('chat-input').value = 'I wait.';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  const descend = (node) => [node, ...node.children.flatMap(descend)];
+  const actions = descend(h.el('message-list'));
+  assert.ok(actions.some((node) => node.textContent === 'Edit'));
+  assert.ok(actions.some((node) => node.textContent === 'Regenerate'));
+  const reject = actions.find((node) => node.textContent === 'Reject draft');
+  assert.ok(reject);
+  await reject.dispatchEvent({ type: 'click', stopPropagation() {} });
+  for (let attempt = 0; h.el('chat-input').disabled && attempt < 100; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.ok(h.calls.rejectedPending);
+  assert.equal(h.calls.saverTurns.length, 1);
+  assert.equal(h.el('chat-input').value, 'I wait.');
+  assert.equal(h.el('chat-input').disabled, false);
+  assert.equal(h.el('btn-send').disabled, false);
+  assert.ok(!descend(h.el('message-list')).some((node) => node.textContent === 'Reject draft'));
 });

@@ -47,6 +47,20 @@ export function prepareCommit(snapshot, pending, request) {
   return { state, messages, turn };
 }
 
+export function changePendingDraft(pending, request, state) {
+  if (!pending || pending.status !== "needs_state_review" || pending.baseRevision !== state.revision ||
+      pending.assistant.contentHash !== request.expectedAssistantHash)
+    throw new Error("Pending draft changed or was already resolved. Reload it before continuing.");
+  if (request.action === "reject") return { ...pending, status: "rejected", error: "Rejected by the user." };
+  if (request.action !== "edit" || request.assistant.id !== pending.assistant.id ||
+      request.assistant.order !== pending.assistant.order || request.assistant.role !== "assistant" ||
+      request.assistant.revision !== pending.assistant.revision + 1)
+    throw new Error("Invalid pending narration edit.");
+  return { ...pending, assistant: request.assistant,
+    proposal: { narration: request.assistant.content, events: [], operations: [] },
+    error: "Narration edited. The previous proposed state was discarded; review or repair the edited narration's state before accepting." };
+}
+
 export function acceptedReceipt(turn) {
   return structuredClone({ status: "accepted", turnId: turn.turnId, branchId: turn.branchId,
     revision: turn.revision, assistant: turn.assistant });
@@ -96,6 +110,7 @@ export function createMemoryStoryStore() {
       const existing = data.turns.get(request.turnId);
       checkRetry(existing, request);
       if (existing?.status === "accepted") return acceptedReceipt(existing);
+      if (existing?.status === "rejected") throw new Error("This draft was rejected. Start a new turn.");
       if (existing?.status === "needs_state_review")
         throw new Error("Resolve the pending Saver turn before continuing.");
       if (data.state.revision !== request.baseRevision) throw new Error("Stale branch revision.");
@@ -107,11 +122,20 @@ export function createMemoryStoryStore() {
       const data = branch(request.branchId);
       const pending = data.turns.get(request.turnId);
       checkPending({ state: data.state }, pending, request);
-      if (pending.status === "accepted") throw new Error("Saver turn was resolved on another device.");
+      if (["accepted", "rejected"].includes(pending.status)) throw new Error("Saver turn was resolved on another device.");
       if (pending.status === "needs_state_review" && pending.assistant?.contentHash !== assistant.contentHash)
         throw new Error("A different Saver draft is already pending.");
       data.turns.set(request.turnId, structuredClone({ ...pending, expectedActiveBranchId: request.branchId, assistant,
         proposal, trace, error: String(error).slice(0, 2000), status: "needs_state_review" }));
+    },
+    async changePendingDraft(request) {
+      if (request.assistant) await verifyMessages([request.assistant]);
+      const data = branch(request.branchId);
+      const pending = data.turns.get(request.turnId);
+      if (request.expectedActiveBranchId !== request.branchId) throw new Error("Active branch changed.");
+      const changed = changePendingDraft(pending, request, data.state);
+      data.turns.set(request.turnId, structuredClone(changed));
+      return structuredClone(changed);
     },
     async commitTurn(request) {
       await verifyMessages([request.user, request.assistant]);
@@ -119,6 +143,7 @@ export function createMemoryStoryStore() {
       const existing = data.turns.get(request.turnId);
       checkRetry(existing, request);
       if (existing?.status === "accepted") return acceptedReceipt(existing);
+      if (!["pending", "needs_state_review"].includes(existing?.status)) throw new Error("This draft was already resolved.");
       if (existing?.assistant && existing.assistant.contentHash !== request.assistant.contentHash)
         throw new Error("Pending narration changed during resolution.");
       const sourceIds = [...new Set(request.review.patch.events.flatMap((event) => event.sources.map((ref) => ref.messageId))

@@ -178,6 +178,24 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
   }
 }
 
+export async function editSaverPending({ store, branchId, turnId, narration, expectedAssistantHash,
+  expectedActiveBranchId = branchId }) {
+  const pending = await store.readTurn(branchId, turnId);
+  if (pending?.status !== "needs_state_review") throw new Error("No pending narration to edit.");
+  const assistant = await sourceMessage({ ...pending.assistant, content: narration,
+    revision: pending.assistant.revision + 1 });
+  return store.changePendingDraft({ branchId, turnId, action: "edit", assistant,
+    expectedAssistantHash: expectedAssistantHash ?? pending.assistant.contentHash, expectedActiveBranchId });
+}
+
+export async function rejectSaverPending({ store, branchId, turnId, expectedAssistantHash,
+  expectedActiveBranchId = branchId }) {
+  const pending = await store.readTurn(branchId, turnId);
+  if (pending?.status !== "needs_state_review") throw new Error("No pending draft to reject.");
+  return store.changePendingDraft({ branchId, turnId, action: "reject",
+    expectedAssistantHash: expectedAssistantHash ?? pending.assistant.contentHash, expectedActiveBranchId });
+}
+
 export async function acceptSaverPending({ store, branchId, turnId }) {
   const pending = await store.readTurn(branchId, turnId);
   if (pending?.status !== "needs_state_review") throw new Error("No Saver turn needs approval.");

@@ -109,6 +109,12 @@ export function initChatView() {
   el.summarizeBtn.addEventListener("click", handleSummarize);
   document.addEventListener("summarize-full", handleFullSummarize);
   document.addEventListener("reset-summary", handleResetSummary);
+  document.addEventListener("reject-continuity-draft", (event) => {
+    const detail = event.detail;
+    if (detail?.sessionId !== state.sessionId || detail?.turnId !== session?.continuityPendingTurnId)
+      return showTransientError("Pending draft changed. Reload it before rejecting.");
+    void resolvePendingNarration({ contentHash: detail.contentHash }, "reject");
+  });
 
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
   // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
@@ -367,7 +373,7 @@ function subscribeChat(sessionId) {
           session.longTermPlan !== previous.longTermPlan) {
         document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
       }
-      if (branchId && session?.continuityPendingTurnId !== previous?.continuityPendingTurnId)
+      if (branchId && (session?.continuityPendingTurnId || session?.continuityPendingTurnId !== previous?.continuityPendingTurnId))
         void refreshPendingContinuity(sessionId, branchId);
       updateWelcome();
       queueCacheSave();
@@ -614,7 +620,7 @@ function renderMessage(m) {
   const actions = document.createElement("span");
   actions.className = "msg-actions";
   actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
-  if (!m.archived && !m.pendingSaver && !m.audit && (m.role === "user" || m.role === "author" || m.role === "assistant" || m.role === "summary")) {
+  if (!m.archived && (!m.pendingSaver || m.role === "assistant") && !m.audit && (m.role === "user" || m.role === "author" || m.role === "assistant" || m.role === "summary")) {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
   if (!m.archived && !m.pendingSaver && !m.audit) actions.appendChild(actionBtn(session?.continuityEnabled ? "Rewind" : "Delete", "del", async () => {
@@ -637,6 +643,8 @@ function renderMessage(m) {
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
   }));
   if (m.role === "assistant" && m.pendingSaver) {
+    actions.appendChild(actionBtn("Reject draft", "del", () => resolvePendingNarration(m, "reject")));
+    actions.appendChild(actionBtn("Regenerate", "regen", () => resolvePendingNarration(m, "regenerate")));
     actions.appendChild(actionBtn("Review state", null, () =>
       document.dispatchEvent(new CustomEvent("open-continuity-editor"))));
   }
@@ -721,6 +729,11 @@ function startEdit(m, wrap) {
     cancel.disabled = true;
     try {
       if (session?.continuityEnabled) {
+        if (m.pendingSaver) {
+          if (!await resolvePendingNarration(m, "edit", text)) return;
+          finish();
+          return;
+        }
         if (!await reviseContinuityTurn(m, "edit", text)) return;
         editingState = null;
         return;
@@ -947,6 +960,42 @@ async function handleSend(e) {
   } finally {
     setBusy(false);
   }
+}
+
+async function resolvePendingNarration(message, action, text) {
+  if (busy || !session?.continuityPendingTurnId) return false;
+  const selectedSession = session.id;
+  const branchId = session.continuityBranchId || "main";
+  const turnId = session.continuityPendingTurnId;
+  setBusy(true);
+  try {
+    const runtime = await loadContinuity();
+    const store = runtime.storyStore(selectedSession);
+    const request = { store, branchId, turnId, expectedAssistantHash: message?.contentHash };
+    if (action === "edit") {
+      const pending = await runtime.editSaverPending({ ...request, narration: text });
+      lastMessages = lastMessages.map((item) => item.id === pending.assistant.id
+        ? { ...pending.assistant, pendingSaver: true } : item);
+      renderMessages(lastMessages);
+      setStatus("Narration edited. Review its state before continuing.");
+    } else {
+      const rejected = await runtime.rejectSaverPending(request);
+      editingState = null;
+      session = { ...session, continuityPendingTurnId: null };
+      continuityRetry = null;
+      lastMessages = lastMessages.filter((item) => !item.pendingSaver);
+      renderMessages(lastMessages);
+      updateWelcome();
+      el.mode.value = rejected.user.role === "author" ? "author" : "player";
+      el.input.value = rejected.user.content;
+      if (action === "regenerate") {
+        const result = await sendContinuityTurn(rejected.user.content, el.mode.value);
+        if (result) el.input.value = "";
+      } else setStatus("Draft and proposed state rejected. Your input is restored; the accepted story is unchanged.");
+    }
+    return true;
+  } catch (error) { showTransientError(error.message); return false; }
+  finally { setBusy(false); }
 }
 
 async function sendContinuityTurn(input, mode, options = {}) {

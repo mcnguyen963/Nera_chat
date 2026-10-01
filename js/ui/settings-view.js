@@ -166,6 +166,14 @@ export function initSettingsView() {
   input("btn-load-continuity-editor").addEventListener("click", loadContinuityEditor);
   input("btn-save-continuity-editor").addEventListener("click", saveContinuityEditor);
   input("btn-accept-continuity-proposal").addEventListener("click", acceptContinuityProposal);
+  input("btn-reject-continuity-proposal").addEventListener("click", () => {
+    if (!editorPending || saving || state.busy) return;
+    const detail = { sessionId: editorState.sessionId, turnId: editorPending.turnId,
+      contentHash: editorPending.assistant.contentHash };
+    closeSettingsPopup();
+    if (!el.overlay.classList.contains("hidden")) return;
+    document.dispatchEvent(new CustomEvent("reject-continuity-draft", { detail }));
+  });
   input("btn-repair-continuity").addEventListener("click", repairContinuityEditor);
   document.addEventListener("open-continuity-editor", () => {
     openSettingsPopup();
@@ -705,6 +713,7 @@ async function loadContinuityEditor() {
     set("continuity-new-record", "");
     input("btn-repair-continuity").hidden = !editorPending;
     input("btn-accept-continuity-proposal").hidden = !editorPending;
+    input("btn-reject-continuity-proposal").hidden = !editorPending;
     status.textContent = editorPending
       ? `Narration saved; state needs review: ${editorPending.error || "Invalid state update"}`
       : `Revision ${loaded.state.revision} · ${ids.length} records`;

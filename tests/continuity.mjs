@@ -11,7 +11,7 @@ import { createFirestoreStoryStore } from "../js/continuity/firestore-store.js";
 import { createStoryTools, NARRATOR_TOOLS, runNarratorTools } from "../js/continuity/tools.js";
 import { runContinuityTurn } from "../js/continuity/turn-controller.js";
 import { prepareContinuityMigration, prepareManualContinuityMigration } from "../js/continuity/migration.js";
-import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
+import { runBalancedTurn, runSaverTurn, acceptSaverPending, editSaverPending, rejectSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody, chatCompletion } from "../js/llm-client.js";
 import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, normalizeMigrationReview, validate } from "../js/continuity/schema.js";
 
@@ -1287,4 +1287,40 @@ test("Compact updates retain protected relationship checks", async () => {
         reason: "She says so.", eventIds: ["claim_trust"], evidence: [{ from: "narration", quote: narration }] }] }) }) });
   assert.equal(result.status, "needs_state_review");
   assert.equal((await store.load("main")).state.records.find((record) => record.id === "rel_A_player").data.trust, "deep distrust");
+});
+
+
+for (const backend of ["memory", "firestore"]) test(`${backend}: pending edits invalidate state and rejection unlocks without accepting prose`, async () => {
+  const story = await hostileMotherStory();
+  let store = story.store;
+  let h;
+  if (backend === "firestore") {
+    h = chunkFirestoreHarness(); store = h.store;
+    await store.initialize({ state: story.state, messages: [story.setup], initializationId: "pending_actions" });
+  }
+  const before = await store.load("main");
+  await runSaverTurn({ store, branchId: "main", turnId: "pending_actions", input: "I wait.",
+    settings: settings(), count, reviewEveryTurn: true,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration: "A waits. This reply is too long.", events: [], operations: [] }) }) });
+  const original = await store.readPending("main");
+  const edited = await editSaverPending({ store, branchId: "main", turnId: original.turnId,
+    narration: "A waits.", expectedAssistantHash: original.assistant.contentHash });
+  assert.equal(edited.assistant.revision, original.assistant.revision + 1);
+  assert.equal(edited.assistant.content, "A waits.");
+  assert.deepEqual(edited.proposal, { narration: "A waits.", events: [], operations: [] });
+  await assert.rejects(rejectSaverPending({ store, branchId: "main", turnId: original.turnId,
+    expectedAssistantHash: original.assistant.contentHash }), /changed/);
+  await rejectSaverPending({ store, branchId: "main", turnId: edited.turnId,
+    expectedAssistantHash: edited.assistant.contentHash });
+  assert.equal(await store.readPending("main"), null);
+  assert.equal((await store.readTurn("main", edited.turnId)).status, "rejected");
+  await assert.rejects(acceptSaverPending({ store, branchId: "main", turnId: edited.turnId }), /No Saver/);
+  const after = await store.load("main");
+  assert.deepEqual(after.state, before.state);
+  assert.deepEqual(after.messages, before.messages);
+  if (h) assert.equal(h.documents.get("users/u/sessions/s").continuityPendingTurnId, null);
+  await runSaverTurn({ store, branchId: "main", turnId: "fresh_after_rejection", input: "I wait.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A remains distant.", events: [], operations: [] }) }) });
+  assert.equal((await store.load("main")).state.revision, before.state.revision + 1);
 });
