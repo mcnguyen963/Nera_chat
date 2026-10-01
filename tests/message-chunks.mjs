@@ -254,3 +254,74 @@ test('duplicating and deleting a migrated session handles chunks and legacy docs
   assert.equal([...h.documents.keys()].some((path) => path.startsWith(h.sessionPath + '/')), false);
   assert.equal((await h.api.getMessages(copyId)).length, 250);
 });
+
+test('partial copy counts existing messages across chunks and appends independently', async () => {
+  const h = await setup(250);
+  await h.api.ensureChunked('s');
+  await h.api.deleteMessage('s', 'm2', 2);
+  Object.assign(h.documents.get(h.sessionPath), {
+    longTermPlan: 'Find the queen', allowLlmPlanUpdates: true, customSetting: { enabled: true },
+  });
+  const source = await h.api.getMessages('s');
+  const copyId = await h.sessions.duplicateSession('s', 105);
+  const copied = await h.api.getMessages(copyId);
+  assert.deepEqual(copied, source.slice(0, 105));
+  const metadata = h.documents.get(`users/u/sessions/${copyId}`);
+  assert.equal(metadata.nextOrder, 106);
+  assert.equal(metadata.activeChunkCount, 5);
+  assert.equal(metadata.longTermPlan, 'Find the queen');
+  assert.equal(metadata.allowLlmPlanUpdates, true);
+  assert.deepEqual(metadata.customSetting, { enabled: true });
+  const added = await h.api.addMessage(copyId, { role: 'user', content: 'New direction' });
+  assert.equal(added.order, 107);
+  assert.deepEqual(await h.api.getMessages('s'), source);
+});
+
+test('partial copy retains only summary checkpoints present in the copied prefix', async () => {
+  const h = await setup(2);
+  await h.api.addMessage('s', {
+    role: 'summary', content: 'Events so far', thinking: 'Hidden text', planThread: 'Next target',
+  }, { id: 'summary', sessionUpdate: { activeSummaryMessageId: 'summary', breakpointOrder: 2 } });
+  await h.api.addMessage('s', { role: 'user', content: 'Later event' });
+  const beforeId = await h.sessions.duplicateSession('s', 2);
+  const before = h.documents.get(`users/u/sessions/${beforeId}`);
+  assert.equal(before.activeSummaryMessageId, null);
+  assert.equal(before.breakpointOrder, 0);
+  const afterId = await h.sessions.duplicateSession('s', 3);
+  const after = h.documents.get(`users/u/sessions/${afterId}`);
+  assert.equal(after.activeSummaryMessageId, 'summary');
+  assert.equal(after.breakpointOrder, 2);
+  assert.deepEqual(await h.api.getMessages(afterId), (await h.api.getMessages('s')).slice(0, 3));
+});
+
+test('zero-message copy inherits story settings with clean storage and context', async () => {
+  const h = await setup(10);
+  await h.api.ensureChunked('s');
+  Object.assign(h.documents.get(h.sessionPath), {
+    longTermPlan: 'Keep this plan', allowLlmPlanUpdates: true,
+    activeSummaryMessageId: 'old-summary', breakpointOrder: 8,
+  });
+  const copyId = await h.sessions.duplicateSession('s', 0);
+  const metadata = h.documents.get(`users/u/sessions/${copyId}`);
+  assert.equal(metadata.longTermPlan, 'Keep this plan');
+  assert.equal(metadata.allowLlmPlanUpdates, true);
+  assert.equal(metadata.nextOrder, 0);
+  assert.equal(metadata.activeChunkId, null);
+  assert.equal(metadata.activeChunkCount, 0);
+  assert.equal(metadata.activeChunkBytes, 0);
+  assert.equal(metadata.activeSummaryMessageId, null);
+  assert.equal(metadata.breakpointOrder, 0);
+  assert.equal((await h.api.getMessages(copyId)).length, 0);
+  assert.equal((await h.api.addMessage(copyId, { role: 'user', content: 'Fresh start' })).order, 1);
+  assert.equal((await h.api.getMessages('s')).length, 10);
+});
+
+test('invalid copy counts cannot create a new session', async () => {
+  const h = await setup(2);
+  await h.api.ensureChunked('s');
+  const originalPaths = [...h.documents.keys()];
+  for (const count of [-1, 1.5, NaN, Infinity, '1', 3]) {
+    await assert.rejects(h.sessions.duplicateSession('s', count), /Message count|only 2 messages/);
+    assert.deepEqual([...h.documents.keys()], originalPaths);
+  }
+});

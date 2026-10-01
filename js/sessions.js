@@ -5,6 +5,7 @@ import {
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { ensureChunked } from "./messages.js";
+import { packMessages, chunkId, chunkRecord, chunkBytes } from "./message-chunks.js";
 
 // Every session lives under users/{uid}/sessions/... so each user's chat history
 // is isolated — enforced both by path scoping and by Firestore rules.
@@ -82,35 +83,61 @@ export function subscribeSessions(callback, onError) {
   );
 }
 
-// Duplicate the session metadata and its message chunks. Embedded message ids
-// and orders stay the same, preserving the summary checkpoint pointers.
-export async function duplicateSession(sourceId) {
+// Copy the first N stored messages (including summary messages), or all when
+// omitted. Keep message ids, timestamps, orders, and hidden reply data intact.
+export async function duplicateSession(sourceId, messageCount = null) {
+  if (messageCount !== null && (!Number.isSafeInteger(messageCount) || messageCount < 0)) {
+    throw new Error("Message count must be a whole number of 0 or more.");
+  }
   await ensureChunked(sourceId);
   const sourceSnap = await getDocFromServer(sessionDoc(sourceId));
   const source = sourceSnap.exists() ? { id: sourceSnap.id, ...sourceSnap.data() } : null;
   if (!source) throw new Error("Session not found.");
-  const msgsSnap = await getDocsFromServer(
+  const msgsSnap = messageCount === 0 ? { docs: [] } : await getDocsFromServer(
     collection(db, "users", currentUid(), "sessions", sourceId, "messageChunks")
   );
+  const messages = msgsSnap.docs.flatMap((d) => d.data().messages ?? [])
+    .sort((a, b) => a.order - b.order);
+  if (messageCount !== null && messageCount > messages.length) {
+    throw new Error(`This session has only ${messages.length} messages. Choose 0–${messages.length}.`);
+  }
+  const selected = messageCount === null ? messages : messages.slice(0, messageCount);
+  const groups = packMessages(selected);
+  const last = groups.at(-1);
+  const hasSummary = selected.some((m) => m.id === source.activeSummaryMessageId && m.role === "summary");
 
   const id = newId("sess");
   const { id: _omit, createdAt: _c, updatedAt: _u, ...fields } = source;
-  await setDoc(sessionDoc(id), {
+  const data = {
     ...fields,
     title: (source.title || "Session") + " (copy)",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    nextOrder: source.nextOrder ?? 0,
-  });
+    nextOrder: selected.at(-1)?.order ?? 0,
+    storageVersion: 2,
+    activeChunkId: last ? chunkId(last[0].order) : null,
+    activeChunkBytes: last ? chunkBytes(last) : 0,
+    activeChunkCount: last?.length ?? 0,
+    activeSummaryMessageId: hasSummary ? source.activeSummaryMessageId : null,
+    breakpointOrder: hasSummary ? source.breakpointOrder ?? 0 : 0,
+  };
 
-  const docs = msgsSnap.docs;
-  // Chunk payloads can be large; keep each commit well below the 10 MiB cap.
-  for (let i = 0; i < docs.length; i += 6) {
-    const batch = writeBatch(db);
-    docs.slice(i, i + 6).forEach((d) => {
-      batch.set(doc(db, "users", currentUid(), "sessions", id, "messageChunks", d.id), d.data());
-    });
-    await batch.commit();
+  // Publish the session only once all chunks are ready, so the sidebar never
+  // selects an incomplete copy. Remove partial chunks if a write fails.
+  try {
+    for (let i = 0; i < groups.length; i += 6) {
+      const batch = writeBatch(db);
+      groups.slice(i, i + 6).forEach((group) => {
+        batch.set(doc(db, "users", currentUid(), "sessions", id, "messageChunks", chunkId(group[0].order)), chunkRecord(group));
+      });
+      await batch.commit();
+    }
+    await setDoc(sessionDoc(id), data);
+  } catch (error) {
+    try { await deleteSession(id); } catch (cleanupError) {
+      console.error("Could not remove incomplete session copy:", cleanupError);
+    }
+    throw error;
   }
   return id;
 }
