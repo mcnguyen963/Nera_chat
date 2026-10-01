@@ -1,9 +1,10 @@
+import { computeContinuityUsage } from "../js/continuity/usage.js";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings } from "../js/continuity/balanced.js";
 import { BALANCED_PREPARE_POLICY } from "../js/continuity/prompts.js";
-import { buildContinuityContext } from "../js/continuity/context.js";
+import { buildContinuityContext, requestTokenCount } from "../js/continuity/context.js";
 import { createStoryState, sourceMessage, sourceRef, applyContinuityPatch } from "../js/continuity/state.js";
 import { createMemoryStoryStore, forkAtRevision } from "../js/continuity/store.js";
 import { createFirestoreStoryStore } from "../js/continuity/firestore-store.js";
@@ -1205,4 +1206,85 @@ test("Balanced checks the selected first-call model's context budget before requ
       balancedPreparation: { profileId: "tiny", thinkingMode: "off" } }), count,
     complete: async () => { calls++; } }), /exceed.*context budget/);
   assert.equal(calls, 0);
+});
+
+
+test("Balanced context preview matches both outgoing requests and includes independent output limits", async () => {
+  const { store } = await hostileMotherStory();
+  const config = settings({ modelId: "narrator", maxResponseTokens: 8192,
+    profiles: [{ id: "lookup", modelId: "lookup", maxResponseTokens: 2048 }],
+    balancedPreparation: { profileId: "lookup", thinkingMode: "off" } });
+  const snapshot = await store.load("main");
+  const usage = await computeContinuityUsage({ snapshot, settings: config, continuityMode: "balanced",
+    input: "I wave to A.", stylePrompt: "Use natural English.", count });
+  let calls = 0;
+  await runBalancedTurn({ store, branchId: "main", turnId: "preview_exact", input: "I wave to A.",
+    settings: config, stylePrompt: "Use natural English.", count, complete: async (request) => {
+      const index = calls++;
+      assert.equal(await requestTokenCount(request.messages, request.tools ?? [], count), usage.requests[index].usedTokens);
+      assert.ok(request.messages[1].content.includes(index === 0 ? "2048 tokens" : "8192 tokens"));
+      if (index === 0) return { finishReason: "stop", content: "Ready" };
+      assert.ok(request.messages[1].content.includes("one shared allowance"));
+      return { finishReason: "stop", content: JSON.stringify({ narration: "A keeps her distance.", events: [], operations: [] }) };
+    } });
+  assert.equal(calls, 2);
+});
+
+test("Continuity preview counts state and policies with an empty composer and reports overflow", async () => {
+  const { store } = await hostileMotherStory();
+  const snapshot = await store.load("main");
+  for (const mode of ["balanced", "saver", "reviewed"]) {
+    const usage = await computeContinuityUsage({ snapshot, settings: settings(), continuityMode: mode, count });
+    assert.ok(usage.requests.every((request) => request.usedTokens > 0));
+    assert.equal(usage.requests.length, mode === "balanced" ? 2 : 1);
+  }
+  const small = await computeContinuityUsage({ snapshot,
+    settings: settings({ maxContextTokens: 1000, maxResponseTokens: 100 }), continuityMode: "balanced", count });
+  assert.ok(small.requests.some((request) => request.usedTokens > request.budget));
+  await assert.rejects(buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
+    input: "", settings: settings(), count }), /Invalid current input/);
+});
+
+
+test("Saver compact updates preserve long fields, add array items and ignore unchanged records", async () => {
+  const { store } = await hostileMotherStory();
+  const before = await store.load("main");
+  const old = before.state.records.find((record) => record.id === "char_A");
+  const relationship = before.state.records.find((record) => record.id === "rel_A_player");
+  const narration = "A tenses and intends to keep her distance.";
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "compact_delta", input: "I wave.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration,
+      events: [{ id: "tense_now", kind: "outcome", description: narration, entityIds: ["char_A", "player"],
+        supersedes: [], evidence: [{ from: "narration", quote: narration }] }], operations: [
+        { update: { id: "char_A", changes: [{ action: "set", field: "emotion", value: "tense" },
+          { action: "add", field: "intentions", value: "Keep distance" },
+          { action: "add", field: "intentions", value: "Keep distance" }] }, reason: "Immediate reaction.",
+          eventIds: ["tense_now"], evidence: [{ from: "narration", quote: narration }] },
+        { record: { id: relationship.id, kind: relationship.kind, data: relationship.data },
+          reason: "Distrust stays the same.", eventIds: ["tense_now"], evidence: [{ from: "narration", quote: narration }] },
+      ] }) }) });
+  assert.equal(result.status, "accepted");
+  const after = await store.load("main");
+  const character = after.state.records.find((record) => record.id === "char_A");
+  assert.equal(character.data.personality, old.data.personality);
+  assert.equal(character.data.background, old.data.background);
+  assert.equal(character.data.emotion, "tense");
+  assert.deepEqual(character.data.intentions, ["Keep distance"]);
+  assert.deepEqual(after.state.records.find((record) => record.id === relationship.id), relationship);
+  const turn = await store.readTurn("main", "compact_delta");
+  assert.equal(turn.review.patch.operations.length, 1);
+  assert.equal(turn.trace.ignoredUnchangedRecords, 1);
+});
+
+test("Compact updates retain protected relationship checks", async () => {
+  const { store } = await hostileMotherStory();
+  const narration = "A claims she now trusts the player.";
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "compact_forgiveness", input: "I wave.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration,
+      events: [{ id: "claim_trust", kind: "outcome", description: narration, entityIds: ["char_A", "player"],
+        supersedes: [], evidence: [{ from: "narration", quote: narration }] }],
+      operations: [{ update: { id: "rel_A_player", changes: [{ action: "set", field: "trust", value: "friendly" }] },
+        reason: "She says so.", eventIds: ["claim_trust"], evidence: [{ from: "narration", quote: narration }] }] }) }) });
+  assert.equal(result.status, "needs_state_review");
+  assert.equal((await store.load("main")).state.records.find((record) => record.id === "rel_A_player").data.trust, "deep distrust");
 });

@@ -94,13 +94,22 @@ async function harness() {
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
     },
     'continuity/runtime.js': {
-      storyStore: () => ({ listMessages: async () => {
+      storyStore: () => ({ load: async () => {
+        calls.continuityStateLoads = (calls.continuityStateLoads ?? 0) + 1;
+        return { state: {}, messages: [] };
+      }, listMessages: async () => {
         calls.continuityLists = (calls.continuityLists ?? 0) + 1;
         if (calls.continuityListError) { calls.continuityListError = false; throw new Error('read interrupted'); }
         return calls.continuityMessages;
       } }),
       watchContinuityHead: (_sessionId, _branchId, callback) => { queueMicrotask(callback); return () => {}; },
       switchContinuityBranch: async () => {}, enableContinuity: async () => {},
+    },
+    'continuity/usage.js': {
+      computeContinuityUsage: async ({ input = "", settings }) => ({ requests: [
+        { label: "Lookup", usedTokens: 4200 + input.length, max: settings.maxContextTokens, budget: 100000 },
+        { label: "Narration before lookups", usedTokens: 9800 + input.length, max: settings.maxContextTokens, budget: 100000 },
+      ], historyMessages: 4 }),
     },
     'continuity/turn-controller.js': {
       runContinuityTurn: async (request) => {
@@ -889,4 +898,33 @@ test('Balanced first-call controls preserve drafts and save existing profile ref
   await h.fire('btn-close-settings'); view.openSettingsPopup();
   assert.equal(h.el('set-balanced-profile').value, lookupId);
   assert.equal(h.el('set-balanced-thinking').value, 'max_tokens');
+});
+
+
+test('Continuity context shows positive token usage before sending and keeps message counts', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.continuityMessages = [{ id: 'user-one', order: 1, role: 'user', content: 'Hello.' }];
+  h.calls.sessionCallbacks.at(-1)?.({ id: 'story', exists: () => true, data: () => ({
+    title: 'story', continuityEnabled: true, continuityMode: 'balanced', continuityBranchId: 'main',
+  }) });
+  for (let attempt = 0; !h.calls.continuityLists && attempt < 100; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  await chat.updateIndicator();
+  for (let attempt = 0; h.el('context-label').textContent.startsWith('Calculating') && attempt < 100; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.match(h.el('context-label').textContent, /Lookup: 4,200 \/ 120,000 tokens/);
+  assert.match(h.el('context-label').textContent, /Narration before lookups: 9,800/);
+  assert.match(h.el('context-label').textContent, /1 messages loaded/);
+  assert.match(h.el('context-label').textContent, /4 in context/);
+  assert.notEqual(h.el('context-fill').style.width, '0%');
+  const reads = h.calls.continuityStateLoads;
+  h.el('chat-input').value = 'I wait.';
+  await chat.updateIndicator();
+  assert.match(h.el('context-label').textContent, /Lookup: 4,207/);
+  assert.equal(h.calls.continuityStateLoads, reads);
+  assert.equal(h.calls.continuityTurns.length, 0);
+  assert.equal(h.calls.requests.length, 0);
 });

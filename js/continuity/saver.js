@@ -1,20 +1,64 @@
-import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings } from "./balanced.js";
-import { BALANCED_PREPARE_POLICY } from "./prompts.js";
+import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings, balancedPreparationPolicy } from "./balanced.js";
 import { chatCompletion } from "../llm-client.js";
 import { countTokens } from "../tokenizer.js";
-import { buildContinuityContext, selectContinuity, requestTokenCount, inputBudget } from "./context.js";
+import { buildContinuityContext, selectContinuity, requestTokenCount, inputBudget, completionBudgetInstruction } from "./context.js";
 import { SAVER_POLICY, REVIEWER_CONTRACT } from "./prompts.js";
 import { sourceMessage, sourceRef } from "./state.js";
 import { prepareCommit, validateReview, acceptedReceipt } from "./store.js";
-import { object, list, string, id, RECORD_SCHEMA, EVENT_SCHEMA, REVIEW_SCHEMA, validate } from "./schema.js";
+import { object, list, string, text, id, RECORD_SCHEMA, EVENT_SCHEMA, REVIEW_SCHEMA, validate } from "./schema.js";
 
 const evidence = object({ from: { type: "string", enum: ["input", "narration"] }, quote: string(8000) });
 const saverEvent = object({ id, kind: EVENT_SCHEMA.properties.kind, description: string(),
   entityIds: list(id), evidence: { ...list(evidence, 10), minItems: 1 }, supersedes: list(id) });
-const saverOperation = object({ record: RECORD_SCHEMA, reason: string(), eventIds: { ...list(id), minItems: 1 },
-  evidence: { ...list(evidence, 10), minItems: 1 } });
+const operationEvidence = { reason: string(), eventIds: { ...list(id), minItems: 1 },
+  evidence: { ...list(evidence, 10), minItems: 1 } };
+const fieldChange = object({ action: { type: "string", enum: ["set", "add", "remove", "append"] },
+  field: string(100), value: { anyOf: [text, list(string())] } });
+const saverOperation = { anyOf: [object({ record: RECORD_SCHEMA, ...operationEvidence }),
+  object({ update: object({ id, changes: { ...list(fieldChange, 30), minItems: 1 } }), ...operationEvidence })] };
 export const SAVER_OUTPUT_SCHEMA = object({ narration: string(50000), events: list(saverEvent),
   operations: list(saverOperation) });
+
+export function saverOutputPolicy(settings) {
+  return `${SAVER_POLICY}\n\n${completionBudgetInstruction(settings, "narration")}\nJSON SCHEMA:\n${JSON.stringify(SAVER_OUTPUT_SCHEMA)}`;
+}
+
+// Object key order is irrelevant; array order and every actual field remain significant.
+function sameData(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.hasOwn(right, key) && sameData(left[key], right[key]));
+}
+
+export function expandSaverOperation(operation, state) {
+  if (!operation.update) return operation;
+  const old = state.records.find((record) => record.id === operation.update.id);
+  if (!old) throw new Error("Compact update requires an existing supplied record.");
+  const data = structuredClone(old.data);
+  for (const change of operation.update.changes) {
+    if (!Object.hasOwn(data, change.field)) throw new Error(`Unknown record field: ${change.field}`);
+    const previous = data[change.field];
+    if (change.action === "set") data[change.field] = structuredClone(change.value);
+    else if (change.action === "add" || change.action === "remove") {
+      if (!Array.isArray(previous) || typeof change.value !== "string" || !change.value.trim())
+        throw new Error("add/remove requires an array field and one nonempty string item.");
+      if (change.action === "add") {
+        if (!previous.includes(change.value)) previous.push(change.value);
+      } else data[change.field] = previous.filter((item) => item !== change.value);
+    } else if (change.action === "append") {
+      if (typeof previous !== "string" || typeof change.value !== "string" || !change.value.trim())
+        throw new Error("append requires a text field and nonempty new text.");
+      data[change.field] = previous ? `${previous}\n${change.value}` : change.value;
+    }
+  }
+  const record = { id: old.id, kind: old.kind, data };
+  validate(RECORD_SCHEMA, record);
+  const { update, ...rest } = operation;
+  return { ...rest, record };
+}
 
 function compileProposal(output, state, turnId, user, assistant) {
   validate(SAVER_OUTPUT_SCHEMA, output);
@@ -26,7 +70,10 @@ function compileProposal(output, state, turnId, user, assistant) {
   };
   return { branchId: state.branchId, baseRevision: state.revision, turnId,
     events: output.events.map(({ evidence: items, ...event }) => ({ ...event, sources: items.map(ref) })),
-    operations: output.operations.map(({ evidence: items, ...operation }) => ({
+    operations: output.operations.map((operation) => expandSaverOperation(operation, state)).filter((operation) => {
+      const old = state.records.find((record) => record.id === operation.record.id);
+      return !old || old.kind !== operation.record.kind || !sameData(old.data, operation.record.data);
+    }).map(({ evidence: items, ...operation }) => ({
       type: "put_record", ...operation, expectedVersion: state.records.find((r) => r.id === operation.record.id)?.version ?? 0,
       sources: items.map(ref),
     })) };
@@ -69,9 +116,10 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
   try {
     signal?.throwIfAborted();
     onStatus("building_context");
-    const policy = `${SAVER_POLICY}\nJSON SCHEMA:\n${JSON.stringify(SAVER_OUTPUT_SCHEMA)}`;
+    const policy = saverOutputPolicy(settings);
+    const contextSettings = balanced ? balancedPreparationSettings(settings) : settings;
     const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
-      input, mode, settings: balanced ? balancedPreparationSettings(settings) : settings, stylePrompt, policy: balanced ? BALANCED_PREPARE_POLICY : policy, tools: balanced ? BALANCED_TOOLS : [], count });
+      input, mode, settings: contextSettings, stylePrompt, policy: balanced ? balancedPreparationPolicy(contextSettings) : policy, tools: balanced ? BALANCED_TOOLS : [], count });
     let preparation = null;
     if (balanced) {
       onStatus("preparing");
@@ -96,6 +144,7 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     let review;
     try {
       const patch = compileProposal(output, snapshot.state, turnId, user, assistant);
+      trace.ignoredUnchangedRecords = output.operations.length - patch.operations.length;
       const supplied = new Set([...built.trace.recordIds, ...built.selection.futurePossibilities.map((record) => record.id)]);
       if (patch.operations.some((op) => snapshot.state.records.some((r) => r.id === op.record.id) && !supplied.has(op.record.id)))
         throw new Error("Saver changed an existing record absent from its context.");

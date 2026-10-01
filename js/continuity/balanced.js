@@ -1,5 +1,6 @@
 import { NARRATOR_TOOLS, createStoryTools, requireCompletedResponse } from "./tools.js";
-import { requestTokenCount, inputBudget } from "./context.js";
+import { requestTokenCount, inputBudget, completionBudgetInstruction } from "./context.js";
+import { BALANCED_PREPARE_POLICY } from "./prompts.js";
 
 export const BALANCED_TOOLS = NARRATOR_TOOLS.filter((tool) =>
   ["get_character", "search_story_events"].includes(tool.function.name));
@@ -37,13 +38,25 @@ export function balancedPreparationSettings(settings) {
   return result;
 }
 
+export function balancedPreparationPolicy(settings) {
+  return `${BALANCED_PREPARE_POLICY}\n\n${completionBudgetInstruction(settings, "lookup")}`;
+}
+
+export function balancedPreparationMessages(built, state) {
+  const messages = structuredClone(built.apiMessages);
+  messages.splice(2, 0, { role: "user", content: JSON.stringify({ type: "character_directory",
+    characters: state.records.filter((r) => r.kind === "character").map((r) =>
+      ({ id: r.id, name: r.data.name, aliases: r.data.aliases })) }) });
+  return messages;
+}
+
+export function balancedNarrationPolicy(policy) {
+  return policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported state changes using the output schema; agenda changes belong in operations after narration.";
+}
+
 // One read-only tool batch, followed by the caller's narration/state request.
 export async function prepareBalancedContext({ built, state, settings, policy, complete, count, signal }) {
-  const messages = structuredClone(built.apiMessages);
-  const directory = { role: "user", content: JSON.stringify({ type: "character_directory",
-    characters: state.records.filter((r) => r.kind === "character").map((r) =>
-      ({ id: r.id, name: r.data.name, aliases: r.data.aliases })) }) };
-  messages.splice(2, 0, directory);
+  const messages = balancedPreparationMessages(built, state);
   const preparationSettings = balancedPreparationSettings(settings);
   const budget = inputBudget(preparationSettings);
   const preparationInputTokens = await requestTokenCount(messages, BALANCED_TOOLS, count);
@@ -78,7 +91,7 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
       trace.push({ name: call.function.name, ok: !output.error });
     }
   }
-  messages[1] = { role: "system", content: policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported state changes using the output schema; agenda changes belong in operations after narration." };
+  messages[1] = { role: "system", content: balancedNarrationPolicy(policy) };
   const narrationInputTokens = await requestTokenCount(messages, [], count);
   if (narrationInputTokens > inputBudget(settings))
     throw new Error("Balanced tool results exceed the context budget.");

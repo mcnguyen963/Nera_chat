@@ -659,7 +659,12 @@ async function loadContinuityEditor() {
     editorPending = pending?.status === "needs_state_review" ? pending : null;
     editorDirty = false;
     editorRows = [];
-    const operations = Array.isArray(editorPending?.proposal?.operations) ? editorPending.proposal.operations : [];
+    const rawOperations = Array.isArray(editorPending?.proposal?.operations) ? editorPending.proposal.operations : [];
+    const { expandSaverOperation } = await import("../continuity/saver.js");
+    const operations = rawOperations.map((operation) => {
+      try { return expandSaverOperation(operation, loaded.state); }
+      catch { return operation; } // Invalid updates remain pending for repair or author correction.
+    });
     const suggested = new Map(operations
       .filter((operation) => typeof operation?.record?.id === "string" &&
         ["character", "relationship", "belief", "consequence", "scene", "agenda", "world_fact"].includes(operation.record.kind))

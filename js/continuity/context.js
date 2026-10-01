@@ -41,6 +41,14 @@ export async function requestTokenCount(messages, tools = [], count = countToken
   return 3 + costs.reduce((a, b) => a + b, 0) + (tools.length ? await count(JSON.stringify(tools)) : 0);
 }
 
+export function completionBudgetInstruction(settings, purpose) {
+  const max = settings.maxResponseTokens;
+  if (!Number.isSafeInteger(max) || max < 1) throw new Error("Invalid completion budget.");
+  const shared = `The API maximum output allowance for this request is ${max} tokens. Leave room for any reasoning that the provider counts against this allowance.`;
+  if (purpose === "lookup") return `${shared} Use the allowance for one complete batch of read-only tool calls, or the short acknowledgement Ready when no lookup is needed. Do not generate narration or state updates. Do not pad the response to consume the allowance.`;
+  return `${shared} This is one shared allowance for narration, JSON syntax, new events, compact state updates or new records, and evidence quotes; it is not a separate allowance for each section. Reserve enough output to finish the entire JSON object and every consequential supported state update. Shorten narration and evidence quotes when needed, prefer compact field updates for existing records, preserve unchanged fields in any full replacement, and omit unchanged records. Do not omit consequential state to extend the prose or pad the response to consume the allowance.`;
+}
+
 export function inputBudget(settings) {
   const max = Math.min(settings.maxContextTokens, settings.modelContextTokens ?? Infinity);
   const reserve = settings.maxResponseTokens;
@@ -51,9 +59,9 @@ export function inputBudget(settings) {
 
 export async function buildContinuityContext({ state, messages, input, mode = "player", characterIds = [],
   settings, stylePrompt = "", tools = [], policy = TOOL_POLICY,
-  recentExchanges = 8, count = countTokens, upToOrder = Infinity }) {
+  recentExchanges = 8, count = countTokens, upToOrder = Infinity, preview = false }) {
   if (state.throughOrder >= upToOrder) throw new Error("Historical generation requires a state snapshot before the target. Fork first.");
-  if (!["player", "author"].includes(mode) || typeof input !== "string" || !input.trim()) throw new Error("Invalid current input.");
+  if (!["player", "author"].includes(mode) || typeof input !== "string" || (!preview && !input.trim())) throw new Error("Invalid current input.");
   const recentCues = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) &&
       m.order <= state.throughOrder && m.order < upToOrder)
     .sort((a, b) => a.order - b.order).slice(-2).map((m) => m.content).join("\n");
@@ -66,7 +74,7 @@ export async function buildContinuityContext({ state, messages, input, mode = "p
   const budget = inputBudget(settings);
   let apiMessages = [system, policyMessage, current];
   let usedTokens = await requestTokenCount(apiMessages, tools, count);
-  if (usedTokens > budget) throw new Error("The current input and essential character state exceed the context budget. Increase the budget or shorten the input.");
+  if (usedTokens > budget && !preview) throw new Error("The current input and essential character state exceed the context budget. Increase the budget or shorten the input.");
   const reference = { role: "user", content: JSON.stringify({ type: "application_reference",
     futurePossibilities: selected.futurePossibilities, focus: selected.focus }) };
   if (selected.futurePossibilities.length && await requestTokenCount([system, policyMessage, reference, current], tools, count) <= budget)

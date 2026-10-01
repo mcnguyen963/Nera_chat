@@ -40,6 +40,8 @@ let watchedBranchId;
 let continuityRetry = null;
 let continuityModules = null;
 let continuityContextStats = null;
+let continuityContextSnapshot = null;
+let contextPreviewTimer = null;
 const renderedMessages = new Map();
 
 function loadContinuity() {
@@ -115,6 +117,12 @@ export function initChatView() {
     el.input.style.height = el.input.scrollHeight + "px";
   };
   el.input.addEventListener("input", autoGrow);
+  el.input.addEventListener("input", () => {
+    if (!session?.continuityEnabled) return;
+    clearTimeout(contextPreviewTimer);
+    contextPreviewTimer = setTimeout(updateIndicator, 250);
+  });
+  el.mode.addEventListener("change", updateIndicator);
   window.addEventListener("resize", autoGrow);
   autoGrow();
 
@@ -236,6 +244,7 @@ function refreshQuickChips() {
 export function setSession(sessionId, opts = {}) {
   if (state.sessionId === sessionId) return true;
   continuityContextStats = null;
+  continuityContextSnapshot = null;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
@@ -376,6 +385,7 @@ async function subscribeContinuity(sessionId, branchId) {
   const store = runtime.storyStore(sessionId);
   msgUnsub = runtime.watchContinuityHead(sessionId, branchId, async () => {
     const run = ++continuityRefresh;
+    continuityContextSnapshot = null;
     try {
       const latest = await store.listMessages(branchId, Infinity, PAGE_SIZE);
       if (run !== continuityRefresh || state.sessionId !== sessionId || watchedBranchId !== branchId) return;
@@ -826,29 +836,58 @@ function showToast(text, ok) {
 
 // ---------- context indicator ----------
 
+function renderContinuityUsage(usage, loadedMessages) {
+  const ratio = Math.max(...usage.requests.map((request) => request.usedTokens / request.max));
+  el.contextFill.style.width = Math.min(100, ratio * 100) + "%";
+  el.contextFill.classList.toggle("over", usage.requests.some((request) => request.usedTokens > request.budget));
+  const tightest = usage.requests.reduce((a, b) => a.budget / a.max < b.budget / b.max ? a : b);
+  el.contextThreshold.style.left = Math.max(0, tightest.budget / tightest.max * 100) + "%";
+  el.contextLabel.textContent = usage.requests.map((request) =>
+    `${request.label}: ${request.usedTokens.toLocaleString()} / ${request.max.toLocaleString()} tokens`).join(" · ") +
+    ` · ${loadedMessages} messages loaded` +
+    (usage.historyMessages != null ? ` · ${usage.historyMessages} in context` : "");
+  el.contextLabel.title = "Estimated input tokens include system policies, selected story state, schemas, tools, recent conversation and the current draft. Balanced narration grows when lookup results are added. The marker reserves response tokens and the safety margin.";
+}
+
 export async function updateIndicator() {
   if (!session || !state.settings || !latestReady) return;
   if (session.continuityEnabled) {
-    ++indicatorRun;
-    if (continuityContextStats) {
-      const { preparationInputTokens, preparationContextLimit, narrationInputTokens, narrationContextLimit } = continuityContextStats;
-      const lookupRatio = preparationInputTokens != null && preparationContextLimit
-        ? preparationInputTokens / preparationContextLimit : 0;
-      const narrationRatio = narrationInputTokens != null && narrationContextLimit
-        ? narrationInputTokens / narrationContextLimit : 0;
-      const ratio = Math.max(lookupRatio, narrationRatio);
-      el.contextFill.style.width = Math.min(100, ratio * 100) + "%";
-      el.contextFill.classList.toggle("over", ratio >= 0.95);
-      el.contextThreshold.style.left = "95%";
-      const parts = [];
-      if (preparationInputTokens != null) parts.push(`lookup ${preparationInputTokens.toLocaleString()} / ${preparationContextLimit.toLocaleString()}`);
-      if (narrationInputTokens != null) parts.push(`narration ${narrationInputTokens.toLocaleString()} / ${narrationContextLimit.toLocaleString()}`);
-      el.contextLabel.textContent = `Estimated context tokens · ${parts.join(" · ")}`;
-    } else {
+    const run = ++indicatorRun;
+    const selectedSession = session.id;
+    const branchId = session.continuityBranchId || "main";
+    const loadedMessages = lastMessages.length || 0;
+    if (busy && continuityContextStats) {
+      const stats = continuityContextStats;
+      const requests = [];
+      if (stats.preparationInputTokens != null) requests.push({ label: "Lookup", usedTokens: stats.preparationInputTokens,
+        max: stats.preparationContextLimit, budget: stats.preparationContextLimit });
+      requests.push({ label: "Narration", usedTokens: stats.narrationInputTokens,
+        max: stats.narrationContextLimit, budget: stats.narrationContextLimit });
+      renderContinuityUsage({ requests }, loadedMessages);
+      return;
+    }
+    el.contextLabel.textContent = `Calculating context tokens… · ${loadedMessages} messages loaded`;
+    try {
+      if (!continuityContextSnapshot || continuityContextSnapshot.sessionId !== selectedSession ||
+          continuityContextSnapshot.branchId !== branchId) {
+        const cached = { sessionId: selectedSession, branchId,
+          promise: loadContinuity().then((runtime) => runtime.storyStore(selectedSession).load(branchId)) };
+        continuityContextSnapshot = cached;
+        cached.promise.catch(() => { if (continuityContextSnapshot === cached) continuityContextSnapshot = null; });
+      }
+      const snapshot = await continuityContextSnapshot.promise;
+      const { computeContinuityUsage } = await import("../continuity/usage.js");
+      if (run !== indicatorRun || state.sessionId !== selectedSession) return;
+      const usage = await computeContinuityUsage({ snapshot, settings: structuredClone(state.settings),
+        continuityMode: session.continuityMode || "reviewed", input: el.input.value.trim(),
+        mode: el.mode.value || "player", stylePrompt: state.settings.continuityStylePrompt || "" });
+      if (run !== indicatorRun || state.sessionId !== selectedSession) return;
+      renderContinuityUsage(usage, loadedMessages);
+    } catch (error) {
+      if (run !== indicatorRun || state.sessionId !== selectedSession) return;
+      el.contextLabel.textContent = `Context estimate unavailable: ${error.message} · ${loadedMessages} messages loaded`;
       el.contextFill.style.width = "0%";
       el.contextFill.classList.remove("over");
-      el.contextThreshold.style.left = "0%";
-      el.contextLabel.textContent = `Context window ${state.settings.maxContextTokens.toLocaleString()} tokens · ${lastMessages.length || 0} messages loaded`;
     }
     return;
   }
@@ -911,6 +950,7 @@ async function handleSend(e) {
 }
 
 async function sendContinuityTurn(input, mode, options = {}) {
+  continuityContextStats = null;
   const petTurn = startPetTurn();
   try {
     const { storyStore, runContinuityTurn, runSaverTurn, runBalancedTurn, switchContinuityBranch } = await loadContinuity();
@@ -1288,6 +1328,7 @@ function setBusy(b) {
   busy = state.busy = b;
   el.sendBtn.disabled = b || !state.sessionId || Boolean(session?.continuityPendingTurnId);
   el.summarizeBtn.disabled = b;
+  if (!b && session?.continuityEnabled) updateIndicator();
 }
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.
