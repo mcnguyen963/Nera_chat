@@ -189,6 +189,20 @@ test('assistant plan thread is stored separately from visible content', async ()
   assert.equal(message.planThread, null);
 });
 
+test('assistant plan updates are committed with the message', async () => {
+  const h = await setup();
+  const saved = await h.api.addMessage('s', { role: 'assistant', content: 'The first event' }, {
+    sessionUpdate: { longTermPlan: 'Meet the queen on day 20' },
+  });
+  assert.equal(h.documents.get(h.sessionPath).longTermPlan, 'Meet the queen on day 20');
+  assert.equal((await h.api.getMessages('s'))[0].content, 'The first event');
+  await h.api.overwriteMessage('s', saved.id, { content: 'A revised event' }, saved.order, {
+    longTermPlan: 'Meet the queen on day 30',
+  });
+  assert.equal(h.documents.get(h.sessionPath).longTermPlan, 'Meet the queen on day 30');
+  assert.equal((await h.api.getMessages('s'))[0].content, 'A revised event');
+});
+
 test('Editing folded story history atomically invalidates its summary checkpoint', async () => {
   const h = await setup();
   const first = await h.api.addMessage('s', { role: 'user', content: 'Old fact' });

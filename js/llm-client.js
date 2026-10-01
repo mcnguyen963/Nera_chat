@@ -34,6 +34,20 @@ function headers(settings) {
   };
 }
 
+function responseError(data) {
+  const detail = data?.error?.message ?? data?.error;
+  return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
+}
+
+function checkFinishReason(reason) {
+  if (reason === "length") {
+    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+  }
+  if (reason && reason !== "stop") {
+    throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
+  }
+}
+
 export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
@@ -53,10 +67,12 @@ async function nonStreamedCompletion({ settings, messages, signal }) {
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  if (data.choices?.[0]?.finish_reason === "length") {
-    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+  if (data.error || !data.choices?.[0]?.message) throw responseError(data);
+  checkFinishReason(data.choices[0].finish_reason);
+  const msg = data.choices[0].message;
+  if (typeof msg.content !== "string" || !msg.content.trim()) {
+    throw new Error("The model returned no reply; nothing was saved.");
   }
-  const msg = data.choices?.[0]?.message ?? {};
   return {
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
@@ -98,11 +114,14 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     } catch {
       throw new Error("The model returned a malformed response event.");
     }
+    if (json.error) throw responseError(json);
+    if (!Array.isArray(json.choices) && !json.usage) throw responseError(json);
     const delta = json.choices?.[0]?.delta ?? {};
     if (json.choices?.[0]?.finish_reason) {
       finishReason = json.choices[0].finish_reason;
       completed = true;
     }
+    if (delta.content && typeof delta.content !== "string") throw responseError(json);
     if (delta.content) {
       content += delta.content;
       onDelta?.(delta.content);
@@ -129,7 +148,8 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
   if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
-  if (finishReason === "length") throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+  checkFinishReason(finishReason);
+  if (!content.trim()) throw new Error("The model returned no reply; nothing was saved.");
 
   return {
     content,

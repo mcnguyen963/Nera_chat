@@ -20,7 +20,7 @@ let draft;
 let original;
 let panel = "model";
 let opener = null;
-let sessionOriginal = { title: "", longTermPlan: "" };
+let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
 let sessionId = null;
 let saving = false;
 
@@ -126,7 +126,9 @@ function closeSettingsPopup() {
 function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
 function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
-  return raw("set-session-title") !== sessionOriginal.title || raw("set-session-plan") !== sessionOriginal.longTermPlan;
+  return raw("set-session-title") !== sessionOriginal.title ||
+    raw("set-session-plan") !== sessionOriginal.longTermPlan ||
+    input("set-allow-llm-plan-updates").checked !== sessionOriginal.allowLlmPlanUpdates;
 }
 function accountDirty() {
   return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
@@ -299,23 +301,29 @@ function clearMessage() { if (el.message) el.message.textContent = ""; }
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
     sessionId = state.sessionId;
-    sessionOriginal = { title: "", longTermPlan: "" };
+    sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
+    input("set-allow-llm-plan-updates").checked = false;
     return;
   }
   const requestedId = state.sessionId;
   if (sessionId !== requestedId) {
     sessionId = requestedId;
-    sessionOriginal = { title: "", longTermPlan: "" };
+    sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
+    input("set-allow-llm-plan-updates").checked = false;
   } else if (sessionDirty()) return;
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
     if (requestedId !== state.sessionId || sessionDirty()) return;
     sessionId = requestedId;
-    sessionOriginal = { title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "" };
+    sessionOriginal = {
+      title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
+      allowLlmPlanUpdates: session?.allowLlmPlanUpdates === true,
+    };
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
+    input("set-allow-llm-plan-updates").checked = sessionOriginal.allowLlmPlanUpdates;
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -326,8 +334,9 @@ async function handleSaveSession() {
   try {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
-    await updateSession(state.sessionId, { title, longTermPlan });
-    sessionOriginal = { title, longTermPlan };
+    const allowLlmPlanUpdates = input("set-allow-llm-plan-updates").checked;
+    await updateSession(state.sessionId, { title, longTermPlan, allowLlmPlanUpdates });
+    sessionOriginal = { title, longTermPlan, allowLlmPlanUpdates };
     set("set-session-title", title);
     feedback("Session saved ✓");
     refreshContextIndicator();

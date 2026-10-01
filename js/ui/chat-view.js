@@ -311,6 +311,7 @@ function subscribeChat(sessionId) {
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       if (!session || !previous ||
           session.longTermPlan !== previous.longTermPlan ||
+          session.allowLlmPlanUpdates !== previous.allowLlmPlanUpdates ||
           session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
           session.breakpointOrder !== previous.breakpointOrder) {
         updateIndicator();
@@ -359,6 +360,7 @@ export function syncActiveSession(metadata) {
     document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId: session.id, session } }));
   }
   if (session.longTermPlan !== previous.longTermPlan ||
+      session.allowLlmPlanUpdates !== previous.allowLlmPlanUpdates ||
       session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
       session.breakpointOrder !== previous.breakpointOrder) updateIndicator();
   queueCacheSave();
@@ -787,12 +789,14 @@ async function handleSend(e) {
 async function runAssistantTurn(opts = {}) {
   const settings = structuredClone(state.settings);
   if (!settings) return;
-  const planBefore = opts.planOverride ?? session.longTermPlan ?? "";
+  const planBefore = session.allowLlmPlanUpdates === true
+    ? (opts.planOverride ?? session.longTermPlan ?? "")
+    : (session.longTermPlan ?? "");
   setBusy(true);
   try {
     const allMessages = opts.messages ?? await ensureHistory();
     const { apiMessages } = await buildContextForRequest(session, settings, {
-      ...opts, messages: allMessages, requireLatestUser: true,
+      ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
     });
     startStreamUI();
 
@@ -809,9 +813,13 @@ async function runAssistantTurn(opts = {}) {
     const plan = extractPlan(content);
     const planThread = extractPlanThread(content);
     const clean = stripPlan(content);
-    const finalContent =
-      clean || (plan !== null ? "(plan updated — no narrative content in the reply)" : "(empty response)");
-    const newPlan = plan !== null && plan.length > 0 ? plan : null;
+    if (!clean && !(session.allowLlmPlanUpdates === true && plan?.length > 0)) {
+      throw new Error("The model returned no narrative reply; nothing was saved.");
+    }
+    const finalContent = clean || "(plan updated — no narrative content in the reply)";
+    const newPlan = session.allowLlmPlanUpdates === true && plan !== null && plan.length > 0 ? plan : null;
+    const nextPlan = session.allowLlmPlanUpdates === true ? (newPlan ?? planBefore) : (session.longTermPlan ?? "");
+    const planUpdate = nextPlan !== (session.longTermPlan ?? "") ? { longTermPlan: nextPlan } : {};
 
     // Bridge the local cache for the auto-summary check (avoids a fresh
     // getSession/getMessages round-trip — the snapshots will reconcile shortly).
@@ -819,7 +827,7 @@ async function runAssistantTurn(opts = {}) {
     if (opts.overwriteId) {
       const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
         content: finalContent, thinking, planThread, planBefore,
-      }, opts.upToOrder);
+      }, opts.upToOrder, planUpdate);
       const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
       if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, planBefore, tokenCount };
       historyMessages = historyMessages.map((m) =>
@@ -828,7 +836,7 @@ async function runAssistantTurn(opts = {}) {
     } else {
       savedMsg = await messagesApi.addMessage(session.id, {
         role: "assistant", content: finalContent, thinking, planThread, planBefore,
-      });
+      }, { sessionUpdate: planUpdate });
       lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
         { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, planBefore, tokenCount: savedMsg.tokenCount },
       ]);
@@ -837,11 +845,7 @@ async function runAssistantTurn(opts = {}) {
     renderMessages(lastMessages);
     queueCacheSave();
 
-    const nextPlan = newPlan ?? planBefore;
-    if (nextPlan !== (session.longTermPlan ?? "")) {
-      await updateSession(session.id, { longTermPlan: nextPlan });
-      session = { ...session, longTermPlan: nextPlan };
-    }
+    if (Object.keys(planUpdate).length) session = { ...session, ...planUpdate };
 
     // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
     // computed entirely from cached data.

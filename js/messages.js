@@ -221,7 +221,7 @@ async function findChunk(sessionId, messageId, order) {
   return chunk;
 }
 
-async function changeMessage(sessionId, messageId, order, change) {
+async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}) {
   await ensureChunked(sessionId);
   const old = await findChunk(sessionId, messageId, order);
   const previous = old.data();
@@ -248,8 +248,10 @@ async function changeMessage(sessionId, messageId, order, change) {
   const summaryReset = !!sessionData?.activeSummaryMessageId &&
     ((current.role !== "summary" && order <= (sessionData.breakpointOrder ?? 0)) ||
       (current.role === "summary" && !replacement && messageId === sessionData.activeSummaryMessageId));
-  const sessionPatch = summaryReset
-    ? { activeSummaryMessageId: null, breakpointOrder: 0 } : {};
+  const sessionPatch = {
+    ...(summaryReset ? { activeSummaryMessageId: null, breakpointOrder: 0 } : {}),
+    ...sessionUpdate,
+  };
   if (sessionData?.activeChunkId === old.id) {
     const active = records.at(-1);
     Object.assign(sessionPatch, {
@@ -271,11 +273,11 @@ export async function editMessage(sessionId, messageId, content, order) {
   return { tokenCount, summaryReset };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order, sessionUpdate = {}) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   await changeMessage(sessionId, messageId, order, (message) => ({
     ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount,
-  }));
+  }), sessionUpdate);
   return { tokenCount };
 }
 

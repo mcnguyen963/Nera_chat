@@ -8,7 +8,7 @@
 
 import { getMessages, getCheckpointMessages, addMessage, newMessageId } from "./messages.js";
 import { chatCompletion } from "./llm-client.js";
-import { computeContextUsage } from "./context-builder.js";
+import { computeContextUsage, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
 
 const CHUNK_TOKEN_BUDGET_DEFAULT = 250000;
@@ -23,7 +23,8 @@ function summarizerSettings(settings) {
   const maxResponseTokens = Math.min(
     settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3)
   );
-  return { ...settings, maxResponseTokens };
+  // Summaries need their output budget for facts, not the chat profile's thinking.
+  return { ...settings, maxResponseTokens, reasoning: { ...settings.reasoning, enabled: false } };
 }
 
 export function formatAsTranscript(msgs) {
@@ -67,6 +68,7 @@ export async function runSummarization(session, settings, opts = {}) {
 
   const requestSettings = summarizerSettings(settings);
   const inputLimit = settings.maxContextTokens - requestSettings.maxResponseTokens;
+  const frameTokens = MESSAGE_FRAME_TOKENS * 2 + REQUEST_FRAME_TOKENS;
   const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
@@ -86,7 +88,7 @@ export async function runSummarization(session, settings, opts = {}) {
   while (offset < toFold.length) {
     const chunk = [];
     const prefix = running + "New events to fold in:\n";
-    const fixedTokens = await countTokens(settings.summarizerSystemPrompt + "\n" + prefix + detailDirective);
+    const fixedTokens = await countTokens(settings.summarizerSystemPrompt + "\n" + prefix + detailDirective) + frameTokens;
     let transcriptTokens = 0;
     for (let i = offset; i < toFold.length; i++) {
       const message = toFold[i];
@@ -99,7 +101,7 @@ export async function runSummarization(session, settings, opts = {}) {
       chunk.push(toFold[i]);
     }
     let summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
-    while (chunk.length && await countTokens(settings.summarizerSystemPrompt + "\n" + summarizerInput) > inputLimit) {
+    while (chunk.length && await countTokens(settings.summarizerSystemPrompt + "\n" + summarizerInput) + frameTokens > inputLimit) {
       chunk.pop();
       summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
     }

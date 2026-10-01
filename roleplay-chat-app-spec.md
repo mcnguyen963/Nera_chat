@@ -44,7 +44,8 @@ Holds everything described in §4.
   "title": "My Fantasy Campaign",
   "createdAt": <timestamp>,
   "updatedAt": <timestamp>,
-  "longTermPlan": "string, hidden from chat view, edited only in Settings tab",
+  "longTermPlan": "string, hidden from chat view, edited in Settings or by the model when allowed",
+  "allowLlmPlanUpdates": false,
   "activeSummaryMessageId": "msg_123 | null",
   "breakpointOrder": 42
 }
@@ -174,10 +175,10 @@ This is the "sliding window" — as the conversation grows, the oldest messages 
 ### 6.3 Long-term plan injection
 `planInjectionBlock(session)` appends something like:
 ```
-Current long-term plan (update it by including a new <plan>...</plan> block in your reply if it changes; omit the tag to leave it unchanged):
+Current long-term plan (set by the user; follow its planned events and timing. Do not revise it or emit a <plan> block):
 {session.longTermPlan}
 ```
-into the system message, so the model always sees and can revise it, while it never appears in the visible chat transcript.
+into the system message. The model can revise it only when this story's `allowLlmPlanUpdates` toggle is enabled.
 
 ---
 
@@ -264,9 +265,10 @@ Confirmed current format: SillyTavern exports chats as **JSONL** — one JSON ob
 
 ## 11. Long-Term Plan Mechanism
 
-- The narrator system prompt (via `planInjectionBlock`, §6.3) tells the model it may update the plan by emitting a `<plan>...</plan>` block anywhere in its reply.
+- The story setting `allowLlmPlanUpdates` defaults to false. When enabled, the narrator may update the plan by emitting a `<plan>...</plan>` block anywhere in its reply.
 - After a full (non-streamed-remainder) reply is received, the app scans the raw text for `<plan>...</plan>`:
-  - If found: extract the inner text → save as `session.longTermPlan` → **strip the tag entirely** from what gets stored as the visible `message.content` and shown in the chat transcript.
+  - If found and updates are enabled: extract the inner text → save it with the assistant message as `session.longTermPlan` → **strip the tag entirely** from visible `message.content`.
+  - If found while updates are disabled: strip the tag and keep the user's plan unchanged. Reject a reply containing no narrative after stripping.
   - If absent: plan is left unchanged.
 - The plan is never rendered in the main chat view. It only appears, read-and-write, in a field on that session's Settings tab — exactly as you specified.
 

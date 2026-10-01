@@ -1,6 +1,5 @@
 // cl100k_base token counting via gpt-tokenizer (pure JS, no WASM), loaded lazily from CDN.
-// Counts are consistent approximations across models: rounded up + 2% safety margin
-// so the estimate never under-counts (see spec §6.1).
+// Counts are approximate across models; caller also reserves message framing.
 
 const CDNS = [
   "https://esm.sh/gpt-tokenizer@2",
@@ -36,7 +35,8 @@ export async function countTokens(text) {
         : mod.encode(text).length;
     return Math.ceil(n * 1.02);
   } catch (e) {
-    // Tokenizer unavailable: fall back to a rough character-based estimate (~4 chars/token).
-    return Math.max(1, Math.ceil((text.length / 4) * 1.02));
+    // Byte count is deliberately conservative for byte-based tokenizers.
+    // A four-characters-per-token fallback can badly undercount non-ASCII text.
+    return new TextEncoder().encode(text).length;
   }
 }

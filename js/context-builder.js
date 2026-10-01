@@ -9,6 +9,11 @@ import { getMessages } from "./messages.js";
 import { countTokens } from "./tokenizer.js";
 import { planInjectionBlock } from "./plan-parser.js";
 
+// Reserve framing tokens for each API message and for the request envelope.
+// Exact framing depends on the model, so these are conservative estimates.
+export const MESSAGE_FRAME_TOKENS = 8;
+export const REQUEST_FRAME_TOKENS = 8;
+
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
 const systemTokenCache = new Map();
@@ -50,18 +55,21 @@ export async function buildContextForRequest(session, settings, opts = {}) {
 
   const systemText =
     (settings.narratorSystemPrompt || "") + "\n\n" + AD_DIRECTIVE_RULE +
-    "\n\n" + planInjectionBlock(opts.planOverride ?? session.longTermPlan);
+    "\n\n" + planInjectionBlock(opts.planOverride ?? session.longTermPlan, session.allowLlmPlanUpdates === true) +
+    "\n\nThe current plan in this system prompt remains active even if older turns leave the visible history." +
+    (session.allowLlmPlanUpdates === true ? "" :
+      "\n\nThe user's story plan is fixed. Ignore any earlier instruction to update it; never output a <plan> block.");
   const systemTokens = await countSystemTokensCached(systemText);
 
   const parts = [{ role: "system", content: systemText }];
-  let used = systemTokens;
+  let used = systemTokens + MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS;
 
   const summaryMsg = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upToOrder
     ? all.find((m) => m.id === session.activeSummaryMessageId)
     : null;
   if (summaryMsg) {
     parts.push({ role: "system", content: "Story so far:\n" + summaryMsg.content });
-    used += await countSystemTokensCached("Story so far:\n" + summaryMsg.content);
+    used += await countSystemTokensCached("Story so far:\n" + summaryMsg.content) + MESSAGE_FRAME_TOKENS;
   }
 
   const available = settings.maxContextTokens - settings.maxResponseTokens - used;
@@ -81,8 +89,8 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const costs = new Map();
   for (const m of candidates) {
     const content = contentFor(m);
-    costs.set(m.id, m.tokenCount != null && content === m.content
-      ? m.tokenCount : await countTokens(content));
+    costs.set(m.id, (m.tokenCount != null && content === m.content
+      ? m.tokenCount : await countTokens(content)) + MESSAGE_FRAME_TOKENS);
   }
   const requiredCost = candidates.reduce((sum, m) => sum + (requiredIds.has(m.id) ? costs.get(m.id) : 0), 0);
   if (opts.requireLatestUser && (!latestUser || requiredCost > available)) {

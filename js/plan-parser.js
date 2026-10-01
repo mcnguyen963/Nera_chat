@@ -1,6 +1,6 @@
 // <plan>...</plan> tag handling (spec §11).
 // The tag is emitted by the model anywhere in its reply; the app extracts it,
-// saves it as the session's long-term plan, and strips it from visible content.
+// saves it as the session's long-term plan only when allowed, and strips it from visible content.
 
 export function extractPlan(text) {
   if (!text) return null;
@@ -34,10 +34,11 @@ export function stripPlan(text) {
   );
 }
 
-export function planInjectionBlock(plan) {
+export function planInjectionBlock(plan, allowUpdates = false) {
   return (
-    "Current long-term plan (update it by including a new <plan>...</plan> block in your reply " +
-    "if it changes; omit the tag to leave it unchanged):\n" +
+    (allowUpdates
+      ? "Current long-term plan (you may update it by including a new <plan>...</plan> block in your reply; omit the tag to leave it unchanged):\n"
+      : "Current long-term plan (set by the user; follow its planned events and timing. Do not revise it or emit a <plan> block):\n") +
     (plan && plan.trim() ? plan : "(no plan yet)")
   );
 }

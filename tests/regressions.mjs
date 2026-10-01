@@ -55,7 +55,7 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary', streamLines: null };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary', responseData: null, streamLines: null };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document, TextDecoder,
@@ -70,7 +70,7 @@ async function harness() {
         return { ok: true, body: { getReader: () => ({ read: async () => chunks.length
           ? { done: false, value: chunks.shift() } : { done: true } }) } };
       }
-      return { ok: true, json: async () => ({ choices: [{ message: { content: calls.response } }] }) };
+      return { ok: true, json: async () => calls.responseData ?? ({ choices: [{ message: { content: calls.response } }] }) };
     },
   });
   const firestore = {
@@ -283,8 +283,9 @@ test('Story footer saves the active story and transfer actions remain wired', as
   assert.equal(h.el('btn-save-settings').classList.contains('hidden'), true);
   h.el('set-session-title').value = 'New title';
   h.el('set-session-plan').value = 'New plan';
+  h.el('set-allow-llm-plan-updates').checked = true;
   await h.fire('btn-save-session');
-  assert.deepEqual(structuredClone(h.calls.sessionWrites[0]), ['story-id', { title: 'New title', longTermPlan: 'New plan' }]);
+  assert.deepEqual(structuredClone(h.calls.sessionWrites[0]), ['story-id', { title: 'New title', longTermPlan: 'New plan', allowLlmPlanUpdates: true }]);
   await h.fire('nav-transfer');
   await h.fire('btn-export-st');
   assert.deepEqual(h.calls.exports, ['story-id']);
@@ -382,7 +383,7 @@ test('Empty summarizer output does not advance checkpoint', async () => {
   const { runSummarization } = await h.use('summarizer.js');
   await assert.rejects(runSummarization({ id: 's' }, {
     ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [{ id: 'm', order: 1, role: 'user', content: 'event' }] }), /empty summary/);
+  }, { messages: [{ id: 'm', order: 1, role: 'user', content: 'event' }] }), /no reply/);
   assert.equal(h.calls.messages.length, 0);
 });
 
@@ -421,7 +422,7 @@ test('Sliding context preserves the opening exchange and latest user while eject
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 130 + 100, maxResponseTokens: 100 };
+  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 165 + 100, maxResponseTokens: 100 };
   const messages = [
     { id: 'u1', order: 1, role: 'user', content: 'Opening', tokenCount: 25 },
     { id: 'a1', order: 2, role: 'assistant', content: 'Background', tokenCount: 25 },
@@ -460,6 +461,29 @@ test('Opening exchange survives a summary checkpoint and regeneration uses the p
   assert.equal(regen.apiMessages.some((m) => m.content.includes('Story summary')), false);
 });
 
+test('Story plan is locked by default and model edits require the story toggle', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const locked = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20' }, h.state.settings, { messages: [] });
+  assert.match(locked.apiMessages[0].content, /plan is fixed/);
+  assert.match(locked.apiMessages[0].content, /day 20/);
+  const editable = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20', allowLlmPlanUpdates: true }, h.state.settings, { messages: [] });
+  assert.match(editable.apiMessages[0].content, /may update it/);
+  assert.doesNotMatch(editable.apiMessages[0].content, /plan is fixed/);
+});
+
+test('Context budget reserves message framing as short turns accumulate', async () => {
+  const h = await harness();
+  const { buildContextForRequest, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } = await h.use('context-builder.js');
+  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
+  assert.ok(base.usedTokens >= MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
+  const messages = Array.from({ length: 20 }, (_, i) => ({ id: String(i), order: i + 1, role: 'user', content: 'x', tokenCount: 1 }));
+  const budget = base.usedTokens + 20 + MESSAGE_FRAME_TOKENS * 5 + 100;
+  const result = await buildContextForRequest({ id: 's' }, { ...h.state.settings, maxContextTokens: budget, maxResponseTokens: 100 }, { messages });
+  assert.ok(result.windowedCount < messages.length);
+  assert.ok(result.usedTokens + 100 <= budget);
+});
+
 test('Summarizer bounds each request to the configured context', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
@@ -474,6 +498,18 @@ test('Summarizer bounds each request to the configured context', async () => {
     request.messages.reduce((sum, message) => sum + message.content.length, 0) + request.max_tokens <= 2000));
 });
 
+test('Summarizer disables chat reasoning on every request', async () => {
+  const h = await harness();
+  const { runSummarization } = await h.use('summarizer.js');
+  await runSummarization({ id: 's' }, {
+    ...h.state.settings, modelId: 'test', streaming: false,
+    reasoning: { enabled: true, mode: 'max_tokens', maxTokens: 20000 },
+    keepRecentMessagesAfterSummary: 0,
+  }, { messages: [{ id: '1', order: 1, role: 'user', content: 'A new event' }] });
+  assert.equal(h.calls.requests.length, 1);
+  assert.equal(h.calls.requests[0].reasoning, undefined);
+});
+
 test('Incomplete streamed replies are rejected', async () => {
   const h = await harness();
   const { chatCompletion } = await h.use('llm-client.js');
@@ -482,6 +518,23 @@ test('Incomplete streamed replies are rejected', async () => {
   await assert.rejects(chatCompletion({ settings, messages: [] }), /ended before completion/);
   h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"cut"},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
   await assert.rejects(chatCompletion({ settings, messages: [] }), /output limit/);
+});
+
+test('Model errors and abnormal endings are rejected before a reply is saved', async () => {
+  const h = await harness();
+  const { chatCompletion } = await h.use('llm-client.js');
+  const settings = { ...h.state.settings, modelId: 'test', streaming: false };
+  h.calls.responseData = { error: { message: 'quota exceeded' } };
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /quota exceeded/);
+  h.calls.responseData = { choices: [{ finish_reason: 'content_filter', message: { content: 'partial' } }] };
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /content_filter/);
+  h.calls.responseData = { choices: [{ finish_reason: 'stop', message: { content: '' } }] };
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /no reply/);
+  settings.streaming = true;
+  h.calls.streamLines = ['data: {"error":{"message":"provider failed"}}\n', 'data: [DONE]\n'];
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /provider failed/);
+  h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"content_filter"}]}\n', 'data: [DONE]\n'];
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /content_filter/);
 });
 
 test('Streaming plan tags remain hidden even when split across chunks', async () => {
