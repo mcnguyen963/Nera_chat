@@ -2,7 +2,7 @@ import { computeContinuityUsage } from "../js/continuity/usage.js";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings } from "../js/continuity/balanced.js";
+import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings, balancedDirectoryMessage } from "../js/continuity/balanced.js";
 import { BALANCED_PREPARE_POLICY } from "../js/continuity/prompts.js";
 import { buildContinuityContext, requestTokenCount } from "../js/continuity/context.js";
 import { createStoryState, sourceMessage, sourceRef, applyContinuityPatch } from "../js/continuity/state.js";
@@ -14,6 +14,7 @@ import { prepareContinuityMigration, prepareManualContinuityMigration } from "..
 import { runBalancedTurn, runSaverTurn, acceptSaverPending, editSaverPending, rejectSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody, chatCompletion } from "../js/llm-client.js";
 import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, normalizeMigrationReview, validate } from "../js/continuity/schema.js";
+import { parseStateOutput } from "../js/continuity/deltas.js";
 
 const count = async (text) => Math.ceil(text.length / 4);
 
@@ -91,6 +92,23 @@ test("current input stays last and recent exchanges retain chronological order",
   const raw = built.apiMessages.filter((message) => message.role !== "system");
   assert.deepEqual(raw.map((message) => message.content), ["turn 1", "turn 2", "turn 3", "turn 4", "turn 5", "turn 6", "turn 7", "turn 8", raw.at(-1).content]);
   assert.equal(JSON.parse(raw.at(-1).content).playerInput, "Continue with A.");
+});
+
+test("Balanced reserves directory space before choosing recent history", async () => {
+  const { state } = await hostileMotherStory();
+  const history = [
+    await sourceMessage({ id: "budget_user", role: "user", order: 1, content: "I ask A about the road. ".repeat(12) }),
+    await sourceMessage({ id: "budget_assistant", role: "assistant", order: 2, content: "A points east and warns me. ".repeat(12) }),
+  ];
+  state.throughOrder = 2;
+  const options = { state, messages: history, input: "I ask A again.", settings: settings(), count };
+  const withoutDirectory = await buildContinuityContext(options);
+  assert.equal(withoutDirectory.trace.historyMessages, 2);
+  const withDirectory = await buildContinuityContext({ ...options,
+    extraReferences: [balancedDirectoryMessage(state)], budgetCap: withoutDirectory.usedTokens });
+  assert.equal(withDirectory.trace.historyMessages, 0);
+  assert.ok(withDirectory.usedTokens <= withDirectory.budget);
+  assert.equal(JSON.parse(withDirectory.apiMessages[2].content).type, "character_directory");
 });
 
 test("a pronoun follow-up carries forward the character from the latest exchange", async () => {
@@ -1323,4 +1341,130 @@ for (const backend of ["memory", "firestore"]) test(`${backend}: pending edits i
     settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
       narration: "A remains distant.", events: [], operations: [] }) }) });
   assert.equal((await store.load("main")).state.revision, before.state.revision + 1);
+});
+
+test("Simple state format commits one field update and leaves durable grief unchanged", async () => {
+  const { store } = await hostileMotherStory();
+  const before = await store.load("main");
+  const narration = "A stays beside the door. 'Keep your distance.'";
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "simple_emotion", input: "I wave.",
+    settings: settings(), count, complete: async (request) => {
+      assert.ok(request.messages[1].content.includes('"changes"'));
+      return { finishReason: "stop", content: JSON.stringify({ narration, changes: [{
+        target: "char_A", action: "set", field: "emotion", value: "guarded", source: "narration",
+        evidence: "A stays beside the door." }] }) };
+    } });
+  assert.equal(result.status, "accepted");
+  const after = await store.load("main");
+  assert.equal(after.state.records.find((r) => r.id === "char_A").data.emotion, "guarded");
+  for (const id of ["rel_A_player", "belief_A_killer", "grievance_A_mother"])
+    assert.deepEqual(after.state.records.find((r) => r.id === id), before.state.records.find((r) => r.id === id));
+  const turn = await store.readTurn("main", "simple_emotion");
+  assert.equal(turn.trace.outputFormat, "changes");
+  assert.equal(turn.review.patch.events.length, 1);
+  assert.match(turn.review.patch.events[0].id, /^simple_emotion_event_/);
+});
+
+test("Saver accepts a complete fenced answer after a closed thinking block", () => {
+  assert.deepEqual(parseStateOutput('<think>Check continuity.</think>\n```json\n{"narration":"A waits.","changes":[]}\n```'),
+    { narration: "A waits.", changes: [] });
+  assert.throws(() => parseStateOutput('<think>unfinished\n{"narration":"A waits.","changes":[]}'));
+});
+
+test("Saver explains empty final content and malformed JSON without accepting a turn", async () => {
+  const { store } = await hostileMotherStory();
+  await assert.rejects(runSaverTurn({ store, branchId: "main", turnId: "empty_final", input: "I wait.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: "",
+      thinking: "The model thought here.", usage: { completion_tokens: 1998 } }) }),
+  /no final answer.*final text: 0 characters, thinking: 23 characters, provider output: 1998 tokens/i);
+  await assert.rejects(runSaverTurn({ store, branchId: "main", turnId: "bad_json", input: "I wait.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: '{"narration":"A waits.","changes":[' }) }),
+  /not valid JSON.*Model text excerpt/i);
+  assert.equal((await store.load("main")).state.throughOrder, 0);
+});
+
+test("Simple state format creates IDs, links new characters and keeps historical memory", async () => {
+  const { store } = await hostileMotherStory();
+  const narration = "A guard arrives at the gate.";
+  await runSaverTurn({ store, branchId: "main", turnId: "simple_new_guard", input: "I wait.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration,
+      changes: [
+        { target: "new_guard", action: "create", kind: "character", data: { name: "Guard" },
+          source: "narration", evidence: narration },
+        { target: "guard_to_player", action: "create", kind: "relationship",
+          data: { from: "new_guard", to: "player", trust: "guarded" }, source: "narration", evidence: narration },
+        { action: "remember", description: "A guard arrived at the gate.", characters: ["new_guard", "player"],
+          source: "narration", evidence: narration },
+      ] }) }) });
+  const state = (await store.load("main")).state;
+  const guard = state.records.find((r) => r.kind === "character" && r.data.name === "Guard");
+  assert.match(guard.id, /^simple_new_guard_record_/);
+  assert.equal(guard.data.controller, "narrator");
+  const relationship = state.records.find((r) => r.kind === "relationship" && r.data.from === guard.id);
+  assert.equal(relationship.data.to, "player");
+  assert.ok(state.events.some((event) => event.description === "A guard arrived at the gate." && event.entityIds.includes(guard.id)));
+});
+
+test("Simple state format auto-accepts increased hostility but reviews forgiveness", async () => {
+  const { store } = await hostileMotherStory();
+  const escalation = "A's hostility toward the player becomes extreme.";
+  const first = await runSaverTurn({ store, branchId: "main", turnId: "simple_hostility", input: "I threaten A.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: escalation, changes: [{ target: "rel_A_player", action: "set", field: "hostility", value: "extreme",
+        source: "narration", evidence: escalation }] }) }) });
+  assert.equal(first.status, "accepted");
+  const forgiveness = "A says she forgives the player.";
+  const second = await runSaverTurn({ store, branchId: "main", turnId: "simple_forgiveness", input: "I wave.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: forgiveness, changes: [{ target: "rel_A_player", action: "set", field: "trust", value: "friendly",
+        source: "narration", evidence: forgiveness }] }) }) });
+  assert.equal(second.status, "needs_state_review");
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === "rel_A_player").data.trust, "deep distrust");
+});
+
+test("Simple state format rejects player-imposed NPC state and bad evidence without committing", async () => {
+  const { store } = await hostileMotherStory();
+  const before = await store.load("main");
+  const result = await runSaverTurn({ store, branchId: "main", turnId: "simple_bad_claim", input: "A forgives me.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration: "A stands still.", changes: [{ target: "char_A", action: "set", field: "emotion", value: "happy",
+        source: "input", evidence: "A forgives me." }] }) }) });
+  assert.equal(result.status, "needs_state_review");
+  assert.match(result.error, /player message cannot establish/i);
+  assert.deepEqual((await store.load("main")).state, before.state);
+});
+
+test("Simple pending state can be repaired without changing saved narration", async () => {
+  const { store } = await hostileMotherStory();
+  const narration = "A keeps her distance.";
+  const pending = await runSaverTurn({ store, branchId: "main", turnId: "simple_repair", input: "I wave.",
+    settings: settings(), count, complete: async () => ({ finishReason: "stop", content: JSON.stringify({
+      narration, changes: [{ target: "char_A", action: "set", field: "emotion", value: "guarded",
+        source: "input", evidence: "I wave." }] }) }) });
+  assert.equal(pending.status, "needs_state_review");
+  const result = await repairSaverTurn({ store, branchId: "main", turnId: pending.turnId,
+    settings: settings(), count, complete: async (request) => {
+      assert.ok(request.messages[0].content.includes("Repair state"));
+      assert.ok(request.messages[0].content.includes('"changes"'));
+      return { finishReason: "stop", content: JSON.stringify({ changes: [{
+        target: "char_A", action: "set", field: "emotion", value: "guarded",
+        source: "narration", evidence: narration }] }) };
+    } });
+  assert.equal(result.status, "accepted");
+  const turn = await store.readTurn("main", pending.turnId);
+  assert.equal(turn.assistant.content, narration);
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === "char_A").data.emotion, "guarded");
+});
+
+test("Editing a simple pending narration discards its prior changes", async () => {
+  const { store } = await hostileMotherStory();
+  const pending = await runSaverTurn({ store, branchId: "main", turnId: "simple_edit", input: "I wait.",
+    settings: settings(), count, reviewEveryTurn: true,
+    complete: async () => ({ finishReason: "stop", content: JSON.stringify({ narration: "A frowns.", changes: [{
+      target: "char_A", action: "set", field: "emotion", value: "angry", source: "narration", evidence: "A frowns." }] }) }) });
+  assert.equal(pending.status, "needs_state_review");
+  const edited = await editSaverPending({ store, branchId: "main", turnId: pending.turnId,
+    narration: "A looks away.", expectedAssistantHash: pending.assistant.contentHash });
+  assert.deepEqual(edited.proposal, { narration: "A looks away.", changes: [] });
+  assert.equal((await store.load("main")).state.records.find((r) => r.id === "char_A").data.emotion, "grieving");
 });

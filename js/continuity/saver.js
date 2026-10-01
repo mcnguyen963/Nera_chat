@@ -1,4 +1,5 @@
-import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings, balancedPreparationPolicy } from "./balanced.js";
+import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings, balancedPreparationPolicy, balancedDirectoryMessage } from "./balanced.js";
+import { DELTA_OUTPUT_SCHEMA, expandDeltaProposal, equalData, applyFieldChange, parseStateOutput } from "./deltas.js";
 import { chatCompletion } from "../llm-client.js";
 import { countTokens } from "../tokenizer.js";
 import { buildContinuityContext, selectContinuity, requestTokenCount, inputBudget, completionBudgetInstruction } from "./context.js";
@@ -16,21 +17,13 @@ const fieldChange = object({ action: { type: "string", enum: ["set", "add", "rem
   field: string(100), value: { anyOf: [text, list(string())] } });
 const saverOperation = { anyOf: [object({ record: RECORD_SCHEMA, ...operationEvidence }),
   object({ update: object({ id, changes: { ...list(fieldChange, 30), minItems: 1 } }), ...operationEvidence })] };
-export const SAVER_OUTPUT_SCHEMA = object({ narration: string(50000), events: list(saverEvent),
+const LEGACY_SAVER_OUTPUT_SCHEMA = object({ narration: string(50000), events: list(saverEvent),
   operations: list(saverOperation) });
+
+export const SAVER_OUTPUT_SCHEMA = DELTA_OUTPUT_SCHEMA;
 
 export function saverOutputPolicy(settings) {
   return `${SAVER_POLICY}\n\n${completionBudgetInstruction(settings, "narration")}\nJSON SCHEMA:\n${JSON.stringify(SAVER_OUTPUT_SCHEMA)}`;
-}
-
-// Object key order is irrelevant; array order and every actual field remain significant.
-function sameData(left, right) {
-  if (left === right) return true;
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
-  if (Array.isArray(left) !== Array.isArray(right)) return false;
-  const keys = Object.keys(left);
-  return keys.length === Object.keys(right).length && keys.every((key) =>
-    Object.hasOwn(right, key) && sameData(left[key], right[key]));
 }
 
 export function expandSaverOperation(operation, state) {
@@ -38,30 +31,16 @@ export function expandSaverOperation(operation, state) {
   const old = state.records.find((record) => record.id === operation.update.id);
   if (!old) throw new Error("Compact update requires an existing supplied record.");
   const data = structuredClone(old.data);
-  for (const change of operation.update.changes) {
-    if (!Object.hasOwn(data, change.field)) throw new Error(`Unknown record field: ${change.field}`);
-    const previous = data[change.field];
-    if (change.action === "set") data[change.field] = structuredClone(change.value);
-    else if (change.action === "add" || change.action === "remove") {
-      if (!Array.isArray(previous) || typeof change.value !== "string" || !change.value.trim())
-        throw new Error("add/remove requires an array field and one nonempty string item.");
-      if (change.action === "add") {
-        if (!previous.includes(change.value)) previous.push(change.value);
-      } else data[change.field] = previous.filter((item) => item !== change.value);
-    } else if (change.action === "append") {
-      if (typeof previous !== "string" || typeof change.value !== "string" || !change.value.trim())
-        throw new Error("append requires a text field and nonempty new text.");
-      data[change.field] = previous ? `${previous}\n${change.value}` : change.value;
-    }
-  }
+  for (const change of operation.update.changes) applyFieldChange(data, change);
   const record = { id: old.id, kind: old.kind, data };
   validate(RECORD_SCHEMA, record);
   const { update, ...rest } = operation;
   return { ...rest, record };
 }
 
-function compileProposal(output, state, turnId, user, assistant) {
-  validate(SAVER_OUTPUT_SCHEMA, output);
+export function compileSaverProposal(output, state, turnId, user, assistant) {
+  if (Object.hasOwn(output, "changes")) return expandDeltaProposal(output, state, turnId, user, assistant);
+  validate(LEGACY_SAVER_OUTPUT_SCHEMA, output);
   if (output.narration !== assistant.content) throw new Error("Saver proposal does not match saved narration.");
   const ref = (item) => {
     const message = item.from === "input" ? user : assistant;
@@ -72,7 +51,7 @@ function compileProposal(output, state, turnId, user, assistant) {
     events: output.events.map(({ evidence: items, ...event }) => ({ ...event, sources: items.map(ref) })),
     operations: output.operations.map((operation) => expandSaverOperation(operation, state)).filter((operation) => {
       const old = state.records.find((record) => record.id === operation.record.id);
-      return !old || old.kind !== operation.record.kind || !sameData(old.data, operation.record.data);
+      return !old || old.kind !== operation.record.kind || !equalData(old.data, operation.record.data);
     }).map(({ evidence: items, ...operation }) => ({
       type: "put_record", ...operation, expectedVersion: state.records.find((r) => r.id === operation.record.id)?.version ?? 0,
       sources: items.map(ref),
@@ -83,16 +62,57 @@ function protectedChange(state, patch, mode) {
   if (mode === "author") return false;
   const open = state.records.filter((r) => r.kind === "consequence" && r.data.status === "open" &&
     ["grievance", "promise", "loyalty", "conflict"].includes(r.data.category));
+  const ranks = {
+    trust: { "deep distrust": 0, distrust: 1, low: 1, guarded: 2, neutral: 3, friendly: 4, trusting: 5, "deep trust": 6 },
+    affection: { none: 0, low: 1, mild: 1, moderate: 2, strong: 3, high: 3, deep: 4 },
+    hostility: { none: 0, low: 1, mild: 1, moderate: 2, strong: 3, high: 3, deep: 4, extreme: 5 },
+  };
+  const restrictive = (field, old, next) => {
+    if (old === next) return true;
+    const previous = ranks[field][old.trim().toLowerCase()];
+    const current = ranks[field][next.trim().toLowerCase()];
+    // Unrecognized free text cannot safely be classified as reconciliation or escalation.
+    return previous !== undefined && current !== undefined &&
+      (field === "hostility" ? current > previous : current < previous);
+  };
   for (const op of patch.operations) {
     const old = state.records.find((r) => r.id === op.record.id);
     if (!old) continue;
-    if (old.kind === "consequence" && open.some((r) => r.id === old.id) &&
-        JSON.stringify(op.record.data) !== JSON.stringify(old.data)) return true;
-    if (old.kind === "relationship" && JSON.stringify(old.data) !== JSON.stringify(op.record.data) &&
-        open.some((r) => (r.data.holder === old.data.from && r.data.target === old.data.to) ||
-          (r.data.holder === old.data.to && r.data.target === old.data.from))) return true;
+    const next = op.record.data;
+    if (old.kind === "consequence" && open.some((r) => r.id === old.id)) {
+      if (["holder", "target", "category", "status"].some((field) => old.data[field] !== next[field]) ||
+          (next.description !== old.data.description && !next.description.startsWith(old.data.description + "\n"))) return true;
+    }
+    if (old.kind === "relationship" && open.some((r) =>
+      (r.data.holder === old.data.from && r.data.target === old.data.to) ||
+      (r.data.holder === old.data.to && r.data.target === old.data.from))) {
+      if (old.data.from !== next.from || old.data.to !== next.to ||
+          !["trust", "affection", "hostility"].every((field) => restrictive(field, old.data[field], next[field])) ||
+          !old.data.boundaries.every((boundary) => next.boundaries.includes(boundary))) return true;
+    }
   }
   return false;
+}
+
+function stateError(error) {
+  const message = error.message;
+  const category = /schema|JSON|expected|allowed record|field|array|requires an array|length/i.test(message) ? "State format"
+    : /target|reference|identify|ID|superseded/i.test(message) ? "State reference"
+    : /evidence|source|quote|acquisition|knowledge/i.test(message) ? "State evidence"
+    : /relationship|consequence|Baseline|Player inner|author direction/i.test(message) ? "Continuity review" : "State validation";
+  return `${category}: ${message}`;
+}
+
+function invalidOutputError(response, cause) {
+  const content = typeof response.content === "string" ? response.content : "";
+  const reasoning = typeof response.thinking === "string" ? response.thinking : "";
+  const tokens = response.usage?.completion_tokens;
+  const details = [`final text: ${content.length} characters`, `thinking: ${reasoning.length} characters`];
+  if (Number.isFinite(tokens)) details.push(`provider output: ${tokens} tokens`);
+  if (response.finishReason) details.push(`finish: ${response.finishReason}`);
+  if (!content.trim()) return new Error(`Saver received no final answer (${details.join(", ")}). Check the narrator profile's thinking and max output settings.`);
+  const excerpt = content.length <= 320 ? content : `${content.slice(0, 160)} … ${content.slice(-160)}`;
+  return new Error(`Saver final answer is not valid JSON (${details.join(", ")}; ${cause.message}). Model text excerpt: ${JSON.stringify(excerpt)}`);
 }
 
 export async function runSaverTurn({ store, branchId, turnId, input, settings, mode = "player",
@@ -119,7 +139,9 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     const policy = saverOutputPolicy(settings);
     const contextSettings = balanced ? balancedPreparationSettings(settings) : settings;
     const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
-      input, mode, settings: contextSettings, stylePrompt, policy: balanced ? balancedPreparationPolicy(contextSettings) : policy, tools: balanced ? BALANCED_TOOLS : [], count });
+      input, mode, settings: contextSettings, stylePrompt, policy: balanced ? balancedPreparationPolicy(contextSettings) : policy, tools: balanced ? BALANCED_TOOLS : [],
+      extraReferences: balanced ? [balancedDirectoryMessage(snapshot.state)] : [],
+      budgetCap: balanced ? inputBudget(settings) : Infinity, count });
     let preparation = null;
     if (balanced) {
       onStatus("preparing");
@@ -134,8 +156,8 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     const response = await complete({ settings: { ...settings, streaming: false }, messages: built.apiMessages, signal });
     if (response.finishReason !== "stop" || response.toolCalls?.length) throw new Error("Saver response is incomplete.");
     let output;
-    try { output = JSON.parse(response.content); }
-    catch { throw new Error("Saver did not return parseable narration and state JSON."); }
+    try { output = parseStateOutput(response.content); }
+    catch (error) { throw invalidOutputError(response, error); }
     if (typeof output.narration !== "string" || !output.narration.trim())
       throw new Error("Saver returned no complete narration.");
     const assistant = await sourceMessage({ id: `${turnId}_assistant`, role: "assistant",
@@ -143,12 +165,14 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     const trace = { ...built.trace, mode: balanced ? "balanced" : "saver", preparation: preparation, model: settings.modelId, modelUsage: response.usage ?? null };
     let review;
     try {
-      const patch = compileProposal(output, snapshot.state, turnId, user, assistant);
-      trace.ignoredUnchangedRecords = output.operations.length - patch.operations.length;
+      const patch = compileSaverProposal(output, snapshot.state, turnId, user, assistant);
+      trace.outputFormat = Object.hasOwn(output, "changes") ? "changes" : "legacy";
+      trace.changedRecords = patch.operations.length;
+      if (output.operations) trace.ignoredUnchangedRecords = output.operations.length - patch.operations.length;
       const supplied = new Set([...built.trace.recordIds, ...built.selection.futurePossibilities.map((record) => record.id)]);
       if (patch.operations.some((op) => snapshot.state.records.some((r) => r.id === op.record.id) && !supplied.has(op.record.id)))
         throw new Error("Saver changed an existing record absent from its context.");
-      if (mode === "author" && (!patch.events.length || !patch.operations.length))
+      if (mode === "author" && !patch.events.length && !patch.operations.length)
         throw new Error("Author note produced no state change.");
       if (protectedChange(snapshot.state, patch, mode))
         throw new Error("A lasting relationship or consequence change needs your review.");
@@ -156,9 +180,10 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
       prepareCommit({ ...snapshot, messages: snapshot.messages }, request,
         { ...request, assistant, review });
     } catch (error) {
-      await store.savePendingDraft(request, assistant, output, error.message, trace);
+      const reason = stateError(error);
+      await store.savePendingDraft(request, assistant, output, reason, trace);
       onStatus("needs_state_review");
-      return { status: "needs_state_review", turnId, user, assistant, error: error.message };
+      return { status: "needs_state_review", turnId, user, assistant, error: reason };
     }
     if (reviewEveryTurn) {
       const reason = "Review every turn is enabled for this story.";
@@ -200,7 +225,7 @@ export async function acceptSaverPending({ store, branchId, turnId }) {
   const pending = await store.readTurn(branchId, turnId);
   if (pending?.status !== "needs_state_review") throw new Error("No Saver turn needs approval.");
   const snapshot = await store.load(branchId);
-  const patch = compileProposal(pending.proposal, snapshot.state, turnId,
+  const patch = compileSaverProposal(pending.proposal, snapshot.state, turnId,
     pending.user, pending.assistant);
   const request = { branchId, turnId, baseRevision: pending.baseRevision,
     expectedActiveBranchId: pending.expectedActiveBranchId, user: pending.user,
@@ -232,19 +257,31 @@ export async function repairSaverTurn({ store, branchId, turnId, settings,
     priorState: { records, events: selected.events }, sources,
     narration: pending.assistant.content, proposed: pending.proposal,
     previousError: pending.error, planProposals: [] };
-  const messages = [{ role: "system", content: REVIEWER_CONTRACT +
+  const simple = Object.hasOwn(pending.proposal, "changes");
+  const repairSettings = { ...settings, streaming: false,
+    maxResponseTokens: settings.continuityReviewMaxTokens ?? 4096,
+    reasoning: { ...settings.reasoning, enabled: false } };
+  const messages = [{ role: "system", content: simple ?
+    "Repair state for the supplied saved narration. Return exactly one JSON object with a changes array and no other fields. The narration is already saved; do not repeat or rewrite it. Each change cites a short exact excerpt from the supplied current input or saved narration. Omit unchanged state. Do not invent a causal development to justify a rejected change. The app assigns IDs and merges valid changes.\nSCHEMA:\n" +
+    JSON.stringify(object({ changes: DELTA_OUTPUT_SCHEMA.properties.changes })) : REVIEWER_CONTRACT +
     "\nRepair the saved narration's state only. Do not rewrite narration.\nSCHEMA:\n" + JSON.stringify(REVIEW_SCHEMA) },
   { role: "user", content: JSON.stringify(reviewInput) }];
-  if (await requestTokenCount(messages, [], count) > inputBudget({ ...settings,
-    maxResponseTokens: settings.continuityReviewMaxTokens ?? 4096 }))
+  if (await requestTokenCount(messages, [], count) > inputBudget(repairSettings))
     throw new Error("State repair exceeds the context budget.");
-  const response = await complete({ settings: { ...settings, streaming: false,
-    maxResponseTokens: settings.continuityReviewMaxTokens ?? 4096,
-    reasoning: { ...settings.reasoning, enabled: false } }, messages });
+  const response = await complete({ settings: repairSettings, messages });
   if (response.finishReason !== "stop" || response.toolCalls?.length)
     throw new Error("State repair response is incomplete.");
   let review;
-  try { review = JSON.parse(response.content); validateReview(review, pending); }
+  try {
+    const parsed = parseStateOutput(response.content);
+    review = simple ? { verdict: "accept", violations: [], patch: compileSaverProposal({ narration: pending.assistant.content, ...parsed }, snapshot.state,
+      turnId, pending.user, pending.assistant) } : parsed;
+    validateReview(review, pending);
+    if (simple && protectedChange(snapshot.state, review.patch, pending.user.role === "author" ? "author" : "player"))
+      throw new Error("A lasting relationship or consequence change still needs your review.");
+    if (simple && pending.user.role === "author" && !review.patch.events.length && !review.patch.operations.length)
+      throw new Error("Author note produced no state change.");
+  }
   catch (error) { throw new Error("State repair failed: " + error.message); }
   for (const operation of review.patch.operations) {
     if (snapshot.state.records.some((record) => record.id === operation.record.id) &&

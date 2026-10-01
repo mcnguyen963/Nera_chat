@@ -293,8 +293,7 @@ legacy path. Duplicate story copies all accepted continuity branches and records
 Open Settings → This story → Create continuity copy of this story. Paste a
 transcript-derived author note that you have checked against the old game. Preview
 the state, select **Reviewed** or **Saver** for the new story, then create the copy.
-Both modes support the new character and agenda state; Saver manages changes in
-its single response. Preview uses one continuity reviewer request and builds the
+All three modes support character and agenda state. Saver and Balanced now ask the narrator for narration plus small supported changes in one narration response. The app assigns event and record IDs, merges existing fields, and builds source links. Existing pending drafts in the older events/operations format remain readable. Balanced adds its separate read-only lookup call before narration. Preview uses one continuity reviewer request and builds the
 state in memory. It shows the
 proposed records and events with provenance, plus the number of transcript messages copied. Nothing is written
 to a new story until **Create continuity copy** is clicked.

@@ -42,16 +42,25 @@ export function balancedPreparationPolicy(settings) {
   return `${BALANCED_PREPARE_POLICY}\n\n${completionBudgetInstruction(settings, "lookup")}`;
 }
 
+export function balancedDirectoryMessage(state) {
+  return { role: "user", content: JSON.stringify({ type: "character_directory",
+    characters: state.records.filter((r) => r.kind === "character").map((r) =>
+      ({ id: r.id, name: r.data.name, aliases: r.data.aliases })) }) };
+}
+
 export function balancedPreparationMessages(built, state) {
   const messages = structuredClone(built.apiMessages);
-  messages.splice(2, 0, { role: "user", content: JSON.stringify({ type: "character_directory",
-    characters: state.records.filter((r) => r.kind === "character").map((r) =>
-      ({ id: r.id, name: r.data.name, aliases: r.data.aliases })) }) });
+  const included = messages.some((message) => {
+    if (message.role !== "user") return false;
+    try { return JSON.parse(message.content)?.type === "character_directory"; }
+    catch { return false; }
+  });
+  if (!included) messages.splice(2, 0, balancedDirectoryMessage(state));
   return messages;
 }
 
 export function balancedNarrationPolicy(policy) {
-  return policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported state changes using the output schema; agenda changes belong in operations after narration.";
+  return policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported changes using the output schema; agenda changes belong in the changes array.";
 }
 
 // One read-only tool batch, followed by the caller's narration/state request.

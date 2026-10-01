@@ -1,5 +1,5 @@
 import { buildContinuityContext, requestTokenCount, inputBudget } from "./context.js";
-import { BALANCED_TOOLS, balancedPreparationSettings, balancedPreparationMessages, balancedNarrationPolicy, balancedPreparationPolicy } from "./balanced.js";
+import { BALANCED_TOOLS, balancedPreparationSettings, balancedPreparationMessages, balancedNarrationPolicy, balancedPreparationPolicy, balancedDirectoryMessage } from "./balanced.js";
 import { saverOutputPolicy } from "./saver.js";
 import { TOOL_POLICY } from "./prompts.js";
 import { NARRATOR_TOOLS } from "./tools.js";
@@ -14,7 +14,9 @@ export async function computeContinuityUsage({ snapshot, settings, continuityMod
   const tools = balanced ? BALANCED_TOOLS : saver ? [] : NARRATOR_TOOLS;
   const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
     input, mode, settings: requestSettings, stylePrompt, tools,
-    policy: balanced ? balancedPreparationPolicy(requestSettings) : policy, preview: true, count });
+    policy: balanced ? balancedPreparationPolicy(requestSettings) : policy,
+    extraReferences: balanced ? [balancedDirectoryMessage(snapshot.state)] : [],
+    budgetCap: balanced ? inputBudget(settings) : Infinity, preview: true, count });
   const entry = async (label, messages, definitions, config) => ({ label,
     usedTokens: await requestTokenCount(messages, definitions, count),
     max: Math.min(config.maxContextTokens, config.modelContextTokens ?? Infinity),

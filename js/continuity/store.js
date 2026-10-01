@@ -57,7 +57,8 @@ export function changePendingDraft(pending, request, state) {
       request.assistant.revision !== pending.assistant.revision + 1)
     throw new Error("Invalid pending narration edit.");
   return { ...pending, assistant: request.assistant,
-    proposal: { narration: request.assistant.content, events: [], operations: [] },
+    proposal: pending.proposal?.changes ? { narration: request.assistant.content, changes: [] }
+      : { narration: request.assistant.content, events: [], operations: [] },
     error: "Narration edited. The previous proposed state was discarded; review or repair the edited narration's state before accepting." };
 }
 

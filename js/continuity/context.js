@@ -46,7 +46,7 @@ export function completionBudgetInstruction(settings, purpose) {
   if (!Number.isSafeInteger(max) || max < 1) throw new Error("Invalid completion budget.");
   const shared = `The API maximum output allowance for this request is ${max} tokens. Leave room for any reasoning that the provider counts against this allowance.`;
   if (purpose === "lookup") return `${shared} Use the allowance for one complete batch of read-only tool calls, or the short acknowledgement Ready when no lookup is needed. Do not generate narration or state updates. Do not pad the response to consume the allowance.`;
-  return `${shared} This is one shared allowance for narration, JSON syntax, new events, compact state updates or new records, and evidence quotes; it is not a separate allowance for each section. Reserve enough output to finish the entire JSON object and every consequential supported state update. Shorten narration and evidence quotes when needed, prefer compact field updates for existing records, preserve unchanged fields in any full replacement, and omit unchanged records. Do not omit consequential state to extend the prose or pad the response to consume the allowance.`;
+  return `${shared} This is one shared allowance for narration, JSON syntax, small state changes, and evidence quotes. Reserve enough output to finish the JSON object and every consequential supported change. Shorten narration and evidence quotes when needed. Omit unchanged state; the application merges changes into saved records. Do not drop consequential changes to extend the prose or pad the response.`;
 }
 
 export function inputBudget(settings) {
@@ -59,7 +59,7 @@ export function inputBudget(settings) {
 
 export async function buildContinuityContext({ state, messages, input, mode = "player", characterIds = [],
   settings, stylePrompt = "", tools = [], policy = TOOL_POLICY,
-  recentExchanges = 8, count = countTokens, upToOrder = Infinity, preview = false }) {
+  recentExchanges = 8, count = countTokens, upToOrder = Infinity, preview = false, extraReferences = [], budgetCap = Infinity }) {
   if (state.throughOrder >= upToOrder) throw new Error("Historical generation requires a state snapshot before the target. Fork first.");
   if (!["player", "author"].includes(mode) || typeof input !== "string" || (!preview && !input.trim())) throw new Error("Invalid current input.");
   const recentCues = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) &&
@@ -71,13 +71,13 @@ export async function buildContinuityContext({ state, messages, input, mode = "p
   const current = { role: "user", content: JSON.stringify({ type: "current_turn", branchId: state.branchId,
     stateRevision: state.revision, mode, state: { records: selected.records, events: selected.events },
     stylePreferences: stylePrompt || "", playerInput: input }) };
-  const budget = inputBudget(settings);
-  let apiMessages = [system, policyMessage, current];
+  const budget = Math.min(inputBudget(settings), budgetCap);
+  let apiMessages = [system, policyMessage, ...extraReferences, current];
   let usedTokens = await requestTokenCount(apiMessages, tools, count);
   if (usedTokens > budget && !preview) throw new Error("The current input and essential character state exceed the context budget. Increase the budget or shorten the input.");
   const reference = { role: "user", content: JSON.stringify({ type: "application_reference",
     futurePossibilities: selected.futurePossibilities, focus: selected.focus }) };
-  if (selected.futurePossibilities.length && await requestTokenCount([system, policyMessage, reference, current], tools, count) <= budget)
+  if (selected.futurePossibilities.length && await requestTokenCount([system, policyMessage, reference, ...extraReferences, current], tools, count) <= budget)
     apiMessages.splice(2, 0, reference);
   // Accepted exchanges are kept whole, newest first during budget selection.
   const history = messages.filter((m) => ["user", "author", "assistant"].includes(m.role) && m.order <= state.throughOrder && m.order < upToOrder)

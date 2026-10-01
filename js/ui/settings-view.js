@@ -668,8 +668,14 @@ async function loadContinuityEditor() {
     editorDirty = false;
     editorRows = [];
     const rawOperations = Array.isArray(editorPending?.proposal?.operations) ? editorPending.proposal.operations : [];
-    const { expandSaverOperation } = await import("../continuity/saver.js");
-    const operations = rawOperations.map((operation) => {
+    const { expandSaverOperation, compileSaverProposal } = await import("../continuity/saver.js");
+    let deltaOperations = null;
+    if (editorPending?.proposal && Object.hasOwn(editorPending.proposal, "changes")) {
+      try { deltaOperations = compileSaverProposal(editorPending.proposal, loaded.state, editorPending.turnId,
+        editorPending.user, editorPending.assistant).operations; }
+      catch { /* Invalid changes stay pending; saved records remain editable for an author correction. */ }
+    }
+    const operations = deltaOperations ?? rawOperations.map((operation) => {
       try { return expandSaverOperation(operation, loaded.state); }
       catch { return operation; } // Invalid updates remain pending for repair or author correction.
     });
