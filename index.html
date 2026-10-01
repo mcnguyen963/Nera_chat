@@ -279,6 +279,17 @@
                 <pre id="continuity-state-preview" class="continuity-state-preview" hidden></pre>
                 <div id="continuity-mode-controls" hidden>
                   <label>Continuity mode<select id="set-continuity-mode"><option value="balanced">Balanced · lookup then narrate (two requests)</option><option value="reviewed">Reviewed · narrator and reviewer</option><option value="saver">Saver · one request per turn</option></select></label>
+                  <div id="balanced-first-call-controls" hidden>
+                    <h3>Balanced first call</h3>
+                    <div class="settings-grid">
+                      <label>Connection profile<select id="set-balanced-profile"></select></label>
+                      <label>Thinking<select id="set-balanced-thinking"><option value="off">Off</option><option value="profile">Use selected profile's thinking</option><option value="effort">Set effort</option><option value="max_tokens">Set thinking token budget</option></select></label>
+                      <label id="balanced-effort-field" hidden>Thinking effort<select id="set-balanced-effort"><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
+                      <label id="balanced-max-field" hidden>Thinking max_tokens<input id="set-balanced-maxtokens" type="text" inputmode="numeric" data-min="1" /></label>
+                    </div>
+                    <p class="muted">Uses profiles from Connection settings, including their model, API key, and response limit. Applies to the first call in all Balanced stories. The narration call uses the active connection. Thinking can increase latency and output token usage.</p>
+                    <button id="btn-save-balanced-settings" type="button" class="btn small">Save first-call settings</button>
+                  </div>
                   <label><input type="checkbox" id="set-saver-review-every-turn" /> Review every Saver or Balanced turn before saving its state</label>
                   <p class="muted">Saver and Balanced save narration and state together. If state needs review, the next turn waits until you resolve it.</p>
                 </div>

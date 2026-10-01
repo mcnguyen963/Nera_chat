@@ -52,6 +52,7 @@ export const DEFAULT_SETTINGS = {
     effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
     maxTokens: 20000,
   },
+  balancedPreparation: { profileId: "", thinkingMode: "off", effort: "medium", maxTokens: 20000 },
   maxContextTokens: 120000,
   autoSummarizationEnabled: false,
   chatRecallEnabled: false,
@@ -76,6 +77,7 @@ function mergeDefaults(data) {
   const merged = {
     ...structuredClone(DEFAULT_SETTINGS),
     ...data,
+    balancedPreparation: { ...DEFAULT_SETTINGS.balancedPreparation, ...(data?.balancedPreparation ?? {}) },
     reasoning: {
       ...structuredClone(DEFAULT_SETTINGS.reasoning),
       ...(data?.reasoning ?? {}),

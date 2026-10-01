@@ -4,6 +4,39 @@ import { requestTokenCount, inputBudget } from "./context.js";
 export const BALANCED_TOOLS = NARRATOR_TOOLS.filter((tool) =>
   ["get_character", "search_story_events"].includes(tool.function.name));
 
+// Resolve a separate connection without switching or mutating the active profile.
+export function balancedPreparationSettings(settings) {
+  const config = settings.balancedPreparation ?? {};
+  const result = structuredClone(settings);
+  if (config.profileId && config.profileId !== settings.activeProfileId) {
+    const profile = settings.profiles?.find((item) => item.id === config.profileId);
+    if (!profile) throw new Error("Balanced first-call profile no longer exists. Select another profile in Settings.");
+    const defaults = { endpoint: "https://openrouter.ai/api/v1/chat/completions", apiKey: "", modelId: "",
+      maxResponseTokens: 8192, advancedParametersEnabled: false,
+      temperature: null, topP: null, frequencyPenalty: null, presencePenalty: null };
+    for (const [key, fallback] of Object.entries(defaults)) result[key] = profile[key] ?? fallback;
+    if (profile.modelContextTokens !== undefined) result.modelContextTokens = profile.modelContextTokens;
+    // A different model must not inherit the narrator model's context limit.
+    if (profile.modelContextTokens === undefined) delete result.modelContextTokens;
+    result.reasoning = structuredClone(profile.reasoning ?? { enabled: false });
+  }
+  const mode = config.thinkingMode ?? "off";
+  if (mode === "off") result.reasoning = { enabled: false };
+  else if (mode === "effort") {
+    const effort = config.effort ?? "medium";
+    if (!["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(effort))
+      throw new Error("Invalid Balanced first-call thinking effort.");
+    result.reasoning = { enabled: true, mode: "effort", effort };
+  } else if (mode === "max_tokens") {
+    const maxTokens = Number(config.maxTokens);
+    if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens >= result.maxResponseTokens)
+      throw new Error("Balanced thinking budget must be positive and below the first-call profile's max response tokens.");
+    result.reasoning = { enabled: true, mode: "max_tokens", maxTokens };
+  } else if (mode !== "profile") throw new Error("Invalid Balanced first-call thinking mode.");
+  result.streaming = false;
+  return result;
+}
+
 // One read-only tool batch, followed by the caller's narration/state request.
 export async function prepareBalancedContext({ built, state, settings, policy, complete, count, signal }) {
   const messages = structuredClone(built.apiMessages);
@@ -11,12 +44,12 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
     characters: state.records.filter((r) => r.kind === "character").map((r) =>
       ({ id: r.id, name: r.data.name, aliases: r.data.aliases })) }) };
   messages.splice(2, 0, directory);
-  const budget = inputBudget(settings);
+  const preparationSettings = balancedPreparationSettings(settings);
+  const budget = inputBudget(preparationSettings);
   if (await requestTokenCount(messages, BALANCED_TOOLS, count) > budget)
     throw new Error("Balanced preparation exceeds the context budget.");
   signal?.throwIfAborted();
-  const response = await complete({ settings: { ...settings, streaming: false,
-    reasoning: { ...settings.reasoning, enabled: false } }, messages,
+  const response = await complete({ settings: preparationSettings, messages,
     tools: BALANCED_TOOLS, toolChoice: "auto", signal });
   requireCompletedResponse(response, true);
   const calls = response.toolCalls ?? [];
@@ -45,10 +78,12 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
     }
   }
   messages[1] = { role: "system", content: policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported state changes using the output schema; agenda changes belong in operations after narration." };
-  if (await requestTokenCount(messages, [], count) > budget)
+  if (await requestTokenCount(messages, [], count) > inputBudget(settings))
     throw new Error("Balanced tool results exceed the context budget.");
   built.apiMessages = messages;
   built.trace.recordIds = [...new Set([...built.trace.recordIds, ...executor.retrievedRecordIds])];
   built.trace.eventIds = [...new Set([...built.trace.eventIds, ...executor.retrievedEventIds])];
-  return { tools: trace, usage: response.usage ?? null };
+  return { tools: trace, usage: response.usage ?? null, model: preparationSettings.modelId,
+    profileId: settings.balancedPreparation?.profileId || settings.activeProfileId || null,
+    thinkingMode: settings.balancedPreparation?.thinkingMode ?? "off" };
 }

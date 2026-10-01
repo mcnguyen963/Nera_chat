@@ -66,6 +66,8 @@ export function initSettingsView() {
     renderProfile();
     clearMessage();
   });
+  input("set-balanced-thinking").addEventListener("change", syncBalancedControls);
+  input("btn-save-balanced-settings").addEventListener("click", handleSaveSettings);
   input("set-reasoning-enabled").addEventListener("change", syncOptionalControls);
   input("set-reasoning-mode").addEventListener("change", syncOptionalControls);
   input("set-advanced-enabled").addEventListener("change", syncOptionalControls);
@@ -135,6 +137,7 @@ export function initSettingsView() {
     if (!state.sessionId || saving || state.busy) return;
     const id = state.sessionId;
     const value = raw("set-continuity-mode");
+    syncBalancedControls();
     try {
       if (!sessionOriginal.continuityEnabled || !["reviewed", "saver", "balanced"].includes(value))
         throw new Error("Select a continuity story and a valid mode.");
@@ -143,6 +146,7 @@ export function initSettingsView() {
       feedback(`${{ saver: "Saver", balanced: "Balanced", reviewed: "Reviewed" }[value]} mode selected for future turns.`);
     } catch (error) {
       set("set-continuity-mode", sessionOriginal.continuityMode || "reviewed");
+      syncBalancedControls();
       feedback("Could not change mode: " + error.message, true);
     }
   });
@@ -366,6 +370,32 @@ function renderProfile() {
   set("set-reasoning-maxtokens", reasoning.maxTokens);
   input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
   syncOptionalControls();
+  renderBalancedControls();
+}
+function renderBalancedControls() {
+  const config = { ...DEFAULT_SETTINGS.balancedPreparation, ...draft.balancedPreparation };
+  const selector = input("set-balanced-profile");
+  const current = document.createElement("option");
+  current.value = ""; current.textContent = "Current connection";
+  selector.replaceChildren(current, ...draft.profiles.map((profile) => {
+    const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; return option;
+  }));
+  if (config.profileId && !draft.profiles.some((profile) => profile.id === config.profileId)) {
+    const missing = document.createElement("option"); missing.value = config.profileId; missing.textContent = "Deleted profile — choose another"; selector.append(missing);
+  }
+  selector.value = config.profileId;
+  set("set-balanced-thinking", config.thinkingMode);
+  set("set-balanced-effort", config.effort);
+  set("set-balanced-maxtokens", config.maxTokens);
+  syncBalancedControls();
+}
+function syncBalancedControls() {
+  input("balanced-first-call-controls").hidden = raw("set-continuity-mode") !== "balanced";
+  const mode = raw("set-balanced-thinking");
+  input("balanced-effort-field").hidden = mode !== "effort";
+  input("balanced-max-field").hidden = mode !== "max_tokens";
+  input("set-balanced-effort").disabled = mode !== "effort";
+  input("set-balanced-maxtokens").disabled = mode !== "max_tokens";
 }
 function renderPetChoices(selectedIds = []) {
   petChoicesReady = true;
@@ -435,6 +465,10 @@ function capture() {
     mirrorFromActiveProfile(draft);
   }
   for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
+  draft.balancedPreparation = {
+    profileId: raw("set-balanced-profile"), thinkingMode: raw("set-balanced-thinking"),
+    effort: raw("set-balanced-effort"), maxTokens: raw("set-balanced-maxtokens").trim(),
+  };
   draft.autoSummarizationEnabled = input("set-auto-summarization").checked;
   draft.chatRecallEnabled = input("set-chat-recall").checked;
   draft.semanticSearchEnabled = input("set-semantic-search").checked;
@@ -524,6 +558,16 @@ function validatedDraft() {
     if (!/^https?:\/\//i.test(result.embeddingEndpoint)) throw new Error("Embedding endpoint must start with http:// or https://.");
     if (!result.embeddingApiKey || !result.embeddingModelId) throw new Error("Enter an embedding API key and model ID for semantic search.");
   }
+  const prep = result.balancedPreparation;
+  const prepProfile = prep.profileId ? result.profiles.find((profile) => profile.id === prep.profileId) : activeProfile(result);
+  if (!prepProfile) throw new Error("Choose an existing Balanced first-call profile.");
+  if (prep.thinkingMode === "max_tokens") {
+    prep.maxTokens = integerField(prep.maxTokens, "set-balanced-maxtokens");
+    if (prep.maxTokens >= prepProfile.maxResponseTokens)
+      throw new Error("Balanced thinking tokens must be below the selected profile's max response tokens.");
+  }
+  if (prepProfile.maxResponseTokens >= result.maxContextTokens)
+    throw new Error("Max context tokens must exceed the Balanced first-call profile's max response tokens.");
   mirrorFromActiveProfile(result);
   if (result.maxResponseTokens >= result.maxContextTokens) throw new Error("Max context tokens must exceed max response tokens.");
   return result;
@@ -771,6 +815,7 @@ async function fillSession(event) {
     set("set-session-plan", sessionOriginal.longTermPlan);
     set("set-session-memory", sessionOriginal.shortMemory);
     set("set-continuity-mode", sessionOriginal.continuityMode);
+    syncBalancedControls();
     input("set-saver-review-every-turn").checked = sessionOriginal.continuitySaverReviewEveryTurn;
     setContinuityStoryControls(sessionOriginal.continuityEnabled, sessionOriginal.nextOrder);
     if (!sessionOriginal.continuityEnabled && input("migration-output-editor").hidden) restoreMigrationOutput();

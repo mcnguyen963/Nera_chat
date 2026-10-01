@@ -861,3 +861,32 @@ test('standalone migration JSON upload can be validated and published without ge
   assert.equal(h.calls.migrationPublishes.length, 1);
   assert.equal(h.calls.requests.length, 0);
 });
+
+test('Balanced first-call controls preserve drafts and save existing profile references explicitly', async () => {
+  const h = await harness();
+  const view = await h.use('ui/settings-view.js');
+  view.initSettingsView(); view.openSettingsPopup();
+  h.el('set-model').value = 'narrator-model';
+  await h.fire('btn-profile-copy');
+  const lookupId = h.el('set-profiles').value;
+  h.el('set-model').value = 'lookup-model';
+  h.el('set-balanced-profile').value = lookupId;
+  h.el('set-balanced-thinking').value = 'max_tokens';
+  h.el('set-balanced-maxtokens').value = '1000';
+  await h.fire('set-balanced-thinking', 'change');
+  assert.equal(h.el('balanced-max-field').hidden, false);
+  h.el('set-profiles').value = 'default';
+  await h.fire('set-profiles', 'change');
+  assert.equal(h.el('set-balanced-profile').value, lookupId);
+  assert.equal(h.el('set-balanced-maxtokens').value, '1000');
+  assert.equal(h.calls.writes.length, 0);
+  await h.fire('btn-save-balanced-settings');
+  assert.equal(h.calls.writes.length, 1);
+  assert.equal(h.state.settings.activeProfileId, 'default');
+  assert.equal(h.state.settings.modelId, 'narrator-model');
+  assert.deepEqual(h.state.settings.balancedPreparation,
+    { profileId: lookupId, thinkingMode: 'max_tokens', effort: 'medium', maxTokens: 1000 });
+  await h.fire('btn-close-settings'); view.openSettingsPopup();
+  assert.equal(h.el('set-balanced-profile').value, lookupId);
+  assert.equal(h.el('set-balanced-thinking').value, 'max_tokens');
+});

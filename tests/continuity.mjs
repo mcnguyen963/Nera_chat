@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepareBalancedContext, BALANCED_TOOLS } from "../js/continuity/balanced.js";
+import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings } from "../js/continuity/balanced.js";
 import { BALANCED_PREPARE_POLICY } from "../js/continuity/prompts.js";
 import { buildContinuityContext } from "../js/continuity/context.js";
 import { createStoryState, sourceMessage, sourceRef, applyContinuityPatch } from "../js/continuity/state.js";
@@ -1149,4 +1149,60 @@ test("a user-authored migration JSON file establishes character state with no mo
   invalid.operations[0].sources = [{ quote: 'A forgave Player.' }];
   await assert.rejects(prepareManualContinuityMigration({ output: JSON.stringify(invalid),
     legacyMessages: [{ id: 'old', order: 1, role: 'assistant', content: 'The scene waits.' }], settings: settings(), count }), /not an exact quote/);
+});
+
+
+test("Balanced selected connection and thinking only affect the first request", async () => {
+  const { store } = await hostileMotherStory();
+  const config = settings({ endpoint: "https://openrouter.ai/api/v1/chat/completions", modelId: "narrator",
+    apiKey: "narrator-key", reasoning: { enabled: true, mode: "effort", effort: "high" },
+    profiles: [{ id: "lookup", modelId: "lookup-model", apiKey: "lookup-key",
+      endpoint: "https://openrouter.ai/api/v1/chat/completions", maxResponseTokens: 2000,
+      reasoning: { enabled: true, mode: "effort", effort: "low" } }],
+    balancedPreparation: { profileId: "lookup", thinkingMode: "effort", effort: "medium" } });
+  const before = structuredClone(config);
+  let calls = 0;
+  await runBalancedTurn({ store, branchId: "main", turnId: "balanced_profile", input: "I wait.", settings: config, count,
+    complete: async (request) => {
+      if (++calls === 1) {
+        const body = buildRequestBody(request.settings, request.messages, request);
+        assert.equal(body.model, "lookup-model");
+        assert.equal(request.settings.apiKey, "lookup-key");
+        assert.equal(body.max_tokens, 2000);
+        assert.deepEqual(body.reasoning, { effort: "medium" });
+        assert.equal(body.tools.length, 2);
+        return { finishReason: "stop", content: "Ready" };
+      }
+      assert.equal(request.settings.modelId, "narrator");
+      assert.equal(request.settings.apiKey, "narrator-key");
+      assert.deepEqual(buildRequestBody(request.settings, request.messages).reasoning, { effort: "high" });
+      return { finishReason: "stop", content: JSON.stringify({ narration: "The room stays quiet.", events: [], operations: [] }) };
+    } });
+  assert.equal(calls, 2);
+  assert.deepEqual(config, before);
+  const turn = await store.readTurn("main", "balanced_profile");
+  assert.equal(turn.trace.preparation.model, "lookup-model");
+});
+
+test("Balanced thinking supports profile settings, token budgets and missing-profile validation", () => {
+  const config = settings({ profiles: [{ id: "lookup", modelId: "lookup-model", maxResponseTokens: 3000,
+    reasoning: { enabled: true, mode: "effort", effort: "high" } }],
+    balancedPreparation: { profileId: "lookup", thinkingMode: "profile" } });
+  assert.deepEqual(balancedPreparationSettings(config).reasoning, { enabled: true, mode: "effort", effort: "high" });
+  config.balancedPreparation = { profileId: "lookup", thinkingMode: "max_tokens", maxTokens: 1000 };
+  assert.deepEqual(buildRequestBody(balancedPreparationSettings(config), []).reasoning, { max_tokens: 1000 });
+  config.balancedPreparation.maxTokens = 3000;
+  assert.throws(() => balancedPreparationSettings(config), /below/);
+  config.balancedPreparation = { profileId: "deleted", thinkingMode: "off" };
+  assert.throws(() => balancedPreparationSettings(config), /no longer exists/);
+});
+
+test("Balanced checks the selected first-call model's context budget before requesting", async () => {
+  const { store } = await hostileMotherStory();
+  let calls = 0;
+  await assert.rejects(runBalancedTurn({ store, branchId: "main", turnId: "balanced_small_model", input: "I wait.",
+    settings: settings({ profiles: [{ id: "tiny", modelId: "tiny", maxResponseTokens: 100, modelContextTokens: 300 }],
+      balancedPreparation: { profileId: "tiny", thinkingMode: "off" } }), count,
+    complete: async () => { calls++; } }), /exceed.*context budget/);
+  assert.equal(calls, 0);
 });

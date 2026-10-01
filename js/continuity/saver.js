@@ -1,4 +1,4 @@
-import { prepareBalancedContext, BALANCED_TOOLS } from "./balanced.js";
+import { prepareBalancedContext, BALANCED_TOOLS, balancedPreparationSettings } from "./balanced.js";
 import { BALANCED_PREPARE_POLICY } from "./prompts.js";
 import { chatCompletion } from "../llm-client.js";
 import { countTokens } from "../tokenizer.js";
@@ -71,7 +71,7 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     onStatus("building_context");
     const policy = `${SAVER_POLICY}\nJSON SCHEMA:\n${JSON.stringify(SAVER_OUTPUT_SCHEMA)}`;
     const built = await buildContinuityContext({ state: snapshot.state, messages: snapshot.messages,
-      input, mode, settings, stylePrompt, policy: balanced ? BALANCED_PREPARE_POLICY : policy, tools: balanced ? BALANCED_TOOLS : [], count });
+      input, mode, settings: balanced ? balancedPreparationSettings(settings) : settings, stylePrompt, policy: balanced ? BALANCED_PREPARE_POLICY : policy, tools: balanced ? BALANCED_TOOLS : [], count });
     let preparation = null;
     if (balanced) {
       onStatus("preparing");
