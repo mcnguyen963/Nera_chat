@@ -1,0 +1,142 @@
+{
+  "authorNote": "A is normally cheerful. Player is the player-controlled character. Player killed A's mother. A knows Player did it; how she learned is unspecified. A deeply distrusts Player. A's grievance is unresolved.",
+  "events": [
+    {
+      "id": "author_setup",
+      "kind": "author_setup",
+      "description": "A is normally cheerful. Player is the player-controlled character. Player killed A's mother. A knows Player did it; how she learned is unspecified. A deeply distrusts Player. A's grievance is unresolved.",
+      "entityIds": [
+        "char_A",
+        "player"
+      ],
+      "sources": [
+        {
+          "quote": "A is normally cheerful. Player is the player-controlled character. Player killed A's mother. A knows Player did it; how she learned is unspecified. A deeply distrusts Player. A's grievance is unresolved."
+        }
+      ],
+      "supersedes": []
+    }
+  ],
+  "operations": [
+    {
+      "record": {
+        "id": "char_A",
+        "kind": "character",
+        "data": {
+          "name": "A",
+          "aliases": [],
+          "controller": "narrator",
+          "personality": "Normally cheerful.",
+          "background": "",
+          "voice": "",
+          "emotion": "",
+          "condition": "",
+          "goals": [],
+          "intentions": []
+        }
+      },
+      "reason": "Established by reviewed author note.",
+      "eventIds": [
+        "author_setup"
+      ],
+      "sources": [
+        {
+          "quote": "A is normally cheerful."
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": "player",
+        "kind": "character",
+        "data": {
+          "name": "Player",
+          "aliases": [],
+          "controller": "player",
+          "personality": "",
+          "background": "",
+          "voice": "",
+          "emotion": "",
+          "condition": "",
+          "goals": [],
+          "intentions": []
+        }
+      },
+      "reason": "Established by reviewed author note.",
+      "eventIds": [
+        "author_setup"
+      ],
+      "sources": [
+        {
+          "quote": "Player is the player-controlled character."
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": "relationship_A_player",
+        "kind": "relationship",
+        "data": {
+          "from": "char_A",
+          "to": "player",
+          "trust": "Deep distrust",
+          "affection": "Not established",
+          "hostility": "Not established",
+          "boundaries": []
+        }
+      },
+      "reason": "Established by reviewed author note.",
+      "eventIds": [
+        "author_setup"
+      ],
+      "sources": [
+        {
+          "quote": "A deeply distrusts Player."
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": "belief_A_killer",
+        "kind": "belief",
+        "data": {
+          "holder": "char_A",
+          "proposition": "Player killed A's mother.",
+          "stance": "knows",
+          "acquisition": "Author-established knowledge; in-world acquisition unspecified."
+        }
+      },
+      "reason": "Established by reviewed author note.",
+      "eventIds": [
+        "author_setup"
+      ],
+      "sources": [
+        {
+          "quote": "A knows Player did it; how she learned is unspecified."
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": "grievance_A_mother",
+        "kind": "consequence",
+        "data": {
+          "holder": "char_A",
+          "target": "player",
+          "category": "grievance",
+          "description": "Player killed A's mother; unresolved grievance.",
+          "status": "open"
+        }
+      },
+      "reason": "Established by reviewed author note.",
+      "eventIds": [
+        "author_setup"
+      ],
+      "sources": [
+        {
+          "quote": "A's grievance is unresolved."
+        }
+      ]
+    }
+  ]
+}

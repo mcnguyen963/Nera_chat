@@ -162,3 +162,21 @@ JSON. Invalid JSON fragments during generation do not cancel the model request.
 The UI distinguishes generation from validation after response completion. A
 provider `length` finish means the provider hit the requested output limit; its
 received output is still preserved for manual correction.
+
+
+## Supplying final migration JSON without any LLM call
+
+Open **Create continuity copy**; **Final migration JSON** is immediately available.
+Paste JSON or choose **Upload JSON / recovery file**, then **Validate JSON · no LLM
+call**, review the preview, and **Create continuity copy**. Model and API-key fields
+can be empty. **Generate with LLM (optional)** is the only generation action.
+
+Use [migration-manual-example.json](migration-manual-example.json) as a template.
+A standalone file can contain authorNote, events and operations. authorNote is the
+reviewed factual basis for quote evidence; alternatively supply it in the note
+field. Each event/operation needs sources containing exact quote passages from
+that note. Keep all required record data fields, even empty values. The app fills
+missing branch/turn metadata, operation type and expectedVersion=0 for new records.
+The full reviewer envelope is also accepted. Local validation does not infer
+missing facts or bypass state/provenance checks. Invalid files stay editable.
+Standalone JSON can be downloaded without requesting or validating a response.

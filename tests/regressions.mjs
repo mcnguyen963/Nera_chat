@@ -56,7 +56,7 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], continuityTurns: [], continuityMessages: [], continuityListError: false, settingsDoc: null, fail: false, confirm: true, response: 'summary', migrationSource: null, migrationTranscript: [], migrationPreviews: [], migrationPublishes: [], saverTurns: [], saverRequireReview: false };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], continuityTurns: [], continuityMessages: [], continuityListError: false, settingsDoc: null, fail: false, confirm: true, response: 'summary', migrationSource: null, migrationTranscript: [], migrationPreviews: [], manualMigrationPreviews: [], migrationPublishes: [], saverTurns: [], saverRequireReview: false };
   const localCache = new Map();
   const context = vm.createContext({
     console, structuredClone, document,
@@ -125,6 +125,11 @@ async function harness() {
       },
     },
     'continuity/migration.js': {
+      prepareManualContinuityMigration: async (request) => {
+        calls.manualMigrationPreviews.push(request);
+        return { sourceMessageCount: request.legacyMessages.length, skippedSummaryCount: 0,
+          state: { throughOrder: 4, records: [{ id: 'char_A' }], events: [{ id: 'setup' }] }, messages: [] };
+      },
       prepareContinuityMigration: async (request) => {
         calls.migrationPreviews.push(request);
         request.onReviewOutput?.({ content: "bad json", thinking: "Reference thinking", turnId: "migration_test", finishReason: "stop" });
@@ -830,4 +835,29 @@ test('a recovery file restores migration output for the original story without a
   fileInput.files = [{ text: async () => JSON.stringify(recovery) }];
   await fileInput.dispatchEvent({ type: 'change', target: fileInput });
   assert.equal(h.el('migration-output').value, before);
+});
+
+
+test('standalone migration JSON upload can be validated and published without generating a response first', async () => {
+  const h = await harness();
+  h.state.sessionId = 'story'; h.state.settings.apiKey = ''; h.state.settings.modelId = '';
+  h.calls.migrationSource = { title: 'story', nextOrder: 2, continuityEnabled: false };
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story'); await Promise.resolve();
+  await h.fire('btn-open-migration');
+  assert.equal(h.el('migration-output-editor').hidden, false);
+  const value = { authorNote: 'A is present.', events: [], operations: [] };
+  const file = h.el('file-migration-output');
+  file.files = [{ text: async () => JSON.stringify(value) }];
+  await file.dispatchEvent({ type: 'change', target: file });
+  assert.equal(h.el('migration-output').value, JSON.stringify(value));
+  assert.equal(h.el('migration-note').value, 'A is present.');
+  await h.fire('btn-validate-migration-output');
+  assert.equal(h.calls.migrationPreviews.length, 0);
+  assert.equal(h.calls.manualMigrationPreviews.length, 1);
+  assert.equal(h.calls.requests.length, 0);
+  assert.equal(h.el('btn-publish-migration').hidden, false);
+  await h.fire('btn-publish-migration');
+  assert.equal(h.calls.migrationPublishes.length, 1);
+  assert.equal(h.calls.requests.length, 0);
 });

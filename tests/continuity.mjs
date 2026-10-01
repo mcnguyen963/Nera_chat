@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prepareBalancedContext, BALANCED_TOOLS } from "../js/continuity/balanced.js";
@@ -8,7 +9,7 @@ import { createMemoryStoryStore, forkAtRevision } from "../js/continuity/store.j
 import { createFirestoreStoryStore } from "../js/continuity/firestore-store.js";
 import { createStoryTools, NARRATOR_TOOLS, runNarratorTools } from "../js/continuity/tools.js";
 import { runContinuityTurn } from "../js/continuity/turn-controller.js";
-import { prepareContinuityMigration } from "../js/continuity/migration.js";
+import { prepareContinuityMigration, prepareManualContinuityMigration } from "../js/continuity/migration.js";
 import { runBalancedTurn, runSaverTurn, acceptSaverPending, saveManualState, repairSaverTurn } from "../js/continuity/saver.js";
 import { buildRequestBody, chatCompletion } from "../js/llm-client.js";
 import { MIGRATION_REVIEW_SCHEMA, REVIEW_SCHEMA, normalizeMigrationReview, validate } from "../js/continuity/schema.js";
@@ -1130,4 +1131,22 @@ test("malformed migration JSON never interrupts generation; the full response is
     assert.equal(received.content, pieces.join(""));
     assert.equal(received.usage.completion_tokens, 123);
   } finally { globalThis.fetch = previousFetch; }
+});
+
+
+test("a user-authored migration JSON file establishes character state with no model or API key", async () => {
+  const output = await readFile(new URL('../prompts/migration-manual-example.json', import.meta.url), 'utf8');
+  let calls = 0;
+  const prepared = await prepareManualContinuityMigration({ output,
+    legacyMessages: [{ id: 'old', order: 1, role: 'assistant', content: 'The scene waits.' }],
+    settings: settings({ modelId: '', apiKey: '', maxContextTokens: 10, maxResponseTokens: 100000 }), count,
+    complete: async () => { calls++; throw new Error('No paid request permitted'); } });
+  assert.equal(calls, 0);
+  assert.equal(prepared.state.records.length, 5);
+  assert.equal(prepared.state.records.find((r) => r.kind === 'relationship').data.trust, 'Deep distrust');
+  assert.equal(prepared.state.records.find((r) => r.kind === 'consequence').data.status, 'open');
+  const invalid = JSON.parse(output);
+  invalid.operations[0].sources = [{ quote: 'A forgave Player.' }];
+  await assert.rejects(prepareManualContinuityMigration({ output: JSON.stringify(invalid),
+    legacyMessages: [{ id: 'old', order: 1, role: 'assistant', content: 'The scene waits.' }], settings: settings(), count }), /not an exact quote/);
 });

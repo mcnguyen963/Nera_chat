@@ -57,3 +57,33 @@ export async function prepareContinuityMigration({ legacyMessages, authorNote, s
   validateInitialStoryStorage(result);
   return result;
 }
+
+// A human-supplied final JSON is an author-reviewed migration, not a generation.
+// Missing application metadata is supplied locally; contradictory supplied
+// metadata and unsupported evidence still fail the normal validation pipeline.
+export async function prepareManualContinuityMigration({ output, authorNote = "", migrationTurnId = null, ...options }) {
+  if (typeof output !== "string" || !output.trim()) throw new Error("Paste or upload your final migration JSON.");
+  let value;
+  try { value = JSON.parse(output.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, "$1")); }
+  catch { throw new Error("The supplied migration JSON is invalid. Edit it and validate again; no model request was made."); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Migration JSON must be an object.");
+  const embeddedNote = value.authorNote;
+  if (embeddedNote !== undefined && typeof embeddedNote !== "string") throw new Error("authorNote must be text.");
+  value = { ...value }; delete value.authorNote;
+  const { normalizeMigrationReview } = await import("./schema.js");
+  value = normalizeMigrationReview(value);
+  value.verdict ??= "accept";
+  value.violations ??= [];
+  value.patch ??= {};
+  if (typeof value.patch !== "object" || Array.isArray(value.patch)) throw new Error("Migration patch must be an object.");
+  value.patch.branchId ??= "main";
+  value.patch.baseRevision ??= 0;
+  value.patch.turnId ??= migrationTurnId ?? `migration_manual_${crypto.randomUUID().replaceAll("-", "")}`;
+  if (Array.isArray(value.patch.operations)) for (const operation of value.patch.operations) {
+    if (!operation || typeof operation !== "object") continue;
+    operation.type ??= "put_record"; operation.expectedVersion ??= 0;
+  }
+  return prepareContinuityMigration({ ...options, authorNote: authorNote.trim() || embeddedNote || "",
+    migrationTurnId: value.patch.turnId, reviewOutputOverride: JSON.stringify(value),
+    complete: async () => { throw new Error("Manual migration cannot call an LLM."); } });
+}
