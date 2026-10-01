@@ -55,16 +55,21 @@ async function harness() {
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = () => null;
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary' };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary', streamLines: null };
   const localCache = new Map();
   const context = vm.createContext({
-    console, structuredClone, document,
+    console, structuredClone, document, TextDecoder,
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     setTimeout() {}, confirm: () => calls.confirm,
     fetch: async (_url, options) => {
       calls.requests.push(JSON.parse(options.body));
+      if (calls.streamLines) {
+        const chunks = calls.streamLines.map((line) => new TextEncoder().encode(line));
+        return { ok: true, body: { getReader: () => ({ read: async () => chunks.length
+          ? { done: false, value: chunks.shift() } : { done: true } }) } };
+      }
       return { ok: true, json: async () => ({ choices: [{ message: { content: calls.response } }] }) };
     },
   });
@@ -144,6 +149,7 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   h.el('set-frequency-penalty').value = '-2';
   h.el('set-presence-penalty').value = '2';
   h.el('set-keep-n').value = '0';
+  h.el('set-auto-summary-enabled').checked = true;
   await h.fire('btn-profile-copy');
   const copyId = h.el('set-profiles').value;
   h.el('set-model').value = 'model-b';
@@ -153,6 +159,7 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   assert.equal(h.calls.writes.length, 0);
   await h.fire('btn-save-settings');
   assert.equal(h.state.settings.keepRecentMessagesAfterSummary, 0);
+  assert.equal(h.state.settings.autoSummarizationEnabled, true);
   assert.equal(h.state.settings.profiles.length, 2);
   assert.equal(h.state.settings.profiles.find(p => p.id === copyId).modelId, 'model-b');
   assert.match(h.el('chip-model').textContent, /model-a/);
@@ -240,6 +247,7 @@ test('Category navigation keeps edits; resets affect only the active draft tab',
   assert.equal(h.el('set-keep-n').value, '2');
   await h.fire('btn-reset-settings');
   assert.equal(h.el('set-keep-n').value, '10');
+  assert.equal(h.el('set-auto-summary-enabled').checked, false);
   await h.fire('nav-model');
   assert.equal(h.el('set-model').value, 'kept-model');
   assert.equal(h.calls.writes.length, 0);
@@ -409,6 +417,73 @@ test('Context uses the checkpoint and every later message supplied by the cache'
   assert.equal(result.apiMessages.at(-1).content, 'turn 149');
 });
 
+test('Sliding context preserves the opening exchange and latest user while ejecting the middle', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
+  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 130 + 100, maxResponseTokens: 100 };
+  const messages = [
+    { id: 'u1', order: 1, role: 'user', content: 'Opening', tokenCount: 25 },
+    { id: 'a1', order: 2, role: 'assistant', content: 'Background', tokenCount: 25 },
+    { id: 'u2', order: 3, role: 'user', content: 'Middle', tokenCount: 80 },
+    { id: 'a2', order: 4, role: 'assistant', content: 'Small recent', tokenCount: 40 },
+    { id: 'u3', order: 5, role: 'user', content: 'Latest', tokenCount: 30 },
+  ];
+  const result = await buildContextForRequest({ id: 's' }, settings, { messages, requireLatestUser: true });
+  assert.deepEqual(Array.from(result.apiMessages.slice(1), (m) => m.content), ['Opening', 'Background', 'Small recent', 'Latest']);
+  assert.equal(result.droppedCount, 1);
+  assert.ok(result.usedTokens + settings.maxResponseTokens <= settings.maxContextTokens);
+  await assert.rejects(buildContextForRequest({ id: 's' }, settings, {
+    messages: messages.map((m) => m.id === 'u3' ? { ...m, tokenCount: 500 } : m), requireLatestUser: true,
+  }), /opening story and latest user message exceed/);
+});
+
+test('Opening exchange survives a summary checkpoint and regeneration uses the prior plan', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = [
+    { id: 'u1', order: 1, role: 'user', content: 'The kingdom begins here', tokenCount: 30 },
+    { id: 'a1', order: 2, role: 'assistant', content: 'The first scene', tokenCount: 30 },
+    { id: 'u2', order: 3, role: 'user', content: 'Later event', tokenCount: 20 },
+    { id: 'sum', order: 4, role: 'summary', content: 'Story summary', tokenCount: 20 },
+    { id: 'u3', order: 5, role: 'user', content: 'Current turn', tokenCount: 20 },
+  ];
+  const session = { id: 's', longTermPlan: 'Future plan', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
+  const current = await buildContextForRequest(session, h.state.settings, { messages, requireLatestUser: true });
+  assert.deepEqual(Array.from(current.apiMessages.slice(1), (m) => m.content),
+    ['Story so far:\nStory summary', 'The kingdom begins here', 'The first scene', 'Current turn']);
+  const regen = await buildContextForRequest(session, h.state.settings, {
+    messages, upToOrder: 2, planOverride: 'Original plan', requireLatestUser: true,
+  });
+  assert.match(regen.apiMessages[0].content, /Original plan/);
+  assert.doesNotMatch(regen.apiMessages[0].content, /Future plan/);
+  assert.equal(regen.apiMessages.some((m) => m.content.includes('Story summary')), false);
+});
+
+test('Summarizer bounds each request to the configured context', async () => {
+  const h = await harness();
+  const { runSummarization } = await h.use('summarizer.js');
+  const settings = { ...h.state.settings, modelId: 'test', streaming: false,
+    maxContextTokens: 2000, summarizerMaxTokens: 1000, summarizerChunkTokens: 1000,
+    keepRecentMessagesAfterSummary: 0 };
+  const messages = Array.from({ length: 4 }, (_, i) => ({ id: String(i), order: i + 1,
+    role: 'user', content: 'event '.repeat(65) }));
+  await runSummarization({ id: 's' }, settings, { messages });
+  assert.ok(h.calls.requests.length > 1);
+  assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(2000 / 3) &&
+    request.messages.reduce((sum, message) => sum + message.content.length, 0) + request.max_tokens <= 2000));
+});
+
+test('Incomplete streamed replies are rejected', async () => {
+  const h = await harness();
+  const { chatCompletion } = await h.use('llm-client.js');
+  const settings = { ...h.state.settings, modelId: 'test', streaming: true };
+  h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"partial"}}]}\n'];
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /ended before completion/);
+  h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"cut"},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /output limit/);
+});
+
 test('Streaming plan tags remain hidden even when split across chunks', async () => {
   const h = await harness();
   const { stripPlan } = await h.use('plan-parser.js');
@@ -432,6 +507,20 @@ test('Plan thread stays out of visible text but remains in the next model contex
   assert.match(result.apiMessages.at(-1).content, /<plan_thread>steering toward the reunion<\/plan_thread>/);
 });
 
+test('Author direction tags are normalized in model context', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = [
+    { id: 'm1', order: 1, role: 'user', content: '<ad>What happened between Nera and Elise?<ad>', tokenCount: 50 },
+    { id: 'm2', order: 2, role: 'user', content: '<ad>Continue the scene</ad>', tokenCount: 30 },
+  ];
+  const result = await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
+  assert.match(result.apiMessages[0].content, /out-of-story author direction/);
+  assert.equal(result.apiMessages[1].content, '<ad>What happened between Nera and Elise?</ad>');
+  assert.equal(result.apiMessages[2].content, '<ad>Continue the scene</ad>');
+  assert.equal(messages[0].content, '<ad>What happened between Nera and Elise?<ad>');
+});
+
 test('Concurrent settings writes cannot silently overwrite each other', async () => {
   const h = await harness();
   const first = h.settings.saveSettings({ ...h.state.settings, modelId: 'first' });
@@ -446,9 +535,12 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   const { shouldAutoSummarize } = await h.use('summarizer.js');
   const result = await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, narratorSystemPrompt: '', maxContextTokens: 1000,
-    maxResponseTokens: 800, autoSummaryThresholdPercent: 90,
+    maxResponseTokens: 800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
   }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]);
   assert.equal(result, true);
+  assert.equal(await shouldAutoSummarize({ id: 's' }, {
+    ...h.state.settings, autoSummarizationEnabled: false,
+  }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]), false);
 });
 
 test('Empty chat enables writing only after a story is selected', async () => {

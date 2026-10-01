@@ -155,6 +155,7 @@ function showPanel(name) {
 function renderAll() {
   renderProfile();
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
+  input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
 }
@@ -204,6 +205,7 @@ function capture() {
     mirrorFromActiveProfile(draft);
   }
   for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
+  draft.autoSummarizationEnabled = input("set-auto-summary-enabled").checked;
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
 }
@@ -219,6 +221,8 @@ function resetPanel() {
     renderProfile();
   } else if (panel === "context") {
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
+    draft.autoSummarizationEnabled = DEFAULT_SETTINGS.autoSummarizationEnabled;
+    input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled;
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;

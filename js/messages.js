@@ -29,8 +29,8 @@ function newMsgId() {
 }
 export const newMessageId = newMsgId;
 
-function makeMessage(id, order, { role, content, thinking = null, planThread = null }, tokenCount) {
-  return { id, order, role, content, thinking, planThread, tokenCount, createdAt: Timestamp.now(), editedAt: null };
+function makeMessage(id, order, { role, content, thinking = null, planThread = null, planBefore = null }, tokenCount) {
+  return { id, order, role, content, thinking, planThread, planBefore, tokenCount, createdAt: Timestamp.now(), editedAt: null };
 }
 
 function contextText(message) {
@@ -244,34 +244,42 @@ async function changeMessage(sessionId, messageId, order, change) {
   const batch = writeBatch(db);
   for (const record of records) batch.set(chunkRef(sessionId, record.id), record.data);
   const sessionSnap = await getDocFromServer(sessionRef(sessionId));
-  if (sessionSnap.data()?.activeChunkId === old.id) {
+  const sessionData = sessionSnap.data();
+  const summaryReset = !!sessionData?.activeSummaryMessageId &&
+    ((current.role !== "summary" && order <= (sessionData.breakpointOrder ?? 0)) ||
+      (current.role === "summary" && !replacement && messageId === sessionData.activeSummaryMessageId));
+  const sessionPatch = summaryReset
+    ? { activeSummaryMessageId: null, breakpointOrder: 0 } : {};
+  if (sessionData?.activeChunkId === old.id) {
     const active = records.at(-1);
-    batch.update(sessionRef(sessionId), {
+    Object.assign(sessionPatch, {
       activeChunkId: active.id,
       activeChunkBytes: active.data.byteSize,
       activeChunkCount: active.data.count,
     });
   }
+  if (Object.keys(sessionPatch).length) batch.update(sessionRef(sessionId), sessionPatch);
   await batch.commit();
-  return replacement;
+  return { replacement, summaryReset };
 }
 
 export async function editMessage(sessionId, messageId, content, order) {
   const tokenCount = await countTokens(content);
-  await changeMessage(sessionId, messageId, order, (message) => ({
+  const { summaryReset } = await changeMessage(sessionId, messageId, order, (message) => ({
     ...message, content, planThread: null, tokenCount, editedAt: Timestamp.now(),
   }));
-  return { tokenCount };
+  return { tokenCount, summaryReset };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null }, order) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, thinking: thinking ?? null, planThread, tokenCount,
+    ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount,
   }));
   return { tokenCount };
 }
 
 export async function deleteMessage(sessionId, messageId, order) {
-  await changeMessage(sessionId, messageId, order, () => null);
+  const { summaryReset } = await changeMessage(sessionId, messageId, order, () => null);
+  return { summaryReset };
 }

@@ -1,5 +1,6 @@
 # Real Firebase config — never commit (injected by CI from repo secrets)
 js/firebase-config.js
+.private/
 
 # Local-only account registration page — never commit, never deploy
 register.html

@@ -172,11 +172,12 @@ test('migration packs existing messages once and checkpoint reads use chunks', a
 test('assistant plan thread is stored separately from visible content', async () => {
   const h = await setup();
   const saved = await h.api.addMessage('s', {
-    role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion',
+    role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion', planBefore: 'Find the door',
   });
   let message = (await h.api.getMessages('s'))[0];
   assert.equal(message.content, 'The door opens.');
   assert.equal(message.planThread, 'steering toward the reunion');
+  assert.equal(message.planBefore, 'Find the door');
   assert.ok(message.tokenCount > message.content.length);
   await h.api.overwriteMessage('s', saved.id, {
     content: 'The room is empty.', thinking: null, planThread: 'steering toward the reveal',
@@ -186,6 +187,26 @@ test('assistant plan thread is stored separately from visible content', async ()
   await h.api.editMessage('s', saved.id, 'A quiet room.', saved.order);
   message = (await h.api.getMessages('s'))[0];
   assert.equal(message.planThread, null);
+});
+
+test('Editing folded story history atomically invalidates its summary checkpoint', async () => {
+  const h = await setup();
+  const first = await h.api.addMessage('s', { role: 'user', content: 'Old fact' });
+  await h.api.addMessage('s', { role: 'assistant', content: 'Reply' });
+  const summary = await h.api.addMessage('s', { role: 'summary', content: 'Old fact remains' }, {
+    sessionUpdate: { activeSummaryMessageId: 'summary', breakpointOrder: 2 }, id: 'summary',
+  });
+  assert.equal(summary.order, 3);
+  const edited = await h.api.editMessage('s', first.id, 'Corrected fact', first.order);
+  assert.equal(edited.summaryReset, true);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, null);
+  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 0);
+  const secondSummary = await h.api.addMessage('s', { role: 'summary', content: 'Rebuilt' }, {
+    sessionUpdate: { activeSummaryMessageId: 'summary2', breakpointOrder: 2 }, id: 'summary2',
+  });
+  const deleted = await h.api.deleteMessage('s', secondSummary.id, secondSummary.order);
+  assert.equal(deleted.summaryReset, true);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, null);
 });
 
 test('append, edit, split, and delete preserve message order and content', async () => {

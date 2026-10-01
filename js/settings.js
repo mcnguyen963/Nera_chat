@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = {
     maxTokens: 20000,
   },
   maxContextTokens: 120000,
+  autoSummarizationEnabled: false,
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
   summarizerMaxTokens: 100000,

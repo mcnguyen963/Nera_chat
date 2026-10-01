@@ -53,6 +53,9 @@ async function nonStreamedCompletion({ settings, messages, signal }) {
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
+  if (data.choices?.[0]?.finish_reason === "length") {
+    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+  }
   const msg = data.choices?.[0]?.message ?? {};
   return {
     content: msg.content ?? "",
@@ -73,7 +76,10 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   let content = "";
   let thinking = "";
   let usage = null;
+  let completed = false;
+  let finishReason = null;
 
+  if (!res.body) throw new Error("The model returned no response stream.");
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -85,14 +91,18 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     if (line.startsWith(":")) return;
     if (!line.startsWith("data:")) return;
     const payload = line.slice(5).trim();
-    if (payload === "[DONE]") return;
+    if (payload === "[DONE]") { completed = true; return; }
     let json;
     try {
       json = JSON.parse(payload);
     } catch {
-      return; // tolerate malformed partials
+      throw new Error("The model returned a malformed response event.");
     }
     const delta = json.choices?.[0]?.delta ?? {};
+    if (json.choices?.[0]?.finish_reason) {
+      finishReason = json.choices[0].finish_reason;
+      completed = true;
+    }
     if (delta.content) {
       content += delta.content;
       onDelta?.(delta.content);
@@ -116,7 +126,10 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
       processLine(line);
     }
   }
+  buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
+  if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
+  if (finishReason === "length") throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
 
   return {
     content,

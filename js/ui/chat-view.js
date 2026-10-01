@@ -512,14 +512,15 @@ function renderMessage(m) {
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
-    await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    const { summaryReset } = await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    if (summaryReset) clearLocalSummary();
     if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
   }));
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
-      runAssistantTurn({ upToOrder: m.order, overwriteId: m.id });
+      void regenerateMessage(m);
     }));
   }
   meta.appendChild(actions);
@@ -595,7 +596,8 @@ function startEdit(m, wrap) {
     save.disabled = true;
     cancel.disabled = true;
     try {
-      const { tokenCount } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
+      const { tokenCount, summaryReset } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
+      if (summaryReset) clearLocalSummary();
       lastMessages = lastMessages.map((item) =>
         item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
       );
@@ -706,19 +708,46 @@ export async function updateIndicator() {
   const usage = await computeContextUsage(session, state.settings, historyMessages ?? lastMessages);
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
-  const pct = usage.max > 0 ? (usage.usedTokens / usage.max) * 100 : 0;
+  const reserved = state.settings.maxResponseTokens;
+  const allocated = usage.usedTokens + reserved;
+  const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
   el.contextFill.style.width = Math.min(100, pct) + "%";
   el.contextFill.classList.toggle("over", usage.overThreshold);
   el.contextThreshold.style.left =
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
-    `${usage.usedTokens.toLocaleString()} / ${usage.max.toLocaleString()} tokens` +
+    `${usage.usedTokens.toLocaleString()} input + ${reserved.toLocaleString()} output / ${usage.max.toLocaleString()} tokens` +
     (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "");
 }
 export const refreshContextIndicator = updateIndicator;
 
 // ---------- send / stream / summarize ----------
+
+function clearLocalSummary() {
+  session = { ...session, activeSummaryMessageId: null, breakpointOrder: 0 };
+  updateIndicator();
+  queueCacheSave();
+}
+
+async function regenerateMessage(message) {
+  try {
+    const all = await ensureHistory();
+    const latest = all.filter((m) => m.role !== "summary").at(-1);
+    if (latest?.id !== message.id || message.order <= (session.breakpointOrder ?? 0)) {
+      throw new Error("Only the latest, unsummarized reply can be regenerated. Later story turns depend on older replies.");
+    }
+    if (message.planBefore == null && session.longTermPlan) {
+      throw new Error("This reply predates plan history tracking. Its prior plan is unknown, so regeneration could change the story incorrectly.");
+    }
+    await runAssistantTurn({
+      messages: all, upToOrder: message.order, overwriteId: message.id,
+      planOverride: message.planBefore ?? "",
+    });
+  } catch (err) {
+    showTransientError(err.message || String(err));
+  }
+}
 
 async function handleSend(e) {
   e.preventDefault();
@@ -758,10 +787,13 @@ async function handleSend(e) {
 async function runAssistantTurn(opts = {}) {
   const settings = structuredClone(state.settings);
   if (!settings) return;
+  const planBefore = opts.planOverride ?? session.longTermPlan ?? "";
   setBusy(true);
   try {
     const allMessages = opts.messages ?? await ensureHistory();
-    const { apiMessages } = await buildContextForRequest(session, settings, { ...opts, messages: allMessages });
+    const { apiMessages } = await buildContextForRequest(session, settings, {
+      ...opts, messages: allMessages, requireLatestUser: true,
+    });
     startStreamUI();
 
     const { content, thinking } = await chatCompletion({
@@ -786,28 +818,29 @@ async function runAssistantTurn(opts = {}) {
     let savedMsg;
     if (opts.overwriteId) {
       const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
-        content: finalContent, thinking, planThread,
+        content: finalContent, thinking, planThread, planBefore,
       }, opts.upToOrder);
       const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
-      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, tokenCount };
+      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, planBefore, tokenCount };
       historyMessages = historyMessages.map((m) =>
-        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, tokenCount } : m
+        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, planBefore, tokenCount } : m
       );
     } else {
       savedMsg = await messagesApi.addMessage(session.id, {
-        role: "assistant", content: finalContent, thinking, planThread,
+        role: "assistant", content: finalContent, thinking, planThread, planBefore,
       });
       lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
-        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, tokenCount: savedMsg.tokenCount },
+        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, planBefore, tokenCount: savedMsg.tokenCount },
       ]);
     historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
     }
     renderMessages(lastMessages);
     queueCacheSave();
 
-    if (newPlan !== null) {
-      await updateSession(session.id, { longTermPlan: newPlan });
-      session = { ...session, longTermPlan: newPlan };
+    const nextPlan = newPlan ?? planBefore;
+    if (nextPlan !== (session.longTermPlan ?? "")) {
+      await updateSession(session.id, { longTermPlan: nextPlan });
+      session = { ...session, longTermPlan: nextPlan };
     }
 
     // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
@@ -918,7 +951,7 @@ async function handleFullSummarize() {
       onDelta: ui.onDelta,
       onReasoning: ui.onReasoning,
       onProgress: (multi, i, total) => {
-        if (multi) ui.setLabel(`Summarizing part ${i}/${total}…`);
+        if (multi) ui.setLabel(total ? `Summarizing part ${i}/${total}…` : `Summarizing part ${i}…`);
       },
     });
     applySummaryResult(r);

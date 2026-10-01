@@ -11,31 +11,19 @@ import { chatCompletion } from "./llm-client.js";
 import { computeContextUsage } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
 
-// Max input tokens per summarizer call. Configurable via settings.summarizerChunkTokens.
 const CHUNK_TOKEN_BUDGET_DEFAULT = 250000;
-
-async function chunkByTokens(msgs, budget) {
-  const chunks = [];
-  let cur = [];
-  let curTokens = 0;
-  for (const m of msgs) {
-    const t = m.tokenCount ?? await countTokens(m.content);
-    if (cur.length > 0 && curTokens + t > budget) {
-      chunks.push(cur);
-      cur = [];
-      curTokens = 0;
-    }
-    cur.push(m);
-    curTokens += t;
-  }
-  if (cur.length > 0) chunks.push(cur);
-  return chunks;
-}
 
 // The summarizer has its own output budget (summarizerMaxTokens), independent
 // of the chat's maxResponseTokens, so long histories can be captured fully.
 function summarizerSettings(settings) {
-  return { ...settings, maxResponseTokens: settings.summarizerMaxTokens ?? 20000 };
+  const contextLimit = Number(settings.maxContextTokens);
+  if (!Number.isFinite(contextLimit) || contextLimit < 1024) {
+    throw new Error("Summarization needs a context limit of at least 1024 tokens.");
+  }
+  const maxResponseTokens = Math.min(
+    settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3)
+  );
+  return { ...settings, maxResponseTokens };
 }
 
 export function formatAsTranscript(msgs) {
@@ -77,7 +65,9 @@ export async function runSummarization(session, settings, opts = {}) {
       ? all.find((m) => m.id === session.activeSummaryMessageId)?.content ?? null
       : null;
 
-  const chunks = await chunkByTokens(toFold, settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT);
+  const requestSettings = summarizerSettings(settings);
+  const inputLimit = settings.maxContextTokens - requestSettings.maxResponseTokens;
+  const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
   // Detail directive appended to every summarizer call — the stored system
@@ -91,16 +81,36 @@ export async function runSummarization(session, settings, opts = {}) {
     "Output only the summary text.";
 
   let content = null;
-  for (let i = 0; i < chunks.length; i++) {
-    opts.onProgress?.(chunks.length > 1, i + 1, chunks.length);
-    const summarizerInput =
-      running +
-      (chunks.length > 1 ? "New events to fold in (part " + (i + 1) + " of " + chunks.length + "):\n" : "New events to fold in:\n") +
-      formatAsTranscript(chunks[i]) +
-      detailDirective;
+  let offset = 0;
+  let part = 0;
+  while (offset < toFold.length) {
+    const chunk = [];
+    const prefix = running + "New events to fold in:\n";
+    const fixedTokens = await countTokens(settings.summarizerSystemPrompt + "\n" + prefix + detailDirective);
+    let transcriptTokens = 0;
+    for (let i = offset; i < toFold.length; i++) {
+      const message = toFold[i];
+      const itemTokens = await countTokens(
+        `${message.role === "user" ? "User" : "Assistant"}: ${message.content}\n\n`
+      );
+      if (fixedTokens + transcriptTokens + itemTokens > inputLimit ||
+          transcriptTokens + itemTokens > chunkLimit) break;
+      transcriptTokens += itemTokens;
+      chunk.push(toFold[i]);
+    }
+    let summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
+    while (chunk.length && await countTokens(settings.summarizerSystemPrompt + "\n" + summarizerInput) > inputLimit) {
+      chunk.pop();
+      summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
+    }
+    if (!chunk.length) {
+      throw new Error("A story message or previous summary is too large for the summarizer context budget. Increase the context limit or shorten it.");
+    }
+    part++;
+    opts.onProgress?.(offset + chunk.length < toFold.length || part > 1, part, null);
 
     const r = await chatCompletion({
-      settings: summarizerSettings(settings),
+      settings: requestSettings,
       messages: [
         { role: "system", content: settings.summarizerSystemPrompt },
         { role: "user", content: summarizerInput },
@@ -111,7 +121,8 @@ export async function runSummarization(session, settings, opts = {}) {
     content = r.content;
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");
     // Each chunk's summary becomes the "previous summary" for the next chunk.
-    running = content && content.trim() ? "Previous summary:\n" + content + "\n\n" : running;
+    running = "Previous summary:\n" + content.trim() + "\n\n";
+    offset += chunk.length;
   }
 
   // One transaction: summary doc + updated summary pointer/breakpoint together.
@@ -133,6 +144,7 @@ export async function runSummarization(session, settings, opts = {}) {
 
 // Auto-trigger check (spec §8.1): fires after each assistant reply is saved.
 export async function shouldAutoSummarize(session, settings, messages = null) {
+  if (settings.autoSummarizationEnabled !== true) return false;
   const { overThreshold, droppedCount } = await computeContextUsage(session, settings, messages);
   return overThreshold || droppedCount > 0;
 }
