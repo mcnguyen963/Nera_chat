@@ -7,7 +7,7 @@ import { buildContextForRequest, computeContextUsage } from "../context-builder.
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
-import { updateSession } from "../sessions.js";
+import { updateSession, duplicateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
 import {
@@ -510,6 +510,27 @@ function renderMessage(m) {
 
   const actions = document.createElement("span");
   actions.className = "msg-actions";
+  if (m.role === "user" || m.role === "assistant") {
+    const createCopy = actionBtn("Create copy", "create-copy", async () => {
+      if (busy || state.busy || createCopy.disabled) return;
+      const sourceId = state.sessionId;
+      createCopy.disabled = true;
+      createCopy.textContent = "Creating…";
+      try {
+        const newId = await duplicateSession(sourceId, null, m.id);
+        if (state.sessionId === sourceId && setSession(newId)) {
+          document.dispatchEvent(new CustomEvent("sidebar:close"));
+        }
+      } catch (error) {
+        showTransientError("Copy failed: " + (error.message || error));
+      } finally {
+        createCopy.disabled = false;
+        createCopy.textContent = "Create copy";
+      }
+    });
+    createCopy.title = "Create a new session with settings and all messages through this message";
+    actions.appendChild(createCopy);
+  }
   actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
   if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
@@ -550,7 +571,7 @@ function actionBtn(text, cls, onClick) {
   const b = document.createElement("button");
   b.textContent = text;
   if (cls) b.className = cls;
-  b.addEventListener("click", (e) => { e.stopPropagation(); onClick?.(); });
+  b.addEventListener("click", (e) => { e.stopPropagation(); return onClick?.(); });
   return b;
 }
 

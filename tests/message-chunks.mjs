@@ -325,3 +325,16 @@ test('invalid copy counts cannot create a new session', async () => {
     assert.deepEqual([...h.documents.keys()], originalPaths);
   }
 });
+
+test('copy through a clicked message includes that message despite gaps in order', async () => {
+  const h = await setup(105);
+  await h.api.ensureChunked('s');
+  await h.api.deleteMessage('s', 'm2', 2);
+  const source = await h.api.getMessages('s');
+  const copyId = await h.sessions.duplicateSession('s', null, 'm102');
+  assert.deepEqual(await h.api.getMessages(copyId), source.filter((m) => m.order <= 102));
+  assert.equal(h.documents.get(`users/u/sessions/${copyId}`).nextOrder, 102);
+  const paths = [...h.documents.keys()];
+  await assert.rejects(h.sessions.duplicateSession('s', null, 'missing'), /no longer exists/);
+  assert.deepEqual([...h.documents.keys()], paths);
+});

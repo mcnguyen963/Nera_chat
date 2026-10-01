@@ -94,7 +94,11 @@ async function harness() {
     'db.js': { db: {} },
     'auth.js': { currentUid: () => 'test-user' },
     'tokenizer.js': { countTokens: async (text) => text.length },
-    'sessions.js': { getSession: async () => ({ title: 'Story', longTermPlan: 'Old plan' }), updateSession: async (...args) => { calls.sessionWrites.push(args); } },
+    'sessions.js': {
+      getSession: async () => ({ title: 'Story', longTermPlan: 'Old plan' }),
+      updateSession: async (...args) => { calls.sessionWrites.push(args); },
+      duplicateSession: async (...args) => { calls.sessionCopies ??= []; calls.sessionCopies.push(args); return 'copied-session'; },
+    },
     'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
       getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
@@ -626,6 +630,33 @@ test('Opening a chat uses the chunked message subscription', async () => {
   chat.setSession('story');
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(h.calls.subscriptions, ['story']);
+});
+
+test('message actions keep consistent order and create copies through the selected message', async () => {
+  for (const role of ['user', 'assistant']) {
+    const h = await harness();
+    const chat = await h.use('ui/chat-view.js');
+    chat.initChatView();
+    chat.setSession('story');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
+    h.calls.latestCallbacks.at(-1)({
+      messages: [{ id: 'chosen-message', order: 7, role, content: 'Chosen turn' }], hasEarlier: false,
+    });
+    const message = h.el('message-list').children.find((node) => node.dataset.messageId === 'chosen-message');
+    const actions = message.children[0].children[1].children;
+    assert.deepEqual(Array.from(actions, (button) => button.textContent), role === 'assistant'
+      ? ['Create copy', 'Copy', 'Edit', 'Delete', 'Regenerate']
+      : ['Create copy', 'Copy', 'Edit', 'Delete']);
+    const click = { type: 'click', stopPropagation() {} };
+    h.state.busy = true;
+    await actions[0].dispatchEvent(click);
+    assert.equal(h.calls.sessionCopies, undefined);
+    h.state.busy = false;
+    await actions[0].dispatchEvent(click);
+    assert.deepEqual(h.calls.sessionCopies, [['story', null, 'chosen-message']]);
+    assert.equal(h.state.sessionId, 'copied-session');
+  }
 });
 
 test('Switching back to a recently opened session reuses its cached messages', async () => {

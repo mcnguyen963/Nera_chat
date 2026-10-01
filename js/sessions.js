@@ -85,7 +85,7 @@ export function subscribeSessions(callback, onError) {
 
 // Copy the first N stored messages (including summary messages), or all when
 // omitted. Keep message ids, timestamps, orders, and hidden reply data intact.
-export async function duplicateSession(sourceId, messageCount = null) {
+export async function duplicateSession(sourceId, messageCount = null, throughMessageId = null) {
   if (messageCount !== null && (!Number.isSafeInteger(messageCount) || messageCount < 0)) {
     throw new Error("Message count must be a whole number of 0 or more.");
   }
@@ -101,7 +101,12 @@ export async function duplicateSession(sourceId, messageCount = null) {
   if (messageCount !== null && messageCount > messages.length) {
     throw new Error(`This session has only ${messages.length} messages. Choose 0–${messages.length}.`);
   }
-  const selected = messageCount === null ? messages : messages.slice(0, messageCount);
+  let selected = messageCount === null ? messages : messages.slice(0, messageCount);
+  if (throughMessageId !== null) {
+    const index = messages.findIndex((m) => m.id === throughMessageId);
+    if (index < 0) throw new Error("This message no longer exists. Refresh the session and try again.");
+    selected = messages.slice(0, index + 1);
+  }
   const groups = packMessages(selected);
   const last = groups.at(-1);
   const hasSummary = selected.some((m) => m.id === source.activeSummaryMessageId && m.role === "summary");

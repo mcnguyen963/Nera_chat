@@ -121,24 +121,14 @@ function render(listEl, sessions) {
     const copyBtn = document.createElement("button");
     copyBtn.textContent = "Copy";
     copyBtn.className = "cpy";
-    copyBtn.title = "Create a new session with all or the first N messages";
+    copyBtn.title = "Copy the entire session";
     copyBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (state.busy) return;
-      const choice = prompt(
-        "Copy the first how many messages into a new session?\nLeave blank for all; enter 0 for settings only.\nEach user reply, assistant reply, and summary counts as one message.\nStory settings are copied; model settings remain shared.",
-        ""
-      );
-      if (choice === null) return;
-      const value = choice.trim();
-      if (value && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) {
-        alert("Enter a whole number of 0 or more, or leave blank to copy all messages.");
-        return;
-      }
       copyBtn.disabled = true;
       copyBtn.textContent = "…";
       try {
-        const newId = await duplicateSession(s.id, value === "" ? null : Number(value));
+        const newId = await duplicateSession(s.id);
         // Jump straight into the fresh copy (same event the importer uses).
         document.dispatchEvent(new CustomEvent("session-imported", { detail: newId }));
         document.dispatchEvent(new CustomEvent("sidebar:close"));
