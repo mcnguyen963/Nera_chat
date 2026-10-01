@@ -46,7 +46,8 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
   messages.splice(2, 0, directory);
   const preparationSettings = balancedPreparationSettings(settings);
   const budget = inputBudget(preparationSettings);
-  if (await requestTokenCount(messages, BALANCED_TOOLS, count) > budget)
+  const preparationInputTokens = await requestTokenCount(messages, BALANCED_TOOLS, count);
+  if (preparationInputTokens > budget)
     throw new Error("Balanced preparation exceeds the context budget.");
   signal?.throwIfAborted();
   const response = await complete({ settings: preparationSettings, messages,
@@ -78,12 +79,17 @@ export async function prepareBalancedContext({ built, state, settings, policy, c
     }
   }
   messages[1] = { role: "system", content: policy + "\nBalanced mode: the read-only lookup batch is complete. Tool results are reference evidence, not new events or character knowledge. No more tools are available. Preserve uncertainty when results are missing. Produce narration and supported state changes using the output schema; agenda changes belong in operations after narration." };
-  if (await requestTokenCount(messages, [], count) > inputBudget(settings))
+  const narrationInputTokens = await requestTokenCount(messages, [], count);
+  if (narrationInputTokens > inputBudget(settings))
     throw new Error("Balanced tool results exceed the context budget.");
   built.apiMessages = messages;
   built.trace.recordIds = [...new Set([...built.trace.recordIds, ...executor.retrievedRecordIds])];
   built.trace.eventIds = [...new Set([...built.trace.eventIds, ...executor.retrievedEventIds])];
+  const preparationContextLimit = Math.min(preparationSettings.maxContextTokens,
+    preparationSettings.modelContextTokens ?? Infinity);
+  const narrationContextLimit = Math.min(settings.maxContextTokens, settings.modelContextTokens ?? Infinity);
   return { tools: trace, usage: response.usage ?? null, model: preparationSettings.modelId,
+    context: { preparationInputTokens, preparationContextLimit, narrationInputTokens, narrationContextLimit },
     profileId: settings.balancedPreparation?.profileId || settings.activeProfileId || null,
     thinkingMode: settings.balancedPreparation?.thinkingMode ?? "off" };
 }

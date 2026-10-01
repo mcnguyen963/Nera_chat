@@ -39,6 +39,7 @@ let continuityRefresh = 0;
 let watchedBranchId;
 let continuityRetry = null;
 let continuityModules = null;
+let continuityContextStats = null;
 const renderedMessages = new Map();
 
 function loadContinuity() {
@@ -234,6 +235,7 @@ function refreshQuickChips() {
 
 export function setSession(sessionId, opts = {}) {
   if (state.sessionId === sessionId) return true;
+  continuityContextStats = null;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
@@ -828,10 +830,26 @@ export async function updateIndicator() {
   if (!session || !state.settings || !latestReady) return;
   if (session.continuityEnabled) {
     ++indicatorRun;
-    el.contextFill.style.width = "0%";
-    el.contextFill.classList.remove("over");
-    el.contextThreshold.style.left = "0%";
-    el.contextLabel.textContent = "Character continuity active · " + (lastMessages.length || 0) + " recent messages";
+    if (continuityContextStats) {
+      const { preparationInputTokens, preparationContextLimit, narrationInputTokens, narrationContextLimit } = continuityContextStats;
+      const lookupRatio = preparationInputTokens != null && preparationContextLimit
+        ? preparationInputTokens / preparationContextLimit : 0;
+      const narrationRatio = narrationInputTokens != null && narrationContextLimit
+        ? narrationInputTokens / narrationContextLimit : 0;
+      const ratio = Math.max(lookupRatio, narrationRatio);
+      el.contextFill.style.width = Math.min(100, ratio * 100) + "%";
+      el.contextFill.classList.toggle("over", ratio >= 0.95);
+      el.contextThreshold.style.left = "95%";
+      const parts = [];
+      if (preparationInputTokens != null) parts.push(`lookup ${preparationInputTokens.toLocaleString()} / ${preparationContextLimit.toLocaleString()}`);
+      if (narrationInputTokens != null) parts.push(`narration ${narrationInputTokens.toLocaleString()} / ${narrationContextLimit.toLocaleString()}`);
+      el.contextLabel.textContent = `Estimated context tokens · ${parts.join(" · ")}`;
+    } else {
+      el.contextFill.style.width = "0%";
+      el.contextFill.classList.remove("over");
+      el.contextThreshold.style.left = "0%";
+      el.contextLabel.textContent = `Context window ${state.settings.maxContextTokens.toLocaleString()} tokens · ${lastMessages.length || 0} messages loaded`;
+    }
     return;
   }
   const run = ++indicatorRun;
@@ -912,6 +930,7 @@ async function sendContinuityTurn(input, mode, options = {}) {
       reviewEveryTurn: session.continuitySaverReviewEveryTurn === true,
       draftOverride: options.draftOverride ?? null,
       expectedActiveBranchId: options.previousBranchId ?? branchId,
+      onContextStats: (stats) => { continuityContextStats = stats; updateIndicator(); },
       onStatus: (phase) => {
         updatePetPhase(phase === "generating" ? "writing" : "thinking", petTurn);
         setStatus({ building_context: "Building story context…", preparing: "Looking up story context…",

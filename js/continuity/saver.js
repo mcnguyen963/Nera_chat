@@ -50,7 +50,7 @@ function protectedChange(state, patch, mode) {
 
 export async function runSaverTurn({ store, branchId, turnId, input, settings, mode = "player",
   stylePrompt = "", reviewEveryTurn = false, expectedActiveBranchId = branchId, complete = chatCompletion,
-  count = countTokens, onStatus = () => {}, signal, balanced = false }) {
+  count = countTokens, onStatus = () => {}, signal, balanced = false, onContextStats = () => {} }) {
   if (!["player", "author"].includes(mode) || !input?.trim()) throw new Error("Invalid Saver input.");
   const existing = await store.readTurn(branchId, turnId);
   if (existing && (existing.user.content !== input || existing.user.role !== (mode === "author" ? "author" : "user")))
@@ -76,6 +76,11 @@ export async function runSaverTurn({ store, branchId, turnId, input, settings, m
     if (balanced) {
       onStatus("preparing");
       preparation = await prepareBalancedContext({ built, state: snapshot.state, settings, policy, complete, count, signal });
+      onContextStats(preparation.context);
+    } else {
+      const narrationInputTokens = await requestTokenCount(built.apiMessages, [], count);
+      onContextStats({ narrationInputTokens, narrationContextLimit:
+        Math.min(settings.maxContextTokens, settings.modelContextTokens ?? Infinity) });
     }
     onStatus("generating");
     const response = await complete({ settings: { ...settings, streaming: false }, messages: built.apiMessages, signal });
