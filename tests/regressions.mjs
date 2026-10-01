@@ -85,6 +85,12 @@ async function harness() {
     },
   };
   const stubs = {
+    // The real pet controller is exercised independently in pets.mjs.
+    'ui/pet-view.js': {
+      initPetView() {}, startPetTurn() {}, finishPetTurn() {},
+      refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
+      loadPetCatalog: async () => [],
+    },
     'db.js': { db: {} },
     'auth.js': { currentUid: () => 'test-user' },
     'tokenizer.js': { countTokens: async (text) => text.length },

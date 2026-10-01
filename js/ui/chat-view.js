@@ -1,3 +1,4 @@
+import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "../db.js";
 import { state } from "../state.js";
@@ -118,6 +119,7 @@ export function initChatView() {
   });
   updateWelcome();
   initQuickControls();
+  initPetView();
 }
 
 // ---------- quick model / thinking chips (composer) ----------
@@ -491,6 +493,7 @@ function updateWelcome() {
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
+  refreshPetPlacement();
 }
 
 function renderMessage(m) {
@@ -792,22 +795,26 @@ async function runAssistantTurn(opts = {}) {
   const planBefore = session.allowLlmPlanUpdates === true
     ? (opts.planOverride ?? session.longTermPlan ?? "")
     : (session.longTermPlan ?? "");
+  const petTurn = startPetTurn();
   setBusy(true);
   try {
+    startStreamUI();
     const allMessages = opts.messages ?? await ensureHistory();
     const { apiMessages } = await buildContextForRequest(session, settings, {
       ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
     });
-    startStreamUI();
 
     const { content, thinking } = await chatCompletion({
       settings,
       messages: apiMessages,
-      onDelta: (t) => { streamState && appendStream("content", t); },
-      onReasoning: (t) => { streamState && appendStream("thinking", t); },
+      onDelta: (t) => { updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
+      onReasoning: (t) => { updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
     });
     streamState?.wrap.remove();
     streamState = null;
+    refreshPetPlacement();
+
+    updatePetPhase("saving", petTurn);
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
     const plan = extractPlan(content);
@@ -855,8 +862,8 @@ async function runAssistantTurn(opts = {}) {
       try {
         const r = await runSummarization(fresh, settings, {
           messages: historyMessages,
-          onDelta: ui.onDelta,
-          onReasoning: ui.onReasoning,
+          onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
+          onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
         });
         applySummaryResult(r);
         setStatus(r.skipped ? r.reason : "Summary updated.", true);
@@ -864,9 +871,12 @@ async function runAssistantTurn(opts = {}) {
         ui.done();
       }
     }
+    finishPetTurn("ready", petTurn);
   } catch (err) {
+    finishPetTurn("blocked", petTurn);
     streamState?.wrap.remove();
     streamState = null;
+    refreshPetPlacement();
     showTransientError(err.message || String(err));
   } finally {
     setBusy(false);
@@ -898,6 +908,7 @@ function streamSummaryUI(label) {
     frame = requestAnimationFrame(() => {
       frame = 0;
       const stickyNow = isNearBottom();
+      invalidatePetLayout();
       body.textContent = acc.slice(-2000);
       thinkingBody.textContent = thinkAcc.slice(-4000);
       if (stickyNow) scrollToEnd();
@@ -916,18 +927,21 @@ function streamSummaryUI(label) {
 
 async function handleSummarize() {
   if (busy || !session) return;
+  const petTurn = startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
   try {
     await ensureHistory();
     const r = await runSummarization(session, state.settings, {
       messages: historyMessages,
-      onDelta: ui.onDelta,
-      onReasoning: ui.onReasoning,
+      onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
+      onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
+    finishPetTurn("ready", petTurn);
   } catch (err) {
+    finishPetTurn("blocked", petTurn);
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
@@ -945,6 +959,7 @@ async function handleFullSummarize() {
     )
   )
     return;
+  const petTurn = startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
@@ -952,15 +967,17 @@ async function handleFullSummarize() {
     const r = await runSummarization(session, state.settings, {
       messages: historyMessages,
       full: true,
-      onDelta: ui.onDelta,
-      onReasoning: ui.onReasoning,
+      onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
+      onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
       onProgress: (multi, i, total) => {
         if (multi) ui.setLabel(total ? `Summarizing part ${i}/${total}…` : `Summarizing part ${i}…`);
       },
     });
     applySummaryResult(r);
     setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
+    finishPetTurn("ready", petTurn);
   } catch (err) {
+    finishPetTurn("blocked", petTurn);
     showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();

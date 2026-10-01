@@ -15,6 +15,8 @@ const PLAN_THREAD_RECOVERY_RULE =
   "reconstructed; proceed with no active plan until the user sets a new one.";
 
 export const DEFAULT_SETTINGS = {
+  petCharacterIds: [],
+  petMovement: "roam",
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
   modelId: "",

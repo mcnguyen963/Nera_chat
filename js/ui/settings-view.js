@@ -4,6 +4,8 @@ import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
 import { refreshContextIndicator } from "./chat-view.js";
 
+import { loadPetCatalog } from "./pet-view.js";
+
 const el = {};
 const connectionFields = {
   endpoint: "set-endpoint", apiKey: "set-apikey", modelId: "set-model",
@@ -23,6 +25,9 @@ let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
 let sessionId = null;
 let saving = false;
+let petChoicesReady = false;
+let petCatalog = [];
+let petLoadRequest = 0;
 
 const input = (id) => document.getElementById(id);
 const raw = (id) => input(id).value;
@@ -33,6 +38,7 @@ export function initSettingsView() {
     overlay: input("settings-tab"), content: input("settings-content"), footer: input("settings-footer"),
     message: input("settings-saved-msg"), save: input("btn-save-settings"), saveSession: input("btn-save-session"),
     reset: input("btn-reset-settings"), profiles: input("set-profiles"),
+    petChoices: input("set-pet-choices"),
   });
   input("btn-close-settings").addEventListener("click", closeSettingsPopup);
   input("settings-backdrop").addEventListener("click", closeSettingsPopup);
@@ -78,6 +84,10 @@ export function initSettingsView() {
     mirrorFromActiveProfile(draft);
     renderProfile();
   });
+  el.petChoices.addEventListener("change", () => { capture(); clearMessage(); });
+  input("set-pet-movement").addEventListener("change", () => { capture(); clearMessage(); });
+  input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
+  document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
@@ -94,18 +104,19 @@ export function initSettingsView() {
   });
 }
 
-export function openSettingsPopup(trigger = document.activeElement) {
+export function openSettingsPopup(trigger = document.activeElement, options = {}) {
   if (!el.overlay.classList.contains("hidden")) return;
   opener = trigger;
   original = structuredClone(state.settings);
   draft = structuredClone(state.settings);
+  petChoicesReady = false;
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
   renderAll();
   capture();
   original = structuredClone(draft);
-  showPanel("model");
+  showPanel(options.panel === "pets" ? "pets" : "model");
   input("btn-close-settings").focus();
 }
 
@@ -137,6 +148,8 @@ function accountDirty() {
 function showPanel(name) {
   capture();
   panel = name;
+  petChoicesReady = false;
+  const petRequest = ++petLoadRequest;
   document.querySelectorAll("[data-settings-panel]").forEach((button) => {
     const selected = button.dataset.settingsPanel === name;
     button.classList.toggle("selected", selected);
@@ -144,8 +157,19 @@ function showPanel(name) {
     if (selected) button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   });
   document.querySelectorAll("[data-panel]").forEach((section) => section.classList.toggle("hidden", section.dataset.panel !== name));
+  if (name === "pets") {
+    el.petChoices.textContent = "Loading pets…";
+    void loadPetCatalog().then((pets) => {
+      if (petRequest !== petLoadRequest || panel !== "pets" || el.overlay.classList.contains("hidden")) return;
+      petCatalog = pets;
+      renderPetChoices(draft.petCharacterIds);
+    }).catch((error) => {
+      if (petRequest === petLoadRequest && panel === "pets")
+        el.petChoices.textContent = error.message || "Could not load pets.";
+    });
+  }
   el.content.scrollTop = 0;
-  const global = ["model", "context", "prompts"].includes(name);
+  const global = ["model", "context", "pets", "prompts"].includes(name);
   el.footer.classList.toggle("hidden", !global && name !== "story");
   el.save.classList.toggle("hidden", !global);
   el.reset.classList.toggle("hidden", !global);
@@ -155,6 +179,8 @@ function showPanel(name) {
 }
 
 function renderAll() {
+  set("set-pet-movement", draft.petMovement === "stay" ? "stay" : "roam");
+  if (petChoicesReady && panel === "pets") renderPetChoices(draft.petCharacterIds);
   renderProfile();
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
@@ -177,6 +203,37 @@ function renderProfile() {
   set("set-reasoning-maxtokens", reasoning.maxTokens);
   input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
   syncOptionalControls();
+}
+function renderPetChoices(selectedIds = []) {
+  petChoicesReady = true;
+  const selected = new Set(Array.isArray(selectedIds) ? selectedIds : []);
+  const choices = petCatalog.map((pet) => {
+    const label = document.createElement("label");
+    label.className = "pet-choice";
+    const preview = document.createElement("span");
+    preview.className = "pet-choice-preview";
+    preview.setAttribute("aria-hidden", "true");
+    preview.style.backgroundImage = `url("${pet.image}")`;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = pet.id;
+    checkbox.checked = selected.has(pet.id);
+    label.append(checkbox, preview, document.createTextNode(pet.name));
+    return label;
+  });
+  if (!choices.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No pet sheets found in resources/pets.";
+    choices.push(empty);
+  }
+  if ([...selected].some((id) => !petCatalog.some((pet) => pet.id === id))) {
+    const missing = document.createElement("p");
+    missing.className = "muted";
+    missing.textContent = "A selected pet is no longer available. Saving will remove it.";
+    choices.push(missing);
+  }
+  el.petChoices.replaceChildren(...choices);
 }
 function syncOptionalControls() {
   const thinking = input("set-reasoning-enabled").checked;
@@ -208,6 +265,8 @@ function capture() {
   }
   for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
   draft.autoSummarizationEnabled = input("set-auto-summary-enabled").checked;
+  draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
+  if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
 }
@@ -225,6 +284,11 @@ function resetPanel() {
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
     draft.autoSummarizationEnabled = DEFAULT_SETTINGS.autoSummarizationEnabled;
     input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled;
+  } else if (panel === "pets") {
+    draft.petCharacterIds = structuredClone(DEFAULT_SETTINGS.petCharacterIds);
+    draft.petMovement = DEFAULT_SETTINGS.petMovement;
+    set("set-pet-movement", draft.petMovement);
+    renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
