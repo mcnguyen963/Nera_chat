@@ -2,7 +2,7 @@ import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
 import { importSillyTavern, exportSillyTavern } from "../import-export.js";
-import { refreshContextIndicator } from "./chat-view.js";
+import { refreshContextIndicator, getStoryPrivateNote, saveStoryPrivateNote, syncActiveSession } from "./chat-view.js";
 
 import { loadPetCatalog } from "./pet-view.js";
 
@@ -24,6 +24,8 @@ let panel = "model";
 let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
 let sessionId = null;
+let sessionReady = false;
+let noteOriginal = { sessionId: null, messageId: null, order: null, text: "" };
 let saving = false;
 let petChoicesReady = false;
 let petCatalog = [];
@@ -97,6 +99,8 @@ export function initSettingsView() {
   document.addEventListener("session-changed", (event) => {
     if (!el.overlay.classList.contains("hidden") && panel === "story" && !sessionDirty()) fillSession(event);
   });
+  document.addEventListener("story-private-note-changed", fillPrivateNote);
+  document.addEventListener("chat-busy-changed", syncStoryControls);
   document.addEventListener("settings-changed", () => {
     if (el.overlay.classList.contains("hidden")) return;
     // Chat quick controls may change saved settings while the popup is open.
@@ -128,6 +132,9 @@ function closeSettingsPopup() {
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
   sessionId = null;
+  sessionReady = false;
+  noteOriginal = { sessionId: null, messageId: null, order: null, text: "" };
+  set("set-session-private-note", "");
   set("set-session-title", ""); set("set-session-plan", "");
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
   clearMessage();
@@ -139,7 +146,35 @@ function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
   return raw("set-session-title") !== sessionOriginal.title ||
     raw("set-session-plan") !== sessionOriginal.longTermPlan ||
+    privateNoteDirty() ||
     input("set-allow-llm-plan-updates").checked !== sessionOriginal.allowLlmPlanUpdates;
+}
+function privateNoteDirty() {
+  return noteOriginal.sessionId === state.sessionId && raw("set-session-private-note") !== noteOriginal.text;
+}
+
+function syncStoryControls() {
+  el.saveSession.disabled = saving || state.busy || !sessionReady || sessionId !== state.sessionId || !state.sessionId;
+  for (const id of ["set-session-title", "set-session-plan", "set-allow-llm-plan-updates"]) {
+    input(id).disabled = el.saveSession.disabled;
+  }
+  input("set-session-private-note").disabled = saving || state.busy || !sessionReady ||
+    noteOriginal.sessionId !== state.sessionId || !noteOriginal.messageId;
+}
+
+function fillPrivateNote() {
+  if (el.overlay.classList.contains("hidden") || panel !== "story" || saving) return;
+  if (privateNoteDirty()) return;
+  const current = getStoryPrivateNote();
+  noteOriginal = {
+    sessionId: current.sessionId, messageId: current.message?.id ?? null,
+    order: current.message?.order ?? null, text: current.message?.planThread ?? "",
+  };
+  set("set-session-private-note", noteOriginal.text);
+  input("session-private-note-help").textContent = current.message
+    ? "The latest reply's hidden planning note. Save your changes to use them in the next model call."
+    : "The private note will be available after the model's first reply.";
+  syncStoryControls();
 }
 function accountDirty() {
   return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
@@ -365,21 +400,27 @@ function clearMessage() { if (el.message) el.message.textContent = ""; }
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
     sessionId = state.sessionId;
+    sessionReady = false;
     sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
     input("set-allow-llm-plan-updates").checked = false;
+    fillPrivateNote();
+    syncStoryControls();
     return;
   }
   const requestedId = state.sessionId;
   if (sessionId !== requestedId) {
     sessionId = requestedId;
+    sessionReady = false;
     sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
     input("set-allow-llm-plan-updates").checked = false;
   } else if (sessionDirty()) return;
+  fillPrivateNote();
+  syncStoryControls();
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
-    if (requestedId !== state.sessionId || sessionDirty()) return;
+    if (requestedId !== state.sessionId || sessionId !== requestedId || el.overlay.classList.contains("hidden") || sessionDirty()) return;
     sessionId = requestedId;
     sessionOriginal = {
       title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
@@ -388,24 +429,39 @@ async function fillSession(event) {
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
     input("set-allow-llm-plan-updates").checked = sessionOriginal.allowLlmPlanUpdates;
+    sessionReady = Boolean(session);
+    fillPrivateNote();
+    syncStoryControls();
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
   if (!state.sessionId) return feedback("Select a story first.", true);
+  if (!sessionReady || sessionId !== state.sessionId) return feedback("Wait for this story to load.", true);
   if (state.busy) return feedback("Wait for the current reply or summary.", true);
   if (saving) return;
-  saving = true; el.saveSession.disabled = true;
+  const requestedId = state.sessionId;
+  const noteChanged = privateNoteDirty();
+  const noteText = raw("set-session-private-note");
+  saving = true; syncStoryControls();
   try {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
     const allowLlmPlanUpdates = input("set-allow-llm-plan-updates").checked;
-    await updateSession(state.sessionId, { title, longTermPlan, allowLlmPlanUpdates });
+    const patch = { title, longTermPlan, allowLlmPlanUpdates };
+    if (noteChanged) {
+      await saveStoryPrivateNote(requestedId, noteOriginal.messageId, noteOriginal.order, noteText, patch);
+    } else {
+      await updateSession(requestedId, patch);
+      syncActiveSession({ id: requestedId, ...patch });
+    }
+    if (requestedId !== state.sessionId) return;
     sessionOriginal = { title, longTermPlan, allowLlmPlanUpdates };
+    if (noteChanged) noteOriginal = { ...noteOriginal, text: noteText };
     set("set-session-title", title);
     feedback("Session saved ✓");
     refreshContextIndicator();
   } catch (error) { feedback("Save failed: " + error.message, true); }
-  finally { saving = false; el.saveSession.disabled = false; }
+  finally { saving = false; fillPrivateNote(); syncStoryControls(); }
 }
 async function handleImport() {
   const file = input("file-import-st").files[0];

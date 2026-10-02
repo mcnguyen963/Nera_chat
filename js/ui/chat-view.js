@@ -429,6 +429,7 @@ function renderMessages(msgs) {
     visibleCount += msgs.length - lastMessages.length;
   }
   lastMessages = msgs;
+  document.dispatchEvent(new CustomEvent("story-private-note-changed"));
   if (editingState) {
     // A Firestore snapshot must never destroy the open edit textarea (it
     // would wipe the user's in-progress text). The fresh data is already
@@ -747,6 +748,30 @@ export async function updateIndicator() {
     (!historyMessages && hasEarlier ? " · recent history estimate" : "");
 }
 export const refreshContextIndicator = updateIndicator;
+
+export function getStoryPrivateNote() {
+  const message = [...lastMessages].reverse().find((item) => item.role === "assistant");
+  return { sessionId: state.sessionId, message: message ?? null };
+}
+
+export async function saveStoryPrivateNote(sessionId, messageId, order, planThread, sessionUpdate) {
+  if (busy || state.busy || editingState) throw new Error("Wait for the current reply, summary, or message edit.");
+  const current = getStoryPrivateNote();
+  if (sessionId !== state.sessionId || current.message?.id !== messageId) {
+    throw new Error("The latest reply changed. Reopen This story before saving the note.");
+  }
+  setBusy(true);
+  try {
+    const { message, summaryReset } = await messagesApi.editPlanThread(sessionId, messageId, planThread, order, sessionUpdate);
+    if (state.sessionId !== sessionId) return;
+    if (summaryReset) clearLocalSummary();
+    if (historyMessages) historyMessages = historyMessages.map((item) => item.id === messageId ? message : item);
+    renderMessages(lastMessages.map((item) => item.id === messageId ? message : item));
+    syncActiveSession({ id: sessionId, ...sessionUpdate });
+    queueCacheSave();
+    updateIndicator();
+  } finally { setBusy(false); }
+}
 
 // ---------- send / stream / summarize ----------
 
@@ -1079,6 +1104,7 @@ function appendStream(kind, text) {
 
 function setBusy(b) {
   busy = state.busy = b;
+  document.dispatchEvent(new CustomEvent("chat-busy-changed"));
   el.sendBtn.disabled = b;
   el.summarizeBtn.disabled = b;
 }

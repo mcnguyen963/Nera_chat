@@ -273,6 +273,16 @@ export async function editMessage(sessionId, messageId, content, order) {
   return { tokenCount, summaryReset };
 }
 
+export async function editPlanThread(sessionId, messageId, planThread, order, sessionUpdate = {}) {
+  const { replacement, summaryReset } = await changeMessage(sessionId, messageId, order, async (message) => {
+    if (message.role !== "assistant") throw new Error("Only an assistant reply has a private note.");
+    const updated = { ...message, planThread: planThread || null, editedAt: Timestamp.now() };
+    updated.tokenCount = await countTokens(contextText(updated));
+    return updated;
+  }, sessionUpdate);
+  return { message: replacement, summaryReset };
+}
+
 export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order, sessionUpdate = {}) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   await changeMessage(sessionId, messageId, order, (message) => ({

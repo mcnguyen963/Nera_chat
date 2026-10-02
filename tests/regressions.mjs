@@ -104,6 +104,12 @@ async function harness() {
       getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
+      editPlanThread: async (...args) => {
+        calls.privateNoteWrites ??= [];
+        calls.privateNoteWrites.push(args);
+        const message = { ...calls.noteMessage, planThread: args[2] || null, tokenCount: 100, editedAt: true };
+        return { message, summaryReset: false };
+      },
     },
   };
   const cache = new Map();
@@ -604,6 +610,41 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   assert.equal(await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, autoSummarizationEnabled: false,
   }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]), false);
+});
+
+test('This story shows and saves the latest private note for the next request', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story', longTermPlan: 'Old plan' }) });
+  h.calls.noteMessage = { id: 'reply', order: 2, role: 'assistant', content: 'The story continues.', planThread: 'Original note' };
+  h.calls.latestCallbacks.at(-1)({ messages: [h.calls.noteMessage], hasEarlier: false });
+  const view = await h.use('ui/settings-view.js');
+  view.initSettingsView(); view.openSettingsPopup();
+  await h.fire('nav-story');
+  await Promise.resolve();
+  assert.equal(h.el('set-session-private-note').value, 'Original note');
+  assert.equal(h.el('set-session-private-note').disabled, false);
+  h.el('set-session-private-note').value = 'Edited direction for the next scene';
+  h.calls.latestCallbacks.at(-1)({ messages: [h.calls.noteMessage], hasEarlier: false });
+  assert.equal(h.el('set-session-private-note').value, 'Edited direction for the next scene');
+  h.state.busy = true;
+  await h.document.dispatchEvent({ type: 'chat-busy-changed' });
+  assert.equal(h.el('set-session-private-note').disabled, true);
+  assert.equal(h.el('btn-save-session').disabled, true);
+  h.state.busy = false;
+  await h.document.dispatchEvent({ type: 'chat-busy-changed' });
+  await h.fire('btn-save-session');
+  assert.equal(h.calls.privateNoteWrites[0][2], 'Edited direction for the next scene');
+  assert.equal(chat.getStoryPrivateNote().message.planThread, 'Edited direction for the next scene');
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const result = await buildContextForRequest({ id: 'story', longTermPlan: 'Old plan' }, h.state.settings, {
+    messages: [{ id: 'user', role: 'user', content: 'Continue.', order: 1 }, chat.getStoryPrivateNote().message],
+  });
+  assert.match(result.apiMessages.at(-1).content, /<plan_thread>Edited direction for the next scene<\/plan_thread>/);
+  assert.doesNotMatch(result.apiMessages.at(-1).content, /Original note/);
 });
 
 test('Empty chat enables writing only after a story is selected', async () => {
