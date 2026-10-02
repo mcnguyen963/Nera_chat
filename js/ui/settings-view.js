@@ -1,3 +1,5 @@
+import { fillMemory, readMemory, memoryDirty, initMemorySettings, chooseMemoryStart } from './memory-settings-view.js';
+import { normalizeMemory } from '../memory-settings.js';
 import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
@@ -34,6 +36,10 @@ const raw = (id) => input(id).value;
 const set = (id, value) => { input(id).value = String(value ?? ""); };
 
 export function initSettingsView() {
+  const openLore = (options = {}) => { if (closeSettingsPopup() !== false) document.dispatchEvent(new CustomEvent('lorebooks', { detail: options })); };
+  initMemorySettings(() => openLore());
+  input('btn-lore-transfer').addEventListener('click', () => openLore({ screen: 'transfer' }));
+  document.addEventListener('memory-settings', e => { openSettingsPopup(document.activeElement, { panel: 'memory' }); if (e.detail?.focus) setTimeout(() => input(e.detail.focus)?.focus(), 100); });
   Object.assign(el, {
     overlay: input("settings-tab"), content: input("settings-content"), footer: input("settings-footer"),
     message: input("settings-saved-msg"), save: input("btn-save-settings"), saveSession: input("btn-save-session"),
@@ -95,7 +101,7 @@ export function initSettingsView() {
   input("file-import-st").addEventListener("change", handleImport);
   input("btn-export-st").addEventListener("click", handleExport);
   document.addEventListener("session-changed", (event) => {
-    if (!el.overlay.classList.contains("hidden") && panel === "story" && !sessionDirty()) fillSession(event);
+    if (!el.overlay.classList.contains("hidden") && (panel === "story" || panel === "memory") && (sessionId !== state.sessionId || !sessionDirty())) fillSession(event);
   });
   document.addEventListener("settings-changed", () => {
     if (el.overlay.classList.contains("hidden")) return;
@@ -105,7 +111,7 @@ export function initSettingsView() {
 }
 
 export function openSettingsPopup(trigger = document.activeElement, options = {}) {
-  if (!el.overlay.classList.contains("hidden")) return;
+  if (!el.overlay.classList.contains("hidden")) { if (options.panel) showPanel(options.panel); return; }
   opener = trigger;
   original = structuredClone(state.settings);
   draft = structuredClone(state.settings);
@@ -116,14 +122,14 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
   renderAll();
   capture();
   original = structuredClone(draft);
-  showPanel(options.panel === "pets" ? "pets" : "model");
+  showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");
   input("btn-close-settings").focus();
 }
 
 function closeSettingsPopup() {
-  if (saving) return;
+  if (saving) return false;
   capture();
-  if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return;
+  if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
@@ -132,6 +138,7 @@ function closeSettingsPopup() {
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
   clearMessage();
   opener?.focus?.();
+  return true;
 }
 
 function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
@@ -139,7 +146,7 @@ function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
   return raw("set-session-title") !== sessionOriginal.title ||
     raw("set-session-plan") !== sessionOriginal.longTermPlan ||
-    input("set-allow-llm-plan-updates").checked !== sessionOriginal.allowLlmPlanUpdates;
+    memoryDirty(sessionOriginal.memory);
 }
 function accountDirty() {
   return ["current-password", "new-password", "confirm-new-password"].some((id) => raw(id) !== "");
@@ -170,12 +177,12 @@ function showPanel(name) {
   }
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
-  el.footer.classList.toggle("hidden", !global && name !== "story");
+  el.footer.classList.toggle("hidden", !global && !["story", "memory"].includes(name));
   el.save.classList.toggle("hidden", !global);
   el.reset.classList.toggle("hidden", !global);
-  el.saveSession.classList.toggle("hidden", name !== "story");
+  el.saveSession.classList.toggle("hidden", !["story", "memory"].includes(name));
   clearMessage();
-  if (name === "story") fillSession();
+  if (["story", "memory"].includes(name)) fillSession();
 }
 
 function renderAll() {
@@ -186,6 +193,8 @@ function renderAll() {
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
+  set("set-memory-update-prompt", draft.memoryExtractionPrompt);
+  set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
 }
 function renderProfile() {
   el.profiles.replaceChildren(...draft.profiles.map((profile) => {
@@ -269,6 +278,8 @@ function capture() {
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
+  draft.memoryExtractionPrompt = raw("set-memory-update-prompt");
+  draft.memoryReorganizePrompt = raw("set-memory-reorganize-prompt");
 }
 
 function resetPanel() {
@@ -292,8 +303,12 @@ function resetPanel() {
   } else if (panel === "prompts") {
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
+    draft.memoryExtractionPrompt = DEFAULT_SETTINGS.memoryExtractionPrompt;
+    draft.memoryReorganizePrompt = DEFAULT_SETTINGS.memoryReorganizePrompt;
     set("set-narrator-prompt", draft.narratorSystemPrompt);
     set("set-summarizer-prompt", draft.summarizerSystemPrompt);
+    set("set-memory-update-prompt", draft.memoryExtractionPrompt);
+    set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
   }
   feedback("Defaults ready. Save to apply.");
 }
@@ -367,7 +382,7 @@ async function fillSession(event) {
     sessionId = state.sessionId;
     sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
-    input("set-allow-llm-plan-updates").checked = false;
+    fillMemory();
     return;
   }
   const requestedId = state.sessionId;
@@ -375,7 +390,7 @@ async function fillSession(event) {
     sessionId = requestedId;
     sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
-    input("set-allow-llm-plan-updates").checked = false;
+    fillMemory();
   } else if (sessionDirty()) return;
   try {
     const session = event?.detail?.sessionId === requestedId ? event.detail.session : await getSession(requestedId);
@@ -383,11 +398,11 @@ async function fillSession(event) {
     sessionId = requestedId;
     sessionOriginal = {
       title: session?.title ?? "", longTermPlan: session?.longTermPlan ?? "",
-      allowLlmPlanUpdates: session?.allowLlmPlanUpdates === true,
+      allowLlmPlanUpdates:false, memory: normalizeMemory(session?.memory), memoryState: session?.memoryState,
     };
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
-    input("set-allow-llm-plan-updates").checked = sessionOriginal.allowLlmPlanUpdates;
+    fillMemory(sessionOriginal.memory);
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -398,9 +413,22 @@ async function handleSaveSession() {
   try {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
-    const allowLlmPlanUpdates = input("set-allow-llm-plan-updates").checked;
-    await updateSession(state.sessionId, { title, longTermPlan, allowLlmPlanUpdates });
-    sessionOriginal = { title, longTermPlan, allowLlmPlanUpdates };
+    const allowLlmPlanUpdates = false;
+    const partial = {};
+    if (title !== sessionOriginal.title || longTermPlan !== sessionOriginal.longTermPlan || allowLlmPlanUpdates !== sessionOriginal.allowLlmPlanUpdates || panel === 'story') Object.assign(partial, { title, longTermPlan, allowLlmPlanUpdates });
+    if (panel === 'memory' || memoryDirty(sessionOriginal.memory)) {
+      partial.memory = readMemory(true, integerField);
+      const budget = partial.memory.lorebooks ? Object.values(partial.memory.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
+      if (budget > .9*(state.settings.maxContextTokens-state.settings.maxResponseTokens)) throw new Error('Book budgets are larger than the space available. Lower them or raise Max context tokens (Context & summaries).');
+      const start = await chooseMemoryStart(partial.memory, normalizeMemory(sessionOriginal.memory), sessionOriginal);
+      if (start === 'cancel') return;
+      if (start != null) partial['memoryState.extractedThroughOrder'] = start;
+    }
+    const requestedId = state.sessionId;
+    if (requestedId !== sessionId) throw new Error('Story changed. Reopen settings.');
+    await updateSession(requestedId, partial);
+    sessionOriginal = { ...sessionOriginal, title, longTermPlan, allowLlmPlanUpdates, ...(partial.memory ? { memory: partial.memory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
+    document.dispatchEvent(new CustomEvent('memory-session-saved', { detail: { sessionId: requestedId, partial } }));
     set("set-session-title", title);
     feedback("Session saved ✓");
     refreshContextIndicator();

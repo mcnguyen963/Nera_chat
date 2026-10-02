@@ -48,6 +48,13 @@ function checkFinishReason(reason) {
   }
 }
 
+function serializedRequestBody(settings, messages, stream = false) {
+  const body = { ...buildRequestBody(settings, messages), ...(stream ? { stream: true } : {}) };
+  const serialized = JSON.stringify(body);
+  console.log("[LLM request body]", serialized);
+  return serialized;
+}
+
 export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
@@ -62,7 +69,7 @@ async function nonStreamedCompletion({ settings, messages, signal }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify(buildRequestBody(settings, messages)),
+    body: serializedRequestBody(settings, messages),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
@@ -84,7 +91,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify({ ...buildRequestBody(settings, messages), stream: true }),
+    body: serializedRequestBody(settings, messages, true),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);

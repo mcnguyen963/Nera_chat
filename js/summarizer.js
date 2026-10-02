@@ -1,3 +1,5 @@
+import { CONTINUITY_RULE, requestSource, evidenceFor } from './continuity.js';
+import { computeTurns, formatTurnsTranscript } from './turns.js';
 // Rolling summarization (spec §8). The new summary always folds in the old summary
 // plus everything since the last breakpoint; only the newest summary is referenced by
 // the session going forward — older summary docs remain in the log as history.
@@ -8,36 +10,33 @@
 
 import { getMessages, getCheckpointMessages, addMessage, newMessageId } from "./messages.js";
 import { chatCompletion } from "./llm-client.js";
-import { computeContextUsage, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
+import { buildContextForRequest, computeContextUsage, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
 
 const CHUNK_TOKEN_BUDGET_DEFAULT = 250000;
 
 // The summarizer has its own output budget (summarizerMaxTokens), independent
 // of the chat's maxResponseTokens, so long histories can be captured fully.
-function summarizerSettings(settings) {
+function summarizerSettings(settings, outputCapacity) {
   const contextLimit = Number(settings.maxContextTokens);
   if (!Number.isFinite(contextLimit) || contextLimit < 1024) {
     throw new Error("Summarization needs a context limit of at least 1024 tokens.");
   }
   const maxResponseTokens = Math.min(
-    settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3)
+    settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3), outputCapacity
   );
   // Summaries need their output budget for facts, not the chat profile's thinking.
   return { ...settings, maxResponseTokens, reasoning: { ...settings.reasoning, enabled: false } };
 }
 
-export function formatAsTranscript(msgs) {
-  return msgs
-    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-    .join("\n\n");
-}
+export function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
 
 export async function runSummarization(session, settings, opts = {}) {
-  const all = opts.messages ?? (opts.full
+  const expectedSource = requestSource(session);
+  const all = structuredClone(opts.messages ?? (opts.full
     ? await getMessages(session.id)
-    : await getCheckpointMessages(session));
-  const N = settings.keepRecentMessagesAfterSummary;
+    : await getCheckpointMessages(session)));
+  const N = Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
 
   const raw = all
     .filter((m) => m.role !== "summary")
@@ -47,7 +46,12 @@ export async function runSummarization(session, settings, opts = {}) {
     return { skipped: true, reason: `Need more than ${N} raw messages to summarize.` };
   }
 
-  const newBreakpointOrder = raw[raw.length - N - 1].order;
+  const turns = computeTurns(raw);
+  let recentStart = raw.length-N;
+  const firstRecentTurn = turns.turnById.get(raw[recentStart]?.id);
+  while (recentStart > 0 && turns.turnById.get(raw[recentStart-1].id) === firstRecentTurn) recentStart--;
+  if (recentStart === 0) return { skipped:true,reason:'No complete older turns to summarize.' };
+  const newBreakpointOrder = raw[recentStart-1].order;
   // opts.full: ignore the existing checkpoint — fold in the ENTIRE history
   // from the very start and drop the old summary (fresh full-history summary).
   const hasSummary = all.some((m) => m.id === session.activeSummaryMessageId);
@@ -66,21 +70,18 @@ export async function runSummarization(session, settings, opts = {}) {
       ? all.find((m) => m.id === session.activeSummaryMessageId)?.content ?? null
       : null;
 
-  const requestSettings = summarizerSettings(settings);
+  const probe = await buildContextForRequest({ ...session,activeSummaryMessageId:null,breakpointOrder:0 },settings,{ ...opts,messages:all,loreEntries:[],onlyRequiredWindow:true,requireLatestUser:true });
+  const summaryHeaderCost = await countTokens(`[Historical summary through message order ${newBreakpointOrder}; this is not the current scene]\n`)+MESSAGE_FRAME_TOKENS+32;
+  const capacity = Math.floor(settings.maxContextTokens-settings.maxResponseTokens-probe.usedTokens-summaryHeaderCost);
+  if (capacity < 64 || probe.report.warnings.some(w => w.startsWith('Recent window reduced'))) throw new Error('No room for a summary and the required recent conversation; checkpoint was not changed.');
+  const requestSettings = summarizerSettings(settings,capacity);
   const inputLimit = settings.maxContextTokens - requestSettings.maxResponseTokens;
   const frameTokens = MESSAGE_FRAME_TOKENS * 2 + REQUEST_FRAME_TOKENS;
   const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
-  // Detail directive appended to every summarizer call — the stored system
-  // prompt says "be concise", which makes models crush long transcripts into
-  // a few hundred tokens. This overrides that at call time.
-  const detailDirective =
-    "\n\nWrite a thorough, DETAILED summary. Preserve every named character, " +
-    "relationship, open plot thread, key decision, promise, reveal, and outcome — " +
-    "losing any of them breaks the story going forward. Scale length to the material: " +
-    "for a large transcript write a long summary of at least 1000-2000 words. " +
-    "Output only the summary text.";
+  const summaryPrompt = (settings.summarizerSystemPrompt || '')+'\n\n'+CONTINUITY_RULE;
+  const detailDirective = `\n\nPreserve attributed facts, player-action qualifiers and unresolved threads within ${requestSettings.maxResponseTokens} output tokens. Output only the summary text.`;
 
   let content = null;
   let offset = 0;
@@ -88,7 +89,7 @@ export async function runSummarization(session, settings, opts = {}) {
   while (offset < toFold.length) {
     const chunk = [];
     const prefix = running + "New events to fold in:\n";
-    const fixedTokens = await countTokens(settings.summarizerSystemPrompt + "\n" + prefix + detailDirective) + frameTokens;
+    const fixedTokens = await countTokens(summaryPrompt + "\n" + prefix + detailDirective) + frameTokens;
     let transcriptTokens = 0;
     for (let i = offset; i < toFold.length; i++) {
       const message = toFold[i];
@@ -101,7 +102,7 @@ export async function runSummarization(session, settings, opts = {}) {
       chunk.push(toFold[i]);
     }
     let summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
-    while (chunk.length && await countTokens(settings.summarizerSystemPrompt + "\n" + summarizerInput) + frameTokens > inputLimit) {
+    while (chunk.length && await countTokens(summaryPrompt + "\n" + summarizerInput) + frameTokens > inputLimit) {
       chunk.pop();
       summarizerInput = prefix + formatAsTranscript(chunk) + detailDirective;
     }
@@ -114,12 +115,14 @@ export async function runSummarization(session, settings, opts = {}) {
     const r = await chatCompletion({
       settings: requestSettings,
       messages: [
-        { role: "system", content: settings.summarizerSystemPrompt },
+        { role: "system", content: summaryPrompt },
         { role: "user", content: summarizerInput },
       ],
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
+      signal:opts.signal,
     });
+    await opts.validateSource?.(expectedSource);
     content = r.content;
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");
     // Each chunk's summary becomes the "previous summary" for the next chunk.
@@ -127,20 +130,19 @@ export async function runSummarization(session, settings, opts = {}) {
     offset += chunk.length;
   }
 
-  // One transaction: summary doc + updated summary pointer/breakpoint together.
   const summaryId = newMessageId();
-  const newMsg = await addMessage(
-    session.id,
-    { role: "summary", content },
-    { id: summaryId, sessionUpdate: { activeSummaryMessageId: summaryId, breakpointOrder: newBreakpointOrder } }
-  );
+  const summaryMessage = { id:summaryId,order:(all.at(-1)?.order ?? 0)+1,role:'summary',content,coveredRange:{ fromOrder:opts.full ? 1 : (all.find(m => m.id === session.activeSummaryMessageId)?.coveredRange?.fromOrder ?? 1),toOrder:newBreakpointOrder },sourceRevision:expectedSource.historyRevision,evidence:[...new Map([...(opts.full ? [] : all.find(m => m.id === session.activeSummaryMessageId)?.evidence ?? []),...evidenceFor(toFold)].map(e => [e.id,e])).values()],cutoffTurn:turns.turnById.get(raw[recentStart-1].id) };
+  const candidate = await buildContextForRequest({ ...session,activeSummaryMessageId:summaryId,breakpointOrder:newBreakpointOrder },settings,{ ...opts,messages:[...all,summaryMessage],requireLatestUser:true });
+  if (candidate.report.warnings.some(w => w.startsWith('Recent window reduced'))) throw new Error('Candidate summary displaced required recent conversation; checkpoint was not changed.');
+  const newMsg = await addMessage(session.id,summaryMessage,{ id:summaryId,expectedSource,sessionUpdate:{ activeSummaryMessageId:summaryId,breakpointOrder:newBreakpointOrder } });
 
   return {
     skipped: false,
     summaryId: newMsg.id,
     newBreakpointOrder,
     foldedCount: toFold.length,
-    summaryMessage: { id: newMsg.id, order: newMsg.order, role: "summary", content, tokenCount: newMsg.tokenCount },
+    summaryMessage:{ ...summaryMessage,...newMsg },
+    historyRevision:newMsg.historyRevision,
   };
 }
 

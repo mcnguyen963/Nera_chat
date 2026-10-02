@@ -1,17 +1,18 @@
+import { copyLore, waitForStoryWrites } from './lore-store.js';
 import {
   doc, getDoc, getDocFromServer, setDoc, updateDoc, deleteDoc, collection, getDocs, getDocsFromServer, query, orderBy,
   writeBatch, serverTimestamp, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
-import { ensureChunked } from "./messages.js";
+import { ensureChunked, ensureContinuityMetadata } from "./messages.js";
 import { packMessages, chunkId, chunkRecord, chunkBytes } from "./message-chunks.js";
 
 // Every session lives under users/{uid}/sessions/... so each user's chat history
 // is isolated — enforced both by path scoping and by Firestore rules.
 
-function sessionDoc(sessionId) {
-  return doc(db, "users", currentUid(), "sessions", sessionId);
+function sessionDoc(sessionId, owner = currentUid()) {
+  return doc(db, "users", owner, "sessions", sessionId);
 }
 function sessionsCol() {
   return collection(db, "users", currentUid(), "sessions");
@@ -32,6 +33,11 @@ export async function getSession(sessionId) {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
+export async function getSessionFromServer(sessionId) {
+  const snap = await getDocFromServer(sessionDoc(sessionId));
+  return snap.exists() ? { id:snap.id,...snap.data() } : null;
+}
+
 export async function createSession(title) {
   const id = newId("sess");
   const data = {
@@ -39,7 +45,7 @@ export async function createSession(title) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     longTermPlan: "",
-    allowLlmPlanUpdates: false,
+    historyRevision:0,continuityVersion:2,nextNarratorTurn:1,loreRevision:0,
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1
@@ -61,8 +67,10 @@ export async function renameSession(sessionId, title) {
 }
 
 export async function deleteSession(sessionId) {
+  if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('memory-session-deleting', { detail: { sessionId } }));
+  await waitForStoryWrites(sessionId);
   // Migrated sessions retain their legacy docs for recovery. Delete both trees.
-  for (const name of ["messageChunks", "messages"]) {
+  for (const name of ["messageChunks", "messages", "lore", "loreBackups"]) {
     const snap = await getDocsFromServer(collection(db, "users", currentUid(), "sessions", sessionId, name));
     for (let i = 0; i < snap.docs.length; i += 450) {
       const batch = writeBatch(db);
@@ -86,15 +94,16 @@ export function subscribeSessions(callback, onError) {
 // Copy the first N stored messages (including summary messages), or all when
 // omitted. Keep message ids, timestamps, orders, and hidden reply data intact.
 export async function duplicateSession(sourceId, messageCount = null, throughMessageId = null) {
+  const owner = currentUid();
   if (messageCount !== null && (!Number.isSafeInteger(messageCount) || messageCount < 0)) {
     throw new Error("Message count must be a whole number of 0 or more.");
   }
-  await ensureChunked(sourceId);
-  const sourceSnap = await getDocFromServer(sessionDoc(sourceId));
+  await ensureContinuityMetadata(sourceId);
+  const sourceSnap = await getDocFromServer(sessionDoc(sourceId,owner));
   const source = sourceSnap.exists() ? { id: sourceSnap.id, ...sourceSnap.data() } : null;
   if (!source) throw new Error("Session not found.");
   const msgsSnap = messageCount === 0 ? { docs: [] } : await getDocsFromServer(
-    collection(db, "users", currentUid(), "sessions", sourceId, "messageChunks")
+    collection(db,"users",owner,"sessions",sourceId,"messageChunks")
   );
   const messages = msgsSnap.docs.flatMap((d) => d.data().messages ?? [])
     .sort((a, b) => a.order - b.order);
@@ -119,6 +128,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     nextOrder: selected.at(-1)?.order ?? 0,
+    nextNarratorTurn:Math.max(0,...selected.map(m => m.narratorTurn ?? 0))+(selected.at(-1)?.role === "user" ? 0 : 1),
     storageVersion: 2,
     activeChunkId: last ? chunkId(last[0].order) : null,
     activeChunkBytes: last ? chunkBytes(last) : 0,
@@ -127,19 +137,26 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     breakpointOrder: hasSummary ? source.breakpointOrder ?? 0 : 0,
   };
 
+  if (source.memoryState) {
+    const lastAssistant = selected.filter(m => m.role === 'assistant').at(-1)?.order ?? 0;
+    data.memoryState = { ...source.memoryState, extractedThroughOrder: source.memoryState.extractedThroughOrder == null ? null : Math.min(source.memoryState.extractedThroughOrder, lastAssistant), failureStreak: 0, paused: false, lastError: null };
+  }
+
   // Publish the session only once all chunks are ready, so the sidebar never
   // selects an incomplete copy. Remove partial chunks if a write fails.
   try {
     for (let i = 0; i < groups.length; i += 6) {
       const batch = writeBatch(db);
       groups.slice(i, i + 6).forEach((group) => {
-        batch.set(doc(db, "users", currentUid(), "sessions", id, "messageChunks", chunkId(group[0].order)), chunkRecord(group));
+        batch.set(doc(db,"users",owner,"sessions",id,"messageChunks", chunkId(group[0].order)), chunkRecord(group));
       });
       await batch.commit();
     }
-    await setDoc(sessionDoc(id), data);
+    if (owner !== currentUid()) throw new Error('Account changed; session copy cancelled.');
+    await copyLore(sourceId,id,selected.at(-1)?.order ?? 0);
+    await setDoc(sessionDoc(id,owner),data);
   } catch (error) {
-    try { await deleteSession(id); } catch (cleanupError) {
+    try { if (owner === currentUid()) await deleteSession(id); } catch (cleanupError) {
       console.error("Could not remove incomplete session copy:", cleanupError);
     }
     throw error;

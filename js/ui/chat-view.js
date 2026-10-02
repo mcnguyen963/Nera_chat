@@ -1,13 +1,19 @@
+import { requestSource, assertSource, noteNeedsReview } from '../continuity.js';
+import { normalizeMemory, anyMemory } from '../memory-settings.js';
+import { extractScene, formatSceneForDisplay, latestScene, isPureOoc } from '../scene.js';
+import { computeTurns } from '../turns.js';
+import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
+import * as memoryUpdater from '../memory-updater.js';
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
-import { buildContextForRequest, computeContextUsage } from "../context-builder.js";
+import { buildContextForRequest, computeContextUsage, normalizeAdDirective } from "../context-builder.js";
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
-import { updateSession, duplicateSession } from "../sessions.js";
+import { updateSession, duplicateSession, getSessionFromServer } from "../sessions.js";
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
 import {
@@ -33,13 +39,129 @@ let latestReady = false;
 let historyMessages = null; // full history or the active checkpoint onward
 let historyStartOrder = 0;
 let historyLoading = null;
+let historyEpoch = 0;
+let historyRevision = null;
+let loreReady = Promise.resolve();
+let verifiedLoreRevision = null;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
 const renderedMessages = new Map();
 
 const el = {};
+let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
+const memoryStories = new Map();
+let lastMemoryReport = null;
+export function memorySnapshot(sid = state.sessionId) {
+  if (sid === state.sessionId && session) return { session, settings: state.settings, messages: historyMessages ?? lastMessages, entries: loreEntries, busy, report: lastMemoryReport };
+  const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
+}
+export async function prepareMemorySnapshot() {
+  if (!session) throw new Error('Open a story first.');
+  const sid = state.sessionId;
+  await reconcileStory();
+  if (sid !== state.sessionId) throw new Error('Story changed while loading history.');
+  return memorySnapshot();
+}
+function rememberMemoryStory() {
+  if (session && anyMemory(normalizeMemory(session.memory))) memoryStories.set(session.id,{ ...memorySnapshot(),owner:currentUid() });
+}
+function syncLore() {
+  const wanted = session && (anyMemory(normalizeMemory(session.memory)) || managerOpen);
+  if (!wanted) { loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreReady = Promise.resolve(); updateMemoryChip(); return; }
+  if (loreSessionId === session.id) return;
+  loreUnsub?.();
+  const sid = session.id, owner = currentUid(); loreSessionId = sid; loreEntries = []; verifiedLoreRevision = null;
+  let ready, fail;
+  loreReady = new Promise((resolve,reject) => { ready = resolve; fail = reject; });
+  // A listener error is displayed and is also propagated to generation readiness.
+  loreReady.catch(() => {});
+  loreUnsub = subscribeLore(sid,entries => {
+    if (currentUid() !== owner || state.sessionId !== sid || loreSessionId !== sid) return;
+    loreEntries = entries; ready(); rememberMemoryStory(); updateMemoryChip();
+    document.dispatchEvent(new CustomEvent('lore-changed',{ detail:{ sessionId:sid,entries } }));
+    void updateIndicator();
+  },error => { fail(error); if (currentUid() === owner && state.sessionId === sid) showTransientError('Could not load lorebooks: '+error.message); });
+}
+async function reconcileStory() {
+  const sid = state.sessionId, owner = currentUid();
+  if (!sid) throw new Error('Open a story first.');
+  await messagesApi.ensureContinuityMetadata(sid);
+  const fresh = await getSessionFromServer(sid);
+  if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while reconciling.');
+  if (!fresh) throw new Error('Story no longer exists.');
+  session = fresh;
+  if (historyRevision !== (fresh.historyRevision ?? 0)) historyMessages = null;
+  syncLore();
+  if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate) {
+    await loreReady;
+    if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) { const entries = await getLore(sid); if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Story changed while loading lorebooks.'); loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0; }
+  }
+  await ensureHistory(true);
+  if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while loading.');
+  rememberMemoryStory();
+  return memorySnapshot();
+}
+function updateMemoryChip() {
+  const chip = document.getElementById('btn-memory'); if (!chip) return;
+  const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
+  const turn = computeTurns(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
+  const running = memoryUpdater.isRunning(session?.id);
+  chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
+  chip.classList.toggle('running', running); chip.classList.toggle('paused', session?.memoryState?.paused === true);
+  chip.textContent = running ? 'Updating memory…' : session?.memoryState?.paused ? 'Memory paused' : mem.autoUpdate && turn ? 'Memory · T'+turn : 'Memory';
+}
+
 
 export function initChatView() {
+  configureLoreWrites(() => {
+    if (!busy) return Promise.resolve();
+    return new Promise(resolve => {
+      const done = () => { if (!busy) { document.removeEventListener('turn-finished', done); resolve(); } };
+      document.addEventListener('turn-finished', done);
+    });
+  });
+  memoryUpdater.configureMemoryUpdater({
+    get: memorySnapshot, busy: () => busy,
+    prepare: async sid => { if (sid !== state.sessionId) throw new Error("Open the story before maintenance."); return reconcileStory(); },
+    patch(sid, patch, entries) {
+      const live = memorySnapshot(sid); if (!live) return;
+      live.session = { ...live.session, memoryState: { ...live.session.memoryState, ...patch } };
+      if (entries) live.entries = entries;
+      memoryStories.set(sid,{ ...live,owner:currentUid() });
+      if (sid === state.sessionId) { session = live.session; if (entries) loreEntries = entries; updateMemoryChip(); void updateIndicator(); }
+    },
+    waitIdle(signal) {
+      if (!busy || signal?.aborted) return Promise.resolve();
+      return new Promise(resolve => {
+        const done = () => { if (!busy || signal?.aborted) { document.removeEventListener('turn-finished', done); signal?.removeEventListener('abort', done); resolve(); } };
+        document.addEventListener('turn-finished', done); signal?.addEventListener('abort', done, { once: true });
+      });
+    },
+  });
+  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); memoryStories.delete(e.detail.sessionId); });
+  document.addEventListener('memory-session-saved', e => {
+    if (e.detail.sessionId !== state.sessionId || !session) return;
+    const { partial } = e.detail;
+    session = { ...session, ...partial };
+    if ('memoryState.extractedThroughOrder' in partial) session.memoryState = { ...session.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] };
+    delete session['memoryState.extractedThroughOrder'];
+    syncLore(); rememberMemoryStory(); renderedMessages.clear(); renderMessages(lastMessages); void updateIndicator();
+  });
+  document.addEventListener('scene-preference', () => { renderedMessages.clear(); renderMessages(lastMessages); });
+  const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
+  document.getElementById('context-indicator')?.addEventListener('click', openViewer);
+  document.getElementById('context-indicator')?.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openViewer(); } });
+  document.getElementById('btn-memory')?.addEventListener('click', () => document.dispatchEvent(new CustomEvent('lorebooks')));
+  document.addEventListener('lorebook-visibility', e => { managerOpen = e.detail.open; syncLore(); });
+  document.addEventListener('memory-status', e => {
+    if (e.detail.sessionId !== state.sessionId) return;
+    updateMemoryChip(); document.dispatchEvent(new CustomEvent('memory-refresh'));
+    const d = e.detail;
+    if (d.status === 'success' && (d.notes || d.manual || managerOpen)) {
+      const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.');
+      document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text, action: d.notes ? 'Review' : null, event: 'lorebooks', options: { filter: 'review' } } }));
+    } else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: d.failureStreak >= 3 ? 'Memory updates paused after 3 failures.' : "Memory update didn't work — I'll try again next turn.", action: d.failureStreak >= 3 ? 'Open settings' : null, event: 'memory-settings' } }));
+  });
   el.list = document.getElementById("message-list");
   el.input = document.getElementById("chat-input");
   el.composer = document.getElementById("composer");
@@ -61,7 +183,7 @@ export function initChatView() {
     if (!hasEarlier) return;
     const previousHeight = el.list.scrollHeight;
     const previousTop = el.list.scrollTop;
-    const sessionId = state.sessionId;
+    const sessionId = state.sessionId, owner = currentUid();
     const beforeOrder = lastMessages[0].order;
     el.earlierBtn.disabled = true;
     try {
@@ -71,7 +193,7 @@ export function initChatView() {
       const older = cachedEarlier
         ? cachedEarlier.slice(-PAGE_SIZE)
         : await messagesApi.getEarlierMessages(sessionId, beforeOrder, PAGE_SIZE);
-      if (state.sessionId !== sessionId) return;
+      if (state.sessionId !== sessionId || currentUid() !== owner) return;
       hasEarlier = cachedEarlier
         ? cachedEarlier.length > older.length
         : older.length === PAGE_SIZE;
@@ -95,6 +217,7 @@ export function initChatView() {
   const autoGrow = () => {
     el.input.style.height = "auto";
     el.input.style.height = el.input.scrollHeight + "px";
+    void updateIndicator();
   };
   el.input.addEventListener("input", autoGrow);
   window.addEventListener("resize", autoGrow);
@@ -216,6 +339,7 @@ function refreshQuickChips() {
 }
 
 export function setSession(sessionId) {
+  const owner = currentUid();
   if (state.sessionId === sessionId) return true;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
@@ -224,11 +348,13 @@ export function setSession(sessionId) {
   if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
   if (state.sessionId && session && latestReady) {
     const snapshot = chatSnapshot();
-    historyCache.delete(state.sessionId);
-    historyCache.set(state.sessionId, snapshot);
+    historyCache.delete(currentUid()+':'+state.sessionId);
+    historyCache.set(currentUid()+':'+state.sessionId, snapshot);
     void saveChatCache(currentUid(), state.sessionId, snapshot);
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
+  rememberMemoryStory();
+  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null;
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -241,16 +367,18 @@ export function setSession(sessionId) {
   hasEarlier = false;
   latestMessageIds = new Set();
   latestReady = false;
-  const cachedHistory = historyCache.get(sessionId);
+  const cachedHistory = historyCache.get(currentUid()+':'+sessionId);
   historyMessages = cachedHistory?.history ?? null;
+  historyRevision = null;
   historyStartOrder = 0;
   if (cachedHistory) {
-    historyCache.delete(sessionId);
-    historyCache.set(sessionId, cachedHistory);
+    historyCache.delete(currentUid()+':'+sessionId);
+    historyCache.set(currentUid()+':'+sessionId, cachedHistory);
   } else if (sessionId && historyCache.size >= 3) {
     historyCache.delete(historyCache.keys().next().value);
   }
   historyLoading = null;
+  historyEpoch++;
   renderedMessages.clear();
   ++indicatorRun;
   el.list.innerHTML = "";
@@ -258,18 +386,21 @@ export function setSession(sessionId) {
   el.contextLabel.textContent = "No session selected";
   document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session: null } }));
   updateWelcome();
+  updateMemoryChip();
   if (!sessionId) return true;
   el.contextLabel.textContent = "Loading chat…";
   if (cachedHistory) {
     restoreCachedChat(sessionId, cachedHistory);
+    subscribeChat(sessionId);
     return true;
   }
   void loadChatCache(currentUid(), sessionId).then((saved) => {
-    if (state.sessionId !== sessionId) return;
+    if (state.sessionId !== sessionId || currentUid() !== owner) return;
     if (saved?.session && Array.isArray(saved.recent)) {
-      historyCache.set(sessionId, saved);
+      historyCache.set(currentUid()+':'+sessionId, saved);
       if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
       restoreCachedChat(sessionId, saved);
+      subscribeChat(sessionId);
     } else {
       subscribeChat(sessionId);
     }
@@ -294,7 +425,9 @@ function queueCacheSave() {
 
 function restoreCachedChat(sessionId, saved) {
   session = saved.session;
+  syncLore(); rememberMemoryStory();
   historyMessages = saved.history ?? null;
+  historyRevision = saved.session.historyRevision ?? 0;
   hasEarlier = saved.hasEarlier;
   latestReady = true;
   renderMessages(saved.recent);
@@ -304,24 +437,33 @@ function restoreCachedChat(sessionId, saved) {
 }
 
 function subscribeChat(sessionId) {
+  const owner = currentUid();
 
   sessUnsub = onSnapshot(
     doc(db, "users", currentUid(), "sessions", sessionId),
     (snap) => {
-      if (state.sessionId !== sessionId) return;
+      if (state.sessionId !== sessionId || currentUid() !== owner) return;
+      // Pending/cached metadata can lag the server history query and our own
+      // committed writes. Wait for authoritative subscription metadata.
+      if (snap.metadata?.fromCache || snap.metadata?.hasPendingWrites) return;
       const previous = session;
+      if (snap.exists() && (snap.data().historyRevision ?? 0) < (previous?.historyRevision ?? 0)) return;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      if (historyRevision !== (session?.historyRevision ?? 0)) historyMessages = null;
       if (!session || !previous ||
           session.longTermPlan !== previous.longTermPlan ||
           session.allowLlmPlanUpdates !== previous.allowLlmPlanUpdates ||
           session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
-          session.breakpointOrder !== previous.breakpointOrder) {
+          session.breakpointOrder !== previous.breakpointOrder || JSON.stringify(session.memory) !== JSON.stringify(previous.memory)) {
         updateIndicator();
       }
       if (!session || !previous || session.title !== previous.title ||
-          session.longTermPlan !== previous.longTermPlan) {
+          session.longTermPlan !== previous.longTermPlan || JSON.stringify(session.memory) !== JSON.stringify(previous.memory) || JSON.stringify(session.memoryState) !== JSON.stringify(previous.memoryState)) {
         document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
       }
+      syncLore(); rememberMemoryStory();
+      document.dispatchEvent(new CustomEvent('memory-refresh'));
+      if (JSON.stringify(previous?.memory) !== JSON.stringify(session?.memory)) { renderedMessages.clear(); renderMessages(lastMessages); void updateIndicator(); }
       queueCacheSave();
     },
     (err) => console.error("Session listener error:", err)
@@ -330,7 +472,7 @@ function subscribeChat(sessionId) {
   msgUnsub = messagesApi.subscribeLatestMessages(
     sessionId,
     ({ messages: latest, hasEarlier: olderExists }) => {
-      if (state.sessionId !== sessionId) return;
+      if (state.sessionId !== sessionId || currentUid() !== owner) return;
       latestReady = true;
       const ids = new Set(latest.map((m) => m.id));
       const oldestOrder = latest[0]?.order ?? Infinity;
@@ -345,6 +487,13 @@ function subscribeChat(sessionId) {
       const merged = mergeMessages(lastMessages, latest);
       renderMessages(visibleCount <= PAGE_SIZE ? merged.slice(-PAGE_SIZE) : merged);
       if (historyMessages) historyMessages = mergeMessages(historyMessages, latest);
+      if (session && anyMemory(normalizeMemory(session.memory))) {
+        const epoch = historyEpoch;
+        const active = () => state.sessionId === sessionId && currentUid() === owner && historyEpoch === epoch;
+        void ensureHistory().then(() => {
+          if (active()) { renderedMessages.clear(); renderMessages(lastMessages); rememberMemoryStory(); void updateIndicator(); }
+        }).catch(error => { if (active()) console.error('Memory history:',error); });
+      }
       updateIndicator(); // cached data — no extra Firestore reads
       queueCacheSave();
     },
@@ -356,8 +505,12 @@ function subscribeChat(sessionId) {
 // restored chat current without attaching another Firestore listener.
 export function syncActiveSession(metadata) {
   if (!metadata || metadata.id !== state.sessionId || !session) return;
+  if ((metadata.historyRevision ?? 0) < (session.historyRevision ?? 0)) return;
   const previous = session;
   session = { ...session, ...metadata };
+  syncLore(); rememberMemoryStory();
+  if (historyRevision !== (session.historyRevision ?? 0)) historyMessages = null;
+  if (JSON.stringify(previous.memory) !== JSON.stringify(session.memory)) { renderedMessages.clear(); renderMessages(lastMessages); void updateIndicator(); }
   if (session.title !== previous.title || session.longTermPlan !== previous.longTermPlan) {
     document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId: session.id, session } }));
   }
@@ -369,7 +522,8 @@ export function syncActiveSession(metadata) {
 }
 
 export function forgetChatSession(sessionId) {
-  historyCache.delete(sessionId);
+  memoryUpdater.stop(sessionId); memoryStories.delete(sessionId);
+  historyCache.delete(currentUid()+':'+sessionId);
   void deleteChatCache(currentUid(), sessionId);
 }
 
@@ -383,32 +537,54 @@ function mergeMessages(existing, incoming) {
   return [...byId.values()].sort((a, b) => a.order - b.order);
 }
 
-async function ensureHistory() {
-  if (historyMessages) return historyMessages;
+async function ensureHistory(forceServer = false) {
+  const sessionId = state.sessionId, owner = currentUid(), epoch = historyEpoch;
+  const checkScope = () => {
+    if (state.sessionId !== sessionId || historyEpoch !== epoch) throw new Error("Session changed while loading history.");
+    if (currentUid() !== owner) throw new Error("Account changed while loading history.");
+  };
+  if (historyMessages && historyRevision === (session?.historyRevision ?? 0)) return historyMessages;
   if (historyLoading) {
     await historyLoading;
-    return ensureHistory();
+    checkScope();
+    return ensureHistory(forceServer);
   }
-  if (latestReady && !hasEarlier) {
+  if (!forceServer && historyRevision === (session?.historyRevision ?? 0) && latestReady && !hasEarlier) {
     historyMessages = [...lastMessages];
     historyStartOrder = 0;
     queueCacheSave();
     return historyMessages;
   }
-  const sessionId = state.sessionId;
-  historyLoading = (async () => {
-    const messages = await messagesApi.getMessages(sessionId);
-    if (state.sessionId !== sessionId) throw new Error("Session changed while loading history.");
-    historyMessages = mergeMessages(messages, lastMessages);
-    historyStartOrder = 0;
-    const snapshot = chatSnapshot();
-    historyCache.delete(sessionId);
-    historyCache.set(sessionId, snapshot);
-    if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
-    void saveChatCache(currentUid(), sessionId, snapshot);
-    return historyMessages;
-  })().finally(() => { historyLoading = null; });
-  return historyLoading;
+  const pending = (async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const revision = session?.historyRevision ?? 0;
+      const messages = await messagesApi.getMessages(sessionId);
+      checkScope();
+      // A subscription or a local save may arrive while the read is in flight.
+      // Keep a newly bridged/loaded cache if it already matches that revision;
+      // otherwise discard this read and refresh within the same shared job.
+      if (revision !== (session?.historyRevision ?? 0)) {
+        if (historyMessages && historyRevision === (session?.historyRevision ?? 0)) return historyMessages;
+        continue;
+      }
+      historyMessages = messages;
+      historyRevision = revision;
+      renderMessages(messages.slice(-Math.max(visibleCount,PAGE_SIZE)));
+      historyStartOrder = 0;
+      const snapshot = chatSnapshot();
+      historyCache.delete(owner+':'+sessionId);
+      historyCache.set(owner+':'+sessionId,snapshot);
+      if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+      void saveChatCache(owner,sessionId,snapshot);
+      return historyMessages;
+    }
+    throw new Error('History is updating repeatedly. Try again after the current writes finish.');
+  })().finally(() => {
+    // A session switch can start another read before this one settles.
+    if (historyLoading === pending) historyLoading = null;
+  });
+  historyLoading = pending;
+  return pending;
 }
 
 function applySummaryResult(result) {
@@ -417,8 +593,10 @@ function applySummaryResult(result) {
     ...session,
     activeSummaryMessageId: result.summaryId,
     breakpointOrder: result.newBreakpointOrder,
+    historyRevision:result.historyRevision ?? session.historyRevision,
   };
-  historyMessages = mergeMessages(historyMessages, [result.summaryMessage]);
+  historyMessages = mergeMessages(historyMessages ?? [], [result.summaryMessage]);
+  historyRevision = session.historyRevision ?? 0;
   renderMessages(mergeMessages(lastMessages, [result.summaryMessage]));
   updateIndicator();
   queueCacheSave();
@@ -479,7 +657,7 @@ function renderMessages(msgs) {
 
 function sameRenderedMessage(a, b) {
   return a.role === b.role && a.content === b.content && a.thinking === b.thinking &&
-    Boolean(a.editedAt) === Boolean(b.editedAt);
+    a.scene === b.scene && Boolean(a.editedAt) === Boolean(b.editedAt);
 }
 
 function updateWelcome() {
@@ -505,6 +683,7 @@ function renderMessage(m) {
   const label = document.createElement("span");
   label.textContent =
     m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
+  if (m.role !== 'summary' && anyMemory(normalizeMemory(session?.memory))) label.textContent += ' · T'+(computeTurns(historyMessages ?? lastMessages).turnById.get(m.id) ?? '?');
   if (m.editedAt) label.textContent += " (edited)";
   meta.appendChild(label);
 
@@ -538,10 +717,12 @@ function renderMessage(m) {
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
-    const { summaryReset } = await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
-    if (summaryReset) clearLocalSummary();
+    const result = await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    if (result.summaryReset) clearLocalSummary();
+    session = { ...session,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations }; historyRevision = result.historyRevision;
     if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
+    await reconcileDeletedMemory();
   }));
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
@@ -561,6 +742,24 @@ function renderMessage(m) {
   content.textContent = m.content;
   wrap.appendChild(content);
 
+  if (m.role === 'assistant' && m.scene && normalizeMemory(session?.memory).scene && localStorage.getItem('nera.memory.showScene') !== '0') {
+    const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = formatSceneForDisplay(m.scene); chip.title = 'Edit scene line';
+    chip.addEventListener('click', () => {
+      const row = document.createElement('div'), field = document.createElement('input'); field.value = m.scene; field.maxLength = 300;
+      const save = actionBtn('Save', async () => {
+        if (busy) return; save.disabled = true;
+        try {
+          const raw = field.value.trim() || null; const result = await messagesApi.updateMessageScene(state.sessionId,m.id,m.order,raw);
+          if (result.summaryReset) clearLocalSummary();
+          session = { ...session,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations }; historyRevision = result.historyRevision;
+          lastMessages = lastMessages.map(x => x.id === m.id ? { ...x, scene: raw } : x);
+          if (historyMessages) historyMessages = historyMessages.map(x => x.id === m.id ? { ...x, scene: raw } : x);
+          renderMessages(lastMessages); await updateIndicator();
+        } catch (e) { showTransientError(e.message); save.disabled = false; }
+      });
+      row.append(field, save, actionBtn('Cancel', () => row.replaceWith(chip))); chip.replaceWith(row); field.focus();
+    }); wrap.append(chip);
+  }
   attachHoldToCopy(wrap, () => m.content);
   return wrap;
 }
@@ -622,13 +821,14 @@ function startEdit(m, wrap) {
     save.disabled = true;
     cancel.disabled = true;
     try {
-      const { tokenCount, summaryReset } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
+      const { tokenCount, summaryReset, replacement,historyRevision:revision,memoryInvalidations } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order,{ expectedRevision:m.revision ?? 0 });
       if (summaryReset) clearLocalSummary();
+      session = { ...session,historyRevision:revision,memoryInvalidations }; historyRevision = revision;
       lastMessages = lastMessages.map((item) =>
-        item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
+        item.id === m.id ? replacement : item
       );
       if (historyMessages) historyMessages = historyMessages.map((item) =>
-        item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
+        item.id === m.id ? replacement : item
       );
       finish();
     } catch (e) {
@@ -731,9 +931,11 @@ function showToast(text, ok) {
 export async function updateIndicator() {
   if (!session || !state.settings || !latestReady) return;
   const run = ++indicatorRun;
-  const usage = await computeContextUsage(session, state.settings, historyMessages ?? lastMessages);
+  let usage;
+  try { const messages = await ensureHistory(); usage = await computeContextUsage(session,state.settings,messages,{ loreEntries,draftText:el.input.value }); } catch (error) { if (run === indicatorRun) el.contextLabel.textContent = error.message; return; }
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
+  lastMemoryReport = usage.report;
   const reserved = state.settings.maxResponseTokens;
   const allocated = usage.usedTokens + reserved;
   const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
@@ -744,7 +946,9 @@ export async function updateIndicator() {
   el.contextLabel.textContent =
     `${usage.usedTokens.toLocaleString()} input + ${reserved.toLocaleString()} output / ${usage.max.toLocaleString()} tokens` +
     (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
-    (!historyMessages && hasEarlier ? " · recent history estimate" : "");
+    (!historyMessages && hasEarlier ? " · recent history estimate" : "") +
+    (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(computeTurns(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
+  updateMemoryChip();
 }
 export const refreshContextIndicator = updateIndicator;
 
@@ -757,18 +961,19 @@ function clearLocalSummary() {
 }
 
 async function regenerateMessage(message) {
+  const requestedSessionId = state.sessionId;
   try {
+    await reconcileStory();
     const all = await ensureHistory();
     const latest = all.filter((m) => m.role !== "summary").at(-1);
     if (latest?.id !== message.id || message.order <= (session.breakpointOrder ?? 0)) {
       throw new Error("Only the latest, unsummarized reply can be regenerated. Later story turns depend on older replies.");
     }
-    if (message.planBefore == null && session.longTermPlan) {
-      throw new Error("This reply predates plan history tracking. Its prior plan is unknown, so regeneration could change the story incorrectly.");
-    }
+    if (loreWritesPending()) await waitForLoreWrites();
+    if (requestedSessionId !== state.sessionId || busy) return;
     await runAssistantTurn({
       messages: all, upToOrder: message.order, overwriteId: message.id,
-      planOverride: message.planBefore ?? "",
+
     });
   } catch (err) {
     showTransientError(err.message || String(err));
@@ -778,6 +983,7 @@ async function regenerateMessage(message) {
 async function handleSend(e) {
   e.preventDefault();
   if (busy || !session || editingState) return;
+  const requestedSessionId = state.sessionId;
   const text = el.input.value.trim();
   if (!text) return;
   const settings = structuredClone(state.settings);
@@ -785,20 +991,24 @@ async function handleSend(e) {
     showTransientError("Set your API key and Model ID in the Settings tab first.");
     return;
   }
+  if (loreWritesPending()) await waitForLoreWrites();
+  if (busy || !session || requestedSessionId !== state.sessionId) return;
   el.input.value = "";
   el.input.style.height = "auto";
   setBusy(true);
   try {
-    await ensureHistory();
+    await reconcileStory();
     const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
     // Bridge until the snapshot arrives so the context build includes the user turn
     // without re-reading the collection from Firestore.
     if (!lastMessages.some((m) => m.id === userMsg.id)) {
       lastMessages = lastMessages.concat([
-        { id: userMsg.id, order: userMsg.order, role: "user", content: text, tokenCount: userMsg.tokenCount },
+        { ...userMsg,role:"user",content:text },
       ]);
     }
-    historyMessages = mergeMessages(historyMessages, [lastMessages.find((m) => m.id === userMsg.id)]);
+    session = { ...session,historyRevision:userMsg.historyRevision };
+    historyRevision = userMsg.historyRevision;
+    historyMessages = mergeMessages(historyMessages ?? [], [lastMessages.find((m) => m.id === userMsg.id)]);
     // Explicitly pass the bridged cache: opts.messages keeps buildContextForRequest
     // off the racy getMessages() fallback, which would hit the watch cache and
     // potentially miss the just-committed user message.
@@ -811,97 +1021,59 @@ async function handleSend(e) {
 }
 
 async function runAssistantTurn(opts = {}) {
-  const settings = structuredClone(state.settings);
+  const settings = structuredClone(state.settings), sid = state.sessionId, owner = currentUid();
   if (!settings) return;
-  const planBefore = session.allowLlmPlanUpdates === true
-    ? (opts.planOverride ?? session.longTermPlan ?? "")
-    : (session.longTermPlan ?? "");
-  const petTurn = startPetTurn();
-  setBusy(true);
+  const petTurn = startPetTurn(); setBusy(true);
+  let maintenanceUsed = false;
   try {
-    startStreamUI();
-    const allMessages = opts.messages ?? await ensureHistory();
-    const { apiMessages } = await buildContextForRequest(session, settings, {
-      ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
-    });
-
-    const { content, thinking } = await chatCompletion({
-      settings,
-      messages: apiMessages,
-      onDelta: (t) => { updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
-      onReasoning: (t) => { updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
-    });
-    streamState?.wrap.remove();
-    streamState = null;
-    refreshPetPlacement();
-
-    updatePetPhase("saving", petTurn);
-
-    // Plan tag handling (spec §11): extract, save, strip from visible content.
-    const plan = extractPlan(content);
-    const planThread = extractPlanThread(content);
-    const clean = stripPlan(content);
-    if (!clean && !(session.allowLlmPlanUpdates === true && plan?.length > 0)) {
-      throw new Error("The model returned no narrative reply; nothing was saved.");
-    }
-    const finalContent = clean || "(plan updated — no narrative content in the reply)";
-    const newPlan = session.allowLlmPlanUpdates === true && plan !== null && plan.length > 0 ? plan : null;
-    const nextPlan = session.allowLlmPlanUpdates === true ? (newPlan ?? planBefore) : (session.longTermPlan ?? "");
-    const planUpdate = nextPlan !== (session.longTermPlan ?? "") ? { longTermPlan: nextPlan } : {};
-
-    // Bridge the local cache for the auto-summary check (avoids a fresh
-    // getSession/getMessages round-trip — the snapshots will reconcile shortly).
-    let savedMsg;
-    if (opts.overwriteId) {
-      const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
-        content: finalContent, thinking, planThread, planBefore,
-      }, opts.upToOrder, planUpdate);
-      const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
-      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, planBefore, tokenCount };
-      historyMessages = historyMessages.map((m) =>
-        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, planBefore, tokenCount } : m
-      );
-    } else {
-      savedMsg = await messagesApi.addMessage(session.id, {
-        role: "assistant", content: finalContent, thinking, planThread, planBefore,
-      }, { sessionUpdate: planUpdate });
-      lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
-        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, planBefore, tokenCount: savedMsg.tokenCount },
-      ]);
-    historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
-    }
-    renderMessages(lastMessages);
-    queueCacheSave();
-
-    if (Object.keys(planUpdate).length) session = { ...session, ...planUpdate };
-
-    // Auto-summary trigger: checked after each assistant reply is saved (spec §8.1),
-    // computed entirely from cached data.
-    const fresh = { ...session, longTermPlan: newPlan ?? session.longTermPlan };
-    if (await shouldAutoSummarize(fresh, settings, historyMessages)) {
-      const ui = streamSummaryUI("Context near limit — auto-summarizing…");
+    await reconcileStory();
+    let sourceMessages = structuredClone(historyMessages);
+    let sourceSession = structuredClone(session);
+    let built = await buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) });
+    if (!opts.overwriteId && settings.autoSummarizationEnabled === true && built.droppedCount > 0) {
+      maintenanceUsed = true;
+      const ui = streamSummaryUI('Summarizing uncovered history before narration…');
       try {
-        const r = await runSummarization(fresh, settings, {
-          messages: historyMessages,
-          onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
-          onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
-        });
-        applySummaryResult(r);
-        setStatus(r.skipped ? r.reason : "Summary updated.", true);
-      } finally {
-        ui.done();
-      }
+        const result = await runSummarization(sourceSession,settings,{ messages:sourceMessages,loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta,validateSource:async expected => { const fresh = await getSessionFromServer(sid); assertSource(fresh,expected); } });
+        applySummaryResult(result);
+      } finally { ui.done(); }
+      await reconcileStory(); sourceMessages = structuredClone(historyMessages); sourceSession = structuredClone(session);
+      built = await buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) });
     }
-    finishPetTurn("ready", petTurn);
-  } catch (err) {
-    finishPetTurn("blocked", petTurn);
-    streamState?.wrap.remove();
-    streamState = null;
-    refreshPetPlacement();
-    showTransientError(err.message || String(err));
-  } finally {
+    const expectedSource = requestSource(sourceSession);
+    startStreamUI();
+    const { content,thinking } = await chatCompletion({ settings,messages:built.apiMessages,onDelta:t => { updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
+    streamState?.wrap.remove(); streamState = null; refreshPetPlacement();
+    if (currentUid() !== owner || state.sessionId !== sid || JSON.stringify(state.settings) !== JSON.stringify(settings)) throw new Error('Account, story or request settings changed; reply discarded.');
+    const fresh = await getSessionFromServer(sid); assertSource(fresh,expectedSource);
+    const planThread = extractPlanThread(content), clean = stripPlan(content);
+    if (!clean) throw new Error('The model returned no reply; nothing was saved.');
+    const ooc = isPureOoc(normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? ''));
+    const scene = ooc ? null : extractScene(content);
+    const message = { role:'assistant',content:clean,thinking,planThread,planBefore:sourceSession.longTermPlan ?? '',scene,ooc };
+    updatePetPhase('saving',petTurn);
+    let saved;
+    if (opts.overwriteId) {
+      const result = await messagesApi.overwriteMessage(sid,opts.overwriteId,message,opts.upToOrder,{},expectedSource);
+      saved = result.replacement; session = { ...fresh,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations,memoryState:{ ...fresh.memoryState,paused:true,needsRebuild:true } };
+    } else {
+      saved = await messagesApi.addMessage(sid,message,{ expectedSource });
+      session = { ...fresh,historyRevision:saved.historyRevision };
+    }
+    historyMessages = mergeMessages(sourceMessages,[saved]); historyRevision = session.historyRevision;
+    renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
+    lastMemoryReport = built.report;
+    finishPetTurn('ready',petTurn);
     setBusy(false);
-  }
+    if (!maintenanceUsed && !opts.overwriteId && memoryUpdater.maybeStartAfterTurn(sid)) maintenanceUsed = true;
+    if (settings.autoSummarizationEnabled === true && !maintenanceUsed && !memoryUpdater.isRunning(sid) && await shouldAutoSummarize(session,settings,historyMessages)) {
+      maintenanceUsed = true; setBusy(true);
+      const ui = streamSummaryUI('Context near limit — summarizing…');
+      try { const result = await runSummarization(structuredClone(session),settings,{ messages:structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta }); applySummaryResult(result); } finally { ui.done(); }
+    }
+  } catch (err) {
+    finishPetTurn('blocked',petTurn); streamState?.wrap.remove(); streamState = null; refreshPetPlacement(); showTransientError(err.message || String(err));
+  } finally { setBusy(false); }
 }
 
 // Live-stream the summarizer's output into a proper summary bubble (tail only,
@@ -947,14 +1119,15 @@ function streamSummaryUI(label) {
 }
 
 async function handleSummarize() {
+  if (memoryUpdater.isRunning(state.sessionId)) { showTransientError('Wait for the current memory update.'); return; }
   if (busy || !session) return;
   const petTurn = startPetTurn();
   setBusy(true);
   const ui = streamSummaryUI("Summarizing…");
   try {
-    await ensureHistory();
+    await reconcileStory();
     const r = await runSummarization(session, state.settings, {
-      messages: historyMessages,
+      messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
       onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
     });
@@ -973,6 +1146,7 @@ async function handleSummarize() {
 // Full-history summary: ignores the checkpoint and folds in every message
 // from the very start, replacing the active summary (local-only action).
 async function handleFullSummarize() {
+  if (memoryUpdater.isRunning(state.sessionId)) { showTransientError('Wait for the current memory update.'); return; }
   if (busy || !session) return;
   if (
     !confirm(
@@ -984,9 +1158,9 @@ async function handleFullSummarize() {
   setBusy(true);
   const ui = streamSummaryUI("Summarizing full history…");
   try {
-    await ensureHistory();
+    await reconcileStory();
     const r = await runSummarization(session, state.settings, {
-      messages: historyMessages,
+      messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       full: true,
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
       onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
@@ -1079,6 +1253,8 @@ function appendStream(kind, text) {
 
 function setBusy(b) {
   busy = state.busy = b;
+  if (!b) document.dispatchEvent(new CustomEvent('turn-finished'));
+  updateMemoryChip();
   el.sendBtn.disabled = b;
   el.summarizeBtn.disabled = b;
 }
@@ -1139,4 +1315,14 @@ function showTransientError(text) {
   el.list.appendChild(div);
   if (sticky) scrollToEnd();
   setTimeout(() => div.remove(), 10000);
+}
+
+async function reconcileDeletedMemory() {
+  if (!session || !normalizeMemory(session.memory).autoUpdate && !loreEntries.length) return;
+  const messages = await ensureHistory(), orders = new Set(messages.filter(m => m.role === 'assistant').map(m => m.order));
+  const maxOrder = Math.max(0, ...orders), pointer = session.memoryState?.extractedThroughOrder;
+
+  const count = loreEntries.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.filter(l => l.src != null && !orders.has(l.src)).length,0),0);
+  if (count) document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: `${count} memory notes came from deleted turns.`, action: 'Review', event: 'lorebooks', options: { filter: 'deleted' } } }));
+  rememberMemoryStory();
 }

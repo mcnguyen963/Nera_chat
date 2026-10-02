@@ -1,3 +1,6 @@
+import { initLorebookView } from './ui/lorebook-view.js';
+import { initContextViewer } from './ui/context-viewer.js';
+import { stopAll } from './memory-updater.js';
 import { initAuth, login, register, resetPassword, changePassword, currentUserInfo } from "./auth.js";
 import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
@@ -79,6 +82,8 @@ el.topMenu?.addEventListener("click", (e) => {
     setSidebarOpen(true);
   } else if (item.dataset.action === "settings") {
     openSettingsPopup(el.topMenuBtn);
+  } else if (item.dataset.action === 'lorebooks' || item.dataset.action === 'context-details') {
+    document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary") {
     document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else {
@@ -98,6 +103,7 @@ document.addEventListener("click", (e) => {
 initAuth((user) => {
   // Tear down account-scoped listeners and in-flight work on auth transitions.
   if (appInitialized) {
+    stopAll();
     window.location.reload();
     return;
   }
@@ -237,6 +243,8 @@ async function enterApp() {
   initChatView();
   initSidebar();
   initSettingsView();
+  initLorebookView();
+  initContextViewer();
   watchSettings();
   document.getElementById("account-email").textContent = currentUserInfo()?.email ?? "";
   wireTabs();

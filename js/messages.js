@@ -1,3 +1,5 @@
+import { computeTurns } from './turns.js';
+import { assertSource, revisionOf } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
   limitToLast, updateDoc, collection, runTransaction, writeBatch, serverTimestamp,
@@ -11,17 +13,17 @@ import {
   chunkBytes, chunkId, chunkRecord,
 } from "./message-chunks.js";
 
-function sessionRef(sessionId) {
-  return doc(db, "users", currentUid(), "sessions", sessionId);
+function sessionRef(sessionId, owner = currentUid()) {
+  return doc(db, "users", owner, "sessions", sessionId);
 }
-function legacyMessagesCol(sessionId) {
-  return collection(db, "users", currentUid(), "sessions", sessionId, "messages");
+function legacyMessagesCol(sessionId, owner = currentUid()) {
+  return collection(db, "users", owner, "sessions", sessionId, "messages");
 }
-function chunksCol(sessionId) {
-  return collection(db, "users", currentUid(), "sessions", sessionId, "messageChunks");
+function chunksCol(sessionId, owner = currentUid()) {
+  return collection(db, "users", owner, "sessions", sessionId, "messageChunks");
 }
-function chunkRef(sessionId, id) {
-  return doc(db, "users", currentUid(), "sessions", sessionId, "messageChunks", id);
+function chunkRef(sessionId, id, owner = currentUid()) {
+  return doc(db, "users", owner, "sessions", sessionId, "messageChunks", id);
 }
 
 function newMsgId() {
@@ -29,8 +31,9 @@ function newMsgId() {
 }
 export const newMessageId = newMsgId;
 
-function makeMessage(id, order, { role, content, thinking = null, planThread = null, planBefore = null }, tokenCount) {
-  return { id, order, role, content, thinking, planThread, planBefore, tokenCount, createdAt: Timestamp.now(), editedAt: null };
+function makeMessage(id, order, message, tokenCount) {
+  const { role,content,thinking = null,planThread = null,planBefore = null,scene = null } = message;
+  return { ...message,id,order,role,content,thinking,planThread,planBefore,scene,revision:message.revision ?? 0,tokenCount,createdAt:message.createdAt ?? Timestamp.now(),editedAt:message.editedAt ?? null };
 }
 
 function contextText(message) {
@@ -38,14 +41,15 @@ function contextText(message) {
 }
 
 const readySessions = new Set();
+const metadataReady = new Set();
 const migrations = new Map();
 
-async function writePackedChunks(sessionId, groups) {
+async function writePackedChunks(sessionId, groups, owner = currentUid()) {
   // Six worst-case oversized chunks stay below Firestore's 10 MiB request cap.
   for (let i = 0; i < groups.length; i += 6) {
     const batch = writeBatch(db);
     for (const group of groups.slice(i, i + 6)) {
-      batch.set(chunkRef(sessionId, chunkId(group[0].order)), chunkRecord(group));
+      batch.set(chunkRef(sessionId, chunkId(group[0].order), owner), chunkRecord(group));
     }
     await batch.commit();
   }
@@ -54,18 +58,19 @@ async function writePackedChunks(sessionId, groups) {
 // Legacy message documents remain untouched. Chunk writes finish before the
 // session marker changes, so an interrupted migration can safely run again.
 export function ensureChunked(sessionId) {
-  if (readySessions.has(sessionId)) return Promise.resolve();
-  if (migrations.has(sessionId)) return migrations.get(sessionId);
+  const owner = currentUid(), key = owner+':'+sessionId;
+  if (readySessions.has(key)) return Promise.resolve();
+  if (migrations.has(key)) return migrations.get(key);
   const pending = (async () => {
-    const sessionSnap = await getDocFromServer(sessionRef(sessionId));
+    const sessionSnap = await getDocFromServer(sessionRef(sessionId, owner));
     if (!sessionSnap.exists()) throw new Error("Session not found.");
     if (sessionSnap.data().storageVersion !== 2) {
-      const old = await getDocsFromServer(query(legacyMessagesCol(sessionId), orderBy("order", "asc")));
+      const old = await getDocsFromServer(query(legacyMessagesCol(sessionId, owner), orderBy("order", "asc")));
       const messages = old.docs.map((d) => ({ id: d.id, ...d.data() }));
       const groups = packMessages(messages);
-      await writePackedChunks(sessionId, groups);
+      await writePackedChunks(sessionId, groups, owner);
       const last = groups.at(-1);
-      await updateDoc(sessionRef(sessionId), {
+      await updateDoc(sessionRef(sessionId, owner), {
         storageVersion: 2,
         nextOrder: Math.max(sessionSnap.data().nextOrder ?? 0, messages.at(-1)?.order ?? 0),
         activeChunkId: last ? chunkId(last[0].order) : null,
@@ -73,24 +78,50 @@ export function ensureChunked(sessionId) {
         activeChunkCount: last?.length ?? 0,
       });
     }
-    readySessions.add(sessionId);
-  })().finally(() => migrations.delete(sessionId));
-  migrations.set(sessionId, pending);
+    readySessions.add(key);
+  })().finally(() => migrations.delete(key));
+  migrations.set(key, pending);
   return pending;
+}
+
+export async function ensureContinuityMetadata(sessionId) {
+  const owner = currentUid();
+  await ensureChunked(sessionId);
+  if (owner !== currentUid()) throw new Error('Account changed during migration.');
+  const key = owner+':'+sessionId;
+  if (metadataReady.has(key)) return;
+  const target = sessionRef(sessionId, owner), snap = await getDocFromServer(target);
+  if (snap.data().continuityVersion === 2) { metadataReady.add(key); return; }
+  const chunks = await getDocsFromServer(query(chunksCol(sessionId, owner),orderBy('firstOrder','asc')));
+  const source = flatten(chunks), turns = computeTurns(source), ids = chunks.docs.map(d => d.id);
+  await runTransaction(db,async tx => {
+    const sessionSnap = await tx.get(target);
+    const fresh = []; for (const id of ids) fresh.push(await tx.get(chunkRef(sessionId,id, owner)));
+    if ((sessionSnap.data().historyRevision ?? 0) !== (snap.data().historyRevision ?? 0) || sessionSnap.data().nextOrder !== snap.data().nextOrder) throw new Error('History changed during migration; try again.');
+    for (const chunk of fresh) {
+      const data = chunk.data(), messages = data.messages.map(m => ({ ...m,revision:m.revision ?? 0,...(m.role !== 'summary' ? { narratorTurn:m.narratorTurn ?? turns.turnById.get(m.id) } : {}) }));
+      tx.update(chunkRef(sessionId,chunk.id, owner),{ messages,byteSize:chunkBytes(messages) });
+    }
+    tx.update(target,{ continuityVersion:2,historyRevision:sessionSnap.data().historyRevision ?? 0,nextNarratorTurn:Math.max(0,...source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(sessionSnap.data().activeChunkId ? { activeChunkBytes:chunkBytes((fresh.find(d => d.id === sessionSnap.data().activeChunkId)?.data().messages ?? []).map(m => ({ ...m,revision:m.revision ?? 0,...(m.role !== 'summary' ? { narratorTurn:m.narratorTurn ?? turns.turnById.get(m.id) } : {}) }))) } : {}) });
+  });
+  metadataReady.add(key);
 }
 
 // The session transaction assigns a unique order and appends to one bounded
 // chunk. Only the session document is read on each new message.
 export async function addMessage(sessionId, message, opts = {}) {
-  await ensureChunked(sessionId);
+  const owner = currentUid();
+  await ensureContinuityMetadata(sessionId);
   const tokenCount = await countTokens(contextText(message));
+  if (owner !== currentUid()) throw new Error('Account changed; message was not saved.');
   const id = opts.id ?? newMsgId();
   return runTransaction(db, async (tx) => {
-    const snap = await tx.get(sessionRef(sessionId));
+    const snap = await tx.get(sessionRef(sessionId, owner));
     if (!snap.exists()) throw new Error("Session not found.");
     const data = snap.data();
+    assertSource(data,opts.expectedSource);
     const order = (data.nextOrder ?? 0) + 1;
-    const item = makeMessage(id, order, message, tokenCount);
+    const item = makeMessage(id, order, { ...message,...(message.role !== "summary" ? { narratorTurn:data.nextNarratorTurn ?? 1 } : {}) }, tokenCount);
     const size = messageBytes(item);
     packMessages([item]); // validates an oversized single reply
     const append = data.activeChunkId && data.activeChunkCount < MAX_MESSAGES_PER_CHUNK &&
@@ -98,8 +129,10 @@ export async function addMessage(sessionId, message, opts = {}) {
     const activeId = append ? data.activeChunkId : chunkId(order);
     const bytes = append ? data.activeChunkBytes + size : chunkBytes([item]);
     const count = append ? data.activeChunkCount + 1 : 1;
-    tx.update(sessionRef(sessionId), {
+    tx.update(sessionRef(sessionId, owner), {
       nextOrder: order,
+      historyRevision:(data.historyRevision ?? 0)+1,
+      nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role === "assistant" ? 1 : 0),
       updatedAt: serverTimestamp(),
       activeChunkId: activeId,
       activeChunkBytes: bytes,
@@ -107,13 +140,13 @@ export async function addMessage(sessionId, message, opts = {}) {
       ...(opts.sessionUpdate ?? {}),
     });
     if (append) {
-      tx.update(chunkRef(sessionId, activeId), {
+      tx.update(chunkRef(sessionId, activeId, owner), {
         messages: arrayUnion(item), lastOrder: order, byteSize: bytes, count,
       });
     } else {
-      tx.set(chunkRef(sessionId, activeId), chunkRecord([item]));
+      tx.set(chunkRef(sessionId, activeId, owner), chunkRecord([item]));
     }
-    return { id, order, tokenCount };
+    return { ...item,historyRevision:(data.historyRevision ?? 0)+1 };
   });
 }
 
@@ -130,14 +163,17 @@ export async function addMessagesBulk(sessionId, items) {
     return results;
   }
   const counts = await Promise.all(items.map((item) => countTokens(item.content)));
-  const messages = items.map((item, index) =>
-    makeMessage(newMsgId(), index + 1, item, counts[index])
-  );
+  const messages = items.map((item,index) => makeMessage(item.id ?? newMsgId(),item.order ?? index+1,item,counts[index]));
+  if (new Set(messages.map(m => m.id)).size !== messages.length || messages.some((m,i) => !Number.isSafeInteger(m.order) || m.order < 1 || i > 0 && m.order <= messages[i-1].order)) throw new Error('Imported message IDs and orders must be unique and ordered.');
+  const turns = computeTurns(messages);
+  for (const m of messages) if (m.role !== 'summary') m.narratorTurn ??= turns.turnById.get(m.id);
   const groups = packMessages(messages);
   await writePackedChunks(sessionId, groups);
   const last = groups.at(-1);
   await updateDoc(sessionRef(sessionId), {
-    nextOrder: messages.length,
+    nextOrder: messages.at(-1).order,
+    historyRevision:(snap.data().historyRevision ?? 0)+1,continuityVersion:2,
+    nextNarratorTurn:Math.max(0,...messages.map(m => m.narratorTurn ?? 0))+(messages.at(-1)?.role === "user" ? 0 : 1),
     updatedAt: serverTimestamp(),
     activeChunkId: chunkId(last[0].order),
     activeChunkBytes: chunkBytes(last),
@@ -221,67 +257,56 @@ async function findChunk(sessionId, messageId, order) {
   return chunk;
 }
 
-async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}) {
-  await ensureChunked(sessionId);
-  const old = await findChunk(sessionId, messageId, order);
-  const previous = old.data();
-  const current = previous.messages.find((message) => message.id === messageId);
-  const replacement = await change(current);
-  const updated = previous.messages.flatMap((message) =>
-    message.id === messageId ? (replacement ? [replacement] : []) : [message]
-  );
-  const groups = packMessages(updated);
-  const records = groups.length
-    ? groups.map((group, index) => ({
-      id: index === 0 ? old.id : chunkId(group[0].order),
-      data: chunkRecord(
-        group,
-        index === 0 ? previous.firstOrder : group[0].order,
-        index === groups.length - 1 ? previous.lastOrder : group.at(-1).order
-      ),
-    }))
-    : [{ id: old.id, data: { ...previous, messages: [], count: 0, byteSize: chunkBytes([]) } }];
-  const batch = writeBatch(db);
-  for (const record of records) batch.set(chunkRef(sessionId, record.id), record.data);
-  const sessionSnap = await getDocFromServer(sessionRef(sessionId));
-  const sessionData = sessionSnap.data();
-  const summaryReset = !!sessionData?.activeSummaryMessageId &&
-    ((current.role !== "summary" && order <= (sessionData.breakpointOrder ?? 0)) ||
-      (current.role === "summary" && !replacement && messageId === sessionData.activeSummaryMessageId));
-  const sessionPatch = {
-    ...(summaryReset ? { activeSummaryMessageId: null, breakpointOrder: 0 } : {}),
-    ...sessionUpdate,
-  };
-  if (sessionData?.activeChunkId === old.id) {
-    const active = records.at(-1);
-    Object.assign(sessionPatch, {
-      activeChunkId: active.id,
-      activeChunkBytes: active.data.byteSize,
-      activeChunkCount: active.data.count,
-    });
-  }
-  if (Object.keys(sessionPatch).length) batch.update(sessionRef(sessionId), sessionPatch);
-  await batch.commit();
-  return { replacement, summaryReset };
+async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}, expectedSource = null) {
+  const owner = currentUid();
+  await ensureContinuityMetadata(sessionId);
+  const old = await findChunk(sessionId,messageId,order), target = sessionRef(sessionId,owner);
+  if (owner !== currentUid()) throw new Error("Account changed; edit was cancelled.");
+  return runTransaction(db,async tx => {
+    const sessionSnap = await tx.get(target), chunkSnap = await tx.get(chunkRef(sessionId,old.id,owner));
+    const data = sessionSnap.data(), previous = chunkSnap.data();
+    assertSource(data,expectedSource);
+    const current = previous.messages.find(m => m.id === messageId);
+    if (!current) throw new Error('Message not found.');
+    const changed = await change(current), replacement = changed ? { ...changed,revision:revisionOf(current)+1 } : null;
+    const updated = previous.messages.flatMap(m => m.id === messageId ? (replacement ? [replacement] : []) : [m]);
+    const groups = packMessages(updated);
+    const records = groups.length ? groups.map((group,index) => ({ id:index === 0 ? old.id : chunkId(group[0].order),data:chunkRecord(group,index === 0 ? previous.firstOrder : group[0].order,index === groups.length-1 ? previous.lastOrder : group.at(-1).order) })) : [{ id:old.id,data:{ ...previous,messages:[],count:0,byteSize:chunkBytes([]) } }];
+    const summaryReset = !!data.activeSummaryMessageId && (current.role !== 'summary' && order <= (data.breakpointOrder ?? 0) || current.id === data.activeSummaryMessageId);
+    const historyRevision = (data.historyRevision ?? 0)+1;
+    const patch = { historyRevision,updatedAt:serverTimestamp(),...(summaryReset ? { activeSummaryMessageId:null,breakpointOrder:0 } : {}),...sessionUpdate };
+    if (current.role !== 'summary') {
+      patch.memoryInvalidations = [...(data.memoryInvalidations ?? []),{ fromOrder:order,revision:historyRevision }];
+      patch['memoryState.needsRebuild'] = true;
+      patch['memoryState.paused'] = true;
+      patch['memoryState.lastError'] = 'History changed; affected notes need review. Rebuild explicitly.';
+    }
+    if (data.activeChunkId === old.id) { const active = records.at(-1); Object.assign(patch,{ activeChunkId:active.id,activeChunkBytes:active.data.byteSize,activeChunkCount:active.data.count }); }
+    for (const record of records) tx.set(chunkRef(sessionId,record.id,owner),record.data);
+    tx.update(target,patch);
+    return { replacement,summaryReset,historyRevision,memoryInvalidations:patch.memoryInvalidations };
+  });
 }
 
-export async function editMessage(sessionId, messageId, content, order) {
+export async function editMessage(sessionId, messageId, content, order, metadata = {}) {
+  const { expectedRevision,...replacementMetadata } = metadata;
   const tokenCount = await countTokens(content);
-  const { summaryReset } = await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, planThread: null, tokenCount, editedAt: Timestamp.now(),
-  }));
-  return { tokenCount, summaryReset };
+  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,planThread:null,scene:null,...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
+  return { tokenCount,...result };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order, sessionUpdate = {}) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false }, order, sessionUpdate = {}, expectedSource = null) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
-  await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount,
-  }), sessionUpdate);
-  return { tokenCount };
+  const result = await changeMessage(sessionId, messageId, order, (message) => ({
+    ...message, content, thinking: thinking ?? null, planThread, planBefore, scene, ooc, tokenCount,
+  }), sessionUpdate, expectedSource);
+  return { tokenCount,...result };
 }
 
 export async function deleteMessage(sessionId, messageId, order) {
-  const { summaryReset } = await changeMessage(sessionId, messageId, order, () => null);
-  return { summaryReset };
+  return changeMessage(sessionId, messageId, order, () => null);
+}
+
+export async function updateMessageScene(sessionId, messageId, order, scene) {
+  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene: String(scene ?? "").trim().slice(0, 300) || null }));
 }

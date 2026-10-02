@@ -1,3 +1,4 @@
+import { DEFAULT_MEMORY_EXTRACTION_PROMPT, DEFAULT_MEMORY_REORGANIZE_PROMPT } from './memory-prompts.js';
 import {
   doc,
   getDocFromServer,
@@ -15,6 +16,8 @@ const PLAN_THREAD_RECOVERY_RULE =
   "reconstructed; proceed with no active plan until the user sets a new one.";
 
 export const DEFAULT_SETTINGS = {
+  memoryExtractionPrompt: DEFAULT_MEMORY_EXTRACTION_PROMPT,
+  memoryReorganizePrompt: DEFAULT_MEMORY_REORGANIZE_PROMPT,
   petCharacterIds: [],
   petMovement: "roam",
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
