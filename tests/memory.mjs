@@ -57,12 +57,14 @@ test('mention boundaries, diacritics, possessives and overlapping longest names'
   const tom = makeEntry('characters','Tom'), old = makeEntry('characters','Old Tom'), mira = makeEntry('characters','Míra'); const index = select.buildLoreIndex([tom,old,mira]);
   assert.deepEqual(plain(select.findMentions("Old Tom greets Míra's friend and Tommy, Mira",index,'characters')),[old.id,mira.id]);
 });
-test('selection orders always, mentioned and scene, caps exclude always and drafts load',async () => {
+test('selection orders always, scene and mentioned, caps exclude always and drafts load',async () => {
   const use = await setup(), { makeEntry } = await use('lore-lines.js'), { normalizeMemory } = await use('memory-settings.js'), select = await use('lore-select.js');
   const a = makeEntry('characters','Nera',{ alwaysLoad:true }), b = makeEntry('characters','Mira',{ draft:true }), c = makeEntry('characters','Kael'), inn = makeEntry('locations','Ashford Inn',{ aliases:['the inn'] });
   const index = select.buildLoreIndex([a,b,c,inn]); assert.equal(select.resolveScene({ present:['Kael','Guard captain'],place:'Ashford Inn, upstairs' },index).place,inn.id);
   const result = select.selectEntries([a,b,c,inn],normalizeMemory({ lorebooks:true,books:{ characters:{ maxCards:1 } } }),"Mira's scar",{ present:['Kael'],place:'the inn' });
-  assert.deepEqual(plain(result.selected.characters.map(e => e.reason)),['always','mentioned']); assert.match(result.skipped[0].reason,/card limit/); assert.equal(result.selected.characters[1].entry.draft,true);
+  assert.deepEqual(plain(result.selected.characters.map(e => e.reason)),['always','in scene']); assert.match(result.skipped[0].reason,/card limit/);
+  const mentioned = select.selectEntries([a,b,c,inn],normalizeMemory({ lorebooks:true,books:{ characters:{ maxCards:2 } } }),"Mira's scar",{ present:['Kael'],place:'the inn' });
+  assert.equal(mentioned.selected.characters.find(x => x.entry.id === b.id).entry.draft,true);
 });
 test('fitBook never truncates canon, preserves newest contiguous notes, rounds fairly and prioritizes events',async () => {
   const use = await setup(), { makeEntry } = await use('lore-lines.js'), { fitBook,renderEntry,renderEventsBlock } = await use('lore-select.js');

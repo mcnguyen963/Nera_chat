@@ -355,6 +355,18 @@ test('scene changes preserve timestamps; prose edits clear old metadata', async 
   await h.api.editMessage('s',saved.id,'Edited story',saved.order); m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,null);
   await h.api.overwriteMessage('s',saved.id,{ content:'New reply',scene:'Day 3 · Market' },saved.order); m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,'Day 3 · Market');
 });
+test('long scene attendance survives storage, edits and reload; oversized edits cannot write partial state',async () => {
+  const h = await setup();
+  const raw = 'date: Day 2 · time: night · place: Inn · present: '+Array.from({ length:25 },(_,i) => `Established Character ${i}`).join(', ');
+  const saved = await h.api.addMessage('s',{ role:'assistant',content:'Story',scene:raw });
+  assert.equal((await h.api.getMessages('s'))[0].scene,raw);
+  const edited = raw.replace('Day 2','Day 3');
+  await h.api.updateMessageScene('s',saved.id,saved.order,edited);
+  assert.equal((await h.api.getMessages('s'))[0].scene,edited);
+  const before = JSON.stringify([...h.documents]);
+  await assert.rejects(h.api.updateMessageScene('s',saved.id,saved.order,'x'.repeat(2001)),/exceeds 2000/);
+  assert.equal(JSON.stringify([...h.documents]),before);
+});
 function loreEntry(id='mira') { return { id,book:'characters',kind:'card',name:'Mira',aliases:[],alwaysLoad:false,draft:false,status:null,createdFrom:'user',sections:{ appearance:{ text:'canon',lines:[{ id:'old',text:'old',turn:1,src:2,by:'auto',at:1 }] },notes:{ text:'',lines:[] } } }; }
 test('card save merges concurrent appends while field and line edits win',async () => {
   const h = await setup(), base = loreEntry(); await h.lore.createEntry('s',base);

@@ -26,16 +26,20 @@ export function findMentions(text, index, book) {
   return [...new Set(chosen.map(m => m.id))];
 }
 export function resolveScene(scene, index) {
-  const characters = [], unmatched = [];
+  const characters = [], unmatched = [], ambiguous = [];
   for (const name of scene?.present ?? []) {
-    const hit = index.characters.find(t => t.normTerm === normalizeName(name));
-    if (hit) characters.push(hit.entryId); else unmatched.push(name);
+    const hits = index.characters.filter(t => t.normTerm === normalizeName(name));
+    const canonical = hits.filter(t => t.isMain);
+    const ids = [...new Set((canonical.length ? canonical : hits).map(t => t.entryId))];
+    if (ids.length === 1) characters.push(ids[0]);
+    else if (ids.length > 1) ambiguous.push(name);
+    else unmatched.push(name);
   }
   const exact = name => index.locations.find(t => t.normTerm === normalizeName(name))?.entryId;
   let place = scene?.place ? exact(scene.place) : null;
   if (!place && scene?.place) for (const part of scene.place.split(',')) { place = exact(part); if (place) break; }
   if (!place && scene?.place) place = [...index.locations].sort((a,b) => b.normTerm.length-a.normTerm.length).find(t => new RegExp('(?<![\\p{L}\\p{N}])'+escapeRegex(t.normTerm)+'(?![\\p{L}\\p{N}])','iu').test(normalizeName(scene.place)))?.entryId;
-  return { characters:[...new Set(characters)], place:place ?? null, unmatched };
+  return { characters:[...new Set(characters)], place:place ?? null, unmatched, ambiguous };
 }
 export function selectEntries(entries, mem, text, scene) {
   const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
@@ -52,13 +56,14 @@ export function selectEntries(entries, mem, text, scene) {
       for (const e of list.filter(e => e.alwaysLoad)) add(e.id,'always');
       const always = selected[book].length;
       if (book === 'locations' && resolved.place) add(resolved.place,'current place');
-      for (const id of findMentions(text,index,book)) add(id,'mentioned');
       if (book === 'characters') for (const id of resolved.characters) add(id,'in scene');
+      for (const id of findMentions(text,index,book)) add(id,'mentioned');
       const cap = always+mem.books[book].maxCards;
       for (const x of selected[book].splice(cap)) skipped.push({ entryId:x.entry.id, book, name:x.entry.name, reason:`card limit (${mem.books[book].maxCards}) reached` });
     }
   }
   if (mem.lorebooks && mem.books.characters.on) for (const name of resolved.unmatched) skipped.push({ entryId:null, book:'characters', name, reason:'no card' });
+  if (mem.lorebooks && mem.books.characters.on) for (const name of resolved.ambiguous) skipped.push({ entryId:null, book:'characters', name, reason:'ambiguous scene name; use the full card name' });
   return { selected, skipped, index, resolved };
 }
 export function renderLine(line) { return '- ['+[line.turn != null ? 'T'+line.turn : null,line.when].filter(Boolean).join(' · ')+'] '+line.text; }
