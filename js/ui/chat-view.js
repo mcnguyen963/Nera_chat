@@ -1,6 +1,6 @@
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
-import { extractScene, formatSceneForDisplay, latestScene, isPureOoc } from '../scene.js';
+import { extractScene, inspectSceneOutput, formatSceneForDisplay, latestScene, isPureOoc, MAX_SCENE_LENGTH } from '../scene.js';
 import { computeTurns } from '../turns.js';
 import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
@@ -751,7 +751,7 @@ function renderMessage(m) {
   if (m.role === 'assistant' && m.scene && normalizeMemory(session?.memory).scene && localStorage.getItem('nera.memory.showScene') !== '0') {
     const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = formatSceneForDisplay(m.scene); chip.title = 'Edit scene line';
     chip.addEventListener('click', () => {
-      const row = document.createElement('div'), field = document.createElement('input'); field.value = m.scene; field.maxLength = 300;
+      const row = document.createElement('div'), field = document.createElement('input'); field.value = m.scene; field.maxLength = MAX_SCENE_LENGTH;
       const save = actionBtn('Save', async () => {
         if (busy) return; save.disabled = true;
         try {
@@ -1054,7 +1054,10 @@ async function runAssistantTurn(opts = {}) {
     const planThread = extractPlanThread(content), clean = stripPlan(content);
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
     const ooc = isPureOoc(normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? ''));
-    const scene = ooc ? null : extractScene(content);
+    const sceneEnabled = normalizeMemory(sourceSession.memory).scene;
+    const sceneOutput = sceneEnabled ? inspectSceneOutput(content) : { scene:extractScene(content),warning:null };
+    const scene = ooc ? null : sceneOutput.scene;
+    const sceneWarning = sceneEnabled && !ooc ? sceneOutput.warning : null;
     const message = { role:'assistant',content:clean,thinking,planThread,planBefore:sourceSession.longTermPlan ?? '',scene,ooc };
     updatePetPhase('saving',petTurn);
     let saved;
@@ -1071,6 +1074,7 @@ async function runAssistantTurn(opts = {}) {
     historyMessages = historyChanged ? null : mergeMessages(sourceMessages,[saved]);
     historyRevision = historyChanged ? null : session.historyRevision;
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
+    if (sceneWarning) showTransientError('Reply saved, but scene state was not updated. '+sceneWarning);
     lastMemoryReport = built.report;
     finishPetTurn('ready',petTurn);
     setBusy(false);

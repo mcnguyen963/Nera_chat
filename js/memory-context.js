@@ -40,6 +40,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
+  if (mem.scene && current.missingStreak > 0) warnings.push(`${current.missingStreak} narrative ${current.missingStreak === 1 ? 'reply is' : 'replies are'} missing scene metadata. ${current.scene ? 'The last established scene is retained with its source cutoff.' : 'No established scene is available for selecting present characters and the current location.'}`);
   let memory = '';
   const render = () => {
     const history = raw.filter(m => selected.has(m.id)).map(m => ({ id:m.id,role:m.role,content:contentFor(m) }));

@@ -1,4 +1,5 @@
 import { computeTurns } from './turns.js';
+import { normalizeSceneLine } from './scene.js';
 import { assertSource, revisionOf } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
@@ -308,5 +309,6 @@ export async function deleteMessage(sessionId, messageId, order) {
 }
 
 export async function updateMessageScene(sessionId, messageId, order, scene) {
-  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene: String(scene ?? "").trim().slice(0, 300) || null }));
+  const raw = normalizeSceneLine(scene);
+  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene:raw }));
 }

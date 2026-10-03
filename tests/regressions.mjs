@@ -793,6 +793,29 @@ test('multi-call summary rejects source changes and never advances its checkpoin
   assert.ok(h.calls.requests.every(r => !r.messages.some(m => /1000-2000 words|DETAILED/.test(m.content))));
 });
 
+test('narrative AD replies save valid scene state; invalid metadata warns while preserving narration and the prior snapshot',async () => {
+  const raw='date: Day 2 · time: night · place: Inn · present: Nera, Mira';
+  for (const valid of [true,false]) {
+    const h=await harness(),chat=await h.use('ui/chat-view.js');
+    Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder=2;
+    chat.initChatView();chat.setSession('story');await new Promise(resolve => setTimeout(resolve,0));
+    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ scene:true,memoryBlock:true } }) });
+    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },
+      { id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Nera, Mira, Kael',narratorTurn:1 }],hasEarlier:false });
+    h.calls.response='Kael leaves the inn.'+(valid ? '\n<scene>'+raw+'</scene>' : '\n<scene_state>Kael left.</scene_state>');
+    h.el('chat-input').value='<ad>Continue the scene. Have Kael leave.</ad>';
+    await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
+    const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
+    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : null);
+    assert.ok(saved.content.startsWith('Kael leaves the inn.'));
+    assert.equal(h.calls.requests.length,1,'No automatic model retry or repair call');
+    const current=(await h.use('scene.js')).latestScene(chat.memorySnapshot().messages);
+    assert.equal(current.missingStreak,valid ? 0 : 1);
+    assert.equal(current.scene.present.includes('Kael'),!valid);
+    if (!valid) assert.ok(h.el('message-list').children.some(x => /Reply saved, but scene state was not updated/.test(x.textContent ?? '')));
+  }
+});
+
 test('model plan output cannot change fixed author instructions and pure OOC preserves established scene',async () => {
   const h = await harness(), chat = await h.use('ui/chat-view.js');
   Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder = 2;
