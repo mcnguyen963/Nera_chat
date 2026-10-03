@@ -292,14 +292,14 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
 export async function editMessage(sessionId, messageId, content, order, metadata = {}) {
   const { expectedRevision,...replacementMetadata } = metadata;
   const tokenCount = await countTokens(content);
-  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,planThread:null,scene:null,...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
+  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,planThread:null,scene:null,sceneMeta:null,sceneCandidate:null,acceptance:'accepted',reviewWarnings:[],...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
   return { tokenCount,...result };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false }, order, sessionUpdate = {}, expectedSource = null) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false,sceneMeta = null,sceneCandidate = null,acceptance = 'accepted',reviewWarnings = [] }, order, sessionUpdate = {}, expectedSource = null) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   const result = await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, thinking: thinking ?? null, planThread, planBefore, scene, ooc, tokenCount,
+    ...message, content, thinking: thinking ?? null, planThread, planBefore, scene, ooc, tokenCount,sceneMeta,sceneCandidate,acceptance,reviewWarnings,
   }), sessionUpdate, expectedSource);
   return { tokenCount,...result };
 }
@@ -310,5 +310,13 @@ export async function deleteMessage(sessionId, messageId, order) {
 
 export async function updateMessageScene(sessionId, messageId, order, scene) {
   const raw = normalizeSceneLine(scene);
-  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene:raw }));
+  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene:raw,sceneMeta:{ kind:'manual',stale:false },sceneCandidate:null }));
+}
+
+export function acceptMessage(sessionId,messageId,order,expectedRevision) {
+  return changeMessage(sessionId,messageId,order,message => {
+    if (revisionOf(message) !== expectedRevision) throw new Error('This reply changed. Review it again before accepting.');
+    return { ...message,acceptance:'accepted',reviewWarnings:[],
+      ...(message.sceneCandidate ? { scene:message.sceneCandidate.scene,sceneMeta:message.sceneCandidate.sceneMeta } : {}),sceneCandidate:null };
+  });
 }

@@ -806,14 +806,52 @@ test('narrative AD replies save valid scene state; invalid metadata warns while 
     h.el('chat-input').value='<ad>Continue the scene. Have Kael leave.</ad>';
     await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
     const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
-    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : null);
+    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : 'Day 2 · night · Inn · present: Nera, Mira, Kael');
+    if (!valid) { assert.equal(saved.sceneMeta.kind,'carried');assert.equal(saved.sceneMeta.fromOrder,2); }
     assert.ok(saved.content.startsWith('Kael leaves the inn.'));
     assert.equal(h.calls.requests.length,1,'No automatic model retry or repair call');
     const current=(await h.use('scene.js')).latestScene(chat.memorySnapshot().messages);
     assert.equal(current.missingStreak,valid ? 0 : 1);
     assert.equal(current.scene.present.includes('Kael'),!valid);
-    if (!valid) assert.ok(h.el('message-list').children.some(x => /Reply saved, but scene state was not updated/.test(x.textContent ?? '')));
+    if (!valid) assert.ok(h.el('message-list').children.some(x => /Reply saved\. The model omitted/.test(x.textContent ?? '')));
   }
+});
+
+test('scene recovery runs only on clean narrative failures, preserves narration on schema failure and uses the maintenance slot',async () => {
+  const raw = 'date: Day 2 · time: night · place: Inn · present: Nera, Mira';
+  for (const mode of ['recover','bad-json','flagged','valid','ooc','running']) {
+    const h = await harness(),chat = await h.use('ui/chat-view.js');
+    Object.assign(h.state.settings,{ modelId:'model',apiKey:'fixture',streaming:false });h.calls.messageOrder=2;
+    h.calls.memoryRunning=mode==='running';h.calls.memoryDue=mode==='recover';
+    h.calls.onRequest = () => { h.calls.response = h.calls.requests.length === 1
+      ? mode==='flagged' ? 'You say, "Leave."' : 'Mira waits by the door.'+(mode==='valid' ? '\n<scene>'+raw+'</scene>' : '')
+      : mode==='bad-json' ? '{"extra":true}' : JSON.stringify({ date:'Day 2',time:'night',place:'Inn',present:['Nera','Mira'],planThread:null }); };
+    chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:()=>true,data:()=>({ title:'Story',memory:{ scene:true,sceneFallback:true,protagonist:'Nera' } }) });
+    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',role:'user',order:1,content:'Start.' },{ id:'a',role:'assistant',order:2,content:'At the inn.',scene:raw }],hasEarlier:false });
+    h.el('chat-input').value=mode==='ooc' ? '<ooc>Who is here?</ooc>' : 'Continue.';
+    await h.el('composer').dispatchEvent({ type:'submit',preventDefault(){} });
+    const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
+    assert.equal(h.calls.requests.length,['recover','bad-json'].includes(mode) ? 2 : 1,mode);
+    assert.ok(saved.content.startsWith(mode==='flagged' ? 'You say' : 'Mira waits'),mode);
+    if(mode==='recover') { assert.equal(saved.sceneMeta.kind,'inferred');assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.requests[1].response_format.json_schema.strict,true); }
+    if(['bad-json','running','flagged'].includes(mode)) { assert.equal(saved.scene,raw);assert.equal(saved.sceneMeta.kind,'carried'); }
+    if(mode==='flagged') assert.equal(saved.acceptance,'pending');
+    if(mode==='valid') assert.equal(saved.sceneMeta.kind,'declared');
+    if(mode==='ooc') assert.equal(saved.scene,null);
+    assert.equal(h.state.busy,false);
+  }
+});
+
+test('starting scene settings stage separately from canon and reject an incomplete opening before writing',async () => {
+  const h = await harness();h.state.sessionId='story-id';const view=await h.use('ui/settings-view.js');
+  view.initSettingsView();view.openSettingsPopup();await h.fire('nav-memory');await Promise.resolve();
+  h.el('mem-scene').checked=true;h.el('mem-starting-date').value='18 September 731';h.el('mem-starting-place').value='West Reception Room';
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,0);assert.match(h.el('settings-saved-msg').textContent,/attendees/);
+  h.el('mem-starting-present').value='Nera Veyrath, Isolde Veyless';h.el('mem-replyContract').value='user';
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,1);
+  const patch=h.calls.sessionWrites[0][1];assert.deepEqual(Object.keys(patch),['memory']);
+  assert.match(patch.memory.startingScene,/time: unknown/);assert.equal(patch.memory.replyContract,'user');assert.equal(patch.memory.sceneFallback,false);
 });
 
 test('model plan output cannot change fixed author instructions and pure OOC preserves established scene',async () => {

@@ -466,3 +466,18 @@ test('version 2 bulk import retains orders, turn numbers, message revisions and 
   await h.api.addMessagesBulk('s',[{ id:'user',order:3,role:'user',content:'Question',revision:2,narratorTurn:8 },{ id:'assistant',order:7,role:'assistant',content:'Reply',revision:4,narratorTurn:8 },{ id:'summary',order:9,role:'summary',content:'Summary',coveredRange:{ fromOrder:3,toOrder:7 },sourceRevision:12,evidence:[{ id:'assistant',order:7,revision:4 }] }]);
   const imported = await h.api.getMessages('s'); assert.deepEqual(imported.map(m => m.order),[3,7,9]); assert.equal(imported[1].narratorTurn,8); assert.equal(imported[1].revision,4); assert.equal(imported[2].evidence[0].id,'assistant'); assert.equal(h.documents.get(h.sessionPath).nextOrder,9);
 });
+
+test('accepting a flagged reply is revision checked, persists its candidate scene and invalidates downstream notes',async () => {
+  const h = await setup();
+  const candidate = { scene:'date: Day 2 · time: unknown · place: Inn · present: Nera, Mira',sceneMeta:{ kind:'declared',provenance:{ time:'unknown' } } };
+  const reply = await h.api.addMessage('s',{ role:'assistant',content:'You say hello.',scene:'Inn',acceptance:'pending',sceneCandidate:candidate,reviewWarnings:['Player speech.'] });
+  await assert.rejects(h.api.acceptMessage('s',reply.id,reply.order,1),/changed/);
+  assert.equal((await h.api.getMessages('s'))[0].acceptance,'pending');
+  const accepted = await h.api.acceptMessage('s',reply.id,reply.order,0);
+  assert.equal(accepted.replacement.acceptance,'accepted');assert.equal(accepted.replacement.scene,candidate.scene);
+  assert.equal(accepted.replacement.sceneCandidate,null);assert.equal(accepted.replacement.revision,1);
+  assert.equal(h.documents.get(h.sessionPath).memoryState.paused,true);
+  assert.equal((await h.api.getMessages('s'))[0].sceneMeta.provenance.time,'unknown');
+  const replacement = await h.api.overwriteMessage('s',reply.id,{ content:'Mira waits.',scene:'Inn',sceneMeta:{ kind:'inferred' },acceptance:'accepted' },reply.order);
+  assert.equal(replacement.replacement.sceneMeta.kind,'inferred');assert.equal(replacement.replacement.sceneCandidate,null);
+});

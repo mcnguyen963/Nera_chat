@@ -1,3 +1,4 @@
+import { isAcceptedTurn } from './turn-review.js';
 // Persisted narratorTurn is authoritative; legacy fallback is migrated before mutations.
 export function computeTurns(messages) {
   const raw = [...messages].filter(m => m.role !== 'summary').sort((a,b) => a.order-b.order);
@@ -22,7 +23,9 @@ export function dueRange(messages, memoryState, mem, { manual = false } = {}) {
   const pointer = memoryState?.extractedThroughOrder;
   if (pointer == null) return null;
   const turns = computeTurns(messages);
-  const eligible = turns.assistants.slice(0, Math.max(0, turns.assistants.length-mem.lagTurns)).filter(a => a.order > pointer);
+  let eligible = turns.assistants.slice(0, Math.max(0, turns.assistants.length-mem.lagTurns)).filter(a => a.order > pointer);
+  const blocked = eligible.findIndex(a => !isAcceptedTurn(messages.find(m => m.id === a.id),mem.protagonist));
+  if (blocked >= 0) eligible = eligible.slice(0,blocked);
   if (eligible.length < (manual ? 1 : mem.batchTurns)) return null;
   const chosen = eligible.slice(0, mem.batchTurns), end = chosen.at(-1);
   const chosenTurns = new Set(chosen.map(a => a.turn));

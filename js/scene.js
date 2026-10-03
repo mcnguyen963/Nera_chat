@@ -69,11 +69,53 @@ export function parseScene(raw) {
     place:known(labeled ? fields.place : parts.length >= 3 ? parts.slice(2).join(', ') : parts.at(-1)), present };
 }
 export function formatSceneForDisplay(raw) { return String(raw ?? '').replace(/present\s*:\s*/i, ''); }
-export function latestScene(messages, upToOrder = Infinity) {
+export function latestScene(messages, upToOrder = Infinity, startingScene = null) {
   let missingStreak = 0;
   for (const m of [...messages].filter(m => m.role === 'assistant' && m.order < upToOrder).sort((a,b) => b.order-a.order)) {
-    if (m.scene) return { scene: parseScene(m.scene), fromOrder: m.order, fromId:m.id, missingStreak };
+    if (m.scene && m.acceptance !== 'pending' && m.acceptance !== 'rejected') {
+      const carried = m.sceneMeta?.kind === 'carried';
+      return { scene:parseScene(m.scene),fromOrder:carried ? m.sceneMeta.fromOrder : m.order,
+        fromId:carried ? m.sceneMeta.fromId : m.id,kind:m.sceneMeta?.kind ?? 'declared',
+        missingStreak:missingStreak+(carried ? m.sceneMeta.missingStreak ?? 1 : 0) };
+    }
     if (!m.ooc) missingStreak++;
   }
+  if (startingScene) return { scene:parseScene(startingScene),fromOrder:0,fromId:null,kind:'seed',missingStreak };
   return { scene: null, fromOrder: null, fromId:null, missingStreak };
+}
+
+export function sceneLine({ date, when, time, place, present }) {
+  const value = text => String(text ?? '').trim() || 'unknown';
+  const raw = `date: ${value(date ?? when)} · time: ${value(time)} · place: ${value(place)} · present: ${present?.length ? present.join(', ') : 'unknown'}`;
+  const result = inspectSceneOutput('<scene>'+raw+'</scene>');
+  if (!result.scene) throw new Error(result.warning);
+  return result.scene;
+}
+
+export function carryScene(prior) {
+  return { scene:prior?.scene?.raw ?? null,sceneMeta:{ kind:'carried',stale:true,
+    fromOrder:prior?.fromOrder ?? null,fromId:prior?.fromId ?? null,missingStreak:(prior?.missingStreak ?? 0)+1 } };
+}
+
+// Only text outside metadata is evidence. This is a conservative lexical check,
+// not proof that narrated events are true or that an earlier action caused them.
+export function validateSceneValues(raw, { narration = '', userText = '', prior = null } = {}) {
+  const parsed = parseScene(raw), warnings = [], provenance = {};
+  const narrative = String(narration).replace(/<(?:scene|plan|plan_thread)>[\s\S]*?<\/(?:scene|plan|plan_thread)>/gi,'').replace(/["“][\s\S]*?["”]/g,'');
+  const normalized = text => String(text ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+  const supports = (text,needle) => {
+    text = normalized(text);
+    const at = needle ? text.indexOf(needle) : -1;
+    return at >= 0 && !/[\p{L}\p{N}]/u.test(text[at-1] ?? '') && !/[\p{L}\p{N}]/u.test(text[at+needle.length] ?? '');
+  };
+  for (const [key,field] of [['date','when'],['time','time']]) {
+    const value = parsed[field];
+    const needle = normalized(value);
+    if (!value) provenance[key] = 'unknown';
+    else if (normalized(prior?.[field]) === needle) provenance[key] = 'prior';
+    else if (supports(userText,needle)) provenance[key] = 'user';
+    else if (supports(narrative,needle)) provenance[key] = 'narration';
+    else { parsed[field] = null;provenance[key] = 'unknown';warnings.push(`Unsupported scene ${key} was stored as unknown.`); }
+  }
+  return { scene:sceneLine(parsed),sceneMeta:{ kind:'declared',stale:false,provenance },warnings };
 }
