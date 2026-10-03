@@ -1,3 +1,4 @@
+import { prompts, renderPrompt } from './system-prompts.js';
 // <plan>...</plan> tag handling (spec §11).
 // The tag is emitted by the model anywhere in its reply; the app extracts it,
 // strips it from visible content. Model output never changes the fixed author plan.
@@ -37,5 +38,5 @@ export function stripPlan(text) {
 }
 
 export function planInjectionBlock(plan) {
-  return "Current long-term plan (fixed author instructions; only the user can edit it. Follow its events and timing; never emit a <plan> block):\n" + (plan?.trim() || "(no plan yet)");
+  return renderPrompt(prompts.plan, { PLAN: plan?.trim() || prompts.emptyPlan });
 }

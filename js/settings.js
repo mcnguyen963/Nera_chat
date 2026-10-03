@@ -1,3 +1,4 @@
+import { prompts } from './system-prompts.js';
 import { DEFAULT_MEMORY_EXTRACTION_PROMPT, DEFAULT_MEMORY_REORGANIZE_PROMPT } from './memory-prompts.js';
 import {
   doc,
@@ -9,11 +10,7 @@ import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { state } from "./state.js";
 
-const PLAN_THREAD_RECOVERY_RULE =
-  " If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears " +
-  "anywhere in the visible conversation history, even though a plan seems to have been " +
-  "set earlier, treat that plan as lost from context. Its exact contents cannot be " +
-  "reconstructed; proceed with no active plan until the user sets a new one.";
+const legacyNarratorHashes = new Set(prompts.legacyNarratorHashes.split(/\s+/));
 
 export const DEFAULT_SETTINGS = {
   memoryExtractionPrompt: DEFAULT_MEMORY_EXTRACTION_PROMPT,
@@ -42,30 +39,11 @@ export const DEFAULT_SETTINGS = {
   keepRecentMessagesAfterSummary: 10,
   summarizerMaxTokens: 100000,
   summarizerChunkTokens: 250000,
-  narratorSystemPrompt:
-    "You are the narrator of an interactive, ongoing story. Drive the plot forward, " +
-    "stay consistent with everything established so far, and write in vivid prose. " +
-    "You maintain a long-term plan for the story that appears in your system prompt. " +
-    "If the plan changes, include a new <plan>...</plan> block anywhere in your reply; " +
-    "if it has not changed, omit the tag. The plan tag is never shown to the user. " +
-    "PLAN THREAD — cheap, every turn: While a plan is active, include one short line in " +
-    "your hidden output each turn, in the form <plan_thread>brief one-clause reminder of " +
-    "the current target, e.g. \"steering toward: reconciliation scene between A and her " +
-    "father\"</plan_thread>. This is not the full plan restated — a handful of tokens, not " +
-    "a paragraph. Its only job is to make sure the plan is never more than one turn away " +
-    "from appearing somewhere in your own hidden output, so it doesn't quietly vanish from " +
-    "view over a long conversation. Writing this line is mandatory whenever a plan is " +
-    "active, with no exceptions — it's cheap enough that \"it hasn't changed\" is never a " +
-    "reason to skip it. The plan_thread tag is never shown to the user." +
-    PLAN_THREAD_RECOVERY_RULE,
-  summarizerSystemPrompt:
-    "You maintain a running summary of a long roleplay story. You are given the previous " +
-    "summary (if any) and a transcript of new events. Produce an updated summary that " +
-    "preserves all characters, relationships, open plot threads, key decisions, and " +
-    "established facts. Be concise but complete. Output only the summary text, no preamble.",
+  narratorSystemPrompt: prompts.narrator,
+  summarizerSystemPrompt: prompts.summarizer,
 };
 
-function mergeDefaults(data) {
+async function mergeDefaults(data) {
   const merged = {
     ...structuredClone(DEFAULT_SETTINGS),
     ...data,
@@ -74,10 +52,12 @@ function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
-  // Existing accounts that kept the former app default receive the new rule.
-  // An edited prompt remains exactly as its author saved it.
-  if (data?.narratorSystemPrompt === DEFAULT_SETTINGS.narratorSystemPrompt.slice(0, -PLAN_THREAD_RECOVERY_RULE.length)) {
-    merged.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
+  // Identify exact obsolete app defaults without keeping their conflicting text.
+  // Custom prompts remain exactly as saved.
+  if (typeof data?.narratorSystemPrompt === 'string' && data.narratorSystemPrompt !== DEFAULT_SETTINGS.narratorSystemPrompt) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(data.narratorSystemPrompt));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    if (legacyNarratorHashes.has(hash)) merged.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
   }
   return merged;
 }
@@ -190,11 +170,11 @@ export async function loadSettings() {
   try {
     snap = await getDocFromServer(ref);
   } catch (error) {
-    if (cached) return hydrateProfiles(mergeDefaults(cached));
+    if (cached) return hydrateProfiles(await mergeDefaults(cached));
     throw error;
   }
   if (snap.exists()) {
-    const settings = hydrateProfiles(mergeDefaults(snap.data()));
+    const settings = hydrateProfiles(await mergeDefaults(snap.data()));
     cacheSettings(settings);
     return settings;
   }
@@ -212,13 +192,19 @@ export async function loadSettings() {
 // Ignore local Firestore snapshots so stale/offline data cannot replace a
 // newer server value loaded at startup.
 export function watchSettings() {
-  return onSnapshot(userSettingsRef(), (snap) => {
+  let update = 0;
+  return onSnapshot(userSettingsRef(), async (snap) => {
     if (!snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
-    const settings = hydrateProfiles(mergeDefaults(snap.data()));
-    if (JSON.stringify(settings) === JSON.stringify(state.settings)) return;
-    state.settings = settings;
-    cacheSettings(settings);
-    document.dispatchEvent(new CustomEvent("settings-changed"));
+    const sequence = ++update;
+    try {
+      const settings = hydrateProfiles(await mergeDefaults(snap.data()));
+      if (sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
+      state.settings = settings;
+      cacheSettings(settings);
+      document.dispatchEvent(new CustomEvent("settings-changed"));
+    } catch (error) {
+      console.error("Failed to sync settings:", error);
+    }
   }, (error) => console.error("Failed to sync settings:", error));
 }
 

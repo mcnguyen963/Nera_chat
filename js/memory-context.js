@@ -1,3 +1,4 @@
+import { prompts, renderPrompt } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
 import { SCENE_RULE, latestScene } from './scene.js';
 import { computeTurns } from './turns.js';
@@ -5,6 +6,9 @@ import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemo
 import { planInjectionBlock } from './plan-parser.js';
 import { CONTINUITY_RULE, usableLore, cutoffLabel, revisionOf } from './continuity.js';
 const FRAME = 8;
+function stripOcc(content) {
+  return content.replace(/<OCC\b[^>]*>[\s\S]*?(?:<\/OCC\s*>|$)|<\/OCC\s*>/gi, '');
+}
 // Both modes use this renderer and count the entire rendered request on every fit.
 export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd }) {
   const mem = normalizeMemory(session.memory), limit = Number(settings.maxContextTokens)-Number(settings.maxResponseTokens);
@@ -24,14 +28,15 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (summary && ((summary.evidence ?? []).some(e => !all.some(m => m.id === e.id && revisionOf(m) === e.revision)) || (session.memoryInvalidations ?? []).some(i => (summary.sourceRevision ?? 0) < i.revision && i.fromOrder <= (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0)))) summary = null;
   const checkpoint = summary ? (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0) : 0;
   if (summary) {
-    const content = `[Historical summary through ${cutoffLabel({ order:checkpoint,turn:summary.cutoffTurn })}; this is not the current scene]\n`+summary.content;
+    const content = renderPrompt(prompts.historicalSummary, { CUTOFF: cutoffLabel({ order:checkpoint,turn:summary.cutoffTurn }), SUMMARY: summary.content });
     head.push({ role:'system',content }); blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content)+FRAME });
   }
   const contentFor = m => {
     let text = m.role === 'user' ? normalizeAd(m.content) : m.content;
     if (m.role === 'assistant') text += (m.planThread ? '\n<plan_thread>'+m.planThread+'</plan_thread>' : '')+(mem.scene && m.scene ? '\n<scene>'+m.scene+'</scene>' : '');
+    if (m.id !== latest?.id) text = stripOcc(text);
     // An opening message that is also the active latest user keeps its current role.
-    if (anchorIds.has(m.id) && m.id !== latest?.id) text = `[Opening exchange: historical background at T${turns.turnById.get(m.id)}; not current conditions]\n`+text;
+    if (anchorIds.has(m.id) && m.id !== latest?.id) text = renderPrompt(prompts.openingExchange, { TURN: turns.turnById.get(m.id), CONTENT: text });
     return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
@@ -71,12 +76,12 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null);
   const skipped = [...filtered.skipped,...selection.skipped];
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
-  const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,plan:'The fixed author plan in the system message remains active.',characters:chars,locations:places }) : [chars.text && 'Characters:\n'+chars.text,places.text && 'Places:\n'+places.text].filter(Boolean).join('\n\n');
+  const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && 'Characters:\n'+chars.text,places.text && 'Places:\n'+places.text].filter(Boolean).join('\n\n');
   if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
   for (const book of ['facts','events','characters','locations']) {
     if (!selection.selected[book].length) continue;
     const beforeMemory = memory;
-    const header = book === 'facts' ? '[World facts and attributed accounts]\n' : book === 'events' ? '[Story memory — open threads and key events]\nOpen threads:\nTimeline (oldest first, 999999 earlier events not shown):\n' : book === 'characters' ? 'Characters:\n' : 'Places:\n';
+    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\nOpen threads:\nTimeline (oldest first, 999999 earlier events not shown):\n' : book === 'characters' ? 'Characters:\n' : 'Places:\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
     let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events' });
     const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit) : fit.text;
