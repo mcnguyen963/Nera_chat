@@ -1,0 +1,53 @@
+{
+  "content": " Krail waits a moment longer, pen balanced between two fingers, then sets it down beside the unsigned order with a small, deliberate click.\n\n\"You need not decide this instant, my lord,\" he says. His voice stays level, the tone of a man reading a scheduled item aloud. \"The order will remain here. The estate's accounts will not close today, and neither will this matter.\"\n\nHe squares the paper against the table edge, aligning it so the blank approval space faces Nera directly. \"I would only note, for the record, that the loss extends beyond damaged cloth and a scorched portrait. A shipping folio of some value has vanished from rooms that were locked. Locked rooms, my lord, imply keys, and keys imply the maid who kept them. That is the connection the ledger must reflect if the folio is not recovered.\"\n\nElise's hands tighten around one another at her waist. She does not speak. Liora shifts her weight from foot to foot, her blistered palm curled against her skirt, and opens her mouth—then closes it again when her mother's shoulder shifts a half-inch toward her.\n\n\"Should you wish the prisoners held,\" Krail continues, \"they will be held. Should you wish them released to their quarters pending judgment, that too is within your authority. I will draft whatever you determine.\" He smooths his cuffs, one and then the other, and retrieves his key ring from the table. \"In the meantime, I will verify what the fire actually consumed against the wing inventory. If the folio is ash, the record will show ash. If it is not ash, the record will show that as well.\"\n\nHe bows, shallow and precise, collects his writing case, and moves to the door. His footsteps recede down the passage—unhurried, evenly spaced—past the place where Magerrett stands just out of sight of the doorway, and fade toward the stairwell.\n\nThe room settles into quiet. The smell of wet ash hangs over everything, and Ilyra's ruined portrait leans against the wall with its painted eyes half-consumed. Liora's gaze moves from the unsigned order to Nera's face and back again. Elise keeps her posture steady, one hand still resting near her daughter. Isolde stands where she has stood all along, yellow eyes tracking the door through which Krail left.\n\nThe pen lies where he set it down.\n\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The user directive: continue the hearing, have Bastian Krail leave the room, do not move Nera or others, no player speech/thoughts/decisions. So narrate Krail wrapping up and exiting—but Krail was waiting for Nera's decision. How does Krail leave without Nera's decision? Krail can leave on his own initiative, perhaps to attend to something, stating the order remains for signature. Or Isolde could note something prompting... but the directive says have Krail leave. I can have Krail announce he will attend to something (e.g., verifying the folio's loss in the records, or summoning the physician?) Actually Krail leaving voluntarily fits: he may state the order will remain on the table, that he will verify the inventory of the burned rooms, and withdraw, telling Nera to summon him when decided. That preserves the unsigned order and doesn't force Nera's decision.\n\nAlso present: Elise, Liora, Isolde stay. Krail exits — so present after: Nera, Isolde, Elise, Liora. Maybe Magerrett listening outside remains not in room.\n\nI can add texture: Krail's parting remarks about the folio, the punishment order left on table with pen. Perhaps a small beat: Liora's reaction, Elise's composure, Isolde noting Krail's departure direction. Magerrett outside the door—maybe she slips in after Krail leaves? The directive says \"do not move Nera or the other people\" — \"other people\" ambiguous; probably means don't move the prisoners/Isolde either. Safer to not add Magerrett entering. Keep her outside listening.\n\nEnd with scene tag: date: 18 September 731 · time: unknown? We need time of day. The fire happened today; hearing is ongoing. No established time of day. The memory snapshot says time: unknown. Rules: \"Write 'unknown' for each unsupported field.\" So time: unknown. Place: West Reception Room, Veyrath estate. Present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen (Krail left).\n\nWrite narration, ~300-400 words. No player speech/thoughts/decisions. Krail can speak. NPCs may interpret. End with tag.",
+  "usage": {
+    "prompt_tokens": 14934,
+    "completion_tokens": 1047,
+    "total_tokens": 15981,
+    "cost": 0.00104619,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14785,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00104619,
+      "upstream_inference_prompt_cost": 0.00052269,
+      "upstream_inference_completions_cost": 0.0005235
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 494,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 388,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": false
+  },
+  "automaticPass": false,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

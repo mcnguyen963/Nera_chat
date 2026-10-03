@@ -1,0 +1,53 @@
+{
+  "content": " The west reception room smells of smoke that has traveled farther than the fire itself. Someone opened a window, but the curtains near it were pulled shut again, and the haze has settled into the fabric instead. It clings faintly to your sleeves as you sit at the head of the small table, and you are aware of it the way you are aware of every inconsistency in this room: as something that should not still be here.\n\nBastian Krail stands to your right with the punishment order squared in front of you. He is a heavyset man with grey at his temples and ink stains he never quite manages to wash from his fingers, and he speaks the way a ledger reads—measured, itemized, closed. He has laid out the sequence twice already: the stolen keys, the locked rooms, the damaged portrait, the missing folio, the burned register. Each item lands on the table like a coin he expects to be counted.\n\n\"The folio covered the autumn shipping contracts,\" he says, for the second time. \"Three years of arranged rates. It cannot be reconstructed from memory. With respect, young master, the estate cannot absorb losses of this kind without consequence, or every servant's child will learn that a locked door is merely a suggestion.\"\n\nHe places the pen beside the order. The approval space is blank. The paper has been prepared with room for your signature and nothing else—no line for the physician, no line for Elise's account, no line for a girl of eleven to explain why she wanted a silver bird to sing again.\n\nLiora stands between the two household guards, and she is smaller than you remember. Her right hand is wrapped in a strip of cloth that has browned at the center, and she holds it against her chest as though it were the thing being accused. She has already confessed—stolen keys, entered without leave, knocked the lamp—and she confessed the way children confess, all at once, as if saying it quickly might finish it. Her eyes keep returning to the damaged portrait propped against the far wall, where your mother's painted shoulder is charred black and one painted hand has burned away entirely.\n\nElise stands slightly in front of her daughter, though the guards have not permitted her to shield the girl, only to lean. Her left forearm is bandaged, and the bandage is the one Isolde told you about—the one that has not been changed since morning, dark at the edges, the burn beneath it untreated. When she speaks, her voice is flat with the effort of keeping it level.\n\n\"My lord. I don't ask you to believe I did nothing. I lost the keys; I should have reported it the hour I noticed. I ask only that the fire was an accident, and that my daughter is eleven, and that she be examined before anything is decided. She has been standing here for an hour holding a burn.\"\n\nKrail's jaw tightens almost imperceptibly. \"The physician's attendance can follow the disposition,\" he says. \"It is not customary to spend the household's time—\"\n\n\"Isolde.\" You have not spoken yet, and the sound of your own voice is unfamiliar—higher than you expect, a child's voice carrying a grown decision inside it.\n\nIsolde steps forward from beside your chair. She is twelve, dark-haired, precise in her movements in the way of someone who has been trained and has survived the training, and her violet eyes move over the room without lingering on anything she does not wish to be seen noticing. \"I examined neither of them,\" she says to you, evenly. \"The household physician has been in the east wing all morning. Elise Fen's bandage was applied by a scullery maid. Liora Fen has not been examined at all.\"\n\n\"Then it will be examined now,\" Krail says, and his voice has the mild patience of a man who has handled many young masters. \"No one disputes the child is hurt, my lord. The question before you is not her hand. It is whether this household answers destruction of your mother's property and loss of a shipping folio with a signed order or with a shrug. I would not advise the shrug. Your father returns after sunset, and he will ask what was decided.\"\n\nHe lets that sit. The pen lies beside the blank approval space, angled toward your hand. Behind you, faintly, a floorboard settles in the corridor—the weight of someone standing close to the door, then shifting to hear better.\n\nLiora's wrapped hand lowers an inch. Elise does not look at Krail at all; she looks at you, and there is something in her face that is not quite hope, more like a woman reading weather.\n\nThe order waits. So does Krail. So does Isolde, half a step behind your shoulder.\n\n<scene>date: 18 September 731 · time: late morning · place: West reception room, Veyrath estate · present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless</scene>",
+  "thinking": "I need to narrate the scene in the west reception room. Nera must choose—stop before his decision. Second person, present tense. Krail presenting the order, Elise and Liora present, Isolde beside him. End with visible prose, then plan_thread tag only when fixed plan is active—there's no fixed plan mentioned, so maybe omit? The contract says \"write visible prose, then a short <plan_thread> when the fixed plan is active, then exactly this one-line structure as the final line.\" So plan_thread only when applicable. Final line must be the scene tag.\n\nScene: date: 18 September 731 · time: morning/afternoon? Fire occurred, hearing same day. Let's say mid-morning or late morning. Place: West reception room, Veyrath estate. Present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless. Magerrett is outside the door listening—she's not inside. So present list: those in the room.\n\nWrite under 800 words, ending when Nera must choose—pen beside unsigned order.",
+  "usage": {
+    "prompt_tokens": 15493,
+    "completion_tokens": 1297,
+    "total_tokens": 16790,
+    "cost": 0.001463116203,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13170,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001463116203,
+      "upstream_inference_prompt_cost": 0.00025852875,
+      "upstream_inference_completions_cost": 0.001204587453
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 242,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "scene": {
+    "raw": "date: 18 September 731 · time: late morning · place: West reception room, Veyrath estate · present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless",
+    "when": "18 September 731",
+    "time": "late morning",
+    "place": "West reception room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Bastian Krail",
+      "Elise Fen",
+      "Liora Fen",
+      "Isolde Veyless"
+    ]
+  },
+  "appClassifiesOoc": false,
+  "appSavedScene": "date: 18 September 731 · time: late morning · place: West reception room, Veyrath estate · present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless",
+  "sceneContractWarning": null,
+  "planThread": null,
+  "visibleWords": 805,
+  "sceneTagCount": 1,
+  "legacyHiddenReport": false,
+  "requiresHumanReview": [
+    "player agency",
+    "source knowledge",
+    "attendance consistent with visible events",
+    "location/time evidence"
+  ]
+}

@@ -1,0 +1,486 @@
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"I","reasoning_details":[{"type":"reasoning.text","text":"I","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" need to write a scene continuation. Nera has","reasoning_details":[{"type":"reasoning.text","text":" need to write a scene continuation. Nera has","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" just awakened; the hearing is in progress. Kr","reasoning_details":[{"type":"reasoning.text","text":" just awakened; the hearing is in progress. Kr","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"ail has placed the pen beside the unsigned order and","reasoning_details":[{"type":"reasoning.text","text":"ail has placed the pen beside the unsigned order and","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" asked for Nera's decision. The instruction:","reasoning_details":[{"type":"reasoning.text","text":" asked for Nera's decision. The instruction:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" continue the hearing, have Bastian Krail leave","reasoning_details":[{"type":"reasoning.text","text":" continue the hearing, have Bastian Krail leave","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the room, do not move Nera or other","reasoning_details":[{"type":"reasoning.text","text":" the room, do not move Nera or other","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" people. Visible narration first, hidden scene state tags","reasoning_details":[{"type":"reasoning.text","text":" people. Visible narration first, hidden scene state tags","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" at the end.\n\nI should write in second person","reasoning_details":[{"type":"reasoning.text","text":" at the end.\n\nI should write in second person","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" or... The user's messages are first-person N","reasoning_details":[{"type":"reasoning.text","text":" or... The user's messages are first-person N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era. Typically the assistant narrates the world's","reasoning_details":[{"type":"reasoning.text","text":"era. Typically the assistant narrates the world's","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" response. Let me write narrative prose from Nera","reasoning_details":[{"type":"reasoning.text","text":" response. Let me write narrative prose from Nera","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s perspective (or third person limited on Nera","reasoning_details":[{"type":"reasoning.text","text":"'s perspective (or third person limited on Nera","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"), depicting Krail pressing for a decision, N","reasoning_details":[{"type":"reasoning.text","text":"), depicting Krail pressing for a decision, N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era's first test, and Krail eventually leaving","reasoning_details":[{"type":"reasoning.text","text":"era's first test, and Krail eventually leaving","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the room — perhaps Nera asks him to step","reasoning_details":[{"type":"reasoning.text","text":" the room — perhaps Nera asks him to step","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" out, or Krail leaves to fetch something.","reasoning_details":[{"type":"reasoning.text","text":" out, or Krail leaves to fetch something.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" The instruction says \"have Bastian Krail leave","reasoning_details":[{"type":"reasoning.text","text":" The instruction says \"have Bastian Krail leave","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the room; do not move Nera or the","reasoning_details":[{"type":"reasoning.text","text":" the room; do not move Nera or the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" other people.\" So Krail exits (maybe to","reasoning_details":[{"type":"reasoning.text","text":" other people.\" So Krail exits (maybe to","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" attend another duty, or Nera dismisses him","reasoning_details":[{"type":"reasoning.text","text":" attend another duty, or Nera dismisses him","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" pending examination of prisoners). Since Nera hasn't","reasoning_details":[{"type":"reasoning.text","text":" pending examination of prisoners). Since Nera hasn't","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" spoken yet in dialogue as the new Nera,","reasoning_details":[{"type":"reasoning.text","text":" spoken yet in dialogue as the new Nera,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" I can have Nera act — but I'm","reasoning_details":[{"type":"reasoning.text","text":" I can have Nera act — but I'm","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" writing the world, and the player is Nera","reasoning_details":[{"type":"reasoning.text","text":" writing the world, and the player is Nera","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":". Hmm — the user plays Nera. But","reasoning_details":[{"type":"reasoning.text","text":". Hmm — the user plays Nera. But","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the instruction says have Krail leave. So I","reasoning_details":[{"type":"reasoning.text","text":" the instruction says have Krail leave. So I","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" need Nera to dismiss him? Or I can","reasoning_details":[{"type":"reasoning.text","text":" need Nera to dismiss him? Or I can","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" have Krail leave for his own reason without N","reasoning_details":[{"type":"reasoning.text","text":" have Krail leave for his own reason without N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era's action... Better: I can narrate","reasoning_details":[{"type":"reasoning.text","text":"era's action... Better: I can narrate","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Krail pressing, and Nera (the player","reasoning_details":[{"type":"reasoning.text","text":" Krail pressing, and Nera (the player","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s character) — actually in these RP formats the","reasoning_details":[{"type":"reasoning.text","text":"'s character) — actually in these RP formats the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" assistant often narrates including the player character lightly,","reasoning_details":[{"type":"reasoning.text","text":" assistant often narrates including the player character lightly,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" but safer to give Nera a minimal action that","reasoning_details":[{"type":"reasoning.text","text":" but safer to give Nera a minimal action that","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the user's opening implies: Nera hasn't","reasoning_details":[{"type":"reasoning.text","text":" the user's opening implies: Nera hasn't","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" decided. The ad says \"Have Bastian Kr","reasoning_details":[{"type":"reasoning.text","text":" decided. The ad says \"Have Bastian Kr","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"ail leave the room\" — so I should make","reasoning_details":[{"type":"reasoning.text","text":"ail leave the room\" — so I should make","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" it happen. I can have Nera say something","reasoning_details":[{"type":"reasoning.text","text":" it happen. I can have Nera say something","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" minimal, or better: have an external interruption —","reasoning_details":[{"type":"reasoning.text","text":" minimal, or better: have an external interruption —","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" e.g., Magerrett knocking? No,","reasoning_details":[{"type":"reasoning.text","text":" e.g., Magerrett knocking? No,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Magerrett is outside listening. Actually a clean","reasoning_details":[{"type":"reasoning.text","text":" Magerrett is outside listening. Actually a clean","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" way: Nera withholds signature and asks Kr","reasoning_details":[{"type":"reasoning.text","text":" way: Nera withholds signature and asks Kr","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"ail to leave so he can think / or to","reasoning_details":[{"type":"reasoning.text","text":"ail to leave so he can think / or to","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" summon the physician. Since I control the world but","reasoning_details":[{"type":"reasoning.text","text":" summon the physician. Since I control the world but","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Nera is the player's character, I could","reasoning_details":[{"type":"reasoning.text","text":" Nera is the player's character, I could","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" write Nera's small decision — many such games","reasoning_details":[{"type":"reasoning.text","text":" write Nera's small decision — many such games","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" allow the assistant to move the player character lightly when","reasoning_details":[{"type":"reasoning.text","text":" allow the assistant to move the player character lightly when","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" instructed. The ad explicitly directs Krail to leave","reasoning_details":[{"type":"reasoning.text","text":" instructed. The ad explicitly directs Krail to leave","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", which implies Nera dismisses him. I","reasoning_details":[{"type":"reasoning.text","text":", which implies Nera dismisses him. I","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'ll write Nera buying time: he doesn't","reasoning_details":[{"type":"reasoning.text","text":"'ll write Nera buying time: he doesn't","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" sign, orders Krail to leave the order with","reasoning_details":[{"type":"reasoning.text","text":" sign, orders Krail to leave the order with","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" him and withdraw, perhaps also requesting the physician attend","reasoning_details":[{"type":"reasoning.text","text":" him and withdraw, perhaps also requesting the physician attend","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the prisoners. That fits Nera's likely first","reasoning_details":[{"type":"reasoning.text","text":" the prisoners. That fits Nera's likely first","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" move (player wrote \"I have not decided what","reasoning_details":[{"type":"reasoning.text","text":" move (player wrote \"I have not decided what","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" happens\"). Keep it open-ended for the player to","reasoning_details":[{"type":"reasoning.text","text":" happens\"). Keep it open-ended for the player to","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" continue.\n\nWrite visible narration first, ending with hidden","reasoning_details":[{"type":"reasoning.text","text":" continue.\n\nWrite visible narration first, ending with hidden","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" tags containing scene state only. Hidden tag format:","reasoning_details":[{"type":"reasoning.text","text":" tags containing scene state only. Hidden tag format:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" probably something like","reasoning_details":[{"type":"reasoning.text","text":" probably something like","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" <scene> or per system \"Put scene state only","reasoning_details":[{"type":"reasoning.text","text":" <scene> or per system \"Put scene state only","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" in the final hidden tag.\" I'll use a","reasoning_details":[{"type":"reasoning.text","text":" in the final hidden tag.\" I'll use a","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" hidden tag like","reasoning_details":[{"type":"reasoning.text","text":" hidden tag like","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" <[Scene: ...]>? It says final hidden","reasoning_details":[{"type":"reasoning.text","text":" <[Scene: ...]>? It says final hidden","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" tag — I'll use something like:","reasoning_details":[{"type":"reasoning.text","text":" tag — I'll use something like:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n\n<scene hidden>...</scene> — hidden meaning it","reasoning_details":[{"type":"reasoning.text","text":"\n\n<scene hidden>...</scene> — hidden meaning it","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s a tag. I'll do:","reasoning_details":[{"type":"reasoning.text","text":"'s a tag. I'll do:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n\n[visible narration]","reasoning_details":[{"type":"reasoning.text","text":"\n\n[visible narration]","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n\n<scene_state>\n...","reasoning_details":[{"type":"reasoning.text","text":"\n\n<scene_state>\n...","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n</scene_state>\n\nProbably fine. Keep it moderate length","reasoning_details":[{"type":"reasoning.text","text":"\n</scene_state>\n\nProbably fine. Keep it moderate length","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":". Include sensory detail: burnt smell, portrait,","reasoning_details":[{"type":"reasoning.text","text":". Include sensory detail: burnt smell, portrait,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Liora's bandaged palm, Elise","reasoning_details":[{"type":"reasoning.text","text":" Liora's bandaged palm, Elise","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s arm, Krail's pen, Isol","reasoning_details":[{"type":"reasoning.text","text":"'s arm, Krail's pen, Isol","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"de beside him, Magerrett possibly at the","reasoning_details":[{"type":"reasoning.text","text":"de beside him, Magerrett possibly at the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" door when Krail exits (she's outside the","reasoning_details":[{"type":"reasoning.text","text":" door when Krail exits (she's outside the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" room listening — Krail leaving could pass her;","reasoning_details":[{"type":"reasoning.text","text":" room listening — Krail leaving could pass her;","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" but don't move other people — Krail leaves","reasoning_details":[{"type":"reasoning.text","text":" but don't move other people — Krail leaves","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the room; Magerrett/Taigar stay","reasoning_details":[{"type":"reasoning.text","text":" the room; Magerrett/Taigar stay","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" in corridor).\n\nNarrative beats:\n- Krail","reasoning_details":[{"type":"reasoning.text","text":" in corridor).\n\nNarrative beats:\n- Krail","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s dry pressure: \"The estate expects order,","reasoning_details":[{"type":"reasoning.text","text":"'s dry pressure: \"The estate expects order,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" my lord.\" Presents the order: forfeit wages","reasoning_details":[{"type":"reasoning.text","text":" my lord.\" Presents the order: forfeit wages","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", lashes? Punishment order details unspecified — I","reasoning_details":[{"type":"reasoning.text","text":", lashes? Punishment order details unspecified — I","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" can describe modestly: dismissal, forfeited wages","reasoning_details":[{"type":"reasoning.text","text":" can describe modestly: dismissal, forfeited wages","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", corporal discipline for Liora perhaps.","reasoning_details":[{"type":"reasoning.text","text":", corporal discipline for Liora perhaps.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Keep vague-ish but concrete: dismissal without wages for","reasoning_details":[{"type":"reasoning.text","text":" Keep vague-ish but concrete: dismissal without wages for","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Elise, ten strokes for Liora?","reasoning_details":[{"type":"reasoning.text","text":" Elise, ten strokes for Liora?","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" That may be too much invention; but a punishment","reasoning_details":[{"type":"reasoning.text","text":" That may be too much invention; but a punishment","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" order would have content. I'll describe it as","reasoning_details":[{"type":"reasoning.text","text":" order would have content. I'll describe it as","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" written terms: Elise dismissed without pay or character","reasoning_details":[{"type":"reasoning.text","text":" written terms: Elise dismissed without pay or character","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" reference; Liora to receive the strap and","reasoning_details":[{"type":"reasoning.text","text":" reference; Liora to receive the strap and","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" be sent from the household. Reasonable.\n-","reasoning_details":[{"type":"reasoning.text","text":" be sent from the household. Reasonable.\n-","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Nera's internal moment: game memories, the","reasoning_details":[{"type":"reasoning.text","text":" Nera's internal moment: game memories, the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" pen, the blank approval space, Isolde","reasoning_details":[{"type":"reasoning.text","text":" pen, the blank approval space, Isolde","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"'s learned calm, Liora's burned hand","reasoning_details":[{"type":"reasoning.text","text":"'s learned calm, Liora's burned hand","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", portrait.\n- Nera declines to sign;","reasoning_details":[{"type":"reasoning.text","text":", portrait.\n- Nera declines to sign;","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" asks questions maybe minimal; orders Krail to leave","reasoning_details":[{"type":"reasoning.text","text":" asks questions maybe minimal; orders Krail to leave","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the order and withdraw; requests physician. Krail","reasoning_details":[{"type":"reasoning.text","text":" the order and withdraw; requests physician. Krail","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" complies with professional courtesy, slight record of surprise","reasoning_details":[{"type":"reasoning.text","text":" complies with professional courtesy, slight record of surprise","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", notes the unsigned order in his book, exits","reasoning_details":[{"type":"reasoning.text","text":", notes the unsigned order in his book, exits","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":".\n- End with room now: Nera,","reasoning_details":[{"type":"reasoning.text","text":".\n- End with room now: Nera,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Isolde, Elise, Liora","reasoning_details":[{"type":"reasoning.text","text":" Isolde, Elise, Liora","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"; Krail gone; Magerrett perhaps heard","reasoning_details":[{"type":"reasoning.text","text":"; Krail gone; Magerrett perhaps heard","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" outside. Leave open for player.\n\nDon't decide","reasoning_details":[{"type":"reasoning.text","text":" outside. Leave open for player.\n\nDon't decide","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" punishments; Nera explicitly defers. Also Is","reasoning_details":[{"type":"reasoning.text","text":" punishments; Nera explicitly defers. Also Is","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"olde earlier informed him of medical neglect — N","reasoning_details":[{"type":"reasoning.text","text":"olde earlier informed him of medical neglect — N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era ordering the physician is a natural first act,","reasoning_details":[{"type":"reasoning.text","text":"era ordering the physician is a natural first act,","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" but careful: ordering the physician in would move people","reasoning_details":[{"type":"reasoning.text","text":" but careful: ordering the physician in would move people","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" (physician enters). \"Do not move N","reasoning_details":[{"type":"reasoning.text","text":" (physician enters). \"Do not move N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era or the other people\" — other people =","reasoning_details":[{"type":"reasoning.text","text":"era or the other people\" — other people =","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" those present; the physician arriving could be left as","reasoning_details":[{"type":"reasoning.text","text":" those present; the physician arriving could be left as","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" an instruction, not arrival. Nera can instruct","reasoning_details":[{"type":"reasoning.text","text":" an instruction, not arrival. Nera can instruct","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Isolde or Krail to fetch the physician","reasoning_details":[{"type":"reasoning.text","text":" Isolde or Krail to fetch the physician","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"; Krail leaves. Actually instructing Isol","reasoning_details":[{"type":"reasoning.text","text":"; Krail leaves. Actually instructing Isol","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"de to fetch would move her. Better: N","reasoning_details":[{"type":"reasoning.text","text":"de to fetch would move her. Better: N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era tells Krail to send the physician on his","reasoning_details":[{"type":"reasoning.text","text":"era tells Krail to send the physician on his","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" way out — Krail can relay the order without","reasoning_details":[{"type":"reasoning.text","text":" way out — Krail can relay the order without","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Nera moving anyone present. Good.\n\nLength:","reasoning_details":[{"type":"reasoning.text","text":" Nera moving anyone present. Good.\n\nLength:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" ~600-900 words. Write it.","reasoning_details":[{"type":"reasoning.text","text":" ~600-900 words. Write it.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Krail does not pick the pen up again.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" He lets it lie where he set it, angled","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" across the order's blank approval space like a decoration","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" on a finished meal, and folds his hands behind","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" his back.\n\n\"Take whatever time you require,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" my lord,\" he says. \"Though I would","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" note for the record that the household has procedures for","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" exactly this. A servant's child enters a locked","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" room. A lamp is knocked over. Property of","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the House is destroyed — including, I regret to","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" say, the last true portrait of the late Lady","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Ilyra.\" His grey eyes move to the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" ruined canvas leaning against the wall, rest on it","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a moment with what looks almost like respect, then","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" return to Nera. \"Sentiment is natural","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". But the estate runs on order, and order","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" runs on consequence. If a girl of eleven may","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" burn a wing without answer, every servant on this","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" land learns the price of keys.\"\n\nElise makes","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a small sound — not a word, just the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" beginning of one — and stops herself. Her burned","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" forearm is bound in a linen wrap gone grey at","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the edges. Liora stands pressed close against","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" her mother's skirts, her right palm crad","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"led against her chest in a strip of cloth,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" and she is not looking at Krail at all","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". She is looking at Nera, and there","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is something in her face that is not only fear","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". It is the look of someone waiting to find","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" out whether a person she used to know is still","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" in there somewhere.\n\nNera knows the face.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" He knows it from a game, and he knows","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" it from three summers ago, when an eleven-year","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"-old girl dragged him over a garden wall to show","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" him a magpie's nest and neither of them","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" cared whose boots touched whose clothes. That girl is","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" gone in the original history. Elise dies in","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" it too. He remembers it the way you remember","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a line already written.\n\nBut the page in front","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" of him is blank.\n\nThe bond at his side","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is quiet. Isolde stands with her hands","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" folded, her expression smoothed into the particular calm she","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" wore at his mother's sickbed — correct,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" attentive, and last year, when he had looked","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" closely, empty. He does not look for warmth","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" in it now.\n\n\"The order names dismissal without wages","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" or reference,\" Krail continues, tapping one line","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" with a knuckle, \"and disciplinary correction for","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the girl — the strap, my lord, administered","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" by the under-steward, nothing excessive. El","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"ise Fen held the keys. Liora Fen","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" used them. The fire follows from that, whatever","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the intent.\" A pause, dry as paper.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" \"There is also the matter of the missing shipping","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" folio, which Lady Elise's negligence makes","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" it difficult to account for. I have noted it","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" separately.\"\n\nNera's eyes stay on the paper","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". The ink is neat. Every clause is reasonable","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":", in the way that a ledger is reasonable —","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" as long as no one asks what the ledger is","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" for.\n\nHe thinks about the pen. He thinks","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" about how easy it would be, how expected,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" how the original Nera would have signed without reading","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a word and then gone to breakfast.\n\nHe sets","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the pen down without marking the page.\n\n\"The fire","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" will be investigated,\" he says. His voice comes","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" out steadier than he expected — a child's","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" voice, but level. \"All of it.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" The room, the lamp, the folio.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" I'm not signing anything today.\"\n\nKrail's","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" expression does not change, but something behind it does","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" — a recalculation, brief and contained,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" like a clerk finding a column that doesn't sum","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". \"My lord. The House expects—\"\n\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"\"The House has a Duke,\" Nera says.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" \"This hearing is mine. Leave the order.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Have the physician attend both of them — properly,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" tonight, and record the injuries. Then you may","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" go.\"\n\nFor a moment Krail simply looks at","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" him, the way he might look at an entry","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" in another man's handwriting appearing in his own ledger","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":". Then he straightens, collects nothing but his","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" own dignity, and inclines his head precisely.\n\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"\"As the young lord wishes.\"\n\nHe aligns the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" unsigned order on the table with two fingers, squares","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" it to the edge, and leaves it there.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" At the door he pauses with his hand on the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" latch — a small pause, professional, noting something","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" in whatever book he keeps behind his eyes — and","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" then the door closes behind him and his polished shoes","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" recede down the corridor, past the place where","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" someone else's quieter footsteps had been waiting.\n\nThe","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" room is different without him. The west light comes","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" through the tall windows and lies across the burnt smell","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" and the wet ash and the ruined portrait of a","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" woman with silver-threaded dark hair, half of","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" her face eaten to bare canvas. Liora","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" has stopped trembling. Elise has not; she","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is watching Nera with the careful stillness of","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" someone who has just learned that the danger in the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" room changed shape and does not yet know into what","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":".\n\nThe order lies on the table, blank where","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a name should be.\n\nIsolde's folded","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" hands have not moved.\n\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"<scene_state>\ndate: 18 September 7","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"31 · time: late morning (hearing ongoing","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":") · place: West Reception Room, Vey","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"rath estate wing · active event: Nera","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" has deferred signing Krail's punishment order, ordered","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" a full investigation of the fire and folio,","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" and instructed that the physician properly attend Elise and","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Liora tonight · present: Nera V","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"eyrath, Isolde Veyless","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":", Elise Fen, Liora Fen (","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Bastian Krail has exited; Mager","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"rett remains near the door outside listening, Taigar","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" farther down the corridor)\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"</scene_state>","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1791001536-PIUZFYx1BrsKF1DWQ51Y","object":"chat.completion.chunk","created":1791001536,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":14558,"completion_tokens":2292,"total_tokens":16850,"cost":0.002307755208,"is_byok":false,"prompt_tokens_details":{"cached_tokens":13539,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.002307755208,"upstream_inference_prompt_cost":0.0001790625,"upstream_inference_completions_cost":0.002128692708},"completion_tokens_details":{"reasoning_tokens":1125,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

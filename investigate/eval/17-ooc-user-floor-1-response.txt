@@ -1,0 +1,26 @@
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"O","reasoning_details":[{"type":"reasoning.text","text":"O","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"OC question — brief answer, no tags.","reasoning_details":[{"type":"reasoning.text","text":"OC question — brief answer, no tags.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Physically present in the West Reception Room are N","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"era Veyrath, Isolde V","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"eyless, Elise Fen, and Lior","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"a Fen. Bastian Krail is associated with","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the hearing but is not listed among those present at","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" the end of the latest scene; Magerrett","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is outside the room listening, and Taigar is","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" farther down the corridor.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1791005041-GgGyj3w2RwnvqI235sO8","object":"chat.completion.chunk","created":1791005041,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":14641,"completion_tokens":87,"total_tokens":14728,"cost":0.000555935,"is_byok":false,"prompt_tokens_details":{"cached_tokens":13470,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.000555935,"upstream_inference_prompt_cost":0.000512435,"upstream_inference_completions_cost":0.0000435},"completion_tokens_details":{"reasoning_tokens":10,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

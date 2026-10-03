@@ -1,0 +1,37 @@
+{
+  "content": " According to the latest scene snapshot, four people are physically present in the West Reception Room: Nera Veyrath, Isolde Veyless, Elise Fen, and Liora Fen. Bastian Krail was also in the room at the hearing, having presented the unsigned punishment order and set the pen beside it, waiting for your decision — so he should be counted as present as well. Magerrett and Taigar remain outside in the corridor.",
+  "thinking": "OOC question — answer briefly, no tags, no scene tag per contract (pure OOC omits both tags). Present: Nera, Isolde, Elise, Liora. Krail? Snapshot lists four present. Krail was waiting in the room earlier... The snapshot from message order 4 lists present as those four; Krail not listed. But Krail presented the order and placed the pen. The snapshot at T2 lists present: Nera, Isolde, Elise, Liora — Krail presumably also present since he's waiting for decision. But I should trust the snapshot. Hmm, the snapshot is authoritative at that point; Krail placed the pen beside the order — he's likely in the room. But the snapshot omitted him. Safest: state the four established as present per snapshot, note Krail may also be present as he was presenting the order? Actually the plan_thread/scene tag is omitted for OOC. Answer briefly: Nera, Isolde, Elise, Liora per latest snapshot; Krail also stood in the room waiting for the signature. I'll mention both accurately.",
+  "usage": {
+    "prompt_tokens": 14641,
+    "completion_tokens": 333,
+    "total_tokens": 14974,
+    "cost": 0.000678935,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13470,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000678935,
+      "upstream_inference_prompt_cost": 0.000512435,
+      "upstream_inference_completions_cost": 0.0001665
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 236,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 69,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

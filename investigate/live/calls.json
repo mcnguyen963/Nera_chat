@@ -1,0 +1,440 @@
+[
+  {
+    "number": 1,
+    "action": "baseline",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "4629486c0ee4b020310f1c9e4af62634d24baf8248987203b6cd14a42d595dd7",
+    "startedAt": "2026-10-03T04:15:38.398Z",
+    "status": "network-error",
+    "error": "fetch failed",
+    "durationMs": 46,
+    "finishedAt": "2026-10-03T04:15:38.452Z",
+    "connectionFailure": true,
+    "causeCode": "ENOTFOUND",
+    "attempt": 1
+  },
+  {
+    "number": 1,
+    "attempt": 2,
+    "action": "baseline",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "4629486c0ee4b020310f1c9e4af62634d24baf8248987203b6cd14a42d595dd7",
+    "startedAt": "2026-10-03T04:18:06.139Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a4492415bbc8d007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 92632,
+    "responseIds": [
+      "gen-1791001086-JFQhLrGqs39z92NRB9u4"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15260,
+      "completion_tokens": 2318,
+      "total_tokens": 17578,
+      "cost": 0.002345110182,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13887,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.002345110182,
+        "upstream_inference_prompt_cost": 0.00019227,
+        "upstream_inference_completions_cost": 0.002152840182
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 642,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "connectionFailure": false,
+    "finishedAt": "2026-10-03T04:19:38.774Z",
+    "parseError": "TextDecoder is not defined",
+    "scene": null,
+    "visibleWords": 1243,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": true,
+    "appClassifiesOoc": false,
+    "appSavedScene": null
+  },
+  {
+    "number": 2,
+    "attempt": 3,
+    "action": "baseline",
+    "repetition": 2,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "4629486c0ee4b020310f1c9e4af62634d24baf8248987203b6cd14a42d595dd7",
+    "startedAt": "2026-10-03T04:20:27.220Z",
+    "status": "complete",
+    "responseIds": [
+      "gen-1791001227-BHarK2lJhZwTKKdWQW24"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15260,
+      "completion_tokens": 2083,
+      "total_tokens": 17343,
+      "cost": 0.002124559167,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14040,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.002124559167,
+        "upstream_inference_prompt_cost": 0.000189975,
+        "upstream_inference_completions_cost": 0.001934584167
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 962,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": null,
+    "visibleWords": 853,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": true,
+    "appClassifiesOoc": false,
+    "appSavedScene": null
+  },
+  {
+    "number": 3,
+    "attempt": 4,
+    "action": "candidate",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "346987053ba5c666527215db704ebe2a29d200965bb47b18b66696e9d7be8cb5",
+    "startedAt": "2026-10-03T04:21:23.563Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a44928e758fbd007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 52158,
+    "responseIds": [
+      "gen-1791001283-5cjdDY6SLI4YxrWrhTcT"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15254,
+      "completion_tokens": 1763,
+      "total_tokens": 17017,
+      "cost": 0.001843311987,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12966,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001843311987,
+        "upstream_inference_prompt_cost": 0.0002059275,
+        "upstream_inference_completions_cost": 0.001637384487
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 840,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": null,
+    "visibleWords": 705,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": false,
+    "finishedAt": "2026-10-03T04:22:15.744Z",
+    "appClassifiesOoc": false,
+    "appSavedScene": null
+  },
+  {
+    "number": 4,
+    "attempt": 5,
+    "action": "candidate",
+    "repetition": 2,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "346987053ba5c666527215db704ebe2a29d200965bb47b18b66696e9d7be8cb5",
+    "startedAt": "2026-10-03T04:22:15.745Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a4492a2cbd2ed007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 42645,
+    "responseIds": [
+      "gen-1791001335-FBKrToxaWaLjCETWAO8m"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15254,
+      "completion_tokens": 1355,
+      "total_tokens": 16609,
+      "cost": 0.001450642395,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13882,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001450642395,
+        "upstream_inference_prompt_cost": 0.0001921875,
+        "upstream_inference_completions_cost": 0.001258454895
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 357,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": null,
+    "visibleWords": 806,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": false,
+    "finishedAt": "2026-10-03T04:22:58.410Z",
+    "appClassifiesOoc": false,
+    "appSavedScene": null
+  },
+  {
+    "number": 5,
+    "attempt": 6,
+    "action": "progression",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "f3162b11e229c9a99e98e57f2b41a5404ae19ce26d0681fa335ee3bceb0baaa1",
+    "startedAt": "2026-10-03T04:25:35.667Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a4492f0f3c9cd007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 87873,
+    "responseIds": [
+      "gen-1791001536-PIUZFYx1BrsKF1DWQ51Y"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 14558,
+      "completion_tokens": 2292,
+      "total_tokens": 16850,
+      "cost": 0.002307755208,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13539,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.002307755208,
+        "upstream_inference_prompt_cost": 0.0001790625,
+        "upstream_inference_completions_cost": 0.002128692708
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 1125,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": null,
+    "visibleWords": 921,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": false,
+    "finishedAt": "2026-10-03T04:27:03.569Z",
+    "appClassifiesOoc": false,
+    "appSavedScene": null
+  },
+  {
+    "number": 6,
+    "attempt": 7,
+    "action": "ooc",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "93ba0b397828fe773682b5286015a88493c3b92560ce21317751ca0223d51463",
+    "startedAt": "2026-10-03T04:27:45.313Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a44932397ac7d007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 12294,
+    "responseIds": [
+      "gen-1791001666-tsw2mWDBsYDmGf377ntx"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15757,
+      "completion_tokens": 210,
+      "total_tokens": 15967,
+      "cost": 0.00043493604,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15442,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00043493604,
+        "upstream_inference_prompt_cost": 0.00023989875,
+        "upstream_inference_completions_cost": 0.00019503729
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 62,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": null,
+    "visibleWords": 86,
+    "sceneTagCount": 0,
+    "hasPlanThread": false,
+    "legacyHiddenReport": false,
+    "finishedAt": "2026-10-03T04:27:57.626Z",
+    "appClassifiesOoc": true,
+    "appSavedScene": null
+  },
+  {
+    "number": 7,
+    "attempt": 8,
+    "action": "reminder",
+    "repetition": 1,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "requestHash": "8d1a0c250690b19cfb14e982472ce481b1ae40bbb3e24af960f590b732feb5a1",
+    "totalBudget": 0.5,
+    "spentBefore": 0.010506314979,
+    "maxCostReserve": 0.107271,
+    "startedAt": "2026-10-03T04:47:51.227Z",
+    "status": "complete",
+    "statusCode": 200,
+    "responseHeaders": {
+      "cf-ray": "a4494faa9dd6d007-HKG",
+      "content-type": "text/event-stream"
+    },
+    "durationMs": 40624,
+    "responseIds": [
+      "gen-1791002872-Rkmani2GWPf7chGinBbn"
+    ],
+    "returnedModels": [
+      "z-ai/glm-5.3-flash"
+    ],
+    "providers": [
+      "OpenInference"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "usage": {
+      "prompt_tokens": 15493,
+      "completion_tokens": 1297,
+      "total_tokens": 16790,
+      "cost": 0.001463116203,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13170,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001463116203,
+        "upstream_inference_prompt_cost": 0.00025852875,
+        "upstream_inference_completions_cost": 0.001204587453
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 242,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "scene": {
+      "raw": "date: 18 September 731 · time: late morning · place: West reception room, Veyrath estate · present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless",
+      "when": "18 September 731",
+      "time": "late morning",
+      "place": "West reception room, Veyrath estate",
+      "present": [
+        "Nera Veyrath",
+        "Bastian Krail",
+        "Elise Fen",
+        "Liora Fen",
+        "Isolde Veyless"
+      ]
+    },
+    "visibleWords": 805,
+    "sceneTagCount": 1,
+    "hasPlanThread": false,
+    "legacyHiddenReport": false,
+    "finishedAt": "2026-10-03T04:48:31.880Z",
+    "appClassifiesOoc": false,
+    "appSavedScene": "date: 18 September 731 · time: late morning · place: West reception room, Veyrath estate · present: Nera Veyrath, Bastian Krail, Elise Fen, Liora Fen, Isolde Veyless"
+  }
+]

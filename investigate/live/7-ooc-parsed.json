@@ -1,0 +1,41 @@
+{
+  "content": " OOC answer:\n\n**Inside the west reception room:**\n- **Nera Veyrath** (you)\n- **Isolde Veyless** — beside Nera\n- **Elise Fen** — detained\n- **Liora Fen** — detained\n- **Bastian Krail** — standing with the unsigned punishment order\n\n**Nearby but *not* inside the room:**\n- **Magerrett Veyrath** — stopped outside the hearing room, close enough to listen\n- **Taigar Veyrath** — farther down the passage\n\nThe physician is available in the east wing but has not been called into the room. No one else is currently present.",
+  "thinking": "The user asks an OOC question: who is physically present in the west reception room. Answer without advancing events. Per memory snapshot, present: Nera, Isolde, Elise, Liora, Krail. Magerrett is outside the room listening; Taigar farther down the corridor.",
+  "usage": {
+    "prompt_tokens": 15757,
+    "completion_tokens": 210,
+    "total_tokens": 15967,
+    "cost": 0.00043493604,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 15442,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00043493604,
+      "upstream_inference_prompt_cost": 0.00023989875,
+      "upstream_inference_completions_cost": 0.00019503729
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 62,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "scene": null,
+  "appClassifiesOoc": true,
+  "appSavedScene": null,
+  "sceneContractWarning": "The model omitted the scene tag.",
+  "planThread": null,
+  "visibleWords": 86,
+  "sceneTagCount": 0,
+  "legacyHiddenReport": false,
+  "requiresHumanReview": [
+    "player agency",
+    "source knowledge",
+    "attendance consistent with visible events",
+    "location/time evidence"
+  ]
+}

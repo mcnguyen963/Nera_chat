@@ -1,0 +1,37 @@
+{
+  "content": "Physically present in the West Reception Room: **Nera Veyrath**, **Isolde Veyless**, **Elise Fen**, and **Liora Fen**. Bastian Krail is also in the room, waiting with the unsigned punishment order, making five people in total. Magerrett is outside the room listening at the passage, and Taigar is farther down the corridor — neither is inside.",
+  "thinking": "OOC question, answer briefly, no tags, no scene tag.",
+  "usage": {
+    "prompt_tokens": 14641,
+    "completion_tokens": 102,
+    "total_tokens": 14743,
+    "cost": 0.000563435,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 12885,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000563435,
+      "upstream_inference_prompt_cost": 0.000512435,
+      "upstream_inference_completions_cost": 0.000051
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 14,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 54,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

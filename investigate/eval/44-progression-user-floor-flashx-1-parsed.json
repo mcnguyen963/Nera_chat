@@ -1,0 +1,53 @@
+{
+  "content": "The unsigned order sits on the table between you and Krail, its approval space a blank rectangle of good paper. He does not push it closer. He simply lets it lie there, aligned with the table's edge, the way he let the pen lie beside it.\n\nThe room holds its quiet. Wet ash and lamp oil still flavor every breath. Against the far wall, Ilyra's portrait leans where the guards propped it, one corner charred black, your mother's painted face surviving above the scorch line from the chin up.\n\nLiora shifts her weight from one foot to the other. The blistered palm hangs against her skirt, and she keeps it there as if holding it still might keep the situation still too. Her mouth opens once, and Elise's good hand presses her daughter's shoulder, and the mouth closes again.\n\nIsolde stands at your right, hands folded, yellow eyes moving between Krail and the door. She does not perform a smile. There is no one here she performs for.\n\nKrail takes out his pocket watch, considers it, and closes it again.\n\n\"Lord Nera. I recognize that this matter is not a pleasant one for a young lord so soon after the loss of the lady his mother.\" His voice stays level, dry, the voice of a man reading a column of figures aloud. \"I would note only that the duke's steward arrives from the east wing before evening, and His Grace prefers that incidents within the household be closed before they reach his desk. An unsigned order is an open incident.\"\n\nElise smooths her apron with her bandaged arm, wincing as the cloth pulls. When she speaks, her voice is steady and low.\n\n\"My lord. Whatever you decide for me, my daughter's hand is burned, and she has had no physician. I ask only that she be seen before anything else is settled.\" She keeps her posture bent forward, careful, her clasped hands whitening at the knuckles. \"I will answer for what I did and did not do. I have answered truly.\"\n\n\"She has,\" Liora blurts, then flinches at her own volume. Her reddish-brown eyes come up to your face, and for a moment the girl who once followed you through the kitchen gardens looks out from behind the soot streak on her cheek. \"I took the keys. Mama didn't know. The nightingale was jammed, and I thought — I thought if I fixed it, you'd — \" She stops. Her jaw tightens. \"It was my fault. Not hers.\"\n\nKrail's thin lips press together at the interruption, but he does not reprimand her. He lifts the pen from beside the order and sets it down again, precisely parallel.\n\n\"The medical question can be arranged once disposition is made,\" he says. \"It is a matter of sequence, not of refusal. I will withdraw to fetch the fire warden's inventory of the damaged rooms, so that the young lord has the full record before him. The east wing physician is in his quarters and may be summoned at Lord Nera's word.\"\n\nHe bows, shallow and exact, collects nothing from the table, and crosses to the door. For the two seconds it stands open, the corridor beyond is visible: Magerrett's shoulder pulling back from the gap where she has been standing too close, the softer shadow of Taigar farther down, near the window embrasure.\n\nThe door shuts. Krail's polished shoes fade down the passage.\n\nThe unsigned order remains on the table, with the pen beside it. Elise's hand is still on Liora's shoulder. The burned portrait watches from the wall.\n\n<plan_thread>Household hearing: punishment order still unsigned; Krail withdrawn.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The directive: continue the hearing, have Krail leave the room, do not move Nera or other people, no player speech/thoughts/decisions. So narrate the scene: Krail waits, but the order remains unsigned. How do I have Krail leave without Nera's speech? Krail can act on his own — perhaps he notes the young lord's silence, gives a prompt, then excuses himself to fetch something (e.g., the incident report, physician, or to attend the duke), leaving the unsigned order on the table. NPCs can act on their own motives. Nera hasn't signed or spoken — I can't invent his speech. Krail could interpret silence, present the pen again, then withdraw to \"allow the young lord to consider\" or fetch corroborating documents — that's plausible and in-character for a controlled administrator.\n\nI mustn't invent Nera's voluntary reactions. I can describe Krail's actions, Elise, Liora, Isolde. End on an open beat after Krail exits. Include Magerrett outside? People outside stay outside. Krail might pause at the door where Magerrett listens — I can note the door opening briefly but Magerrett stays outside; maybe a glimpse. Better to keep it minimal: Krail leaves, door closes.\n\nContent: Krail waits; silence stretches; Liora shifts; Elise's bandage; Isolde stands still. Krail checks his pocket watch, aligns papers, remarks that the duke will expect a resolution by evening, states he will fetch the fire marshal's report or the incident inventory, sets pen down, bows, exits. Elise may speak briefly — NPCs can speak. Perhaps Elise asks for the physician; Krail denies or defers? He could coldly note medical examination awaits disposition. Then he leaves. End on open beat.\n\nWord count 500-700. Include plan_thread then scene tag. Time unknown stays unknown. Present at end: Nera, Isolde, Elise, Liora (Krail left).",
+  "usage": {
+    "prompt_tokens": 14909,
+    "completion_tokens": 1251,
+    "total_tokens": 16160,
+    "cost": 0.00708008,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00708008,
+      "upstream_inference_prompt_cost": 0.00551633,
+      "upstream_inference_completions_cost": 0.00156375
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 425,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 596,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

@@ -1,0 +1,54 @@
+{
+  "content": "The pen lies on the table between you, its nib aligned with the blank approval space exactly the way Krail aligns everything—straight, deliberate, settled. The parchment beside it is neat as well. *Punishment order: Elise Fen, negligence of keys; Liora Fen, unauthorized entry and destruction of property.* Beneath those lines, in Krail's compact hand, the proposed discipline is spelled out in the same dry tone he might use for a delivery of lamp oil: lashes for the mother, confinement for the daughter, dismissal from service after the healer's clearance, no wages owed.\n\nKrail waits. His hands are folded behind his back now, his grey coat without a single wrinkle, his grey eyes resting on you with the mild patience of a man watching a ledger close itself. He has not raised his voice once. He has not needed to. The room's smell does his arguing for him—burned cloth, wet ash, the ghost of lamp oil—rising from the ruins stacked against the wall where your mother's final portrait leans, one corner blackened, her painted eyes still looking out from beneath the soot.\n\n\"Young lord,\" Krail says, and his voice is smooth as a smoothed page, \"the household cannot wait on sentiment. The duke returns after sunset. It would reflect well on you to have this settled before he does—to show him you understand that order is not cruelty. Order is what keeps the rest of them safe.\" A small gesture toward the two women, inclusive, almost generous. \"Sentiment, left unmanaged, becomes indulgence. Indulgence becomes the kind of household where servants burn a lady's rooms and a folio worth more than their lives walks out the door.\"\n\nLiora flinches at *folio*. She doesn't know what it means. Her burned palm is pressed against her skirt, and she keeps her eyes down—on the floor, on her mother's boots—because she learned this summer that looking up at the young lord is dangerous. That was your doing. The old Nera's doing. It sits in the room like a fourth person.\n\nElise stands differently. Her shoulders are square despite the bandage on her forearm, the cloth stained brown at the center, stiffening. She smooths her apron with her good hand before she speaks, and her voice is level even though her knuckles are white.\n\n\"My lord. I've served this house eleven years. I don't ask you to believe me because I'm frightened. I ask you to check the record.\" She looks at the order without reading it—she doesn't need to. \"My daughter took my keys. She'll answer for that. But I was in the linen store when it happened, and I ran to the fire with my own hands. If the house wants a confession from me, it can have a true one. There's a difference, and I'll die before I sign the other kind.\"\n\n\"There will be no dying,\" Krail says mildly, \"and no speeches. The order does not require your signature, Elise. Only the young lord's.\"\n\nAt your side, Isolde has not moved. Her white hair catches the light from the tall west windows; her yellow eyes rest on Krail with nothing in them at all—no anger, no warning, nothing you can read. She said what she had to say earlier, flat and precise: *Neither prisoner has been examined by the physician. Elise's bandage has not been changed since the fire.* She is bound to protect you. She is not bound to argue for anyone else. So she waits, hands neatly placed, doll-still, and the silence she keeps is entirely her own choice.\n\nSomewhere beyond the door, boards creak—Magerrett, still close enough to listen. Farther down the passage, the fainter sound of a second pair of feet going still. Your sisters are eavesdropping on your first judgment. The whole household will know by supper what the third child of Cassian Veyrath did with a pen.\n\nKrail watches you. The watch in his pocket ticks once against the quiet.\n\n\"The approval space is blank, young lord,\" he says. \"Whenever you're ready.\"\n\n<plan_thread>The household hearing remains pending: Krail's unsigned punishment order awaits Nera's decision before the duke returns after sunset.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "The user gave an opening/first-person setup. No explicit action from Nera — the input is mostly background. The last actual scene state: Krail placed the pen beside the unsigned order and asked for Nera's decision. The user's message is the opening exchange, providing background; but as the assistant, I must narrate the scene and end on an open beat before the player's choice. The user input contains no Nera action — so I should narrate the moment: Krail waiting, pen beside order, NPCs present, ending open for Nera's decision.\n\nI must not put words in Nera's mouth. Narrate 500-700 words, second person, present tense. Include plan_thread naming immediate pending target. Scene tag: date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail.\n\nMagerrett and Taigar are outside the room — not present. Write prose ending open beat before player's choice.",
+  "usage": {
+    "prompt_tokens": 15377,
+    "completion_tokens": 1193,
+    "total_tokens": 16570,
+    "cost": 0.001134695,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13378,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001134695,
+      "upstream_inference_prompt_cost": 0.000538195,
+      "upstream_inference_completions_cost": 0.0005965
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 232,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 666,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

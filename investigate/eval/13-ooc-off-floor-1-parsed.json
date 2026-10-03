@@ -1,0 +1,37 @@
+{
+  "content": "Physically in the West Reception Room, as established: Nera Veyrath, Isolde Veyless, Elise Fen, and Liora Fen.\n\nBastian Krail is with them at the hearing (he presented the unsigned punishment order and is waiting for Nera's decision), while Magerrett listens from outside the room and Taigar waits farther down the corridor.",
+  "thinking": "Answer OOC briefly, no scene tag (pure OOC question omits tag). Present per snapshot: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen. Krail? The snapshot lists present as those four; Krail is waiting for Nera's decision — the place card says \"Krail waits for Nera's decision\" in the room... The snapshot's present field lists only the four. But place state says \"while Krail waits for Nera's decision\" — ambiguous whether in room. Established scene tag said present: those four. I should answer per established snapshot: those four. Mention Krail likely nearby (he presented the order) but the recorded scene tag lists only the four; note Magerrett/Taigar outside.",
+  "usage": {
+    "prompt_tokens": 14284,
+    "completion_tokens": 245,
+    "total_tokens": 14529,
+    "cost": 0.00062244,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 12142,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00062244,
+      "upstream_inference_prompt_cost": 0.00049994,
+      "upstream_inference_completions_cost": 0.0001225
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 163,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 51,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

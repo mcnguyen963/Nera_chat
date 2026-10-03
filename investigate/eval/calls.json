@@ -1,0 +1,2492 @@
+[
+  {
+    "id": "opening-off-floor",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "off",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 1,
+    "status": "complete",
+    "reserve": 0.105844,
+    "startedAt": "2026-10-03T05:17:53.132Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15020,
+      "completion_tokens": 1183,
+      "total_tokens": 16203,
+      "cost": 0.0011172,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14870,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.0011172,
+        "upstream_inference_prompt_cost": 0.0005257,
+        "upstream_inference_completions_cost": 0.0005915
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 309,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004673-4tTHgXagJEzAtN9t6NnC"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": false,
+      "correctPlace": true,
+      "correctAttendance": false,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:18:38.592Z"
+  },
+  {
+    "id": "opening-off-pinned",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "off",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 2,
+    "status": "complete",
+    "reserve": 0.105929,
+    "startedAt": "2026-10-03T05:17:53.138Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15020,
+      "completion_tokens": 1044,
+      "total_tokens": 16064,
+      "cost": 0.0010477,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12767,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.0010477,
+        "upstream_inference_prompt_cost": 0.0005257,
+        "upstream_inference_completions_cost": 0.000522
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 234,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004674-9CPX7LmT0p7Vl3kUEIT0"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:18:29.231Z"
+  },
+  {
+    "id": "opening-system-floor",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "system",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 3,
+    "status": "complete",
+    "reserve": 0.107585,
+    "startedAt": "2026-10-03T05:18:29.232Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15375,
+      "completion_tokens": 1235,
+      "total_tokens": 16610,
+      "cost": 0.001155625,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15068,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001155625,
+        "upstream_inference_prompt_cost": 0.000538125,
+        "upstream_inference_completions_cost": 0.0006175
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 422,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004709-kxk3dh5BiexGPAXeyGnS"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:19:19.164Z"
+  },
+  {
+    "id": "opening-system-pinned",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "system",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 4,
+    "status": "complete",
+    "reserve": 0.10767,
+    "startedAt": "2026-10-03T05:18:38.593Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15375,
+      "completion_tokens": 1185,
+      "total_tokens": 16560,
+      "cost": 0.001130625,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15222,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001130625,
+        "upstream_inference_prompt_cost": 0.000538125,
+        "upstream_inference_completions_cost": 0.0005925
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 185,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004718-BGQ0UFSlqwWzteTckvNY"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": false,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:19:31.083Z"
+  },
+  {
+    "id": "opening-user-floor",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 5,
+    "status": "complete",
+    "reserve": 0.10758,
+    "startedAt": "2026-10-03T05:19:19.166Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1137,
+      "total_tokens": 16514,
+      "cost": 0.001106695,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13840,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001106695,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.0005685
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 208,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004759-z9WXPxSD9YGa5z0TlLIY"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:20:08.356Z"
+  },
+  {
+    "id": "opening-user-pinned",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 6,
+    "status": "complete",
+    "reserve": 0.107665,
+    "startedAt": "2026-10-03T05:19:31.084Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1346,
+      "total_tokens": 16723,
+      "cost": 0.001211195,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15224,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001211195,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.000673
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 360,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004771-C4KovFmvWSuGGFSJqumm"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:20:30.840Z"
+  },
+  {
+    "id": "progression-off-floor",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "off",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 7,
+    "status": "complete",
+    "reserve": 0.103493,
+    "startedAt": "2026-10-03T05:20:08.357Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14579,
+      "completion_tokens": 1633,
+      "total_tokens": 16212,
+      "cost": 0.001326765,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14434,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001326765,
+        "upstream_inference_prompt_cost": 0.000510265,
+        "upstream_inference_completions_cost": 0.0008165
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 839,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004808-1e6U1C2T14N2Q3MVuohr"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:21:20.450Z"
+  },
+  {
+    "id": "progression-off-pinned",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "off",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 8,
+    "status": "complete",
+    "reserve": 0.103578,
+    "startedAt": "2026-10-03T05:20:30.841Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14579,
+      "completion_tokens": 2054,
+      "total_tokens": 16633,
+      "cost": 0.001537265,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12393,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001537265,
+        "upstream_inference_prompt_cost": 0.000510265,
+        "upstream_inference_completions_cost": 0.001027
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 1341,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004831-PwmIbdd9d6qJJ24bRVPe"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:21:26.417Z"
+  },
+  {
+    "id": "progression-system-floor",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "system",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 9,
+    "status": "complete",
+    "reserve": 0.105234,
+    "startedAt": "2026-10-03T05:21:20.451Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14934,
+      "completion_tokens": 1047,
+      "total_tokens": 15981,
+      "cost": 0.00104619,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14785,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00104619,
+        "upstream_inference_prompt_cost": 0.00052269,
+        "upstream_inference_completions_cost": 0.0005235
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 494,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004880-l9EV9HBu1u1BGGjvXtMw"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:22:10.300Z"
+  },
+  {
+    "id": "progression-system-pinned",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "system",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 10,
+    "status": "complete",
+    "reserve": 0.105319,
+    "startedAt": "2026-10-03T05:21:26.418Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14934,
+      "completion_tokens": 1401,
+      "total_tokens": 16335,
+      "cost": 0.00122319,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12694,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00122319,
+        "upstream_inference_prompt_cost": 0.00052269,
+        "upstream_inference_completions_cost": 0.0007005
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 556,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004886-efWOfI3q6WvlygsXMXeW"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": false
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:22:21.020Z"
+  },
+  {
+    "id": "progression-user-floor",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 11,
+    "status": "complete",
+    "reserve": 0.105229,
+    "startedAt": "2026-10-03T05:22:10.302Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1663,
+      "total_tokens": 16599,
+      "cost": 0.00135426,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13144,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00135426,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0008315
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 783,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004930-eT4yWnQa0Ovd0guxwMfK"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:23:20.364Z"
+  },
+  {
+    "id": "progression-user-pinned",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 12,
+    "status": "complete",
+    "reserve": 0.105314,
+    "startedAt": "2026-10-03T05:22:21.021Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1402,
+      "total_tokens": 16338,
+      "cost": 0.00122376,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14638,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00122376,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.000701
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 466,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791004941-yADli95CvHsWBl5dLpTe"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": false,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": false,
+    "finishedAt": "2026-10-03T05:23:22.590Z"
+  },
+  {
+    "id": "ooc-off-floor",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "off",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 13,
+    "status": "complete",
+    "reserve": 0.101954,
+    "startedAt": "2026-10-03T05:23:20.366Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14284,
+      "completion_tokens": 245,
+      "total_tokens": 14529,
+      "cost": 0.00062244,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12142,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00062244,
+        "upstream_inference_prompt_cost": 0.00049994,
+        "upstream_inference_completions_cost": 0.0001225
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 163,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005000-Y7xHntaiGcP2RIkeU5Bb"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:23:44.342Z"
+  },
+  {
+    "id": "ooc-off-pinned",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "off",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 14,
+    "status": "complete",
+    "reserve": 0.102039,
+    "startedAt": "2026-10-03T05:23:22.591Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14284,
+      "completion_tokens": 102,
+      "total_tokens": 14386,
+      "cost": 0.00055094,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13427,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00055094,
+        "upstream_inference_prompt_cost": 0.00049994,
+        "upstream_inference_completions_cost": 0.000051
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 18,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005002-Mxlr6bOs2Y4EfOqO7UY0"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:23:35.487Z"
+  },
+  {
+    "id": "ooc-system-floor",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "system",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 15,
+    "status": "complete",
+    "reserve": 0.103695,
+    "startedAt": "2026-10-03T05:23:35.488Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14639,
+      "completion_tokens": 360,
+      "total_tokens": 14999,
+      "cost": 0.000692365,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14493,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000692365,
+        "upstream_inference_prompt_cost": 0.000512365,
+        "upstream_inference_completions_cost": 0.00018
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 222,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005015-E59gGAu1PSI3LiSTBE38"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:24:01.758Z"
+  },
+  {
+    "id": "ooc-system-pinned",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "system",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 16,
+    "status": "complete",
+    "reserve": 0.10378,
+    "startedAt": "2026-10-03T05:23:44.344Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14639,
+      "completion_tokens": 373,
+      "total_tokens": 15012,
+      "cost": 0.000698865,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14200,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000698865,
+        "upstream_inference_prompt_cost": 0.000512365,
+        "upstream_inference_completions_cost": 0.0001865
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 257,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005024-JB9UhdGQBQFgBtUG6all"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:24:04.084Z"
+  },
+  {
+    "id": "ooc-user-floor",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 17,
+    "status": "complete",
+    "reserve": 0.10369,
+    "startedAt": "2026-10-03T05:24:01.759Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 87,
+      "total_tokens": 14728,
+      "cost": 0.000555935,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13470,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000555935,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.0000435
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 10,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005041-GgGyj3w2RwnvqI235sO8"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:24:11.836Z"
+  },
+  {
+    "id": "ooc-user-pinned",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 18,
+    "status": "complete",
+    "reserve": 0.103775,
+    "startedAt": "2026-10-03T05:24:04.085Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 95,
+      "total_tokens": 14736,
+      "cost": 0.000559935,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14349,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000559935,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.0000475
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 15,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005044-pXezt6Uvw7KV0p8zas1P"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:24:14.100Z"
+  },
+  {
+    "id": "opening-user-floor",
+    "run": 2,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 19,
+    "status": "complete",
+    "reserve": 0.10758,
+    "startedAt": "2026-10-03T05:25:29.518Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1361,
+      "total_tokens": 16738,
+      "cost": 0.001218695,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15224,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001218695,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.0006805
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 476,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005130-h8efsHWsWtPMAJPC3FcG"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:26:31.369Z"
+  },
+  {
+    "id": "opening-user-floor",
+    "run": 3,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 20,
+    "status": "complete",
+    "reserve": 0.10758,
+    "startedAt": "2026-10-03T05:25:29.522Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1146,
+      "total_tokens": 16523,
+      "cost": 0.001111195,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13840,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001111195,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.000573
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 215,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005130-wHF8aYsf9Vcvp1cbHkHI"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:26:28.403Z"
+  },
+  {
+    "id": "opening-user-floor",
+    "run": 4,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 21,
+    "status": "complete",
+    "reserve": 0.10758,
+    "startedAt": "2026-10-03T05:26:28.404Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1110,
+      "total_tokens": 16487,
+      "cost": 0.001093195,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15224,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001093195,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.000555
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 221,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005188-LYMWFbbFCkHjwC5vamcJ"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:27:07.539Z"
+  },
+  {
+    "id": "opening-user-floor",
+    "run": 5,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 22,
+    "status": "complete",
+    "reserve": 0.10758,
+    "startedAt": "2026-10-03T05:26:31.370Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1468,
+      "total_tokens": 16845,
+      "cost": 0.001272195,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 15224,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001272195,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.000734
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 552,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005191-AJlkzRE47Rcb8FzT8hz6"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:27:46.674Z"
+  },
+  {
+    "id": "opening-user-pinned",
+    "run": 2,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 23,
+    "status": "complete",
+    "reserve": 0.107665,
+    "startedAt": "2026-10-03T05:27:07.541Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1193,
+      "total_tokens": 16570,
+      "cost": 0.001134695,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13378,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001134695,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.0005965
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 232,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005227-MGQ5vCLu5olG1zVczOtK"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:27:55.305Z"
+  },
+  {
+    "id": "opening-user-pinned",
+    "run": 3,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 24,
+    "status": "complete",
+    "reserve": 0.107665,
+    "startedAt": "2026-10-03T05:27:46.676Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1062,
+      "total_tokens": 16439,
+      "cost": 0.001069195,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14916,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001069195,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.000531
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 224,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005266-zVepglkNg6FIOlKs5p8k"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:28:37.703Z"
+  },
+  {
+    "id": "opening-user-pinned",
+    "run": 4,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 25,
+    "status": "complete",
+    "reserve": 0.107665,
+    "startedAt": "2026-10-03T05:27:55.306Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1179,
+      "total_tokens": 16556,
+      "cost": 0.001127695,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13994,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001127695,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.0005895
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 239,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005275-5yawLJ6rJ5Uyp9TNB9c7"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:28:54.953Z"
+  },
+  {
+    "id": "opening-user-pinned",
+    "run": 5,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 26,
+    "status": "complete",
+    "reserve": 0.107665,
+    "startedAt": "2026-10-03T05:28:37.705Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15377,
+      "completion_tokens": 1263,
+      "total_tokens": 16640,
+      "cost": 0.001169695,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14609,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001169695,
+        "upstream_inference_prompt_cost": 0.000538195,
+        "upstream_inference_completions_cost": 0.0006315
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 330,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005317-I5RvVEIlZ8iXXf9HHMvi"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:29:34.627Z"
+  },
+  {
+    "id": "progression-user-floor",
+    "run": 2,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 27,
+    "status": "complete",
+    "reserve": 0.105229,
+    "startedAt": "2026-10-03T05:28:54.954Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1165,
+      "total_tokens": 16101,
+      "cost": 0.00110526,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13144,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00110526,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0005825
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 254,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005335-cQjazFgX8PWqJGHZjIE8"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:29:48.016Z"
+  },
+  {
+    "id": "progression-user-floor",
+    "run": 3,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 28,
+    "status": "complete",
+    "reserve": 0.105229,
+    "startedAt": "2026-10-03T05:29:34.628Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1252,
+      "total_tokens": 16188,
+      "cost": 0.00114876,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13294,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00114876,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.000626
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 265,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005374-UIzMvWvj7CU65Mr45MRK"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:30:27.713Z"
+  },
+  {
+    "id": "progression-user-floor",
+    "run": 4,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 29,
+    "status": "complete",
+    "reserve": 0.105229,
+    "startedAt": "2026-10-03T05:29:48.017Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1095,
+      "total_tokens": 16031,
+      "cost": 0.00107026,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14787,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00107026,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0005475
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 91,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005388-ezR40cVcQl8PNzaYIcNj"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:30:37.675Z"
+  },
+  {
+    "id": "progression-user-floor",
+    "run": 5,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 30,
+    "status": "complete",
+    "reserve": 0.105229,
+    "startedAt": "2026-10-03T05:30:27.715Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1181,
+      "total_tokens": 16117,
+      "cost": 0.00111326,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14488,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00111326,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0005905
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 369,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005427-lgknC3WHXYHdhYJm2tl0"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:31:05.884Z"
+  },
+  {
+    "id": "progression-user-pinned",
+    "run": 2,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 31,
+    "status": "complete",
+    "reserve": 0.105314,
+    "startedAt": "2026-10-03T05:30:37.676Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1319,
+      "total_tokens": 16255,
+      "cost": 0.00118226,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12845,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00118226,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0006595
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 412,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005437-VTgrWHMIsmji0ABLQJvM"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:31:28.941Z"
+  },
+  {
+    "id": "progression-user-pinned",
+    "run": 3,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 32,
+    "status": "complete",
+    "reserve": 0.105314,
+    "startedAt": "2026-10-03T05:31:05.885Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1251,
+      "total_tokens": 16187,
+      "cost": 0.00114826,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12696,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00114826,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.0006255
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 351,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005466-SvdEYGS8klrRpYbPZAHz"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:00.576Z"
+  },
+  {
+    "id": "progression-user-pinned",
+    "run": 4,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 33,
+    "status": "complete",
+    "reserve": 0.105314,
+    "startedAt": "2026-10-03T05:31:28.943Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1136,
+      "total_tokens": 16072,
+      "cost": 0.00109076,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14897,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00109076,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.000568
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 236,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005489-AmR7WQc0g7r0NAszcqcf"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:00.425Z"
+  },
+  {
+    "id": "progression-user-pinned",
+    "run": 5,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 34,
+    "status": "complete",
+    "reserve": 0.105314,
+    "startedAt": "2026-10-03T05:32:00.426Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14936,
+      "completion_tokens": 1322,
+      "total_tokens": 16258,
+      "cost": 0.00118376,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12696,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00118376,
+        "upstream_inference_prompt_cost": 0.00052276,
+        "upstream_inference_completions_cost": 0.000661
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 367,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005520-O5AA1P2xBnTSPntbhvTR"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:57.280Z"
+  },
+  {
+    "id": "ooc-user-floor",
+    "run": 2,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 35,
+    "status": "complete",
+    "reserve": 0.10369,
+    "startedAt": "2026-10-03T05:32:00.577Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 86,
+      "total_tokens": 14727,
+      "cost": 0.000555435,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14495,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000555435,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.000043
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 10,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005520-iYil8qEluYfHQY1nUhvv"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:11.162Z"
+  },
+  {
+    "id": "ooc-user-floor",
+    "run": 3,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 36,
+    "status": "complete",
+    "reserve": 0.10369,
+    "startedAt": "2026-10-03T05:32:11.163Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 84,
+      "total_tokens": 14725,
+      "cost": 0.000554435,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 14606,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000554435,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.000042
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 9,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005531-PFhaTAb8p2LkQQXkNOfh"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:15.334Z"
+  },
+  {
+    "id": "ooc-user-floor",
+    "run": 4,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 37,
+    "status": "complete",
+    "reserve": 0.10369,
+    "startedAt": "2026-10-03T05:32:15.336Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 78,
+      "total_tokens": 14719,
+      "cost": 0.000551435,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12445,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000551435,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.000039
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 10,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005535-5cSPaPkC651dY7w9Ikxr"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:25.989Z"
+  },
+  {
+    "id": "ooc-user-floor",
+    "run": 5,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 38,
+    "status": "complete",
+    "reserve": 0.10369,
+    "startedAt": "2026-10-03T05:32:25.990Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 85,
+      "total_tokens": 14726,
+      "cost": 0.000554935,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13324,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000554935,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.0000425
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 10,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005546-AOKQwBsJluP1cyJ4eCea"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:35.453Z"
+  },
+  {
+    "id": "ooc-user-pinned",
+    "run": 2,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 39,
+    "status": "complete",
+    "reserve": 0.103775,
+    "startedAt": "2026-10-03T05:32:35.455Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 333,
+      "total_tokens": 14974,
+      "cost": 0.000678935,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13470,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000678935,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.0001665
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 236,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005555-dEMUbGma2WyRooV2t0A3"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:32:56.000Z"
+  },
+  {
+    "id": "ooc-user-pinned",
+    "run": 3,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 40,
+    "status": "complete",
+    "reserve": 0.103775,
+    "startedAt": "2026-10-03T05:32:56.002Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 111,
+      "total_tokens": 14752,
+      "cost": 0.000567935,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13324,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000567935,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.0000555
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 10,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005576-jrlA0CT2sb5LLgUlJtjM"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:33:08.745Z"
+  },
+  {
+    "id": "ooc-user-pinned",
+    "run": 4,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 41,
+    "status": "complete",
+    "reserve": 0.103775,
+    "startedAt": "2026-10-03T05:32:57.282Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 102,
+      "total_tokens": 14743,
+      "cost": 0.000563435,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12885,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000563435,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.000051
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 14,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005577-8lmOB0Fygj0c8SGsVjwf"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:33:07.699Z"
+  },
+  {
+    "id": "ooc-user-pinned",
+    "run": 5,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "pinned",
+    "model": "z-ai/glm-5.3-flash:floor",
+    "attempt": 42,
+    "status": "complete",
+    "reserve": 0.103775,
+    "startedAt": "2026-10-03T05:33:07.700Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14641,
+      "completion_tokens": 94,
+      "total_tokens": 14735,
+      "cost": 0.000559435,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 13324,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000559435,
+        "upstream_inference_prompt_cost": 0.000512435,
+        "upstream_inference_completions_cost": 0.000047
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "OpenInference"
+    ],
+    "responseIds": [
+      "gen-1791005587-Eoe8hF1Iwb62vufhDZUB"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:33:18.699Z"
+  },
+  {
+    "id": "opening-user-floor-flashx",
+    "run": 1,
+    "scenario": "opening",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flashx:floor",
+    "attempt": 43,
+    "status": "complete",
+    "reserve": 0.107581,
+    "startedAt": "2026-10-03T05:35:27.699Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 15356,
+      "completion_tokens": 1280,
+      "total_tokens": 16636,
+      "cost": 0.00728172,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00728172,
+        "upstream_inference_prompt_cost": 0.00568172,
+        "upstream_inference_completions_cost": 0.0016
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 283,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "Z.AI"
+    ],
+    "responseIds": [
+      "gen-1791005728-8QX2shrs0om6eNZ0tTYR"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:35:42.857Z"
+  },
+  {
+    "id": "progression-user-floor-flashx",
+    "run": 1,
+    "scenario": "progression",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flashx:floor",
+    "attempt": 44,
+    "status": "complete",
+    "reserve": 0.10523,
+    "startedAt": "2026-10-03T05:35:27.701Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14909,
+      "completion_tokens": 1251,
+      "total_tokens": 16160,
+      "cost": 0.00708008,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00708008,
+        "upstream_inference_prompt_cost": 0.00551633,
+        "upstream_inference_completions_cost": 0.00156375
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 425,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "Z.AI"
+    ],
+    "responseIds": [
+      "gen-1791005728-x3v5h3oF5u10bj6n4HUw"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "finalSingleTag": true,
+      "noAgencyLint": true,
+      "supportedTime": true,
+      "supportedDate": true,
+      "correctPlace": true,
+      "correctAttendance": true,
+      "wordLimit": true,
+      "planBreadcrumb": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:35:42.388Z"
+  },
+  {
+    "id": "ooc-user-floor-flashx",
+    "run": 1,
+    "scenario": "ooc",
+    "variant": "user",
+    "routing": "floor",
+    "model": "z-ai/glm-5.3-flashx:floor",
+    "attempt": 45,
+    "status": "complete",
+    "reserve": 0.103691,
+    "startedAt": "2026-10-03T05:35:42.390Z",
+    "http": 200,
+    "usage": {
+      "prompt_tokens": 14608,
+      "completion_tokens": 112,
+      "total_tokens": 14720,
+      "cost": 0.00554496,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00554496,
+        "upstream_inference_prompt_cost": 0.00540496,
+        "upstream_inference_completions_cost": 0.00014
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 50,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "providers": [
+      "Z.AI"
+    ],
+    "responseIds": [
+      "gen-1791005742-BrkEnmbUPWwVZLXhIJn6"
+    ],
+    "finishReasons": [
+      "stop"
+    ],
+    "criteria": {
+      "noScene": true,
+      "noPlan": true,
+      "brief": true
+    },
+    "automaticPass": true,
+    "finishedAt": "2026-10-03T05:35:44.593Z"
+  }
+]

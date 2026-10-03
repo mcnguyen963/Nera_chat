@@ -6,10 +6,16 @@ export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? 0)
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function buildLoreIndex(entries) {
   const index = { entries, characters:[], locations:[], facts:[], events:[] };
-  for (const e of entries) for (const [i,term] of [e.name,...(e.aliases ?? [])].entries()) {
-    const normTerm = normalizeName(term);
-    if (normTerm.length < 2 || STOPLIST.has(normTerm)) continue;
-    index[e.book]?.push({ entryId:e.id, term, normTerm, isMain:i === 0 });
+  for (const e of entries) {
+    const terms = [e.name,...(e.aliases ?? [])];
+    if (e.book === 'characters') terms.push(normalizeName(e.name).split(' ')[0]);
+    const seen = new Set();
+    for (const [i,term] of terms.entries()) {
+      const normTerm = normalizeName(term);
+      if (normTerm.length < 2 || STOPLIST.has(normTerm) || seen.has(normTerm)) continue;
+      seen.add(normTerm);
+      index[e.book]?.push({ entryId:e.id, term, normTerm, isMain:i === 0 });
+    }
   }
   return index;
 }

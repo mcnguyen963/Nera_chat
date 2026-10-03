@@ -27,7 +27,7 @@ Cards above 700 KB show a storage warning. Writes above 900 KB are refused, belo
 
 Lore has one collection listener only while memory is enabled or the manager is open. Legacy stories have no lore listeners or per-turn lore reads. The context builder uses the cached entries. Backups are fetched on the Backups screen or when creating/pruning a backup.
 
-Characters load in this order: always, latest user mentions, scene presence. Locations load always, current place, then mentions. World facts and open threads load every turn; closed threads do not. Mentions use accent-sensitive Unicode word boundaries and prefer longer overlapping names. Scene names resolve exactly against names/aliases; places additionally resolve comma components and the longest contained term.
+Characters load in this order: always, latest user mentions, scene presence. Locations load always, current place, then mentions. World facts and open threads load every turn; closed threads do not. Character cards match their full name, first name (the first word of the card name), or aliases in both mentions and scene presence. Mentions use accent-sensitive Unicode word boundaries and prefer longer overlapping names. Scene names resolve exactly against these terms; places additionally resolve comma components and the longest contained term.
 
 Every request reserves maxResponseTokens within maxContextTokens. The opening exchange and latest user are required. Books fit in facts → events → characters → locations order. User text is never truncated. Update lines are fitted newest first, round-robin, with a 2% book margin and final rendered-token accounting. Events give threads up to two lines before the Timeline. Oversized always-load cards are skipped with a warning.
 

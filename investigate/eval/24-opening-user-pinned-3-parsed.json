@@ -1,0 +1,54 @@
+{
+  "content": "Krail does not move to pick the pen back up. He has set it beside the order with its nib angled toward the signature line, a small courtesy that is also a pressure. His grey eyes stay on you with the same close attention he gives a ledger entry, and his voice, when he speaks again, remains dry and unhurried.\n\n\"Two counts, my lord. Unauthorized entry into the late Lady Ilyra's apartments, and the destruction of estate property by negligence, with possible deliberation. The folio complicates the second count. It cannot be valued until it is found or declared lost.\" He aligns the edge of the document with the edge of the table, a small adjustment no one else would notice. \"Household discipline is yours to set. The duke is at the provincial council and expected after sunset, but the household does not wait on him for a matter of servants. It waits on you.\"\n\nAcross the room, Liora cannot hold still. Her boots scuff the floor as she shifts her weight, and the red layers of her hair flash when she jerks her head up to look at you. Soot still streaks one cheek. Her right hand is held against her skirt, palm down, and even from here the blistered skin looks raw and swollen.\n\n\"I didn't mean it,\" she says, and then, too loudly, \"I *didn't*. The lamp slipped, the bird was jammed, I only wanted to fix it, it used to make you laugh, you told me—\" She stops herself. Her mouth closes with an effort, and her eyes drop to the floor, because whatever the boy you used to be told her, you are standing here now with a steward and a punishment order and a pen.\n\nElise moves before the silence can grow teeth. She smooths her apron with her uninjured hand, the way she does before addressing someone formally, and her voice comes out steady even though the fear shows at the corners of her mouth.\n\n\"My lord. My daughter took my keys without asking. That is true, and I won't pretend otherwise. But I never sent her into those rooms, and I will swear that on anything the house requires.\" She lifts her bandaged left forearm slightly, as if the brown-stained cloth is itself a statement. \"I put out the fire. What I ask is not leniency for her. It is that the physician see us both before anything else is written, because a burn left wrapped in dirty cloth goes bad, and then whatever punishment you choose becomes heavier than you ordered. That is not a plea. It is only what I know about burns.\"\n\nHer hand drifts back to Liora's shoulder without crowding her, and stays there.\n\nIsolde stands at your right, her hands placed neatly before her apron, her white hair ordered, her yellow eyes fixed forward. When you glance toward her, she tilts her head a fraction toward the sound of your movement.\n\n\"As I reported, my lord,\" she says quietly. \"Neither has been examined. The physician remains available in the east wing. The order as drafted specifies discipline first, treatment at the steward's discretion afterward.\" Her tone does not change; she is stating facts, not advising you. If she has an opinion, it is hidden where everything in her is hidden.\n\nAgainst the wall rests what remains of your mother's portrait, the painted cloth scorched and sagging where the flames reached it. The room still smells of burned fabric, lamp oil, and wet ash.\n\nKrail waits. The pen lies where he set it, close enough to your hand.\n\n<plan_thread>The immediate pending target: Nera's response to the unsigned punishment order — whether to sign, refuse, or alter Krail's proposed discipline.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "The user's message is background/setup, first-person. It doesn't contain new actions. The scene: Krail has placed the pen beside the unsigned order and asked for Nera's decision. I must not write Nera's choice. I narrate from the current snapshot, showing NPCs, ending on an open beat before Nera's decision.\n\nWord count 500–700 visible words. End with plan_thread then scene tag.\n\nPresent at end: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail. Magerrett and Taigar are outside — not present. Date: 18 September 731, time: unknown (per contract, don't invent clock). Place: West Reception Room.\n\nWrite the scene: Krail waiting, pen on paper, Elise and Liora, Isolde beside Nera, the portrait. Maybe small NPC actions: Krail pressing, Liora shifting, Elise smoothing apron, Isolde's report. End open before Nera's choice. No menu.",
+  "usage": {
+    "prompt_tokens": 15377,
+    "completion_tokens": 1062,
+    "total_tokens": 16439,
+    "cost": 0.001069195,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14916,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001069195,
+      "upstream_inference_prompt_cost": 0.000538195,
+      "upstream_inference_completions_cost": 0.000531
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 224,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 600,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

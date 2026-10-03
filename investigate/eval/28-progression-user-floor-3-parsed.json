@@ -1,0 +1,53 @@
+{
+  "content": "The pen lies where Krail set it, its nib aimed at the blank approval line like something patient.\n\nKrail does not reach for it again. He straightens the punishment order a last half-finger's width, squares it against the table edge, and steps back with the small, satisfied motion of a clerk closing an account.\n\n\"Young lord,\" he says. \"Take the time you require. There is one matter I must verify in the counting room before the afternoon inventory — the loss register, and which documents are confirmed burned.\" His grey eyes pass over Elise without warmth. \"I will return before the household sits its evening meal. The order will keep. Detention costs nothing.\"\n\nHe retrieves his pocket watch, glances at it, snaps it shut. At the door he pauses, one hand on the frame.\n\n\"A recommendation, freely given. Delay is read as weakness in a household of this size. Servants watch how their lords decide, and word travels to the other wings by nightfall. A firm signature today, and this is finished.\" A thin pause. \"Hesitation, and the story grows teeth.\"\n\nThen he is gone. The door closes without force — he is too practiced for force — but the latch catches with a small, final click.\n\nSilence fills the space he leaves behind. It smells of burned cloth and lamp oil, of wet ash and the faint metallic tang of the extinguisher powder the guards carried. The ruined portrait rests against the wall where they propped it: Ilyra's face still visible at the left edge, one painted eye and the curve of her jaw, the rest blackened to a leathery blank. A long tear where someone dragged it out of the flames crosses the canvas from her painted shoulder down.\n\nLiora is the first to move. She shifts her weight from foot to foot, her injured palm cradled against her apron, and her mouth opens — closes — opens again. The red layers of her hair flash as she turns her head toward her mother, then toward you, then down at the floor. Whatever she wants to say, she swallows it twice. Her large eyes are red-rimmed and fixed on the burned portrait, and her breath comes quick and shallow through her nose.\n\nElise's hand settles on her daughter's shoulder without looking away from you. Her bandaged left forearm is held close against her body, the cloth stained brown at the center. She is pale under the soot, and there is a fine tremor in the hand that isn't holding Liora, but her voice, when it comes, is level and quiet.\n\n\"My lord. I won't beg, and I won't put words in Liora's mouth — she'll tell you herself, if you ask her. But I'll say this much while the steward is out of the room.\" She smooths her apron with her free hand, an old habit done half-consciously. \"I lost the keys. That fault is mine and I'll answer for it. The rest — the lamp, the fire — was an accident, and my daughter has been sitting here for hours waiting on a signature with a burned hand that no one has looked at.\" Her jaw tightens. \"I'd ask for the physician before I'd ask for mercy. But I'd take either.\"\n\nShe stops there, holding her posture steady the way a person holds a heavy door.\n\nIsolde stands at your right shoulder, exactly where she has been since the hearing began. She has not moved during Krail's speech or Elise's. Now her head turns a precise few degrees toward the door Krail left through, then back to you. Her yellow eyes rest on your face, waiting. Her hands are folded neatly before her apron, and her voice, when she uses it, is low enough that it cannot carry past Elise and Liora.\n\n\"Steward Krail keeps the counting-room keys himself, my lord. He did not request a guard for that errand.\" A small pause. \"He also did not state which document he intends to verify. I am noting this. Instruct me as you require.\"\n\nOutside the door, in the passage, the floorboards hold quiet — but not empty quiet. Someone is still standing there, close to the wall, the way Magerrett was standing before. She has not knocked.\n\n<plan_thread>The pending target is Nera's unsigned decision on Krail's punishment order — now with a window while Krail is absent verifying records.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "Continue: Krail leaves the room. Nera doesn't act (user gave no action). The directive says Krail should leave the room. I need to narrate Krail leaving without player input — but why would he leave? I must not put words in Nera's mouth. Krail can leave on his own pretext: e.g., he has duties, will return for the signature, or fetches something. That's an NPC action I control. Let me have Krail wait, then perhaps excuse himself to verify the folio inventory / attend another matter, leaving the pen and order on the table, promising to return. That's fine.\n\nNarrate the room, tension, Liora/Elise/Isolde reactions, then Krail leaves. End on open beat. 500-700 words. Include plan_thread and scene tag.\n\nScene tag: date: 18 September 731 · time: unknown (time not established; opening says morning in the background — \"this morning, I awakened\" — but the current scene time wasn't established... The memory snapshot says time: unknown. Keep unknown). Place: West Reception Room. Present: after Krail leaves — Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen.",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1252,
+    "total_tokens": 16188,
+    "cost": 0.00114876,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13294,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00114876,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.000626
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 265,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 710,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

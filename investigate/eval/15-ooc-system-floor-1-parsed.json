@@ -1,0 +1,37 @@
+{
+  "content": "Physically in the West Reception Room at the end of the last exchange:\n\n- **Nera Veyrath** — presiding over the hearing\n- **Isolde Veyless** — beside him\n- **Elise Fen** — detained, bandaged forearm\n- **Liora Fen** — detained, burned palm\n\n**Bastian Krail** is also in the room per the established T1 record: he presented the unsigned punishment order, placed the pen beside it, and is waiting for Nera's decision.\n\nOutside the room: Magerrett is close enough in the passage to listen, and Taigar is farther down the corridor.",
+  "thinking": "OOC question, no scene tag needed. Present per snapshot: Nera, Isolde, Elise, Liora. Krail is also present — the snapshot lists present as those four, but Krail placed the pen beside the unsigned order and is waiting. The memory block's snapshot lists present: Nera, Isolde, Elise, Liora — Krail was presumably in the room at T1. The scene tag contract says the snapshot governs established state; Krail is waiting for Nera's signature — he was in the room. The snapshot field only lists four names, but earlier context says Krail presented the order and asked for decision. I'll answer per established record, noting Krail is present too since he's waiting for the signature in the room. Actually the snapshot explicitly lists present; but Krail's asking for a decision beside the pen implies he's in the room. Safest: state the four recorded, and note Krail is also in the room per T1 (he presented the order and is waiting for the decision). Brief answer.",
+  "usage": {
+    "prompt_tokens": 14639,
+    "completion_tokens": 360,
+    "total_tokens": 14999,
+    "cost": 0.000692365,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14493,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000692365,
+      "upstream_inference_prompt_cost": 0.000512365,
+      "upstream_inference_completions_cost": 0.00018
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 222,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 89,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

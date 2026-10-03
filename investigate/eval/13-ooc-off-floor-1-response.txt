@@ -1,0 +1,106 @@
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"Answer","reasoning_details":[{"type":"reasoning.text","text":"Answer","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" OOC briefly, no scene tag (pure O","reasoning_details":[{"type":"reasoning.text","text":" OOC briefly, no scene tag (pure O","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"OC question omits tag). Present per snapshot:","reasoning_details":[{"type":"reasoning.text","text":"OC question omits tag). Present per snapshot:","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Nera Veyrath, Isolde","reasoning_details":[{"type":"reasoning.text","text":" Nera Veyrath, Isolde","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Veyless, Elise Fen, Lior","reasoning_details":[{"type":"reasoning.text","text":" Veyless, Elise Fen, Lior","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"a Fen. Krail? The snapshot lists present","reasoning_details":[{"type":"reasoning.text","text":"a Fen. Krail? The snapshot lists present","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" as those four; Krail is waiting for N","reasoning_details":[{"type":"reasoning.text","text":" as those four; Krail is waiting for N","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"era's decision — the place card says \"K","reasoning_details":[{"type":"reasoning.text","text":"era's decision — the place card says \"K","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"rail waits for Nera's decision\" in the","reasoning_details":[{"type":"reasoning.text","text":"rail waits for Nera's decision\" in the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" room... The snapshot's present field lists only the","reasoning_details":[{"type":"reasoning.text","text":" room... The snapshot's present field lists only the","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" four. But place state says \"while Krail","reasoning_details":[{"type":"reasoning.text","text":" four. But place state says \"while Krail","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" waits for Nera's decision\" — ambiguous whether","reasoning_details":[{"type":"reasoning.text","text":" waits for Nera's decision\" — ambiguous whether","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" in room. Established scene tag said present: those","reasoning_details":[{"type":"reasoning.text","text":" in room. Established scene tag said present: those","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" four. I should answer per established snapshot: those","reasoning_details":[{"type":"reasoning.text","text":" four. I should answer per established snapshot: those","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" four. Mention Krail likely nearby (he presented","reasoning_details":[{"type":"reasoning.text","text":" four. Mention Krail likely nearby (he presented","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the order) but the recorded scene tag lists only","reasoning_details":[{"type":"reasoning.text","text":" the order) but the recorded scene tag lists only","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the four; note Magerrett/Taigar","reasoning_details":[{"type":"reasoning.text","text":" the four; note Magerrett/Taigar","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" outside.","reasoning_details":[{"type":"reasoning.text","text":" outside.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Physically in the West Reception Room, as established","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":": Nera Veyrath, Isol","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"de Veyless, Elise Fen, and","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Liora Fen.\n\nBastian Krail","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is with them at the hearing (he presented the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" unsigned punishment order and is waiting for Nera's","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" decision), while Magerrett listens from outside the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" room and Taigar waits farther down the corridor.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1791005000-Y7xHntaiGcP2RIkeU5Bb","object":"chat.completion.chunk","created":1791005000,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":14284,"completion_tokens":245,"total_tokens":14529,"cost":0.00062244,"is_byok":false,"prompt_tokens_details":{"cached_tokens":12142,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.00062244,"upstream_inference_prompt_cost":0.00049994,"upstream_inference_completions_cost":0.0001225},"completion_tokens_details":{"reasoning_tokens":163,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

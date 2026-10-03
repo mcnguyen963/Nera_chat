@@ -1,0 +1,54 @@
+{
+  "content": "The room smells of burned cloth and wet ash. It settles in the back of your throat with every breath, a taste like a coin held too long in the mouth. Tall west windows let in a grey afternoon light that does nothing to warm the hearth-side of the chamber, where the fire brigade's buckets still stand in a crooked row, one tipped over, water drying in a dark ring on the polished floor.\n\nBastian Krail stands before the desk with the bearing of a man who has already finished his work and is merely waiting for the world to confirm it. His grey coat is immaculate—no soot, no scorch, though the fire was in *his* corner of the house too. He has squared the punishment order on the desk before you twice already, nudging its edges parallel to the blotter's edge with two long fingers. The document is neat. The approval space is blank. The pen lies beside it, angled for a right hand, its nib freshly cut.\n\n\"My lord.\" His voice is dry, unhurried, the voice of a man reading a ledger entry aloud. \"The order before you proposes twenty strokes for the mother—reduced from thirty, in consideration of her years of service—and ten for the girl, administered on the shoulders, with dismissal from the household to follow. The deliberate destruction of the Lady Ilyra's portrait cannot go unanswered. Not if this house is to mean what it says.\"\n\nHe does not look at Elise when he says it. He looks at you, chin level, grey eyes patient, the way a man waits for a signature he considers a formality.\n\nElise Fen kneels where the guards left her, on the bare boards to the left of the hearth. Soot streaks her apron; her left forearm is wrapped in a cloth bandage gone brown at the center, and she holds that arm against her ribs as if it has already been forgotten by everyone in the room but her. When she speaks, her voice is steady in the way of someone spending effort to keep it so.\n\n\"My lord. I did not give her the keys. I did not know she had them until I smelled the smoke.\" She smooths her apron with her good hand—an old habit, a servant's reflex before addressing the house—and her clasped knuckles whiten. \"The fire was an accident. I will swear it on any altar the house names. But I will not say my daughter meant harm, because she did not.\"\n\nBeside her, Liora is trying very hard not to cry, and failing at it noisily. Her palm is red and blistered, cradled against her skirt. Her hair, black with those hidden flashes of red inside, hangs half out of its tie, and her eyes keep darting from Krail to the portrait leaning against the wall, to you.\n\n\"I only wanted to fix it,\" she blurts, and her voice cracks in the middle. \"The nightingale. It used to make you laugh. I remembered it making you laugh. I was going to put it back before anyone—\" She stops herself, presses her lips together, and stares down at her blistered hand.\n\nYour mother's ruined portrait stands where they set it against the wall. Ilyra's face remains at the left edge—a line of jaw, one dark eye, the silver tower of the crest at her shoulder—everything else charred to a grey weal that drips a thin thread of ash onto the floorboards even now.\n\nIsolde stands at your right shoulder, precisely one step behind, hands folded before her apron. She has not moved in some time. Her yellow eyes rest on Krail's back, then on the pen beside the order, then on the bandage at Elise's arm—the same bandage she told you, not an hour past, had not been changed. Her expression is smooth and cold and tells you nothing.\n\nSomewhere beyond the door, a floorboard creaks and goes quiet.\n\nKrail waits. The nib of the pen catches the grey light.\n\n<plan_thread>Immediate pending target: Nera's decision on Krail's unsigned punishment order against Elise and Liora.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "The user's input is the opening background narrative, and my job is to narrate the scene from where Krail placed the pen beside the unsigned order and asked for Nera's decision. I must not write Nera's actions—end on an open beat before the player's choice. 500–700 words visible, plan_thread, scene tag.\n\nThe established snapshot: date 18 September 731, time unknown, place West Reception Room, present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail. Magerrett outside listening, Taigar farther down the passage—must stay outside.\n\nWrite the scene: Krail presenting the order, Elise and Liora's state, Isolde beside Nera, damaged portrait, tension. End with Krail waiting, pen beside order. Don't write Nera's decision.\n\nPlan thread: the pending target is Nera's decision on the unsigned punishment order.\n\nWord count 500-700. Let me write.",
+  "usage": {
+    "prompt_tokens": 15377,
+    "completion_tokens": 1146,
+    "total_tokens": 16523,
+    "cost": 0.001111195,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13840,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001111195,
+      "upstream_inference_prompt_cost": 0.000538195,
+      "upstream_inference_completions_cost": 0.000573
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 215,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 666,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

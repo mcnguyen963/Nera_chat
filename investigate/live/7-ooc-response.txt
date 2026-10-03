@@ -1,0 +1,54 @@
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" ","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"The","reasoning_details":[{"type":"reasoning.text","text":"The","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" user asks an OOC question: who is physically","reasoning_details":[{"type":"reasoning.text","text":" user asks an OOC question: who is physically","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" present in the west reception room. Answer without advancing","reasoning_details":[{"type":"reasoning.text","text":" present in the west reception room. Answer without advancing","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" events. Per memory snapshot, present: Nera","reasoning_details":[{"type":"reasoning.text","text":" events. Per memory snapshot, present: Nera","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":", Isolde, Elise, Lior","reasoning_details":[{"type":"reasoning.text","text":", Isolde, Elise, Lior","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"a, Krail. Magerrett is outside","reasoning_details":[{"type":"reasoning.text","text":"a, Krail. Magerrett is outside","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the room listening; Taigar farther down the corridor","reasoning_details":[{"type":"reasoning.text","text":" the room listening; Taigar farther down the corridor","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":".","reasoning_details":[{"type":"reasoning.text","text":".","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"OOC answer:\n\n**Inside the west reception room","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":":**\n- **Nera Veyrath","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"** (you)\n- **Isolde V","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"eyless** — beside Nera\n- **","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Elise Fen** — detained\n- **L","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"iora Fen** — detained\n- **B","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"astian Krail** — standing with the unsigned","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" punishment order\n\n**Nearby but *not*","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" inside the room:**\n- **Magerrett","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Veyrath** — stopped outside the hearing","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" room, close enough to listen\n- **Ta","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"igar Veyrath** — farther down the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" passage\n\nThe physician is available in the east wing","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" but has not been called into the room. No","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" one else is currently present.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1791001666-tsw2mWDBsYDmGf377ntx","object":"chat.completion.chunk","created":1791001666,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":15757,"completion_tokens":210,"total_tokens":15967,"cost":0.00043493604,"is_byok":false,"prompt_tokens_details":{"cached_tokens":15442,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.00043493604,"upstream_inference_prompt_cost":0.00023989875,"upstream_inference_completions_cost":0.00019503729},"completion_tokens_details":{"reasoning_tokens":62,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

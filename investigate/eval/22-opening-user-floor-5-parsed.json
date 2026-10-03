@@ -1,0 +1,54 @@
+{
+  "content": " The pen lies beside the order, its nib pointed toward you like something waiting to be fed.\n\nKrail aligns the document once more against the edge of the table, a small, precise motion, then steps back half a pace so nothing of his stands between you and the choice. \"For the record, my lord,\" he says, voice level as a ledger line, \"the terms are these. A written confession of negligence from the mother, witnessed and filed. Dismissal from the household without wages or character reference — House Veyrath does not retain servants who lose keys to the late lady's rooms. The girl receives formal discipline for unauthorized entry, ten strokes, administered by the under-steward, and she is returned to her mother's family in Lower Fenwick. The household accounts close on the matter.\"\n\nHe pauses, thin lips pressed flat. \"The missing folio is, regrettably, ash. Nothing to be done there. The confession covers the loss.\"\n\nAcross the room, Liora shifts her weight from foot to foot, then can't hold it. \"I didn't— the lamp just slipped, it wasn't—\" She stops herself, remembering where she is, who is presiding. Her burned palm curls against her skirt. The red skin glistens where the blister has broken. Soot still streaks one cheek, and the crimson layers of her hair flash as her head turns from Krail to you and back.\n\nElise's hand settles on her daughter's shoulder without gripping it. She smooths her apron with the other, the gesture slow and deliberate, buying herself a breath. \"My lord.\" Her voice is steadier than her knuckles. \"I'll sign a confession for my own negligence. The keys were mine; that part is fair. But I'll not put my name to Liora entering on my word, because she didn't. And I'd ask — before anything else is written down — that the physician see her hand. It's been hours.\"\n\n\"The physician's availability is not in question,\" Krail says. \"It follows the signature.\"\n\n\"Then everything follows the signature,\" Elise says quietly, and holds your gaze — a maid holding a lord's eyes a moment too long, but her forearm is wrapped in a cloth bandage stained brown at the center, and she doesn't look away.\n\nBeside you, Isolde stands exactly where she has stood since the hearing began. Her hands are folded at her apron, her snow-white hair caught once by the draft from the tall west windows and then still again. When your glance crosses hers, she tilts her head a fraction toward Elise's bandage — the same wordless report she already gave you, *neither prisoner has been examined* — and then returns to neutral. Nothing in her yellow eyes advises you. The bond doesn't counsel. It only waits.\n\nThe ruined portrait leans against the wall where they carried it out. Half of your mother's face remains: one eye, the line of her jaw, silver thread in the painted collar. The rest is char and curling canvas. It is strange, standing here between her burned face and the girl who burned it trying to mend her nightingale — the one that made you laugh, before, when you were smaller and someone else entirely.\n\nOut in the passage, a floorboard creaks and goes quiet. Magerrett, you'd guess, still rooted near the door. Farther off, another silence that might be Taigar.\n\nKrail produces his pocket watch, checks it without reading it, and closes it again. \"The duke returns after sunset, my lord. It would be tidier if this were filed before he arrived. He dislikes loose ends in his own house.\" He sets the watch away, squares the document's corner, and lifts the pen between two clean fingers.\n\nHe holds it out to you, grip first, the way one offers a tool to its proper user.\n\n\"Your decision, Lord Nera.\"\n\n<plan_thread>Target: Nera's decision on Krail's unsigned punishment order — sign, refuse, redirect, or investigate the folio claim.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "Scene: Nera has just been asked for his decision by Krail. I must not write Nera's decision — only the user controls him. But the user's input is background narration ending with \"This is where my story begins.\" That's the opening setup; no new player action. So my reply should advance the scene as NPCs await his decision — but not decide for him. I need to show NPC behavior, pressure, perhaps Krail pressing, Isolde observing, Elise/Liora reactions, Magerrett outside. End on open beat before player's choice.\n\nTime of day: unknown. Fire happened today; Cassian expected home after sunset. Keep time: unknown? The tag says use unknown for current time not established. Snapshot says time: unknown. Keep it.\n\nPresent: Nera, Isolde, Elise, Liora, Krail. Magerrett and Taigar outside — excluded.\n\nWord count 500-700 visible words. Include <plan_thread> naming immediate pending target: Nera's decision on the punishment order.\n\nWrite second person, present tense. Show the room, Krail aligning documents, Liora's burned palm, Elise's bandage, Isolde still, perhaps a small moment where Liora looks up, Elise smoothing apron, Krail stating details of the order (dismissal, confession, ten lashes? Careful — don't invent specifics not established; order exists but contents were only described generally: \"punishment order against Elise and Liora.\" I can have Krail summarize terms plausibly but I shouldn't fabricate hard facts... As GM I do control NPCs and can add plausible detail; the open thread says \"Krail's proposed punishment of Elise and Liora\" — contents unspecified. I can specify now: e.g., formal confession of negligence, dismissal from household service for Elise, corporal discipline for Liora? That's plausible and creates the stakes. I think specifying terms is fine as GM — it gives the player concrete decision material. Let's do: confession recorded, Elise dismissed without wages/character reference, Liora... some punishment — perhaps lashes or loss of position. Keep it administrative in Krail's voice.\n\nAlso maybe distant sounds: Magerrett outside. Maybe a servant's footstep. End with Krail: \"Your signature, my lord.\" Open beat.\n\nScene tag: date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail.",
+  "usage": {
+    "prompt_tokens": 15377,
+    "completion_tokens": 1468,
+    "total_tokens": 16845,
+    "cost": 0.001272195,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 15224,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001272195,
+      "upstream_inference_prompt_cost": 0.000538195,
+      "upstream_inference_completions_cost": 0.000734
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 552,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 632,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}
