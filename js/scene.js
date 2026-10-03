@@ -76,7 +76,7 @@ export function latestScene(messages, upToOrder = Infinity, startingScene = null
       const carried = m.sceneMeta?.kind === 'carried';
       return { scene:parseScene(m.scene),fromOrder:carried ? m.sceneMeta.fromOrder : m.order,
         fromId:carried ? m.sceneMeta.fromId : m.id,kind:m.sceneMeta?.kind ?? 'declared',
-        missingStreak:missingStreak+(carried ? m.sceneMeta.missingStreak ?? 1 : 0) };
+        missingStreak:missingStreak+(carried || m.sceneMeta?.stale ? m.sceneMeta.missingStreak ?? 1 : 0) };
     }
     if (!m.ooc) missingStreak++;
   }
