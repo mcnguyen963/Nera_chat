@@ -178,7 +178,7 @@ test('assistant plan thread is stored separately from visible content', async ()
   assert.equal(message.content, 'The door opens.');
   assert.equal(message.planThread, 'steering toward the reunion');
   assert.equal(message.planBefore, 'Find the door');
-  assert.ok(message.tokenCount > message.content.length);
+  assert.equal(message.tokenCount, message.content.length);
   await h.api.overwriteMessage('s', saved.id, {
     content: 'The room is empty.', thinking: null, planThread: 'steering toward the reveal',
   }, saved.order);
@@ -204,7 +204,7 @@ test('private-note edits preserve the reply and save story settings atomically',
   assert.equal(edited.content, original.content);
   assert.equal(edited.thinking, original.thinking);
   assert.equal(edited.planBefore, original.planBefore);
-  assert.equal(edited.tokenCount, `${edited.content}\n<plan_thread>${edited.planThread}</plan_thread>`.length);
+  assert.equal(edited.tokenCount, edited.content.length);
   assert.equal(result.message.planThread, edited.planThread);
   assert.equal(h.documents.get(h.sessionPath).title, 'Edited story');
   assert.equal(h.documents.get(h.sessionPath).longTermPlan, 'Meet the queen');

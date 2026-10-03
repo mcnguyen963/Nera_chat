@@ -6,6 +6,7 @@ import {
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { countTokens } from "./tokenizer.js";
+import { storyText } from "./story-text.js";
 import {
   TARGET_CHUNK_BYTES, MAX_MESSAGES_PER_CHUNK, messageBytes, packMessages,
   chunkBytes, chunkId, chunkRecord,
@@ -34,7 +35,7 @@ function makeMessage(id, order, { role, content, thinking = null, planThread = n
 }
 
 function contextText(message) {
-  return message.planThread ? `${message.content}\n<plan_thread>${message.planThread}</plan_thread>` : message.content;
+  return message.role === "user" ? message.content : storyText(message.content);
 }
 
 const readySessions = new Set();
@@ -284,7 +285,7 @@ export async function editPlanThread(sessionId, messageId, planThread, order, se
 }
 
 export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order, sessionUpdate = {}) {
-  const tokenCount = await countTokens(contextText({ content, planThread }));
+  const tokenCount = await countTokens(contextText({ content }));
   await changeMessage(sessionId, messageId, order, (message) => ({
     ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount,
   }), sessionUpdate);

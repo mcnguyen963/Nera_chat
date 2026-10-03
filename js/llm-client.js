@@ -2,11 +2,14 @@
 // - delta.content  -> visible response, becomes message.content
 // - delta.reasoning -> collapsible "thinking" pane, becomes message.thinking.
 //                      Stored for reference but NEVER re-sent in context (spec §6/§7).
+import { storyText } from "./story-text.js";
 
 export function buildRequestBody(settings, messages) {
   const body = {
     model: settings.modelId,
-    messages,
+    messages: messages.map(({ role, content }) => ({ role,
+      content: role === "assistant" ? storyText(content) : content,
+    })).filter((message) => message.role !== "assistant" || message.content.trim()),
     max_tokens: settings.maxResponseTokens,
   };
   if (settings.advancedParametersEnabled) {
@@ -48,21 +51,23 @@ function checkFinishReason(reason) {
   }
 }
 
-export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal }) {
+export async function chatCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal });
+    return nonStreamedCompletion({ settings, messages, onRequest, signal });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal });
 }
 
-async function nonStreamedCompletion({ settings, messages, signal }) {
+async function nonStreamedCompletion({ settings, messages, onRequest, signal }) {
+  const body = buildRequestBody(settings, messages);
+  onRequest?.(structuredClone({ model: body.model, messages: body.messages }));
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify(buildRequestBody(settings, messages)),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
@@ -80,11 +85,13 @@ async function nonStreamedCompletion({ settings, messages, signal }) {
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal }) {
+  const body = { ...buildRequestBody(settings, messages), stream: true };
+  onRequest?.(structuredClone({ model: body.model, messages: body.messages }));
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify({ ...buildRequestBody(settings, messages), stream: true }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);

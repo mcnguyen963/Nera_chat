@@ -88,12 +88,28 @@ input[type="checkbox"] { accent-color: #dededb; width: 16px; height: 16px; }
 .tab:hover { color: #fff; }
 .chat-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-toolbar { display: flex; gap: 13px; align-items: center; padding: 0 30px 12px; }
-.context-indicator { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.context-indicator { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; text-align: left; cursor: pointer; }
 .context-caption, #context-label { color: #787878; font-size: 10px; }
-.context-bar { position: relative; width: 58px; flex-shrink: 0; height: 3px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
-.context-fill { height: 100%; background: #aaa; width: 0; transition: width .2s; }
+.context-bar { display: block; position: relative; width: 58px; flex-shrink: 0; height: 3px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
+.context-fill { display: block; height: 100%; background: #aaa; width: 0; transition: width .2s; }
 .context-fill.over { background: var(--danger); }
 .context-threshold { position: absolute; top: 0; bottom: 0; width: 1px; background: #bbb; opacity: .6; }
+.context-dialog { width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 20px; box-sizing: border-box; overflow: auto; background: #111; color: var(--text); border: 1px solid #383838; border-radius: 16px; }
+.context-dialog:not([open]) { display: none; }
+.context-dialog::backdrop { background: #000a; }
+.context-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.context-dialog-header h2 { margin: 0 0 12px; }
+.context-mode-label { display: flex; align-items: center; gap: 10px; }
+.context-mode-label select { width: auto; }
+#context-status { overflow-wrap: anywhere; line-height: 1.6; }
+.context-contributions { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; }
+.context-contributions th, .context-contributions td { padding: 9px 6px; border-bottom: 1px solid #303030; text-align: left; }
+.context-contributions th:not(:first-child), .context-contributions td:not(:first-child) { text-align: right; white-space: nowrap; }
+.context-message { margin: 8px 0; border: 1px solid #303030; border-radius: 8px; }
+.context-message summary { cursor: pointer; padding: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.context-message pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 12px 12px; margin: 0; font: inherit; line-height: 1.6; }
+.context-turn-list { max-height: min(420px, 45dvh); overflow-y: auto; overscroll-behavior: contain; padding: 0 10px 10px; }
+.context-warning { color: var(--danger); }
 .chat-toolbar .btn { background: none; border: 0; color: #929292; padding: 6px 8px; font-size: 11px; }
 .chat-toolbar .btn:hover { background: #222; color: #eee; }
 .top-menu-wrap { position: relative; }

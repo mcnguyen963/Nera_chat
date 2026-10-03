@@ -21,6 +21,9 @@ async function harness() {
     closest() { return { firstChild: { textContent: this.id } }; }
     getClientRects() { return [1]; }
     querySelectorAll() { return []; }
+    querySelector(selector) { return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? null; }
+    showModal() { this.open = true; }
+    close() { this.open = false; void this.dispatchEvent({ type: 'close' }); }
     appendChild(child) { child.remove(); this.children.push(child); child.parentNode = this; return child; }
     insertBefore(child, anchor) { child.remove(); const index = anchor ? this.children.indexOf(anchor) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
     append(...children) { this.children.push(...children); }
@@ -39,7 +42,7 @@ async function harness() {
     }
     return elements.get(id);
   };
-  document.createElement = () => new Element();
+  document.createElement = (tag) => { const element = new Element(); element.tagName = tag.toUpperCase(); return element; };
   const panelNames = ['model', 'context', 'prompts', 'story', 'transfer', 'account'];
   const navButtons = panelNames.map((name) => {
     const button = document.getElementById(`nav-${name}`);
@@ -101,7 +104,8 @@ async function harness() {
     },
     'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
-      getMessages: async () => [], getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
+      getMessages: async () => { calls.historyReads = (calls.historyReads ?? 0) + 1; return calls.historyMessages ?? []; },
+      getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
       editPlanThread: async (...args) => {
@@ -438,7 +442,7 @@ test('Sliding context preserves the opening exchange and latest user while eject
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 165 + 100, maxResponseTokens: 100 };
+  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 115, maxResponseTokens: 100 };
   const messages = [
     { id: 'u1', order: 1, role: 'user', content: 'Opening', tokenCount: 25 },
     { id: 'a1', order: 2, role: 'assistant', content: 'Background', tokenCount: 25 },
@@ -449,7 +453,7 @@ test('Sliding context preserves the opening exchange and latest user while eject
   const result = await buildContextForRequest({ id: 's' }, settings, { messages, requireLatestUser: true });
   assert.deepEqual(Array.from(result.apiMessages.slice(1), (m) => m.content), ['Opening', 'Background', 'Small recent', 'Latest']);
   assert.equal(result.droppedCount, 1);
-  assert.ok(result.usedTokens + settings.maxResponseTokens <= settings.maxContextTokens);
+  assert.ok(result.usedTokens <= settings.maxContextTokens);
   await assert.rejects(buildContextForRequest({ id: 's' }, settings, {
     messages: messages.map((m) => m.id === 'u3' ? { ...m, tokenCount: 500 } : m), requireLatestUser: true,
   }), /opening story and latest user message exceed/);
@@ -494,10 +498,10 @@ test('Context budget reserves message framing as short turns accumulate', async 
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
   assert.ok(base.usedTokens >= MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
   const messages = Array.from({ length: 20 }, (_, i) => ({ id: String(i), order: i + 1, role: 'user', content: 'x', tokenCount: 1 }));
-  const budget = base.usedTokens + 20 + MESSAGE_FRAME_TOKENS * 5 + 100;
+  const budget = base.usedTokens + 20 + MESSAGE_FRAME_TOKENS * 5;
   const result = await buildContextForRequest({ id: 's' }, { ...h.state.settings, maxContextTokens: budget, maxResponseTokens: 100 }, { messages });
   assert.ok(result.windowedCount < messages.length);
-  assert.ok(result.usedTokens + 100 <= budget);
+  assert.ok(result.usedTokens <= budget);
 });
 
 test('Summarizer bounds each request to the configured context', async () => {
@@ -511,7 +515,7 @@ test('Summarizer bounds each request to the configured context', async () => {
   await runSummarization({ id: 's' }, settings, { messages });
   assert.ok(h.calls.requests.length > 1);
   assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(2000 / 3) &&
-    request.messages.reduce((sum, message) => sum + message.content.length, 0) + request.max_tokens <= 2000));
+    request.messages.reduce((sum, message) => sum + message.content.length + 8, 8) <= 2000));
 });
 
 test('Summarizer disables chat reasoning on every request', async () => {
@@ -563,7 +567,7 @@ test('Streaming plan tags remain hidden even when split across chunks', async ()
   }
 });
 
-test('Plan thread stays out of visible text but remains in the next model context', async () => {
+test('Plan thread is stored for reference and excluded from model context', async () => {
   const h = await harness();
   const { extractPlanThread, stripPlan } = await h.use('plan-parser.js');
   const reply = 'The door opens. <plan_thread>steering toward the reunion</plan_thread>';
@@ -573,7 +577,7 @@ test('Plan thread stays out of visible text but remains in the next model contex
   const result = await buildContextForRequest({ id: 'story' }, h.state.settings, {
     messages: [{ id: 'm', order: 1, role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion', tokenCount: 12 }],
   });
-  assert.match(result.apiMessages.at(-1).content, /<plan_thread>steering toward the reunion<\/plan_thread>/);
+  assert.equal(result.apiMessages.at(-1).content, 'The door opens.');
 });
 
 test('Author direction tags are normalized in model context', async () => {
@@ -612,7 +616,7 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]), false);
 });
 
-test('This story shows and saves the latest private note for the next request', async () => {
+test('This story saves private notes for reference without resending them', async () => {
   const h = await harness();
   const chat = await h.use('ui/chat-view.js');
   chat.initChatView();
@@ -643,7 +647,7 @@ test('This story shows and saves the latest private note for the next request', 
   const result = await buildContextForRequest({ id: 'story', longTermPlan: 'Old plan' }, h.state.settings, {
     messages: [{ id: 'user', role: 'user', content: 'Continue.', order: 1 }, chat.getStoryPrivateNote().message],
   });
-  assert.match(result.apiMessages.at(-1).content, /<plan_thread>Edited direction for the next scene<\/plan_thread>/);
+  assert.equal(result.apiMessages.at(-1).content, 'The story continues.');
   assert.doesNotMatch(result.apiMessages.at(-1).content, /Original note/);
 });
 
@@ -723,4 +727,205 @@ test('Switching back to a recently opened session reuses its cached messages', a
   chat.setSession('story-b');
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(h.calls.subscriptions.length, readsBeforeEvictedReturn + 1);
+});
+
+test('Story cleaner removes explicit thinking, nested blocks, and incomplete streaming tags', async () => {
+  const h = await harness();
+  const { storyText, stripThinking } = await h.use('story-text.js');
+  const story = 'The door opens.';
+  for (const tag of ['think', 'thinking']) {
+    const block = `<${tag}>private analysis</${tag}>`;
+    for (let i = 1; i <= block.length; i++) {
+      assert.equal(storyText(story + ' ' + block.slice(0, i)), story);
+    }
+    assert.equal(storyText(block + story), story);
+  }
+  assert.equal(storyText('<THINK mode="deep">outer<thinking>inner</thinking>secret</THINK>' + story), story);
+  assert.equal(storyText(story + '<think>unfinished reasoning'), story);
+  assert.equal(storyText(story + '<thinking mode="deep"'), story);
+  assert.equal(storyText('<think>hidden</think>' + story + '<plan_thread>note</plan_thread><plan>new plan</plan>'), story);
+  assert.equal(stripThinking('<think><plan>fake</plan></think>' + story + '<plan>real</plan>'), story + '<plan>real</plan>');
+});
+
+test('Context contributions match cleaned request text and legacy private-note counts are ignored', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = [
+    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+    { id: 'a1', order: 2, role: 'assistant', content: '<think>analysis</think>The door opens.',
+      thinking: 'stored reasoning', planThread: 'private steering', tokenCount: 99999 },
+    { id: 'u2', order: 3, role: 'user', content: 'Older turn' },
+    { id: 'sum', order: 4, role: 'summary', content: '<thinking>summary reasoning</thinking>Earlier events.' },
+    { id: 'u3', order: 5, role: 'user', content: '<ad>Continue</ad>' },
+    { id: 'a3', order: 6, role: 'assistant', content: 'The room is quiet.<plan_thread>private target</plan_thread>',
+      tokenCount: 99999, reasoning_details: [{ text: 'internal details' }] },
+    { id: 'empty', order: 7, role: 'assistant', content: '<think>no story</think>' },
+  ];
+  const result = await buildContextForRequest({ id: 's', longTermPlan: 'Meet the queen',
+    activeSummaryMessageId: 'sum', breakpointOrder: 3 }, h.state.settings, { messages });
+  assert.equal(result.entries[1].content, 'Story so far:\nEarlier events.');
+  assert.equal(result.entries.find((entry) => entry.id === 'a1').tokens, 'The door opens.'.length);
+  assert.equal(result.entries.find((entry) => entry.id === 'a3').content, 'The room is quiet.');
+  assert.equal(result.omitted['Summary checkpoint'], 1);
+  assert.equal(result.omitted['Empty story text'], 1);
+  assert.equal(result.contributions.reduce((sum, row) => sum + row.tokens, 0), result.usedTokens);
+  assert.equal(result.apiMessages.reduce((sum, message) => sum + message.content.length + 8, 8), result.usedTokens);
+  assert.deepEqual(Array.from(result.entries, (entry) => entry.content), Array.from(result.apiMessages, (message) => message.content));
+  assert.doesNotMatch(JSON.stringify(result), /stored reasoning|private steering|summary reasoning|private target|internal details|no story/);
+  assert.match(result.apiMessages[0].content, /Meet the queen/);
+  const regen = await buildContextForRequest({ id: 's' }, h.state.settings, { messages, upToOrder: 3 });
+  assert.equal(regen.omitted['Regeneration cutoff'], 5);
+});
+
+test('Input selection and summary thresholds do not depend on the output limit', async () => {
+  const h = await harness();
+  const { buildContextForRequest, computeContextUsage } = await h.use('context-builder.js');
+  const messages = Array.from({ length: 15 }, (_, i) => ({ id: String(i), order: i + 1,
+    role: 'user', content: 'event '.repeat(20) }));
+  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
+  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 500, maxResponseTokens: 1,
+    autoSummaryThresholdPercent: 90 };
+  const small = await computeContextUsage({ id: 's' }, settings, messages);
+  const large = await computeContextUsage({ id: 's' }, { ...settings, maxResponseTokens: 500000 }, messages);
+  assert.equal(small.usedTokens, large.usedTokens);
+  assert.equal(small.overThreshold, large.overThreshold);
+  assert.equal(small.usedTokens >= small.threshold, small.overThreshold);
+  assert.equal(JSON.stringify(small.apiMessages), JSON.stringify(large.apiMessages));
+  assert.ok(large.usedTokens <= settings.maxContextTokens);
+  const oversized = await computeContextUsage({ id: 's' }, { ...settings, maxContextTokens: 10 }, messages);
+  assert.equal(oversized.exceedsInputLimit, true);
+  await assert.rejects(buildContextForRequest({ id: 's' }, { ...settings, maxContextTokens: 10 }, {
+    messages, requireLatestUser: true,
+  }), /exceed the context budget/);
+});
+
+test('Streaming and non-streaming fetch bodies contain only story history and snapshots match serialized messages', async () => {
+  for (const streaming of [false, true]) {
+    const h = await harness();
+    const { chatCompletion } = await h.use('llm-client.js');
+    if (streaming) h.calls.streamLines = [
+      'data: {"choices":[{"delta":{"reasoning":"new reasoning","content":"The story continues."},"finish_reason":"stop"}]}\n',
+      'data: [DONE]\n',
+    ];
+    else h.calls.responseData = { choices: [{ finish_reason: 'stop', message: {
+      content: 'The story continues.', reasoning: 'new reasoning',
+    } }] };
+    const messages = [
+      { role: 'system', content: 'Narrate the story.' },
+      { role: 'user', content: '<think>This is user text</think>' },
+      { role: 'assistant', content: '<think>old thought</think>The door opens.<plan_thread>old plan</plan_thread>',
+        thinking: 'stored thought', reasoning: 'provider reasoning', reasoning_content: 'extra reasoning',
+        reasoning_details: [{ text: 'reasoning details' }], planThread: 'private note' },
+    ];
+    let snapshot;
+    const result = await chatCompletion({ settings: { ...h.state.settings, streaming, modelId: 'test', apiKey: 'secret-key' },
+      messages, onRequest: (request) => { snapshot = request; } });
+    const request = h.calls.requests[0];
+    assert.equal(JSON.stringify(snapshot.messages), JSON.stringify(request.messages));
+    assert.equal(request.messages[1].content, messages[1].content);
+    assert.deepEqual(request.messages[2], { role: 'assistant', content: 'The door opens.' });
+    assert.doesNotMatch(JSON.stringify(request), /old thought|old plan|stored thought|extra reasoning|reasoning details|private note/);
+    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key/);
+    assert.equal(result.thinking, 'new reasoning');
+    messages[2].content = 'edited after sending';
+    assert.equal(snapshot.messages[2].content, 'The door opens.');
+  }
+});
+
+test('Summarizer sends cleaned story and previous summary and saves only clean output', async () => {
+  const h = await harness();
+  const { runSummarization } = await h.use('summarizer.js');
+  h.calls.response = '<think>new hidden reasoning</think>The door opened.<plan_thread>new hidden note</plan_thread>';
+  const result = await runSummarization({ id: 's', activeSummaryMessageId: 'old', breakpointOrder: 1 }, {
+    ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
+  }, { messages: [
+    { id: 'old', order: 2, role: 'summary', content: '<think>old hidden reasoning</think>Earlier story.' },
+    { id: 'a', order: 3, role: 'assistant', content: '<thinking>inline reasoning</thinking>The door opens.',
+      thinking: 'saved reasoning', planThread: 'saved note' },
+  ] });
+  assert.match(h.calls.requests[0].messages[1].content, /Earlier story\./);
+  assert.match(h.calls.requests[0].messages[1].content, /Assistant: The door opens\./);
+  assert.doesNotMatch(JSON.stringify(h.calls.requests), /old hidden reasoning|inline reasoning|saved reasoning|saved note/);
+  assert.equal(result.summaryMessage.content, 'The door opened.');
+  const savedCount = h.calls.messages.length;
+  h.calls.response = '<thinking>reasoning only</thinking>';
+  await assert.rejects(runSummarization({ id: 's' }, {
+    ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
+  }, { messages: [{ id: 'u', order: 1, role: 'user', content: 'Continue.' }] }), /empty summary/);
+  assert.equal(h.calls.messages.length, savedCount);
+});
+
+test('Context indicator displays input only and opening the inspector reuses loaded history', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  h.state.settings.maxContextTokens = 125000;
+  h.state.settings.maxResponseTokens = 15000;
+  const base = await buildContextForRequest({ id: 'story' }, h.state.settings, { messages: [] });
+  const content = 'x'.repeat(45956 - base.usedTokens - 8);
+  chat.initChatView(); chat.setSession('story');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
+  h.calls.latestCallbacks.at(-1)({ messages: [{ id: 'u', role: 'user', order: 1, content }], hasEarlier: false });
+  await chat.updateIndicator();
+  assert.equal(h.el('context-label').textContent, '45,956 input / 125,000 tokens');
+  assert.ok(Math.abs(parseFloat(h.el('context-fill').style.width) - 36.7648) < 0.000001);
+  const opener = h.el('context-indicator'); opener.focus();
+  await h.fire('context-indicator');
+  assert.equal(h.el('context-dialog').open, true);
+  assert.match(h.el('context-status').textContent, /45,956 input \/ 125,000 tokens/);
+  assert.equal(h.calls.historyReads ?? 0, 0);
+  const detail = h.el('context-body').children.find((element) => element.tagName === 'DETAILS');
+  detail.open = true; await detail.dispatchEvent({ type: 'toggle' });
+  assert.equal(detail.querySelector('pre').textContent.includes('narrator'), true);
+  await h.fire('context-close');
+  assert.equal(h.document.activeElement, opener);
+  await h.fire('context-indicator');
+  assert.equal(h.calls.historyReads ?? 0, 0);
+  chat.setSession('another-story');
+  assert.equal(h.el('context-dialog').open, false);
+});
+
+test('Inspector latest sent is immutable, excludes credentials, and is cleared on reset', async () => {
+  const h = await harness();
+  const { computeContextUsage } = await h.use('context-builder.js');
+  const inspector = await h.use('ui/context-view.js');
+  const context = await computeContextUsage({ id: 's' }, h.state.settings, [
+    { id: 'u', role: 'user', order: 1, content: 'Continue.' },
+  ]);
+  let loads = 0;
+  inspector.initContextInspector(async () => { loads++; return context; });
+  await h.fire('context-indicator');
+  inspector.captureContextRequest(context, { model: 'sent-model', messages: context.apiMessages });
+  context.entries.at(-1).content = 'changed afterward';
+  context.apiMessages.at(-1).content = 'changed afterward';
+  h.el('context-mode').value = 'sent'; await h.fire('context-mode', 'change');
+  assert.match(h.el('context-status').textContent, /sent-model.*latest story request sent/);
+  const groups = h.el('context-body').children.filter((element) => element.className?.includes('context-turn-group'));
+  assert.equal(groups.length, 1);
+  const group = groups[0];
+  assert.equal(Boolean(group.open), false);
+  assert.match(group.children[0].textContent, /Conversation turns · 1 messages/);
+  const details = group.children[1].children;
+  details.at(-1).open = true; await details.at(-1).dispatchEvent({ type: 'toggle' });
+  assert.equal(details.at(-1).querySelector('pre').textContent, 'Continue.');
+  assert.equal(loads, 1);
+  inspector.resetContextInspector();
+  await h.fire('context-indicator');
+  h.el('context-mode').value = 'sent'; await h.fire('context-mode', 'change');
+  assert.match(h.el('context-status').textContent, /No request has been sent/);
+});
+
+test('Inspector drops a pending preview when the active story is reset', async () => {
+  const h = await harness();
+  const { computeContextUsage } = await h.use('context-builder.js');
+  const inspector = await h.use('ui/context-view.js');
+  const context = await computeContextUsage({ id: 's' }, h.state.settings, []);
+  let resolve;
+  inspector.initContextInspector(() => new Promise((done) => { resolve = done; }));
+  const opening = h.fire('context-indicator');
+  inspector.resetContextInspector();
+  resolve(context); await opening;
+  assert.equal(h.el('context-dialog').open, false);
+  assert.equal(h.el('context-body').children.length, 0);
 });

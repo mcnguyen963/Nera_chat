@@ -172,7 +172,7 @@ function fillPrivateNote() {
   };
   set("set-session-private-note", noteOriginal.text);
   input("session-private-note-help").textContent = current.message
-    ? "The latest reply's hidden planning note. Save your changes to use them in the next model call."
+    ? "The latest reply's saved private note, kept for reference. It is excluded from model context."
     : "The private note will be available after the model's first reply.";
   syncStoryControls();
 }
@@ -369,7 +369,6 @@ function validatedDraft() {
   }
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
   mirrorFromActiveProfile(result);
-  if (result.maxResponseTokens >= result.maxContextTokens) throw new Error("Max context tokens must exceed max response tokens.");
   return result;
 }
 async function handleSaveSettings() {

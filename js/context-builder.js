@@ -1,6 +1,6 @@
 // Context window assembly (spec §6). Whole-message granularity, never cut mid-text.
 // Budget accounting: narrator prompt + plan block + summary + sliding-window messages
-// all live inside maxContextTokens; maxResponseTokens is reserved on top.
+// all live inside the input limit maxContextTokens. Output has its own limit.
 //
 // Firestore optimization: both functions accept messages cached by the chat
 // view, so repeated turns and indicator updates need no collection read.
@@ -8,6 +8,7 @@
 import { getMessages } from "./messages.js";
 import { countTokens } from "./tokenizer.js";
 import { planInjectionBlock } from "./plan-parser.js";
+import { storyText } from "./story-text.js";
 
 // Reserve framing tokens for each API message and for the request envelope.
 // Exact framing depends on the model, so these are conservative estimates.
@@ -40,7 +41,7 @@ export function normalizeAdDirective(content) {
 async function countSystemTokensCached(text) {
   let cached = systemTokenCache.get(text);
   if (cached === undefined) {
-    if (systemTokenCache.size > 50) systemTokenCache.clear();
+    if (systemTokenCache.size > 500) systemTokenCache.clear();
     cached = await countTokens(text);
     systemTokenCache.set(text, cached);
   }
@@ -62,38 +63,44 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const systemTokens = await countSystemTokensCached(systemText);
 
   const parts = [{ role: "system", content: systemText }];
+  const entries = [{ role: "system", content: systemText, tokens: systemTokens, source: "System instructions & story plan" }];
   let used = systemTokens + MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS;
 
   const summaryMsg = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upToOrder
     ? all.find((m) => m.id === session.activeSummaryMessageId)
     : null;
-  if (summaryMsg) {
-    parts.push({ role: "system", content: "Story so far:\n" + summaryMsg.content });
-    used += await countSystemTokensCached("Story so far:\n" + summaryMsg.content) + MESSAGE_FRAME_TOKENS;
+  const summaryText = summaryMsg && storyText(summaryMsg.content);
+  if (summaryText) {
+    const content = "Story so far:\n" + summaryText;
+    const tokens = await countSystemTokensCached(content);
+    parts.push({ role: "system", content });
+    entries.push({ id: summaryMsg.id, role: "system", content, tokens, source: "Active story summary" });
+    used += tokens + MESSAGE_FRAME_TOKENS;
   }
 
-  const available = settings.maxContextTokens - settings.maxResponseTokens - used;
-  const raw = all.filter((m) => m.role !== "summary" && m.order < upToOrder)
+  const available = settings.maxContextTokens - used;
+  const contentFor = (m) => m.role === "user" ? normalizeAdDirective(m.content) : storyText(m.content);
+  const raw = all.filter((m) => ["user", "assistant"].includes(m.role) && m.order < upToOrder && contentFor(m).trim())
     .sort((a, b) => a.order - b.order);
   const firstUser = raw.find((m) => m.role === "user");
   const firstAssistant = firstUser && raw.find((m) => m.role === "assistant" && m.order > firstUser.order);
   const latestUser = [...raw].reverse().find((m) => m.role === "user");
   const anchors = [firstUser, firstAssistant].filter(Boolean);
-  const recent = raw.filter((m) => m.order > (summaryMsg ? (session.breakpointOrder ?? 0) : 0));
+  const recent = raw.filter((m) => m.order > (summaryText ? (session.breakpointOrder ?? 0) : 0));
   const candidates = [...new Map([...anchors, ...recent].map((m) => [m.id, m])).values()];
+  const candidateIds = new Set(candidates.map((m) => m.id));
   const requiredIds = new Set(anchors.map((m) => m.id));
-  if (opts.requireLatestUser && latestUser) requiredIds.add(latestUser.id);
-  const contentFor = (m) => m.role === "assistant" && m.planThread
-    ? `${m.content}\n<plan_thread>${m.planThread}</plan_thread>`
-    : m.role === "user" ? normalizeAdDirective(m.content) : m.content;
+  if (latestUser) requiredIds.add(latestUser.id);
   const costs = new Map();
   for (const m of candidates) {
     const content = contentFor(m);
-    costs.set(m.id, (m.tokenCount != null && content === m.content
-      ? m.tokenCount : await countTokens(content)) + MESSAGE_FRAME_TOKENS);
+    // Older saved assistant counts included planThread; count exactly the story sent.
+    costs.set(m.id, (m.role === "user" && m.tokenCount != null && content === m.content
+      ? m.tokenCount : await countSystemTokensCached(content)) + MESSAGE_FRAME_TOKENS);
   }
   const requiredCost = candidates.reduce((sum, m) => sum + (requiredIds.has(m.id) ? costs.get(m.id) : 0), 0);
-  if (opts.requireLatestUser && (!latestUser || requiredCost > available)) {
+  const exceedsInputLimit = requiredCost > available;
+  if (opts.requireLatestUser && (!latestUser || exceedsInputLimit)) {
     throw new Error("The opening story and latest user message exceed the context budget. Increase the context limit or shorten one of those messages.");
   }
   let budget = Math.max(0, available - requiredCost);
@@ -108,11 +115,34 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     used += cost;
   }
   for (const m of candidates.filter((m) => selected.has(m.id)).sort((a, b) => a.order - b.order)) {
-    parts.push({ role: m.role, content: contentFor(m) });
+    const content = contentFor(m);
+    parts.push({ role: m.role, content });
+    entries.push({ id: m.id, order: m.order, role: m.role, content,
+      tokens: costs.get(m.id) - MESSAGE_FRAME_TOKENS,
+      source: anchors.some((anchor) => anchor.id === m.id) ? "Opening exchange"
+        : m.role === "user" ? "Recent user messages" : "Recent assistant story" });
+  }
+
+  const totals = new Map();
+  for (const entry of entries) totals.set(entry.source, (totals.get(entry.source) ?? 0) + entry.tokens);
+  totals.set("Framing overhead", parts.length * MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
+  const omitted = { "Summary checkpoint": 0, "Context window": candidates.length - selected.size,
+    "Regeneration cutoff": 0, "Empty story text": 0, "Older summaries": 0 };
+  for (const m of all) {
+    if (m.order >= upToOrder) omitted["Regeneration cutoff"]++;
+    else if (m.role === "summary") { if (m.id !== summaryMsg?.id || !summaryText) omitted["Older summaries"]++; }
+    else if (["user", "assistant"].includes(m.role)) {
+      if (!contentFor(m).trim()) omitted["Empty story text"]++;
+      else if (!candidateIds.has(m.id)) omitted["Summary checkpoint"]++;
+    }
   }
 
   return {
     apiMessages: parts,
+    entries,
+    contributions: [...totals].map(([source, tokens]) => ({ source, tokens })),
+    omitted,
+    exceedsInputLimit,
     usedTokens: used,
     windowedCount: selected.size,
     droppedCount: candidates.length - selected.size,
@@ -121,9 +151,8 @@ export async function buildContextForRequest(session, settings, opts = {}) {
 
 // Indicator metric: tokens that would be sent for the next turn (no new user turn yet).
 export async function computeContextUsage(session, settings, messages = null) {
-  const { usedTokens, droppedCount } = await buildContextForRequest(session, settings, { messages });
+  const context = await buildContextForRequest(session, settings, { messages });
   const max = settings.maxContextTokens;
   const threshold = (max * settings.autoSummaryThresholdPercent) / 100;
-  return { usedTokens, max, threshold,
-    overThreshold: usedTokens + settings.maxResponseTokens >= threshold, droppedCount };
+  return { ...context, max, threshold, overThreshold: context.usedTokens >= threshold };
 }

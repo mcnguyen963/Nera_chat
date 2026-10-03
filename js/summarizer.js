@@ -10,6 +10,7 @@ import { getMessages, getCheckpointMessages, addMessage, newMessageId } from "./
 import { chatCompletion } from "./llm-client.js";
 import { computeContextUsage, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
+import { storyText } from "./story-text.js";
 
 const CHUNK_TOKEN_BUDGET_DEFAULT = 250000;
 
@@ -29,7 +30,7 @@ function summarizerSettings(settings) {
 
 export function formatAsTranscript(msgs) {
   return msgs
-    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.role === "user" ? m.content : storyText(m.content)}`)
     .join("\n\n");
 }
 
@@ -40,7 +41,8 @@ export async function runSummarization(session, settings, opts = {}) {
   const N = settings.keepRecentMessagesAfterSummary;
 
   const raw = all
-    .filter((m) => m.role !== "summary")
+    .filter((m) => ["user", "assistant"].includes(m.role))
+    .map((m) => ({ ...m, content: m.role === "user" ? m.content : storyText(m.content) }))
     .sort((a, b) => a.order - b.order);
 
   if (raw.length <= N) {
@@ -67,10 +69,11 @@ export async function runSummarization(session, settings, opts = {}) {
       : null;
 
   const requestSettings = summarizerSettings(settings);
-  const inputLimit = settings.maxContextTokens - requestSettings.maxResponseTokens;
+  const inputLimit = settings.maxContextTokens;
   const frameTokens = MESSAGE_FRAME_TOKENS * 2 + REQUEST_FRAME_TOKENS;
   const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
-  let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
+  const cleanPriorSummary = storyText(priorSummary);
+  let running = cleanPriorSummary ? "Previous summary:\n" + cleanPriorSummary + "\n\n" : "";
 
   // Detail directive appended to every summarizer call — the stored system
   // prompt says "be concise", which makes models crush long transcripts into
@@ -120,7 +123,7 @@ export async function runSummarization(session, settings, opts = {}) {
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
     });
-    content = r.content;
+    content = storyText(r.content);
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");
     // Each chunk's summary becomes the "previous summary" for the next chunk.
     running = "Previous summary:\n" + content.trim() + "\n\n";

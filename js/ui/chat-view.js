@@ -7,6 +7,8 @@ import { buildContextForRequest, computeContextUsage } from "../context-builder.
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
+import { stripThinking } from "../story-text.js";
+import { initContextInspector, updateContextPreview, captureContextRequest, resetContextInspector } from "./context-view.js";
 import { updateSession, duplicateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
@@ -48,6 +50,18 @@ export function initChatView() {
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
   el.contextLabel = document.getElementById("context-label");
+  initContextInspector(async () => {
+    const requestedSession = state.sessionId;
+    if (!session || !state.settings) throw new Error("Select a story first.");
+    const messages = await ensureHistory();
+    if (requestedSession !== state.sessionId) throw new Error("Story changed while loading context.");
+    await updateIndicator();
+    if (requestedSession !== state.sessionId || !session || !state.settings) throw new Error("Story changed while loading context.");
+    const model = state.settings.modelId;
+    const context = await computeContextUsage(session, structuredClone(state.settings), messages);
+    if (requestedSession !== state.sessionId) throw new Error("Story changed while loading context.");
+    return { ...context, model };
+  });
   el.earlierBtn = document.createElement("button");
   el.earlierBtn.className = "btn earlier-messages";
   el.earlierBtn.type = "button";
@@ -233,6 +247,7 @@ export function setSession(sessionId) {
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
   state.sessionId = sessionId;
+  resetContextInspector();
   session = null;
   streamState = null;
   editingState = null;
@@ -735,17 +750,16 @@ export async function updateIndicator() {
   const usage = await computeContextUsage(session, state.settings, historyMessages ?? lastMessages);
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
-  const reserved = state.settings.maxResponseTokens;
-  const allocated = usage.usedTokens + reserved;
-  const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
+  const pct = usage.max > 0 ? (usage.usedTokens / usage.max) * 100 : 0;
   el.contextFill.style.width = Math.min(100, pct) + "%";
   el.contextFill.classList.toggle("over", usage.overThreshold);
   el.contextThreshold.style.left =
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
-    `${usage.usedTokens.toLocaleString()} input + ${reserved.toLocaleString()} output / ${usage.max.toLocaleString()} tokens` +
+    `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens` +
     (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "");
+  updateContextPreview({ ...usage, model: state.settings.modelId, isEstimate: !historyMessages && hasEarlier });
 }
 export const refreshContextIndicator = updateIndicator;
 
@@ -846,13 +860,14 @@ async function runAssistantTurn(opts = {}) {
   try {
     startStreamUI();
     const allMessages = opts.messages ?? await ensureHistory();
-    const { apiMessages } = await buildContextForRequest(session, settings, {
+    const context = await buildContextForRequest(session, settings, {
       ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
     });
 
     const { content, thinking } = await chatCompletion({
       settings,
-      messages: apiMessages,
+      messages: context.apiMessages,
+      onRequest: (request) => captureContextRequest({ ...context, max: settings.maxContextTokens }, request),
       onDelta: (t) => { updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
       onReasoning: (t) => { updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
     });
@@ -863,9 +878,10 @@ async function runAssistantTurn(opts = {}) {
     updatePetPhase("saving", petTurn);
 
     // Plan tag handling (spec §11): extract, save, strip from visible content.
-    const plan = extractPlan(content);
-    const planThread = extractPlanThread(content);
-    const clean = stripPlan(content);
+    const withoutThinking = stripThinking(content);
+    const plan = extractPlan(withoutThinking);
+    const planThread = extractPlanThread(withoutThinking);
+    const clean = stripPlan(withoutThinking);
     if (!clean && !(session.allowLlmPlanUpdates === true && plan?.length > 0)) {
       throw new Error("The model returned no narrative reply; nothing was saved.");
     }
@@ -1093,7 +1109,7 @@ function appendStream(kind, text) {
       current.frame = 0;
       if (streamState !== current) return;
       const sticky = isNearBottom();
-      current.content.textContent = stripPlan(current.contentText);
+      current.content.textContent = stripPlan(stripThinking(current.contentText));
       current.thinkingBody.textContent = current.thinkingText.slice(-4000);
       if (sticky) scrollToEnd();
     });
