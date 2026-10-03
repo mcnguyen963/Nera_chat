@@ -1,6 +1,8 @@
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
-import { extractScene, inspectSceneOutput, formatSceneForDisplay, latestScene, isPureOoc, MAX_SCENE_LENGTH } from '../scene.js';
+import { extractScene, inspectSceneOutput, formatSceneForDisplay, latestScene, isPureOoc, MAX_SCENE_LENGTH, carryScene, validateSceneValues } from '../scene.js';
+import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn } from '../turn-review.js';
+import { recoverScene } from '../scene-recovery.js';
 import { computeTurns } from '../turns.js';
 import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
@@ -747,9 +749,23 @@ function renderMessage(m) {
   content.className = "msg-content";
   content.textContent = m.content;
   wrap.appendChild(content);
+  if (m.role === 'assistant' && !isAcceptedTurn(m,normalizeMemory(session?.memory).protagonist)) {
+    const review = document.createElement('div');review.className = 'muted';
+    review.textContent = 'Needs review: '+(m.reviewWarnings?.length ? m.reviewWarnings : lintPlayerAgency(m.content,normalizeMemory(session?.memory).protagonist)).join(' ')+' Memory and summaries wait for acceptance.';
+    const accept = actionBtn('Accept reply',async () => {
+      if (busy) return;
+      try {
+        await messagesApi.acceptMessage(state.sessionId,m.id,m.order,m.revision ?? 0);
+        await reconcileStory();renderMessages(historyMessages);await updateIndicator();
+      } catch (error) { showTransientError(error.message); }
+    });
+    review.append(accept,actionBtn('Regenerate',() => { if (!busy) void regenerateMessage(m); }));wrap.append(review);
+  }
 
   if (m.role === 'assistant' && m.scene && normalizeMemory(session?.memory).scene && localStorage.getItem('nera.memory.showScene') !== '0') {
     const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = formatSceneForDisplay(m.scene); chip.title = 'Edit scene line';
+    if (m.sceneMeta?.kind === 'carried') chip.textContent += ' (carried forward · stale)';
+    if (m.sceneMeta?.kind === 'inferred') chip.textContent += ' (inferred)';
     chip.addEventListener('click', () => {
       const row = document.createElement('div'), field = document.createElement('input'); field.value = m.scene; field.maxLength = MAX_SCENE_LENGTH;
       const save = actionBtn('Save', async () => {
@@ -758,8 +774,8 @@ function renderMessage(m) {
           const raw = field.value.trim() || null; const result = await messagesApi.updateMessageScene(state.sessionId,m.id,m.order,raw);
           if (result.summaryReset) clearLocalSummary();
           session = { ...session,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations }; historyRevision = result.historyRevision;
-          lastMessages = lastMessages.map(x => x.id === m.id ? { ...x, scene: raw } : x);
-          if (historyMessages) historyMessages = historyMessages.map(x => x.id === m.id ? { ...x, scene: raw } : x);
+          lastMessages = lastMessages.map(x => x.id === m.id ? result.replacement : x);
+          if (historyMessages) historyMessages = historyMessages.map(x => x.id === m.id ? result.replacement : x);
           renderMessages(lastMessages); await updateIndicator();
         } catch (e) { showTransientError(e.message); save.disabled = false; }
       });
@@ -1051,14 +1067,37 @@ async function runAssistantTurn(opts = {}) {
     streamState?.wrap.remove(); streamState = null; refreshPetPlacement();
     const fresh = await getSessionFromServer(sid);
     if (!fresh) throw new Error('Story no longer exists.');
-    const planThread = extractPlanThread(content), clean = stripPlan(content);
+    let planThread = extractPlanThread(content); const clean = stripPlan(content);
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
     const ooc = isPureOoc(normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? ''));
-    const sceneEnabled = normalizeMemory(sourceSession.memory).scene;
+    const mem = normalizeMemory(sourceSession.memory),sceneEnabled = mem.scene;
     const sceneOutput = sceneEnabled ? inspectSceneOutput(content) : { scene:extractScene(content),warning:null };
-    const scene = ooc ? null : sceneOutput.scene;
-    const sceneWarning = sceneEnabled && !ooc ? sceneOutput.warning : null;
-    const message = { role:'assistant',content:clean,thinking,planThread,planBefore:sourceSession.longTermPlan ?? '',scene,ooc };
+    const userText = normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
+    const prior = latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
+    const reviewWarnings = sceneEnabled && !ooc ? [...lintPlayerAgency(clean,mem.protagonist),...lintUnestablishedTime(clean,{ prior:prior.scene,userText })] : [];
+    const pending = reviewWarnings.length > 0;
+    let acceptedScene = ooc ? { scene:null,sceneMeta:null } : sceneEnabled
+      ? sceneOutput.scene ? validateSceneValues(sceneOutput.scene,{ narration:clean,userText,prior:prior.scene }) : carryScene(prior)
+      : { scene:sceneOutput.scene,sceneMeta:null };
+    let sceneWarning = sceneEnabled && !ooc ? sceneOutput.warning : null;
+    if (acceptedScene.warnings?.length) sceneWarning = [sceneWarning,...acceptedScene.warnings].filter(Boolean).join(' ');
+    if (sceneEnabled && !ooc && !pending && !sceneOutput.scene && mem.sceneFallback && !maintenanceUsed && !memoryUpdater.isRunning(sid)) {
+      maintenanceUsed = true;
+      try {
+        acceptedScene = await recoverScene(settings,{ narration:clean,userText,prior,
+          names:loreEntries.filter(e => e.book === 'characters').map(e => e.name),plan:sourceSession.longTermPlan,
+          model:mem.sceneFallbackModel });
+        planThread ||= acceptedScene.planThread;
+        sceneWarning = 'Missing scene tag recovered as inferred state.'+(acceptedScene.warnings.length ? ' '+acceptedScene.warnings.join(' ') : '');
+      } catch (error) { sceneWarning += ' Scene recovery failed; prior state retained. '+error.message; }
+    } else if (sceneEnabled && !ooc && !pending && !sceneOutput.scene && mem.sceneFallback && (maintenanceUsed || memoryUpdater.isRunning(sid))) {
+      sceneWarning += ' Scene recovery deferred because maintenance is already using the extra call.';
+    }
+    const selectedScene = pending && !ooc ? carryScene(prior) : acceptedScene;
+    const message = { role:'assistant',content:clean,thinking,planThread,planBefore:sourceSession.longTermPlan ?? '',
+      scene:selectedScene.scene,sceneMeta:selectedScene.sceneMeta,ooc,
+      ...(sceneEnabled ? { acceptance:pending ? 'pending' : 'accepted',reviewWarnings,
+        sceneCandidate:pending && sceneOutput.scene ? { scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta } : null } : {}) };
     updatePetPhase('saving',petTurn);
     let saved;
     if (opts.overwriteId) {
@@ -1074,7 +1113,7 @@ async function runAssistantTurn(opts = {}) {
     historyMessages = historyChanged ? null : mergeMessages(sourceMessages,[saved]);
     historyRevision = historyChanged ? null : session.historyRevision;
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
-    if (sceneWarning) showTransientError('Reply saved, but scene state was not updated. '+sceneWarning);
+    if (sceneWarning) showTransientError('Reply saved. '+sceneWarning);
     lastMemoryReport = built.report;
     finishPetTurn('ready',petTurn);
     setBusy(false);

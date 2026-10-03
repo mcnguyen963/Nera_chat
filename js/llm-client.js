@@ -48,28 +48,30 @@ function checkFinishReason(reason) {
   }
 }
 
-function serializedRequestBody(settings, messages, stream = false) {
-  const body = { ...buildRequestBody(settings, messages), ...(stream ? { stream: true } : {}) };
+function serializedRequestBody(settings, messages, stream = false, format = {}) {
+  const body = { ...buildRequestBody(settings, messages), ...(stream ? { stream: true } : {}),
+    ...(format.responseFormat ? { response_format:format.responseFormat } : {}),
+    ...(format.provider ? { provider:format.provider } : {}) };
   const serialized = JSON.stringify(body);
   console.log("[LLM request body]", serialized);
   return serialized;
 }
 
-export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal }) {
+export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal });
+    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider });
 }
 
-async function nonStreamedCompletion({ settings, messages, signal }) {
+async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: serializedRequestBody(settings, messages),
+    body: serializedRequestBody(settings, messages, false, { responseFormat,provider }),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
@@ -87,11 +89,11 @@ async function nonStreamedCompletion({ settings, messages, signal }) {
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: serializedRequestBody(settings, messages, true),
+    body: serializedRequestBody(settings, messages, true, { responseFormat,provider }),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);

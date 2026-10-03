@@ -6,6 +6,8 @@ const files = {
   "authorDirection": "author-direction.md",
   "continuity": "continuity.md",
   "scene": "scene.md",
+  "replyContract": "reply-contract.md",
+  "sceneRecovery": "scene-recovery.md",
   "memoryExtraction": "memory-extraction.md",
   "memoryReorganize": "memory-reorganize.md",
   "lorebookMarkdown": "lorebook-conversion-markdown.md",

@@ -3,12 +3,14 @@ import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
 import { buildLoreIndex, findMentions, resolveScene, fitBook, renderEntry } from './lore-select.js';
 import { parseScene } from './scene.js';
+import { isAcceptedTurn } from './turn-review.js';
 export const DEFAULT_MEMORY_EXTRACTION_PROMPT = prompts.memoryExtraction;
 export const DEFAULT_MEMORY_REORGANIZE_PROMPT = prompts.memoryReorganize;
 export function fillProtagonist(text, protagonist) { return String(text).replaceAll('{{PROTAGONIST}}', protagonist || 'the main character'); }
 export const LOREBOOK_TEMPLATE_MD = prompts.lorebookMarkdown;
 export const LOREBOOK_TEMPLATE_JSON = prompts.lorebookJson;
 export async function buildExtractionMessages({ settings, mem, entries, messages, range, count }) {
+  if (range.messages.some(m => m.role === 'assistant' && !isAcceptedTurn(m,mem.protagonist))) throw new Error('Review or regenerate flagged replies before extracting their turns.');
   const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = settings.maxContextTokens - mem.updateMaxTokens - await count(prompt) - 500;
   const turns = computeTurns(messages);

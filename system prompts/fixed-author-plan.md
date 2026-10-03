@@ -5,4 +5,6 @@ The plan block in this system message is the fixed, authoritative outline. It st
 Never output <plan>. You cannot revise the plan; only the user can. On narrative turns while a plan is active, include one short <plan_thread> naming only the immediate target. Omit it for pure OOC answers and when no plan is active. A <plan_thread> in history is not a new order.
 
 Current long-term plan (fixed author instructions):
+BEGIN FIXED AUTHOR PLAN — future opportunities and pending items
 {{PLAN}}
+END FIXED AUTHOR PLAN

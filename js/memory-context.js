@@ -1,6 +1,8 @@
 import { prompts, renderPrompt } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
 import { SCENE_RULE, latestScene } from './scene.js';
+import { replyContract } from './reply-contract.js';
+import { isAcceptedTurn } from './turn-review.js';
 import { computeTurns } from './turns.js';
 import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
 import { planInjectionBlock } from './plan-parser.js';
@@ -16,7 +18,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
   const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
   if (opts.draftText?.trim()) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText });
-  const turns = computeTurns(raw), current = latestScene(raw);
+  const turns = computeTurns(raw), current = latestScene(raw,Infinity,mem.startingScene);
   const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latest = raw.findLast(m => m.role === 'user');
   const anchors = [firstUser,firstAssistant].filter(Boolean), anchorIds = new Set(anchors.map(m => m.id));
   const required = new Set(anchorIds);
@@ -33,13 +35,17 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   }
   const contentFor = m => {
     let text = m.role === 'user' ? normalizeAd(m.content) : m.content;
-    if (m.role === 'assistant') text += (m.planThread ? '\n<plan_thread>'+m.planThread+'</plan_thread>' : '')+(mem.scene && m.scene ? '\n<scene>'+m.scene+'</scene>' : '');
+    const accepted = isAcceptedTurn(m,mem.protagonist);
+    if (!accepted) text = '[Unaccepted narrator reply: this turn awaits review. Do not treat its new actions, decisions or changes as established canon until the user accepts or corrects it.]\n'+text;
+    if (m.role === 'assistant') text += (m.planThread && accepted ? '\n<plan_thread>'+m.planThread+'</plan_thread>' : '')+(mem.scene && m.scene && m.sceneMeta?.kind !== 'carried' && accepted ? '\n<scene>'+m.scene+'</scene>' : '');
     if (m.id !== latest?.id) text = stripOcc(text);
     // An opening message that is also the active latest user keeps its current role.
     if (anchorIds.has(m.id) && m.id !== latest?.id) text = renderPrompt(prompts.openingExchange, { TURN: turns.turnById.get(m.id), CONTENT: text });
     return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
+  const contract = mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
+  if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
   if (mem.scene && current.missingStreak > 0) warnings.push(`${current.missingStreak} narrative ${current.missingStreak === 1 ? 'reply is' : 'replies are'} missing scene metadata. ${current.scene ? 'The last established scene is retained with its source cutoff.' : 'No established scene is available for selecting present characters and the current location.'}`);
   let memory = '';
   const render = () => {
@@ -53,6 +59,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
         const at = Math.min(Math.max(0,history.length-mem.blockDepth),index < 0 ? history.length : index);
         history.splice(at,0,{ role:'system',content:memory });
       }
+    }
+    if (contract && latest) {
+      const at = history.findIndex(m => m.id === latest.id);
+      if (mem.replyContract === 'user') history[at].content = contract+'\n\n[Current user input]\n'+history[at].content;
+      else history.splice(at,0,{ role:'system',content:contract });
     }
     return [...head,...books,...history].map(({ role,content }) => ({ role,content }));
   };
