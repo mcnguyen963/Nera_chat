@@ -1,3 +1,4 @@
+import { prompts } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { normalizeName, STOPLIST, SECTION_KEYS } from './lore-lines.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
@@ -108,7 +109,7 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
   for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist)); }
   return { included, skipped, text, tokens:actual, cut:included.reduce((n,e) => n+e.linesCut,0) };
 }
-export function renderFactsBlock(fit) { return fit.text ? '[World facts and attributed accounts]\n'+fit.text : ''; }
+export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
 export function renderEventsBlock(fit) {
   const out = [], threads = fit.included.filter(e => e.entry.kind === 'thread'), timeline = fit.included.find(e => e.entry.kind === 'timeline');
   if (threads.length) out.push('Open threads:',...threads.map(e => renderEntry(e.entry,e.lineIds)));
@@ -117,10 +118,10 @@ export function renderEventsBlock(fit) {
     if (timeline.entry.sections.text.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); out.push(`[${meta.kind}; origin: ${meta.origin}; ${cutoffLabel(meta.cutoff)}]`,timeline.entry.sections.text.text); }
     out.push(...sortLines(timeline.entry.sections.text.lines).filter(l => timeline.lineIds.has(l.id)).map(renderLine));
   }
-  return out.length ? '[Story memory — open threads and key events]\n'+out.join('\n') : '';
+  return out.length ? prompts.eventsHeader+'\n'+out.join('\n') : '';
 }
 export function renderMemoryBlock({ scene, sceneFromTurn, sceneFromOrder, staleScene, plan = '', characters, locations }) {
-  const out = ['[Memory for the next reply — background notes from the app, not part of the conversation]'];
+  const out = [prompts.memoryHeader];
   if (scene) out.push(`Established scene snapshot at T${sceneFromTurn ?? '?'} (message order ${sceneFromOrder ?? '?'}${staleScene ? '; later narrative omitted scene metadata' : ''}): ${scene.raw}`);
   if (plan) out.push(plan);
   if (characters?.text) out.push('Characters:',characters.text);

@@ -1,3 +1,4 @@
+import { prompts } from './system-prompts.js';
 import { buildMemoryContext } from './memory-context.js';
 // Context window assembly (spec §6). Whole-message granularity, never cut mid-text.
 // Budget accounting: narrator prompt + plan block + summary + sliding-window messages
@@ -18,13 +19,7 @@ export const REQUEST_FRAME_TOKENS = 8;
 // to avoid re-running the tokenizer on every send/indicator refresh.
 const systemTokenCache = new Map();
 
-const AD_DIRECTIVE_RULE =
-  "A user message may contain <ad>...</ad> for an out-of-story author direction. " +
-  "A repeated final <ad> also closes that block. Follow the direction as user input, " +
-  "without treating it as story dialogue. For questions about the story, use only " +
-  "established context; say when the answer is unknown. Do not describe valid <ad> " +
-  "markup as garbled or fragmented.";
-
+const AD_DIRECTIVE_RULE = prompts.authorDirection;
 export function normalizeAdDirective(content) {
   if (!/^\s*<ad>/i.test(content)) return content;
   const openings = [...content.matchAll(/<ad>/gi)].length;

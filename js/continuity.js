@@ -1,5 +1,6 @@
+import { prompts } from './system-prompts.js';
 // Shared provenance and chronology contract. Classification is additive for old data.
-export const CONTINUITY_RULE = `Author canon and explicit author corrections are authoritative. Confirmed events update only the state they actually establish. Preserve attribution: beliefs, accusations, rumors, lies, official accounts, hidden truths and intended or attempted actions are distinct from completed events. Dates and source turns establish chronology, not blanket precedence over unrelated claims. Background and snapshots describe their cutoff, not the current scene. Personality cards and earlier assistant narration never authorize new player behavior. Preserve all qualifiers about player choices. The fixed author plan in the system message remains active; model plan output cannot revise it.`;
+export const CONTINUITY_RULE = prompts.continuity;
 export const revisionOf = m => m.revision ?? 0;
 export function evidenceFor(messages) { return messages.map(m => ({ id:m.id, revision:revisionOf(m), order:m.order })); }
 export function sectionMeta(section, entry) {

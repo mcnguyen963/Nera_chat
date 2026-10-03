@@ -1,17 +1,18 @@
+import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 const plain = x => JSON.parse(JSON.stringify(x));
 async function setup(stubs = {}, globals = {}) {
-  const cache = new Map(), context = vm.createContext({ console,structuredClone,TextEncoder,Date,Map,Set,AbortController,setTimeout,clearTimeout,...globals });
+  const cache = new Map(), context = vm.createContext({ URL,fetch:promptFetch,console,structuredClone,TextEncoder,Date,Map,Set,AbortController,setTimeout,clearTimeout,...globals });
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
     const pending = create(path); cache.set(path, pending); return pending;
   }
   async function create(path) {
     const source = stubs[path];
-    const module = source ? new vm.SyntheticModule(Object.keys(source),function () { for (const [k,v] of Object.entries(source)) this.setExport(k,v); },{ context,identifier:path }) : new vm.SourceTextModule(await readFile(new URL('../js/'+path,import.meta.url),'utf8'),{ context,identifier:path });
+    const module = source ? new vm.SyntheticModule(Object.keys(source),function () { for (const [k,v] of Object.entries(source)) this.setExport(k,v); },{ context,identifier:path }) : new vm.SourceTextModule(await readFile(new URL('../js/'+path,import.meta.url),'utf8'),{ context,identifier:path,initializeImportMeta:promptImportMeta });
     await module.link((specifier,parent) => load(specifier.startsWith('https:') ? specifier : new URL(specifier,'https://local/'+parent.identifier).pathname.slice(1)));
     return module;
   }
@@ -118,24 +119,25 @@ test('memory builder adds plan threads before scenes, keeps fixed plan in system
   const history = [...messages,{ id:'latest',order:13,role:'user',content:'Ask Mira' }]; history[1].planThread = 'letter';
   const e = l.makeEntry('characters','Mira'); e.sections.appearance.text = 'scar';
   const only = await b.buildContextForRequest({ id:'s',longTermPlan:'unique plan',memory:{ scene:true } },settings,{ messages:history,requireLatestUser:true }); assert.match(only.apiMessages[0].content,/unique plan/); assert.match(only.apiMessages.find(m => m.content.includes('text 1')).content,/<plan_thread>.*<\/plan_thread>\n<scene>/s);
-  for (const blockRole of ['system','user']) { const result = await b.buildContextForRequest({ id:'s',longTermPlan:'unique plan',memory:{ scene:true,lorebooks:true,memoryBlock:true,blockDepth:3,blockRole } },settings,{ messages:history,loreEntries:[e],requireLatestUser:true }); assert.match(result.apiMessages[0].content,/unique plan/); const memory = result.apiMessages.find(m => m.content.includes('## Mira')); assert.doesNotMatch(memory.content,/unique plan/); assert.match(memory.content,/fixed author plan/); if (blockRole === 'system') assert.equal(result.apiMessages.length-result.apiMessages.indexOf(memory)-1,3); else assert.match(result.apiMessages.at(-1).content,/^<memory>/); assert.ok(result.usedTokens+settings.maxResponseTokens<=settings.maxContextTokens); }
+  for (const blockRole of ['system','user']) { const result = await b.buildContextForRequest({ id:'s',longTermPlan:'unique plan',memory:{ scene:true,lorebooks:true,memoryBlock:true,blockDepth:3,blockRole } },settings,{ messages:history,loreEntries:[e],requireLatestUser:true }); assert.match(result.apiMessages[0].content,/unique plan/); const memory = result.apiMessages.find(m => m.content.includes('## Mira')); assert.doesNotMatch(memory.content,/unique plan/); assert.doesNotMatch(memory.content,/fixed author plan/); if (blockRole === 'system') assert.equal(result.apiMessages.length-result.apiMessages.indexOf(memory)-1,3); else assert.match(result.apiMessages.at(-1).content,/^<memory>/); assert.ok(result.usedTokens+settings.maxResponseTokens<=settings.maxContextTokens); }
 });
 test('cache window aligns, falls back for oversized blocks, reports gaps and unused budget returns with F5 off',async () => {
   const use = await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } }), b = await use('context-builder.js'), l = await use('lore-lines.js');
+  const overhead = (await b.buildContextForRequest({ id:'s' },settings,{ messages:[] })).usedTokens;
   const history = Array.from({ length:81 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'x'.repeat(60) }));
   const session = { id:'s',memory:{ blockWindow:true,batchTurns:10,autoUpdate:true },memoryState:{ extractedThroughOrder:2 } };
-  const result = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:4300,maxResponseTokens:100 },{ messages:history,requireLatestUser:true }); const window = result.report.blocks.find(b => b.key === 'window'); assert.equal(window.mode,'block'); assert.equal((window.fromTurn-1)%10,0); assert.ok(result.report.gap);
-  const next = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:4300,maxResponseTokens:100 },{ messages:[...history,{ id:'next',order:82,role:'assistant',content:'x'.repeat(60) },{ id:'user',order:83,role:'user',content:'x'.repeat(60) }],requireLatestUser:true }); assert.equal(next.report.blocks.find(b => b.key === 'window').fromTurn,window.fromTurn);
-  const fallback = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:2300,maxResponseTokens:100 },{ messages:history,requireLatestUser:true }); assert.equal(fallback.report.blocks.find(b => b.key === 'window').mode,'fallback');
+  const result = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:overhead+2900,maxResponseTokens:100 },{ messages:history,requireLatestUser:true }); const window = result.report.blocks.find(b => b.key === 'window'); assert.equal(window.mode,'block'); assert.equal((window.fromTurn-1)%10,0); assert.ok(result.report.gap);
+  const next = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:overhead+2900,maxResponseTokens:100 },{ messages:[...history,{ id:'next',order:82,role:'assistant',content:'x'.repeat(60) },{ id:'user',order:83,role:'user',content:'x'.repeat(60) }],requireLatestUser:true }); assert.equal(next.report.blocks.find(b => b.key === 'window').fromTurn,window.fromTurn);
+  const fallback = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:overhead+900,maxResponseTokens:100 },{ messages:history,requireLatestUser:true }); assert.equal(fallback.report.blocks.find(b => b.key === 'window').mode,'fallback');
   const card = l.makeEntry('characters','Mira'); card.sections.notes.text = 'canon';
-  const a = await b.buildContextForRequest({ ...session,memory:{ lorebooks:true,books:{ characters:{ budget:1200 } } } },{ ...settings,maxContextTokens:5000,maxResponseTokens:100 },{ messages:history,loreEntries:[card],requireLatestUser:true }); const c = await b.buildContextForRequest({ ...session,memory:{ lorebooks:true,blockWindow:true,books:{ characters:{ budget:1200 } } } },{ ...settings,maxContextTokens:5000,maxResponseTokens:100 },{ messages:history,loreEntries:[card],requireLatestUser:true }); assert.ok(a.windowedCount>=c.windowedCount);
+  const a = await b.buildContextForRequest({ ...session,memory:{ lorebooks:true,books:{ characters:{ budget:1200 } } } },{ ...settings,maxContextTokens:overhead+3600,maxResponseTokens:100 },{ messages:history,loreEntries:[card],requireLatestUser:true }); const c = await b.buildContextForRequest({ ...session,memory:{ lorebooks:true,blockWindow:true,books:{ characters:{ budget:1200 } } } },{ ...settings,maxContextTokens:overhead+3600,maxResponseTokens:100 },{ messages:history,loreEntries:[card],requireLatestUser:true }); assert.ok(a.windowedCount>=c.windowedCount);
 });
 test('extraction input bounds whole turns and excludes thinking and hidden plans; reorganize never rewrites user text',async () => {
   const use = await setup(), p = await use('memory-prompts.js'), t = await use('turns.js'), { normalizeMemory } = await use('memory-settings.js'), l = await use('lore-lines.js');
   const mem = normalizeMemory({ batchTurns:2,lagTurns:0,updateMaxTokens:256 }), range = t.dueRange(messages,{ extractedThroughOrder:0 },mem);
   const built = await p.buildExtractionMessages({ settings:{ ...settings,memoryExtractionPrompt:'extract {{PROTAGONIST}}' },mem,entries:[],messages,range,count }); assert.equal(built.range.endOrder,4); assert.match(built.messages[1].content,/NEW TURNS 1–2/);
   await assert.rejects(() => p.buildExtractionMessages({ settings:{ ...settings,maxContextTokens:800,memoryExtractionPrompt:'prompt' },mem,entries:[],messages:messages.map(m => ({ ...m,content:'x'.repeat(5000) })),range:{ ...range,messages:range.messages.map(m => ({ ...m,content:'x'.repeat(5000) })) },count }),/One turn is too long/);
-  const entry = l.makeEntry('characters','Mira'); entry.sections.appearance.text = 'canon'; entry.sections.appearance.lines = [line('a','scar',2)]; const input = p.buildReorganizeMessages({ settings,mem,entries:[entry] }); assert.match(input[1].content,/canon, unknown cutoff, do not repeat/); assert.equal(entry.sections.appearance.text,'canon');
+  const entry = l.makeEntry('characters','Mira'); entry.sections.appearance.text = 'canon'; entry.sections.appearance.lines = [line('a','scar',2)]; const input = p.buildReorganizeMessages({ settings,mem,entries:[entry] }); assert.match(input[1].content,/canon, unknown cutoff/); assert.equal(entry.sections.appearance.text,'canon');
 });
 
 async function updaterHarness(complete) {
@@ -185,7 +187,8 @@ test('reorganize batches stay bounded, ignore outside names and leave user lines
 test('first-turn memory block keeps the latest user after it and small books cannot displace required messages',async () => {
   const use=await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } }), builder=await use('context-builder.js'), { makeEntry }=await use('lore-lines.js');
   const first=[{ id:'user',order:1,role:'user',content:'Begin' }]; const result=await builder.buildContextForRequest({ id:'s',memory:{ memoryBlock:true } },settings,{ messages:first,requireLatestUser:true }); assert.equal(result.apiMessages.at(-1).role,'user'); assert.equal(result.apiMessages.at(-2).role,'system');
-  const card=makeEntry('facts','Magic'); card.sections.text.text='x'.repeat(20000); const bounded=await builder.buildContextForRequest({ id:'s',memory:{ lorebooks:true } },{ ...settings,maxContextTokens:3000,maxResponseTokens:100 },{ messages:first,loreEntries:[card],requireLatestUser:true }); assert.equal(bounded.apiMessages.at(-1).content,'Begin'); assert.ok(bounded.report.skipped.some(e => e.reason === 'over budget'));
+  const overhead=(await builder.buildContextForRequest({ id:'s' },settings,{ messages:[] })).usedTokens;
+  const card=makeEntry('facts','Magic'); card.sections.text.text='x'.repeat(20000); const bounded=await builder.buildContextForRequest({ id:'s',memory:{ lorebooks:true } },{ ...settings,maxContextTokens:overhead+1000,maxResponseTokens:100 },{ messages:first,loreEntries:[card],requireLatestUser:true }); assert.equal(bounded.apiMessages.at(-1).content,'Begin'); assert.ok(bounded.report.skipped.some(e => e.reason === 'over budget'));
 });
 
 test('an alias clash never leaves an empty automatic draft behind',async () => {
@@ -232,9 +235,11 @@ test('equal dates preserve source turns and distinct hidden truth, belief and of
   const rendered = select.renderEntry(parsed.entries[0]);
   assert.match(rendered,/background; origin: import; unknown cutoff/);
   assert.match(rendered,/\[T7 · Day 2\] Liora believes Elise died/); assert.match(rendered,/\[T8 · Day 2\] Cassian recorded/);
-  assert.match(select.MEMORY_RULE,/beliefs, accusations, rumors, lies, official accounts, hidden truths/);
+  assert.match(select.MEMORY_RULE,/narrator-only secrets, public accounts, NPC beliefs, rumors/);
+  assert.match(select.MEMORY_RULE,/intentions and attempts, not completed events/);
   const e = l.makeEntry('characters','Player'); e.sections.personality.text = 'Bold';
-  assert.match(select.MEMORY_RULE,/never authorize new player behavior/);
+  const { prompts } = await use('system-prompts.js');
+  assert.match(prompts.narrator,/A personality card does not authorize acting for Nera/);
 });
 test('extraction validates source turns, attaches all turn evidence and preserves attempts and qualifiers',async () => {
   const use = await setup(), l = await use('lore-lines.js'), { computeTurns } = await use('turns.js');
@@ -301,4 +306,24 @@ test('version 2 chat imports preserve hidden metadata and fixed author plan; ver
   await api.importSillyTavern({ name:'story.jsonl',text:async () => payload });
   assert.equal(saved[0][1][0].revision,2); assert.equal(saved[0][1][0].narratorTurn,9); assert.equal(saved[0][1][0].scene,'Day 2 · Inn'); assert.equal(updates[0][1].longTermPlan,'Fixed'); assert.equal(imported[0][1].writes[0].data.sections.text.kind,'background');
   const old = api.parseSillyTavernJsonl('{"character_name":"Old"}\n{"is_user":true,"mes":"Hello"}'); assert.equal(old.messages[0].role,'user'); assert.equal(old.metadata,null);
+});
+
+test('narrator requests inject each shared contract once and keep plan rules outside the narrative prompt', async () => {
+  const use = await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } });
+  const { prompts } = await use('system-prompts.js');
+  const builder = await use('context-builder.js');
+  assert.doesNotMatch(prompts.narrator, /plan/i);
+  const options = { messages:[{ id:'u',order:1,role:'user',content:'Begin.' }],requireLatestUser:true };
+  const base = { id:'s',longTermPlan:'Meet Mira at the inn.' };
+  const config = { ...settings,narratorSystemPrompt:prompts.narrator };
+  const request = await builder.buildContextForRequest(base, config, options);
+  const system = request.apiMessages[0].content;
+  for (const heading of ['# AUTHOR DIRECTIVES AND OOC','# AUTHORITY AND SOURCE PRIORITY','# LONG-TERM PLAN']) {
+    assert.equal(system.split(heading).length-1, 1, heading);
+  }
+  assert.doesNotMatch(system, /treat that plan as lost|include a new <plan>|# SCENE TAG OUTPUT CONTRACT/);
+  assert.match(system, /Meet Mira at the inn/);
+  const sceneRequest = await builder.buildContextForRequest({ ...base,memory:{ scene:true } }, config, options);
+  assert.equal(sceneRequest.apiMessages[0].content.split('# SCENE TAG OUTPUT CONTRACT').length-1, 1);
+  assert.match(sceneRequest.apiMessages[0].content, /Pure OOC questions, clarifications and requested summaries omit the scene tag/);
 });

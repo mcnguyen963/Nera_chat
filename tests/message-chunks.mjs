@@ -1,3 +1,4 @@
+import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 // Run: node --experimental-vm-modules --test tests/message-chunks.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -124,7 +125,7 @@ async function setup(legacyCount = 0) {
       return () => { active = false; };
     },
   };
-  const context = vm.createContext({ TextEncoder, Date, structuredClone, console });
+  const context = vm.createContext({ URL, fetch:promptFetch, TextEncoder, Date, structuredClone, console });
   const modules = new Map();
   async function load(path) {
     if (modules.has(path)) return modules.get(path);
@@ -138,7 +139,7 @@ async function setup(legacyCount = 0) {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);
       }, { context, identifier: path })
       : new vm.SourceTextModule(await readFile(new URL('../js/' + path, import.meta.url), 'utf8'),
-        { context, identifier: path });
+        { context, identifier: path, initializeImportMeta:promptImportMeta });
     modules.set(path, module);
     await module.link((specifier, parent) => load(specifier.startsWith('https:')
       ? specifier : new URL(specifier, 'https://local/' + parent.identifier).pathname.slice(1)));

@@ -1,6 +1,5 @@
-export const SCENE_RULE = (protagonist = '') => `Ordinary narrative replies end with one hidden scene tag, after story text and any <plan_thread>:
-<scene>DATE · TIME OF DAY · PLACE · present: NAME, NAME</scene>
-Describe only established conditions. Use unknown for missing fields; never invent a date, time passage, movement, attendance or completed action. Include ${protagonist || 'the main character'} only when established as present. Pure OOC answers may omit the scene tag; omission preserves the established scene. The scene tag is hidden from the reader.`;
+import { prompts, renderPrompt } from './system-prompts.js';
+export const SCENE_RULE = (protagonist = '') => renderPrompt(prompts.scene, { PROTAGONIST: protagonist || 'the main character' });
 export function isPureOoc(text) { return /^\s*<(?:ad|ooc)>[\s\S]*?<\/(?:ad|ooc)>\s*$/i.test(String(text ?? '')); }
 export function extractScene(text) {
   const matches = [...String(text ?? '').matchAll(/<scene>([\s\S]*?)<\/scene>/gi)];

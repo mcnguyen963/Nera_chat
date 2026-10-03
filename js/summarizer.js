@@ -1,3 +1,4 @@
+import { prompts, renderPrompt } from './system-prompts.js';
 import { CONTINUITY_RULE, requestSource, evidenceFor } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
 // Rolling summarization (spec §8). The new summary always folds in the old summary
@@ -71,7 +72,7 @@ export async function runSummarization(session, settings, opts = {}) {
       : null;
 
   const probe = await buildContextForRequest({ ...session,activeSummaryMessageId:null,breakpointOrder:0 },settings,{ ...opts,messages:all,loreEntries:[],onlyRequiredWindow:true,requireLatestUser:true });
-  const summaryHeaderCost = await countTokens(`[Historical summary through message order ${newBreakpointOrder}; this is not the current scene]\n`)+MESSAGE_FRAME_TOKENS+32;
+  const summaryHeaderCost = await countTokens(renderPrompt(prompts.historicalSummary, { CUTOFF: 'message order '+newBreakpointOrder, SUMMARY: '' }))+MESSAGE_FRAME_TOKENS+32;
   const capacity = Math.floor(settings.maxContextTokens-settings.maxResponseTokens-probe.usedTokens-summaryHeaderCost);
   if (capacity < 64 || probe.report.warnings.some(w => w.startsWith('Recent window reduced'))) throw new Error('No room for a summary and the required recent conversation; checkpoint was not changed.');
   const requestSettings = summarizerSettings(settings,capacity);
@@ -81,7 +82,7 @@ export async function runSummarization(session, settings, opts = {}) {
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
   const summaryPrompt = (settings.summarizerSystemPrompt || '')+'\n\n'+CONTINUITY_RULE;
-  const detailDirective = `\n\nPreserve attributed facts, player-action qualifiers and unresolved threads within ${requestSettings.maxResponseTokens} output tokens. Output only the summary text.`;
+  const detailDirective = '\n\n'+renderPrompt(prompts.summaryOutput, { MAX_OUTPUT_TOKENS: requestSettings.maxResponseTokens });
 
   let content = null;
   let offset = 0;
