@@ -6,9 +6,9 @@
 // checkpoint-to-present message list; the summary message + session pointer update
 // are committed in ONE transaction (1 read + 2 writes instead of 2 reads + 3 writes).
 
-import { getMessages, getCheckpointMessages, addMessage, newMessageId } from "./messages.js";
+import { getMessages, addMessage, newMessageId } from "./messages.js";
 import { chatCompletion } from "./llm-client.js";
-import { computeContextUsage, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
+import { computeContextUsage, openingExchange, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
 import { storyText } from "./story-text.js";
 
@@ -35,14 +35,14 @@ export function formatAsTranscript(msgs) {
 }
 
 export async function runSummarization(session, settings, opts = {}) {
-  const all = opts.messages ?? (opts.full
-    ? await getMessages(session.id)
-    : await getCheckpointMessages(session));
+  // Full history identifies the permanent opening anchors even after a checkpoint.
+  const all = opts.messages ?? await getMessages(session.id);
   const N = settings.keepRecentMessagesAfterSummary;
 
   const raw = all
     .filter((m) => ["user", "assistant"].includes(m.role))
     .map((m) => ({ ...m, content: m.role === "user" ? m.content : storyText(m.content) }))
+    .filter((m) => m.content.trim())
     .sort((a, b) => a.order - b.order);
 
   if (raw.length <= N) {
@@ -54,8 +54,9 @@ export async function runSummarization(session, settings, opts = {}) {
   // from the very start and drop the old summary (fresh full-history summary).
   const hasSummary = all.some((m) => m.id === session.activeSummaryMessageId);
   const fromOrder = opts.full || !hasSummary ? 0 : (session.breakpointOrder ?? 0);
+  const openingIds = new Set(openingExchange(raw).map((m) => m.id));
   const toFold = raw.filter(
-    (m) => m.order > fromOrder && m.order <= newBreakpointOrder
+    (m) => !openingIds.has(m.id) && m.order > fromOrder && m.order <= newBreakpointOrder
   );
   if (toFold.length === 0) {
     return { skipped: true, reason: "Nothing new to fold in since the last breakpoint." };

@@ -363,3 +363,32 @@ test('copy through a clicked message includes that message despite gaps in order
   await assert.rejects(h.sessions.duplicateSession('s', null, 'missing'), /no longer exists/);
   assert.deepEqual([...h.documents.keys()], paths);
 });
+
+test('partial copies restore generated plans at the selected message cutoff', async () => {
+  const h = await setup();
+  await h.api.addMessage('s', { role: 'user', content: 'Start' }, { id: 'u1' });
+  await h.api.addMessage('s', { role: 'assistant', content: 'First scene', planBefore: 'Initial plan' }, {
+    id: 'a1', sessionUpdate: { longTermPlan: 'Plan after first scene', allowLlmPlanUpdates: true },
+  });
+  await h.api.addMessage('s', { role: 'user', content: 'Continue' }, { id: 'u2' });
+  await h.api.addMessage('s', { role: 'assistant', content: 'Later reveal', planBefore: 'Plan after first scene' }, {
+    id: 'a2', sessionUpdate: { longTermPlan: 'Future reveal in latest plan' },
+  });
+  const partial = await h.sessions.duplicateSession('s', null, 'a1');
+  assert.equal(h.documents.get(`users/u/sessions/${partial}`).longTermPlan, 'Plan after first scene');
+  const empty = await h.sessions.duplicateSession('s', 0);
+  assert.equal(h.documents.get(`users/u/sessions/${empty}`).longTermPlan, 'Initial plan');
+  const full = await h.sessions.duplicateSession('s');
+  assert.equal(h.documents.get(`users/u/sessions/${full}`).longTermPlan, 'Future reveal in latest plan');
+  h.documents.get(h.sessionPath).allowLlmPlanUpdates = false;
+  const fixed = await h.sessions.duplicateSession('s', null, 'a1');
+  assert.equal(h.documents.get(`users/u/sessions/${fixed}`).longTermPlan, 'Future reveal in latest plan');
+});
+
+test('partial copies reject unknown historical generated plans', async () => {
+  const h = await setup();
+  await h.api.addMessage('s', { role: 'assistant', content: 'Legacy reply' }, {
+    sessionUpdate: { longTermPlan: 'Later plan', allowLlmPlanUpdates: true },
+  });
+  await assert.rejects(h.sessions.duplicateSession('s', 0), /plan.*cutoff is unknown/);
+});

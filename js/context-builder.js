@@ -48,6 +48,13 @@ async function countSystemTokensCached(text) {
   return cached;
 }
 
+// Input must be cleaned story messages in order, as used by both builders.
+export function openingExchange(messages) {
+  const firstUser = messages.find((m) => m.role === "user");
+  const firstAssistant = firstUser && messages.find((m) => m.role === "assistant" && m.order > firstUser.order);
+  return [firstUser, firstAssistant].filter(Boolean);
+}
+
 export async function buildContextForRequest(session, settings, opts = {}) {
   const upToOrder = opts.upToOrder ?? Infinity; // regenerate: only messages before this order
   // The opening exchange is a permanent story anchor, including after a
@@ -82,10 +89,8 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const contentFor = (m) => m.role === "user" ? normalizeAdDirective(m.content) : storyText(m.content);
   const raw = all.filter((m) => ["user", "assistant"].includes(m.role) && m.order < upToOrder && contentFor(m).trim())
     .sort((a, b) => a.order - b.order);
-  const firstUser = raw.find((m) => m.role === "user");
-  const firstAssistant = firstUser && raw.find((m) => m.role === "assistant" && m.order > firstUser.order);
   const latestUser = [...raw].reverse().find((m) => m.role === "user");
-  const anchors = [firstUser, firstAssistant].filter(Boolean);
+  const anchors = openingExchange(raw);
   const recent = raw.filter((m) => m.order > (summaryText ? (session.breakpointOrder ?? 0) : 0));
   const candidates = [...new Map([...anchors, ...recent].map((m) => [m.id, m])).values()];
   const candidateIds = new Set(candidates.map((m) => m.id));

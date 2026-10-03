@@ -35,6 +35,7 @@ let latestReady = false;
 let historyMessages = null; // full history or the active checkpoint onward
 let historyStartOrder = 0;
 let historyLoading = null;
+let sessionEpoch = 0;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
 const renderedMessages = new Map();
@@ -247,6 +248,7 @@ export function setSession(sessionId) {
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
   state.sessionId = sessionId;
+  ++sessionEpoch;
   resetContextInspector();
   session = null;
   streamState = null;
@@ -554,7 +556,10 @@ function renderMessage(m) {
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
     if (!confirm("Delete this message permanently?")) return;
-    const { summaryReset } = await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
+    const sourceId = state.sessionId;
+    const epoch = sessionEpoch;
+    const { summaryReset } = await messagesApi.deleteMessage(sourceId, m.id, m.order);
+    if (sourceId !== state.sessionId || epoch !== sessionEpoch) return;
     if (summaryReset) clearLocalSummary();
     if (historyMessages) historyMessages = historyMessages.filter((item) => item.id !== m.id);
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
@@ -635,10 +640,13 @@ function startEdit(m, wrap) {
   };
   const save = actionBtn("Save", "small", async () => {
     const text = ta.value;
+    const sourceId = state.sessionId;
+    const epoch = sessionEpoch;
     save.disabled = true;
     cancel.disabled = true;
     try {
-      const { tokenCount, summaryReset } = await messagesApi.editMessage(state.sessionId, m.id, text, m.order);
+      const { tokenCount, summaryReset } = await messagesApi.editMessage(sourceId, m.id, text, m.order);
+      if (sourceId !== state.sessionId || epoch !== sessionEpoch) return;
       if (summaryReset) clearLocalSummary();
       lastMessages = lastMessages.map((item) =>
         item.id === m.id ? { ...item, content: text, tokenCount, editedAt: item.editedAt || true } : item
@@ -796,6 +804,8 @@ function clearLocalSummary() {
 }
 
 async function regenerateMessage(message) {
+  if (busy || editingState) return;
+  setBusy(true);
   try {
     const all = await ensureHistory();
     const latest = all.filter((m) => m.role !== "summary").at(-1);
@@ -811,7 +821,7 @@ async function regenerateMessage(message) {
     });
   } catch (err) {
     showTransientError(err.message || String(err));
-  }
+  } finally { setBusy(false); }
 }
 
 async function handleSend(e) {

@@ -93,7 +93,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
   const sourceSnap = await getDocFromServer(sessionDoc(sourceId));
   const source = sourceSnap.exists() ? { id: sourceSnap.id, ...sourceSnap.data() } : null;
   if (!source) throw new Error("Session not found.");
-  const msgsSnap = messageCount === 0 ? { docs: [] } : await getDocsFromServer(
+  const msgsSnap = messageCount === 0 && source.allowLlmPlanUpdates !== true ? { docs: [] } : await getDocsFromServer(
     collection(db, "users", currentUid(), "sessions", sourceId, "messageChunks")
   );
   const messages = msgsSnap.docs.flatMap((d) => d.data().messages ?? [])
@@ -110,11 +110,24 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
   const groups = packMessages(selected);
   const last = groups.at(-1);
   const hasSummary = selected.some((m) => m.id === source.activeSummaryMessageId && m.role === "summary");
+  let longTermPlan = source.longTermPlan ?? "";
+  if (source.allowLlmPlanUpdates === true && selected.length < messages.length) {
+    // The next assistant's saved input plan is the plan at this copy's cutoff.
+    // Fixed user plans remain shared intentionally; generated plans need history.
+    const nextReply = messages.slice(selected.length).find((m) => m.role === "assistant");
+    if (nextReply) {
+      if (nextReply.planBefore == null) {
+        throw new Error("The plan at this copy's cutoff is unknown. This reply predates plan history tracking.");
+      }
+      longTermPlan = nextReply.planBefore;
+    }
+  }
 
   const id = newId("sess");
   const { id: _omit, createdAt: _c, updatedAt: _u, ...fields } = source;
   const data = {
     ...fields,
+    longTermPlan,
     title: (source.title || "Session") + " (copy)",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
