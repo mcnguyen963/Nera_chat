@@ -228,7 +228,7 @@ test('assistant plan updates are committed with the message', async () => {
   assert.equal((await h.api.getMessages('s'))[0].content, 'A revised event');
 });
 
-test('Editing folded story history atomically invalidates its summary checkpoint', async () => {
+test('Editing folded story history preserves its checkpoint; deleting the active summary resets it', async () => {
   const h = await setup();
   const first = await h.api.addMessage('s', { role: 'user', content: 'Old fact' });
   await h.api.addMessage('s', { role: 'assistant', content: 'Reply' });
@@ -237,9 +237,10 @@ test('Editing folded story history atomically invalidates its summary checkpoint
   });
   assert.equal(summary.order, 3);
   const edited = await h.api.editMessage('s', first.id, 'Corrected fact', first.order);
-  assert.equal(edited.summaryReset, true);
-  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, null);
-  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 0);
+  assert.equal(edited.summaryReset, false);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, 'summary');
+  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 2);
+  assert.equal((await h.api.getMessages('s'))[0].content, 'Corrected fact');
   const secondSummary = await h.api.addMessage('s', { role: 'summary', content: 'Rebuilt' }, {
     sessionUpdate: { activeSummaryMessageId: 'summary2', breakpointOrder: 2 }, id: 'summary2',
   });

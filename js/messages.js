@@ -247,7 +247,8 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
   for (const record of records) batch.set(chunkRef(sessionId, record.id), record.data);
   const sessionSnap = await getDocFromServer(sessionRef(sessionId));
   const sessionData = sessionSnap.data();
-  const summaryReset = !!sessionData?.activeSummaryMessageId &&
+  // Edits preserve the active checkpoint; only deletions invalidate it.
+  const summaryReset = !replacement && !!sessionData?.activeSummaryMessageId &&
     ((current.role !== "summary" && order <= (sessionData.breakpointOrder ?? 0)) ||
       (current.role === "summary" && !replacement && messageId === sessionData.activeSummaryMessageId));
   const sessionPatch = {
