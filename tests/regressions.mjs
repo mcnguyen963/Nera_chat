@@ -85,7 +85,11 @@ async function harness() {
     query: (...args) => { calls.queries.push(args); return args; },
     orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback) => { (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(callback); return () => {}; },
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
-    getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
+    getDocFromServer: async () => {
+      calls.reads++;
+      if (calls.serverError) throw new Error(calls.serverError);
+      return calls.serverSnapshot ?? { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc };
+    },
     setDoc: async (_ref, settings) => {
       if (calls.fail) throw new Error('write denied');
       calls.writes.push(structuredClone(settings));
@@ -1076,4 +1080,67 @@ test('Rolling summary excludes opening anchors after an existing checkpoint', as
   assert.match(request, /New user event/);
   assert.match(request, /New assistant event/);
   assert.doesNotMatch(request, /OPENING|Already folded/);
+});
+
+test('Sync replaces cached history and metadata with server data and invalidates other cached chats', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView();
+  const open = async id => {
+    chat.setSession(id);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    h.calls.sessionCallbacks.at(-1)({ id, exists: () => true, data: () => ({ title: id, longTermPlan: 'Old plan' }) });
+    h.calls.latestCallbacks.at(-1)({ messages: [
+      { id: 'old', order: 1, role: 'assistant', content: 'Stale story' },
+    ], hasEarlier: false });
+  };
+  await open('B'); await open('A');
+  const staleSession = h.calls.sessionCallbacks.at(-1);
+  const staleMessages = h.calls.latestCallbacks.at(-1);
+  h.calls.serverSnapshot = { id: 'A', exists: () => true, data: () => ({
+    title: 'Updated elsewhere', longTermPlan: 'Server plan', activeSummaryMessageId: 'sum', breakpointOrder: 2,
+  }) };
+  h.calls.historyMessages = [
+    { id: 'u', order: 1, role: 'user', content: 'Original opening' },
+    { id: 'a', order: 2, role: 'assistant', content: 'Server story' },
+    { id: 'sum', order: 3, role: 'summary', content: 'Server summary' },
+    { id: 'latest', order: 4, role: 'assistant', content: 'Latest from other device' },
+  ];
+  let metadata;
+  h.document.addEventListener('session-changed', event => { metadata = event.detail.session; });
+  await h.document.dispatchEvent({ type: 'sync-chat' });
+  assert.equal(h.calls.historyReads, 1);
+  assert.equal(chat.getStoryPrivateNote().message.content, 'Latest from other device');
+  assert.equal(metadata.longTermPlan, 'Server plan');
+  assert.equal(metadata.activeSummaryMessageId, 'sum');
+  assert.equal(h.state.busy, false);
+  staleSession({ id: 'A', exists: () => true, data: () => ({ longTermPlan: 'Old plan' }) });
+  staleMessages({ messages: [{ id: 'old', order: 1, role: 'assistant', content: 'Stale callback' }], hasEarlier: false });
+  h.calls.latestCallbacks.at(-1)({ messages: [{ id: 'latest', order: 4, role: 'assistant', content: 'Firebase cache' }], hasEarlier: false, fromCache: true });
+  assert.equal(chat.getStoryPrivateNote().message.content, 'Latest from other device');
+  h.calls.latestCallbacks.at(-1)({ messages: [
+    { id: 'latest', order: 4, role: 'assistant', content: 'Fresh live update' },
+  ], hasEarlier: false, fromCache: false });
+  assert.equal(chat.getStoryPrivateNote().message.content, 'Fresh live update');
+  const count = h.calls.subscriptions.length;
+  chat.setSession('B');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.subscriptions.length, count + 1);
+  assert.equal(h.calls.requests.length, 0);
+});
+
+test('Failed sync preserves displayed history and releases busy state', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('A');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)({ id: 'A', exists: () => true, data: () => ({ title: 'A' }) });
+  h.calls.latestCallbacks.at(-1)({ messages: [
+    { id: 'a', order: 1, role: 'assistant', content: 'Keep displayed story' },
+  ], hasEarlier: false });
+  h.calls.serverError = 'offline';
+  await chat.syncChatData();
+  assert.equal(chat.getStoryPrivateNote().message.content, 'Keep displayed story');
+  assert.equal(h.state.busy, false);
+  assert.equal(h.calls.subscriptions.length, 2);
 });

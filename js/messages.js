@@ -199,6 +199,7 @@ export function subscribeLatestMessages(sessionId, callback, onError) {
       (snap) => callback({
         messages: flatten(snap),
         hasEarlier: snap.docs.length > 0 && snap.docs[0].data().firstOrder > 1,
+        fromCache: snap.metadata?.fromCache ?? false,
       }),
       onError
     );

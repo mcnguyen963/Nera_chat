@@ -79,7 +79,7 @@ el.topMenu?.addEventListener("click", (e) => {
     setSidebarOpen(true);
   } else if (item.dataset.action === "settings") {
     openSettingsPopup(el.topMenuBtn);
-  } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary") {
+  } else if (["summarize-full", "reset-summary", "sync-chat"].includes(item.dataset.action)) {
     document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else {
     // Reuse the existing tab logic; the tab buttons are just CSS-hidden.

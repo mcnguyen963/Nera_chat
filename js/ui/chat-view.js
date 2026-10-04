@@ -1,5 +1,5 @@
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
-import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { doc, getDocFromServer, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
@@ -11,7 +11,7 @@ import { stripThinking } from "../story-text.js";
 import { initContextInspector, updateContextPreview, captureContextRequest, resetContextInspector } from "./context-view.js";
 import { updateSession, duplicateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
-import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
+import { loadChatCache, saveChatCache, deleteChatCache, clearChatCache } from "../chat-cache.js";
 import {
   useLocalSettings,
   normalizeProfiles,
@@ -104,6 +104,7 @@ export function initChatView() {
   el.summarizeBtn.addEventListener("click", handleSummarize);
   document.addEventListener("summarize-full", handleFullSummarize);
   document.addEventListener("reset-summary", handleResetSummary);
+  document.addEventListener("sync-chat", syncChatData);
 
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
   // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
@@ -249,6 +250,7 @@ export function setSession(sessionId) {
   msgUnsub = sessUnsub = null;
   state.sessionId = sessionId;
   ++sessionEpoch;
+  const epoch = sessionEpoch;
   resetContextInspector();
   session = null;
   streamState = null;
@@ -282,7 +284,7 @@ export function setSession(sessionId) {
     return true;
   }
   void loadChatCache(currentUid(), sessionId).then((saved) => {
-    if (state.sessionId !== sessionId) return;
+    if (state.sessionId !== sessionId || epoch !== sessionEpoch) return;
     if (saved?.session && Array.isArray(saved.recent)) {
       historyCache.set(sessionId, saved);
       if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
@@ -291,7 +293,7 @@ export function setSession(sessionId) {
       subscribeChat(sessionId);
     }
   }).catch(() => {
-    if (state.sessionId === sessionId) subscribeChat(sessionId);
+    if (state.sessionId === sessionId && epoch === sessionEpoch) subscribeChat(sessionId);
   });
   return true;
 }
@@ -320,12 +322,13 @@ function restoreCachedChat(sessionId, saved) {
   queueCacheSave(); // refresh recency for the three-entry device cache
 }
 
-function subscribeChat(sessionId) {
+function subscribeChat(sessionId, serverOnly = false) {
+  const epoch = sessionEpoch;
 
   sessUnsub = onSnapshot(
     doc(db, "users", currentUid(), "sessions", sessionId),
     (snap) => {
-      if (state.sessionId !== sessionId) return;
+      if (state.sessionId !== sessionId || epoch !== sessionEpoch || (serverOnly && snap.metadata?.fromCache)) return;
       const previous = session;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       if (!session || !previous ||
@@ -346,8 +349,8 @@ function subscribeChat(sessionId) {
 
   msgUnsub = messagesApi.subscribeLatestMessages(
     sessionId,
-    ({ messages: latest, hasEarlier: olderExists }) => {
-      if (state.sessionId !== sessionId) return;
+    ({ messages: latest, hasEarlier: olderExists, fromCache }) => {
+      if (state.sessionId !== sessionId || epoch !== sessionEpoch || (serverOnly && fromCache)) return;
       latestReady = true;
       const ids = new Set(latest.map((m) => m.id));
       const oldestOrder = latest[0]?.order ?? Infinity;
@@ -390,6 +393,60 @@ export function forgetChatSession(sessionId) {
   void deleteChatCache(currentUid(), sessionId);
 }
 
+export async function syncChatData() {
+  if (busy || state.busy || editingState) {
+    showTransientError("Finish the current reply, summary, or message edit before syncing.");
+    return;
+  }
+  const sessionId = state.sessionId;
+  if (!sessionId) {
+    showTransientError("Select a story before syncing.");
+    return;
+  }
+  setBusy(true);
+  ++sessionEpoch; // discard pending cache loads and old listener callbacks
+  ++indicatorRun;
+  if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
+  msgUnsub?.();
+  sessUnsub?.();
+  msgUnsub = sessUnsub = null;
+  setStatus("Syncing latest data…");
+  let refreshed = false;
+  try {
+    const [snapshot, messages] = await Promise.all([
+      getDocFromServer(doc(db, "users", currentUid(), "sessions", sessionId)),
+      messagesApi.getMessages(sessionId),
+    ]);
+    if (!snapshot.exists()) throw new Error("This story no longer exists on the server.");
+    await clearChatCache(currentUid());
+    historyCache.clear();
+    resetContextInspector();
+    session = { id: snapshot.id, ...snapshot.data() };
+    historyMessages = messages;
+    historyStartOrder = 0;
+    historyLoading = null;
+    latestReady = true;
+    latestMessageIds = new Set(messages.map((message) => message.id));
+    hasEarlier = false; // full server history is now loaded
+    visibleCount = PAGE_SIZE;
+    lastMessages = [];
+    renderedMessages.clear();
+    el.list.innerHTML = "";
+    renderMessages(messages);
+    document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
+    await updateIndicator();
+    await saveChatCache(currentUid(), sessionId, chatSnapshot());
+    refreshed = true;
+    setStatus("Latest story data synced.", true);
+  } catch (error) {
+    showTransientError("Sync failed: " + error.message);
+  } finally {
+    // After a server refresh, ignore older Firebase cache snapshots.
+    subscribeChat(sessionId, refreshed);
+    setBusy(false);
+  }
+}
+
 // ---------- rendering ----------
 
 let lastMessages = [];
@@ -413,9 +470,10 @@ async function ensureHistory() {
     return historyMessages;
   }
   const sessionId = state.sessionId;
+  const epoch = sessionEpoch;
   historyLoading = (async () => {
     const messages = await messagesApi.getMessages(sessionId);
-    if (state.sessionId !== sessionId) throw new Error("Session changed while loading history.");
+    if (state.sessionId !== sessionId || epoch !== sessionEpoch) throw new Error("Session changed while loading history.");
     historyMessages = mergeMessages(messages, lastMessages);
     historyStartOrder = 0;
     const snapshot = chatSnapshot();
@@ -424,7 +482,7 @@ async function ensureHistory() {
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
     void saveChatCache(currentUid(), sessionId, snapshot);
     return historyMessages;
-  })().finally(() => { historyLoading = null; });
+  })().finally(() => { if (epoch === sessionEpoch) historyLoading = null; });
   return historyLoading;
 }
 

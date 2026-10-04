@@ -64,3 +64,22 @@ export async function deleteChatCache(uid, sessionId) {
     transaction.onabort = resolve;
   });
 }
+
+export async function clearChatCache(uid) {
+  const db = await database();
+  if (!db) return;
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE, "readwrite");
+    const store = transaction.objectStore(STORE);
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (cursor.value.uid === uid) cursor.delete();
+      cursor.continue();
+    };
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not clear chat cache."));
+    transaction.onabort = transaction.onerror;
+  });
+}
