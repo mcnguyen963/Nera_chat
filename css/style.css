@@ -173,6 +173,13 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-dot { width: 5px; height: 5px; border-radius: 50%; background: #aaa; flex-shrink: 0; }
 .composer-spacer { flex: 1; }
+.composer-action { flex-shrink: 0; min-height: 36px; }
+.composer-action[hidden] { display: none; }
+.composer-row .composer-chip { min-width: 0; flex-shrink: 1; }
+@media (max-width: 720px) {
+  .composer-row { gap: 4px; flex-wrap: wrap; }
+  .composer-action { min-height: 44px; padding: 8px; }
+}
 .composer-send { display: grid; place-items: center; width: 33px; height: 33px; flex-shrink: 0; align-self: center; padding: 0; border-radius: 50%; background: #dededb; color: #111; border: 0; font-size: 23px; line-height: 1; }
 .composer-send span { display: block; transform: translateY(-1px); }
 .composer-send:hover:enabled { background: #fff; }

@@ -12,6 +12,7 @@ async function harness() {
     classList = { values: new Set(), add(name) { this.values.add(name); }, remove(name) { this.values.delete(name); }, toggle(name, force) { if (force ?? !this.values.has(name)) this.values.add(name); else this.values.delete(name); }, contains(name) { return this.values.has(name); } };
     listeners = {};
     addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+    removeEventListener(type, fn) { this.listeners[type] = (this.listeners[type] ?? []).filter(listener => listener !== fn); }
     async dispatchEvent(event) {
       for (const fn of this.listeners[event.type] ?? []) await fn(event);
     }
@@ -39,7 +40,7 @@ async function harness() {
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000 };
+      const mins = { 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-rewrite-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
@@ -65,13 +66,19 @@ async function harness() {
   const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary', responseData: null, streamLines: null };
   const localCache = new Map();
   const context = vm.createContext({
-    console, structuredClone, document, TextDecoder,
+    console, structuredClone, document, TextDecoder, AbortController,
+    requestAnimationFrame: (fn) => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout,
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, confirm: () => calls.confirm,
+    setTimeout() {}, clearTimeout() {}, confirm: () => calls.confirm,
     fetch: async (_url, options) => {
+      if (_url === './rewrite_default_prompt.md') {
+        calls.promptReads = (calls.promptReads ?? 0) + 1;
+        return { ok: !calls.promptError, text: async () => calls.defaultRewritePrompt ?? 'Default rewrite prompt' };
+      }
       calls.requests.push(JSON.parse(options.body));
+      if (calls.streamReader) return { ok: true, body: { getReader: () => calls.streamReader } };
       if (calls.streamLines) {
         const chunks = calls.streamLines.map((line) => new TextEncoder().encode(line));
         return { ok: true, body: { getReader: () => ({ read: async () => chunks.length
@@ -160,7 +167,7 @@ async function harness() {
   const { state } = await use('state.js');
   const settings = await use('settings.js');
   state.settings = settings.hydrateProfiles(structuredClone(settings.DEFAULT_SETTINGS));
-  return { use, state, settings, calls, localCache, document, el: document.getElementById,
+  return { use, state, settings, calls, localCache, document, setNavigator: nav => { context.navigator = nav; }, el: document.getElementById,
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
 
@@ -1143,4 +1150,213 @@ test('Failed sync preserves displayed history and releases busy state', async ()
   assert.equal(chat.getStoryPrivateNote().message.content, 'Keep displayed story');
   assert.equal(h.state.busy, false);
   assert.equal(h.calls.subscriptions.length, 2);
+});
+
+test('Rewrite request preserves the draft, selects N individual story messages, and rejects excess input', async () => {
+  const h = await harness();
+  const { buildRewriteMessages } = await h.use('rewrite.js');
+  const history = [
+    { order: 3, role: 'assistant', content: '<think>secret</think>Visible<plan>hidden</plan>', planThread: 'private' },
+    { order: 1, role: 'user', content: 'Older' },
+    { order: 4, role: 'summary', content: 'Excluded summary' },
+    { order: 2, role: 'user', content: '<ad>Direction</ad>' },
+  ];
+  const settings = { ...h.state.settings, rewriteRecentMessages: 2, rewriteSystemPrompt: 'Expand my idea' };
+  const messages = await buildRewriteMessages(settings, history, '  I tell him  ');
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [
+    { role: 'system', content: 'Expand my idea' },
+    { role: 'user', content: '<ad>Direction</ad>' },
+    { role: 'assistant', content: 'Visible' },
+    { role: 'user', content: '  I tell him  ' },
+  ]);
+  assert.equal((await buildRewriteMessages({ ...settings, rewriteRecentMessages: 0 }, history, 'Idea')).length, 2);
+  assert.equal((await buildRewriteMessages({ ...settings, rewriteRecentMessages: 1000 }, history, 'Idea')).length, 5);
+  await assert.rejects(buildRewriteMessages({ ...settings, maxContextTokens: 1 }, history, 'Idea'), /Reduce recent messages/);
+  await assert.rejects(buildRewriteMessages({ ...settings, rewriteRecentMessages: -1 }, history, 'Idea'), /nonnegative/);
+  await assert.rejects(buildRewriteMessages({ ...settings, rewriteSystemPrompt: ' ' }, history, 'Idea'), /system prompt/);
+});
+
+test('Markdown rewrite prompt is cached, retryable, and bypassed by custom prompts', async () => {
+  const h = await harness();
+  const rewrite = await h.use('rewrite.js');
+  h.calls.promptError = true;
+  await assert.rejects(rewrite.loadRewriteDefaultPrompt(), /Try again/);
+  h.calls.promptError = false;
+  assert.equal(await rewrite.loadRewriteDefaultPrompt(), 'Default rewrite prompt');
+  assert.equal(await rewrite.loadRewriteDefaultPrompt(), 'Default rewrite prompt');
+  assert.equal(h.calls.promptReads, 2);
+  const messages = await rewrite.buildRewriteMessages(h.state.settings, [], 'Idea');
+  assert.equal(messages[0].content, 'Default rewrite prompt');
+  await rewrite.buildRewriteMessages({ ...h.state.settings, rewriteSystemPrompt: 'Custom' }, [], 'Idea');
+  assert.equal(h.calls.promptReads, 2);
+});
+
+async function rewriteChatHarness() {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
+  h.calls.latestCallbacks.at(-1)({ messages: [], hasEarlier: false });
+  Object.assign(h.state.settings, { modelId: 'rewrite-model', apiKey: 'key', streaming: false, rewriteSystemPrompt: 'Expand', rewriteRecentMessages: 0 });
+  h.el('chat-input').value = 'I tell him about the story';
+  await h.fire('chat-input', 'input');
+  return { ...h, chat };
+}
+
+test('Rewrite streams clean content to composer, forces streaming, and restores the original without writes', async () => {
+  const h = await rewriteChatHarness();
+  h.calls.streamLines = [
+    'data: {"choices":[{"delta":{"reasoning":"private thoughts"}}]}\n',
+    'data: {"choices":[{"delta":{"content":"<think>hidden</think>I lean closer."}}]}\n',
+    'data: {"choices":[{"delta":{"content":"<plan>hidden</plan>"},"finish_reason":"stop"}]}\n',
+  ];
+  await h.fire('btn-rewrite');
+  assert.equal(h.el('chat-input').value, 'I lean closer.');
+  assert.equal(h.el('chat-input').readOnly, false);
+  assert.equal(h.el('btn-restore-draft').hidden, false);
+  assert.equal(h.calls.requests[0].stream, true);
+  assert.equal(h.calls.requests[0].model, 'rewrite-model');
+  assert.equal(h.calls.messages.length, 0);
+  assert.equal(h.calls.sessionWrites.length, 0);
+  await h.fire('btn-restore-draft');
+  assert.equal(h.el('chat-input').value, 'I tell him about the story');
+  assert.equal(h.el('btn-restore-draft').hidden, true);
+  await h.fire('btn-rewrite');
+  await h.fire('chat-input', 'input');
+  assert.equal(h.el('btn-restore-draft').hidden, true);
+});
+
+test('Rewrite restores original on partial failure, empty cleaned output, and Stop', async () => {
+  for (const lines of [
+    ['data: {"choices":[{"delta":{"content":"partial"}}]}\n'],
+    ['data: {"choices":[{"delta":{"content":"<think>only thoughts</think>"},"finish_reason":"stop"}]}\n'],
+    ['data: {"error":{"message":"denied"}}\n'],
+  ]) {
+    const h = await rewriteChatHarness();
+    h.calls.streamLines = lines;
+    await h.fire('btn-rewrite');
+    assert.equal(h.el('chat-input').value, 'I tell him about the story');
+    assert.equal(h.state.busy, false);
+    assert.equal(h.el('btn-restore-draft').hidden, true);
+  }
+  const h = await rewriteChatHarness();
+  let finishRead;
+  let reads = 0;
+  h.calls.streamReader = { read: async () => {
+    if (reads++ === 0) return { done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"I lean closer."}}]}\n') };
+    return new Promise(resolve => { finishRead = resolve; });
+  } };
+  const running = h.fire('btn-rewrite');
+  while (!finishRead) await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(h.el('chat-input').value, 'I lean closer.');
+  assert.equal(h.el('chat-input').readOnly, true);
+  assert.equal(h.el('btn-send').disabled, true);
+  assert.equal(h.chat.setSession('other'), false);
+  await h.fire('btn-rewrite');
+  finishRead({ done: true });
+  await running;
+  assert.equal(h.el('chat-input').value, 'I tell him about the story');
+  assert.equal(h.state.busy, false);
+  assert.equal(h.el('btn-rewrite').textContent, 'Rewrite');
+});
+
+test('Rewrite settings validate N, preserve custom prompt, and reset to Markdown default', async () => {
+  const h = await harness();
+  const chat = await h.use('ui/chat-view.js'); chat.initChatView();
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.el('set-rewrite-prompt').value, 'Default rewrite prompt');
+  h.el('set-rewrite-n').value = '2.5';
+  await h.fire('btn-save-settings');
+  assert.match(h.el('settings-saved-msg').textContent, /whole number/);
+  h.el('set-rewrite-n').value = '0';
+  h.el('set-rewrite-prompt').value = 'My custom prompt';
+  h.el('set-stream-vibration').value = 'speed';
+  await h.fire('btn-save-settings');
+  assert.equal(h.state.settings.rewriteRecentMessages, 0);
+  assert.equal(h.state.settings.rewriteSystemPrompt, 'My custom prompt');
+  assert.equal(h.state.settings.streamVibrationMode, 'speed');
+  await h.fire('btn-reset-rewrite-prompt');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await h.fire('btn-save-settings');
+  assert.equal(h.state.settings.rewriteSystemPrompt, null);
+});
+
+test('Stream vibration coalesces spaces, varies with speed, and cancels on hiding or completion', async () => {
+  const h = await harness();
+  const { createStreamVibration } = await h.use('stream-vibration.js');
+  let time = 0, nextId = 0;
+  const timers = new Map(), pulses = [];
+  const doc = { hidden: false, addEventListener(_event, fn) { this.listener = fn; }, removeEventListener() { this.listener = null; } };
+  const options = { document: doc, navigator: { vibrate: duration => pulses.push([time, duration]) }, now: () => time,
+    schedule: (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: time + delay }); return id; },
+    cancel: id => timers.delete(id),
+  };
+  const advance = to => { time = to; for (const [id, timer] of timers) if (timer.at <= time) { timers.delete(id); timer.fn(); } };
+  const spaces = createStreamVibration('spaces', options);
+  spaces.feed('NoSpace'); assert.equal(pulses.length, 0);
+  spaces.feed(' '); spaces.feed('lots of spaces ');
+  assert.deepEqual(pulses, [[0, 10]]);
+  assert.equal(timers.size, 1);
+  advance(80); assert.deepEqual(pulses.at(-1), [80, 10]);
+  spaces.feed(' thinking ');
+  doc.hidden = true; doc.listener();
+  assert.equal(timers.size, 0); assert.deepEqual(pulses.at(-1), [80, 0]);
+  spaces.feed(' writing '); advance(500);
+  doc.hidden = false;
+  assert.equal(pulses.length, 3);
+  spaces.feed(' resumed '); spaces.feed(' pending '); spaces.stop();
+  assert.equal(timers.size, 0); assert.equal(doc.listener, null);
+  const before = pulses.length; advance(1000); spaces.feed(' stopped ');
+  assert.equal(pulses.length, before);
+  const speed = createStreamVibration('speed', options);
+  speed.feed('a'); const slow = pulses.at(-1)[1];
+  advance(1100); speed.feed('x'.repeat(200));
+  assert.ok(pulses.at(-1)[1] > slow);
+  assert.ok(pulses.at(-1)[1] <= 25);
+  speed.stop();
+  for (const mode of ['off', 'spaces', 'speed']) {
+    const unsupported = createStreamVibration(mode, { ...options, navigator: {} });
+    unsupported.feed('some text '); unsupported.stop();
+  }
+  const rejected = createStreamVibration('spaces', { ...options, navigator: { vibrate() { throw new Error('blocked'); } } });
+  rejected.feed(' '); rejected.stop();
+});
+
+test('Rewrite thinking and writing both trigger space vibration through the stream callbacks', async () => {
+  for (const thinking of [true, false]) {
+    const h = await rewriteChatHarness();
+    const pulses = [];
+    h.document.hidden = false;
+    h.setNavigator({ vibrate: duration => pulses.push(duration) });
+    h.calls.streamLines = [
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning: thinking ? 'thinking words' : 'thinking', content: thinking ? 'Reply' : 'Reply words' }, finish_reason: 'stop' }] })}\n`,
+    ];
+    await h.fire('btn-rewrite');
+    assert.deepEqual(pulses, [10, 0]);
+    assert.doesNotMatch(h.el('chat-input').value, /thinking/);
+    assert.equal((h.document.listeners.visibilitychange ?? []).length, 0);
+  }
+});
+
+test('Stop restores the composer immediately while history is still loading', async () => {
+  const h = await rewriteChatHarness();
+  h.state.settings.rewriteRecentMessages = 10;
+  // Mark older history available, forcing a history read rather than an empty cache.
+  h.calls.latestCallbacks.at(-1)({ messages: [], hasEarlier: true });
+  let finishHistory;
+  h.calls.historyPending = new Promise(resolve => { finishHistory = resolve; });
+  const running = h.fire('btn-rewrite');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.state.busy, true);
+  await h.fire('btn-rewrite');
+  await running;
+  assert.equal(h.state.busy, false);
+  assert.equal(h.el('chat-input').value, 'I tell him about the story');
+  assert.equal(h.calls.requests.length, 0);
+  finishHistory([]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.requests.length, 0);
 });

@@ -125,6 +125,8 @@
                 <span class="model-dot" aria-hidden="true"></span><span id="chip-model" class="chip-label">Model</span><span aria-hidden="true">⌄</span>
               </button>
               <span class="composer-spacer"></span>
+              <button type="button" id="btn-restore-draft" class="btn small composer-action" hidden>Restore original</button>
+              <button type="button" id="btn-rewrite" class="btn small composer-action" disabled>Rewrite</button>
               <button type="submit" id="btn-send" class="composer-send" aria-label="Send"><span aria-hidden="true">↑</span></button>
             </div>
             <div id="composer-popover" class="composer-popover" hidden>
@@ -196,6 +198,8 @@
                 <h3>Parameters</h3>
                 <div class="settings-grid">
                   <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
+                  <label>Streaming vibration<select id="set-stream-vibration"><option value="off">Off</option><option value="speed">Speed</option><option value="spaces">Spaces</option></select></label>
+                  <p class="muted">Vibrates during thinking and writing on supported phones.</p>
                   <label>Max response tokens<input type="text" id="set-max-resp" inputmode="numeric" data-min="1" required /></label>
                 </div>
                 <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-advanced-enabled" aria-controls="advanced-options" /> Custom sampling parameters</label>
@@ -232,6 +236,10 @@
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts</h2>
                 <div class="settings-prompts">
+                  <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
+                  <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
+                  <p id="rewrite-prompt-help" class="muted">The default comes from rewrite_default_prompt.md.</p>
+                  <button type="button" id="btn-reset-rewrite-prompt" class="btn small">Use default rewrite prompt</button>
                   <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label>
                   <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label>
                 </div>

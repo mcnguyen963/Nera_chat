@@ -1,3 +1,4 @@
+import { loadRewriteDefaultPrompt } from "../rewrite.js";
 import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
@@ -30,6 +31,8 @@ let saving = false;
 let petChoicesReady = false;
 let petCatalog = [];
 let petLoadRequest = 0;
+let rewritePromptRequest = 0;
+let rewriteDefaultPrompt = null;
 
 const input = (id) => document.getElementById(id);
 const raw = (id) => input(id).value;
@@ -90,6 +93,11 @@ export function initSettingsView() {
   input("set-pet-movement").addEventListener("change", () => { capture(); clearMessage(); });
   input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
   document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
+  input("btn-reset-rewrite-prompt").addEventListener("click", () => {
+    draft.rewriteSystemPrompt = null;
+    renderRewritePrompt();
+    clearMessage();
+  });
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
@@ -221,6 +229,32 @@ function renderAll() {
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
+  set("set-rewrite-n", draft.rewriteRecentMessages ?? 10);
+  set("set-stream-vibration", draft.streamVibrationMode ?? "spaces");
+  renderRewritePrompt();
+}
+function renderRewritePrompt() {
+  const request = ++rewritePromptRequest;
+  const field = input("set-rewrite-prompt");
+  const help = input("rewrite-prompt-help");
+  if (draft.rewriteSystemPrompt != null) {
+    field.disabled = false;
+    field.value = draft.rewriteSystemPrompt;
+    help.textContent = "Your saved prompt overrides rewrite_default_prompt.md.";
+    return;
+  }
+  field.disabled = true;
+  field.value = rewriteDefaultPrompt ?? "";
+  help.textContent = "Loading rewrite_default_prompt.md…";
+  void loadRewriteDefaultPrompt().then((prompt) => {
+    if (request !== rewritePromptRequest) return;
+    rewriteDefaultPrompt = prompt;
+    field.value = prompt;
+    field.disabled = false;
+    help.textContent = "Using rewrite_default_prompt.md. Edit here to save a custom prompt.";
+  }).catch((error) => {
+    if (request === rewritePromptRequest) help.textContent = error.message + " Click Use default rewrite prompt to retry.";
+  });
 }
 function renderProfile() {
   el.profiles.replaceChildren(...draft.profiles.map((profile) => {
@@ -304,6 +338,12 @@ function capture() {
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
+  draft.rewriteRecentMessages = raw("set-rewrite-n").trim();
+  draft.streamVibrationMode = raw("set-stream-vibration");
+  if (!input("set-rewrite-prompt").disabled) {
+    const prompt = raw("set-rewrite-prompt");
+    draft.rewriteSystemPrompt = draft.rewriteSystemPrompt == null && prompt === rewriteDefaultPrompt ? null : prompt;
+  }
 }
 
 function resetPanel() {
@@ -314,6 +354,8 @@ function resetPanel() {
       profile[key] = DEFAULT_SETTINGS[key];
     profile.reasoning = structuredClone(DEFAULT_SETTINGS.reasoning);
     mirrorFromActiveProfile(draft);
+    draft.streamVibrationMode = DEFAULT_SETTINGS.streamVibrationMode;
+    set("set-stream-vibration", draft.streamVibrationMode);
     renderProfile();
   } else if (panel === "context") {
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
@@ -325,6 +367,10 @@ function resetPanel() {
     set("set-pet-movement", draft.petMovement);
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
+    draft.rewriteRecentMessages = DEFAULT_SETTINGS.rewriteRecentMessages;
+    draft.rewriteSystemPrompt = null;
+    set("set-rewrite-n", draft.rewriteRecentMessages);
+    renderRewritePrompt();
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
     set("set-narrator-prompt", draft.narratorSystemPrompt);
@@ -368,6 +414,9 @@ function validatedDraft() {
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
+  result.rewriteRecentMessages = integerField(result.rewriteRecentMessages, "set-rewrite-n");
+  if (!["off", "speed", "spaces"].includes(result.streamVibrationMode)) throw new Error("Choose a valid vibration mode.");
+  if (result.rewriteSystemPrompt != null && !result.rewriteSystemPrompt.trim()) throw new Error("Rewrite system prompt cannot be empty. Use the default or enter a prompt.");
   mirrorFromActiveProfile(result);
   return result;
 }

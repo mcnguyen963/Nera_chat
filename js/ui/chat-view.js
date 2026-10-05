@@ -4,6 +4,9 @@ import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
 import { buildContextForRequest, computeContextUsage } from "../context-builder.js";
+import { buildRewriteMessages } from "../rewrite.js";
+import { createStreamVibration } from "../stream-vibration.js";
+import { storyText } from "../story-text.js";
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
@@ -25,6 +28,8 @@ let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
 let streamState = null;  // live streaming UI handle
 let busy = false;
+let rewriteController = null;
+let originalDraft = null;
 let indicatorRun = 0;
 let editingState = null; // { id, ta } while a message is being edited inline
 const PAGE_SIZE = 100;
@@ -47,6 +52,8 @@ export function initChatView() {
   el.input = document.getElementById("chat-input");
   el.composer = document.getElementById("composer");
   el.sendBtn = document.getElementById("btn-send");
+  el.rewriteBtn = document.getElementById("btn-rewrite");
+  el.restoreDraftBtn = document.getElementById("btn-restore-draft");
   el.summarizeBtn = document.getElementById("btn-summarize");
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
@@ -101,6 +108,14 @@ export function initChatView() {
   });
 
   el.composer.addEventListener("submit", handleSend);
+  el.rewriteBtn.addEventListener("click", handleRewrite);
+  el.restoreDraftBtn.addEventListener("click", () => {
+    if (busy || originalDraft === null) return;
+    setComposerText(originalDraft);
+    clearOriginalDraft();
+    el.input.focus();
+  });
+  el.input.addEventListener("input", () => { clearOriginalDraft(); updateRewriteControls(); });
   el.summarizeBtn.addEventListener("click", handleSummarize);
   document.addEventListener("summarize-full", handleFullSummarize);
   document.addEventListener("reset-summary", handleResetSummary);
@@ -125,7 +140,10 @@ export function initChatView() {
 
   document.querySelectorAll("[data-starter]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (busy || rewriteController) return;
+      clearOriginalDraft();
       el.input.value = button.dataset.starter;
+      updateRewriteControls();
       autoGrow();
       el.input.focus();
     });
@@ -249,6 +267,7 @@ export function setSession(sessionId) {
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
   state.sessionId = sessionId;
+  clearOriginalDraft();
   ++sessionEpoch;
   const epoch = sessionEpoch;
   resetContextInspector();
@@ -568,6 +587,7 @@ function updateWelcome() {
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
+  updateRewriteControls();
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
   refreshPetPlacement();
 }
@@ -725,6 +745,7 @@ function startEdit(m, wrap) {
   actions.replaceChildren(save, cancel);
   contentEl.replaceWith(ta);
   editingState = { id: m.id, ta };
+  updateRewriteControls();
   ta.focus({ preventScroll: true });
   el.list.scrollTop = scrollTop;
 }
@@ -892,6 +913,7 @@ async function handleSend(e) {
     showTransientError("Set your API key and Model ID in the Settings tab first.");
     return;
   }
+  clearOriginalDraft();
   el.input.value = "";
   el.input.style.height = "auto";
   setBusy(true);
@@ -917,6 +939,84 @@ async function handleSend(e) {
   }
 }
 
+function clearOriginalDraft() {
+  originalDraft = null;
+  if (el.restoreDraftBtn) el.restoreDraftBtn.hidden = true;
+}
+
+function setComposerText(text) {
+  el.input.value = text;
+  el.input.style.height = "auto";
+  el.input.style.height = el.input.scrollHeight + "px";
+  el.input.scrollTop = el.input.scrollHeight;
+}
+
+function updateRewriteControls() {
+  if (!el.rewriteBtn) return;
+  el.rewriteBtn.textContent = rewriteController ? "Stop" : "Rewrite";
+  el.rewriteBtn.disabled = !rewriteController && (busy || state.busy || !session || !!editingState || !el.input.value.trim());
+  el.restoreDraftBtn.disabled = busy;
+  el.input.readOnly = !!rewriteController;
+  el.restoreDraftBtn.hidden = originalDraft === null;
+}
+
+async function handleRewrite() {
+  if (rewriteController) { rewriteController.abort(); return; }
+  if (busy || state.busy || !session || editingState || !el.input.value.trim()) return;
+  const settings = structuredClone(state.settings);
+  if (!settings?.modelId || !settings?.apiKey) {
+    showTransientError("Set your API key and Model ID in Settings first.");
+    return;
+  }
+  const draft = el.input.value;
+  const requestedSession = state.sessionId;
+  const requestedUid = currentUid();
+  clearOriginalDraft();
+  const controller = rewriteController = new AbortController();
+  const vibration = createStreamVibration(settings.streamVibrationMode ?? "spaces");
+  let accumulated = "", frame = null;
+  const active = () => !controller.signal.aborted && requestedSession === state.sessionId && requestedUid === currentUid();
+  const paint = () => { frame = null; if (active()) setComposerText(storyText(accumulated)); };
+  // History and prompt loading also respond to Stop, even before fetch begins.
+  const waitFor = (promise) => new Promise((resolve, reject) => {
+    const abort = () => reject(new Error("Rewrite stopped."));
+    if (controller.signal.aborted) abort();
+    else controller.signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => controller.signal.removeEventListener("abort", abort));
+  });
+  controller.signal.addEventListener("abort", () => vibration.stop(), { once: true });
+  setBusy(true);
+  try {
+    const history = settings.rewriteRecentMessages === 0 ? [] : await waitFor(ensureHistory());
+    const messages = await waitFor(buildRewriteMessages(settings, history, draft));
+    if (!active()) throw new Error("Rewrite stopped because the account or story changed.");
+    const result = await waitFor(chatCompletion({
+      settings: { ...settings, streaming: true }, messages, signal: controller.signal,
+      onDelta: (text) => {
+        if (!active()) { controller.abort(); return; }
+        vibration.feed(text);
+        accumulated += text;
+        if (frame === null) frame = requestAnimationFrame(paint);
+      },
+      onReasoning: (text) => { if (active()) vibration.feed(text); },
+    }));
+    if (!active()) throw new Error("Rewrite stopped because the account or story changed.");
+    const clean = storyText(result.content);
+    if (!clean.trim()) throw new Error("The model returned no rewritten reply.");
+    setComposerText(clean);
+    originalDraft = draft;
+  } catch (error) {
+    if (requestedSession === state.sessionId && requestedUid === currentUid()) setComposerText(draft);
+    if (!controller.signal.aborted) showTransientError(error.message || String(error));
+  } finally {
+    if (frame !== null) cancelAnimationFrame(frame);
+    vibration.stop();
+    rewriteController = null;
+    setBusy(false);
+    updateRewriteControls();
+  }
+}
+
 async function runAssistantTurn(opts = {}) {
   const settings = structuredClone(state.settings);
   if (!settings) return;
@@ -924,6 +1024,7 @@ async function runAssistantTurn(opts = {}) {
     ? (opts.planOverride ?? session.longTermPlan ?? "")
     : (session.longTermPlan ?? "");
   const petTurn = startPetTurn();
+  const vibration = createStreamVibration(settings.streamVibrationMode ?? "spaces");
   setBusy(true);
   try {
     startStreamUI();
@@ -936,9 +1037,10 @@ async function runAssistantTurn(opts = {}) {
       settings,
       messages: context.apiMessages,
       onRequest: (request) => captureContextRequest({ ...context, max: settings.maxContextTokens }, request),
-      onDelta: (t) => { updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
-      onReasoning: (t) => { updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
+      onDelta: (t) => { vibration.feed(t); updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
+      onReasoning: (t) => { vibration.feed(t); updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
     });
+    vibration.stop();
     streamState?.wrap.remove();
     streamState = null;
     refreshPetPlacement();
@@ -1009,6 +1111,7 @@ async function runAssistantTurn(opts = {}) {
     refreshPetPlacement();
     showTransientError(err.message || String(err));
   } finally {
+    vibration.stop();
     setBusy(false);
   }
 }
@@ -1189,8 +1292,9 @@ function appendStream(kind, text) {
 function setBusy(b) {
   busy = state.busy = b;
   document.dispatchEvent(new CustomEvent("chat-busy-changed"));
-  el.sendBtn.disabled = b;
-  el.summarizeBtn.disabled = b;
+  el.sendBtn.disabled = b || !state.sessionId;
+  el.summarizeBtn.disabled = b || !state.sessionId;
+  updateRewriteControls();
 }
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.
