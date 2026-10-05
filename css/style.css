@@ -163,11 +163,13 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .toast { position: fixed; z-index: 100; bottom: calc(100px + var(--safe-bottom)); left: 50%; transform: translateX(-50%); max-width: 90vw; background: #252525; color: #eee; border: 1px solid #484848; border-radius: 10px; padding: 12px 20px; font-size: 12px; box-shadow: 0 8px 30px #0008; pointer-events: none; }
 .toast.error { border-color: var(--danger); }
 .composer { padding: 12px 28px calc(12px + var(--safe-bottom)); position: relative; flex-shrink: 0; }
-.composer-box { position: relative; display: flex; flex-direction: column; gap: 12px; max-width: 740px; margin: 0 auto; padding: 18px 16px 10px; border: 1px solid #353535; border-radius: 22px; background: #1c1c1c; box-shadow: 0 6px 25px #0002; }
+.composer-box { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; max-width: 740px; margin: 0 auto; padding: 18px 16px 10px; border: 1px solid #353535; border-radius: 22px; background: #1c1c1c; box-shadow: 0 6px 25px #0002; }
 .composer-box:focus-within { border-color: #666; }
 .composer textarea { display: block; min-height: 30px; max-height: min(40vh, 260px); padding: 0 4px; resize: none; border: 0; border-radius: 0; background: none; overflow-y: auto; font-size: 14px; }
 .composer textarea:focus { border: 0; outline: none; }
-.composer-row { display: flex; align-items: center; gap: 8px; }
+.composer-box > textarea { grid-column: 1; grid-row: 1; min-width: 0; }
+.composer-row { grid-column: 1; grid-row: 2; display: flex; align-items: center; align-self: end; min-width: 0; gap: 8px; flex-wrap: nowrap; }
+.composer-action-column { --composer-button-size: 33px; width: var(--composer-button-size); grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: center; align-self: start; gap: 4px; }
 .composer-chip { display: flex; align-items: center; gap: 7px; max-width: 75%; padding: 8px; background: transparent; border: 0; border-radius: 7px; color: #999; font-size: 11px; }
 .composer-chip:hover { background: #2a2a2a; }
 .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -175,12 +177,14 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .composer-spacer { flex: 1; }
 .composer-action { flex-shrink: 0; min-height: 36px; }
 .composer-action[hidden] { display: none; }
+#btn-rewrite { width: var(--composer-button-size); min-width: 0; padding: 0 1px; font-size: 8px; white-space: nowrap; }
 .composer-row .composer-chip { min-width: 0; flex-shrink: 1; }
 @media (max-width: 720px) {
-  .composer-row { gap: 4px; flex-wrap: wrap; }
+  .composer-row { gap: 4px; }
+  #btn-restore-draft { min-width: 0; max-width: 100px; flex-shrink: 1; white-space: normal; }
   .composer-action { min-height: 44px; padding: 8px; }
 }
-.composer-send { display: grid; place-items: center; width: 33px; height: 33px; flex-shrink: 0; align-self: center; padding: 0; border-radius: 50%; background: #dededb; color: #111; border: 0; font-size: 23px; line-height: 1; }
+.composer-send { display: grid; place-items: center; width: var(--composer-button-size); height: var(--composer-button-size); flex-shrink: 0; align-self: center; padding: 0; border-radius: 50%; background: #dededb; color: #111; border: 0; font-size: 23px; line-height: 1; }
 .composer-send span { display: block; transform: translateY(-1px); }
 .composer-send:hover:enabled { background: #fff; }
 .composer-note { margin: 12px 0 0; color: #626262; text-align: center; font-size: 10px; }
@@ -253,7 +257,8 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .composer { padding: 10px 14px calc(7px + var(--safe-bottom)); }
   .composer-box { padding: 15px 12px 6px; border-radius: 20px; }
   .composer textarea { font-size: 16px; }
-  .composer-send { width: 44px; height: 44px; }
+  .composer-action-column { --composer-button-size: 44px; }
+  #btn-rewrite { font-size: 10px; }
   .composer-chip { padding: 10px 5px; min-height: 44px; }
   .composer-note { margin-top: 9px; font-size: 9px; }
   .settings-grid { grid-template-columns: 1fr; gap: 17px; }
