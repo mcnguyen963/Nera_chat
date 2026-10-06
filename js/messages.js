@@ -30,8 +30,9 @@ function newMsgId() {
 }
 export const newMessageId = newMsgId;
 
-function makeMessage(id, order, { role, content, thinking = null, planThread = null, planBefore = null }, tokenCount) {
-  return { id, order, role, content, thinking, planThread, planBefore, tokenCount, createdAt: Timestamp.now(), editedAt: null };
+function makeMessage(id, order, { role, content, thinking = null, planThread = null, planBefore = null, truncated = false }, tokenCount) {
+  return { id, order, role, content, thinking, planThread, planBefore, tokenCount, createdAt: Timestamp.now(), editedAt: null,
+    ...(truncated ? { truncated: true } : {}) };
 }
 
 function contextText(message) {
@@ -90,6 +91,9 @@ export async function addMessage(sessionId, message, opts = {}) {
     const snap = await tx.get(sessionRef(sessionId));
     if (!snap.exists()) throw new Error("Session not found.");
     const data = snap.data();
+    if (opts.expectedNextOrder != null && (data.nextOrder ?? 0) !== opts.expectedNextOrder) {
+      throw new Error("New messages arrived from another device. Review them, then try again.");
+    }
     const order = (data.nextOrder ?? 0) + 1;
     const item = makeMessage(id, order, message, tokenCount);
     const size = messageBytes(item);
@@ -252,6 +256,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
     ((current.role !== "summary" && order <= (sessionData.breakpointOrder ?? 0)) ||
       (current.role === "summary" && !replacement && messageId === sessionData.activeSummaryMessageId));
   const sessionPatch = {
+    updatedAt: serverTimestamp(),
     ...(summaryReset ? { activeSummaryMessageId: null, breakpointOrder: 0 } : {}),
     ...sessionUpdate,
   };
@@ -286,10 +291,10 @@ export async function editPlanThread(sessionId, messageId, planThread, order, se
   return { message: replacement, summaryReset };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null }, order, sessionUpdate = {}) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, truncated = false }, order, sessionUpdate = {}) {
   const tokenCount = await countTokens(contextText({ content }));
   await changeMessage(sessionId, messageId, order, (message) => ({
-    ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount,
+    ...message, content, thinking: thinking ?? null, planThread, planBefore, tokenCount, truncated,
   }), sessionUpdate);
   return { tokenCount };
 }

@@ -8,7 +8,7 @@ import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { state } from "./state.js";
 
-const PLAN_THREAD_RECOVERY_RULE =
+export const PLAN_THREAD_RECOVERY_RULE =
   " If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears " +
   "anywhere in the visible conversation history, even though a plan seems to have been " +
   "set earlier, treat that plan as lost from context. Its exact contents cannot be " +
@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
   rewriteSystemPrompt: null,
   streamVibrationMode: "spaces",
   maxResponseTokens: 8192,
+  modelContextTokens: null,
   advancedParametersEnabled: false,
   temperature: null,
   topP: null,
@@ -34,7 +35,7 @@ export const DEFAULT_SETTINGS = {
     enabled: false,
     mode: "effort", // "effort" | "max_tokens" — mutually exclusive OpenRouter controls
     effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
-    maxTokens: 20000,
+    maxTokens: 4096,
   },
   maxContextTokens: 120000,
   autoSummarizationEnabled: false,
@@ -94,6 +95,7 @@ const PROFILE_CONNECTION_KEYS = [
   "modelId",
   "streaming",
   "maxResponseTokens",
+  "modelContextTokens",
   "advancedParametersEnabled",
   "temperature",
   "topP",

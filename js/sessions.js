@@ -32,6 +32,11 @@ export async function getSession(sessionId) {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
+export async function getSessionFromServer(sessionId) {
+  const snap = await getDocFromServer(sessionDoc(sessionId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
 export async function createSession(title) {
   const id = newId("sess");
   const data = {

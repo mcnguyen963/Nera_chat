@@ -11,6 +11,7 @@ import { chatCompletion } from "./llm-client.js";
 import { computeContextUsage, openingExchange, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from "./context-builder.js";
 import { countTokens } from "./tokenizer.js";
 import { storyText } from "./story-text.js";
+import { requestInputLimit } from "./request-budget.js";
 
 const CHUNK_TOKEN_BUDGET_DEFAULT = 250000;
 
@@ -22,7 +23,9 @@ function summarizerSettings(settings) {
     throw new Error("Summarization needs a context limit of at least 1024 tokens.");
   }
   const maxResponseTokens = Math.min(
-    settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3)
+    settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3),
+    Number.isFinite(settings.modelContextTokens) && settings.modelContextTokens > 0
+      ? Math.floor(settings.modelContextTokens / 3) : Infinity
   );
   // Summaries need their output budget for facts, not the chat profile's thinking.
   return { ...settings, maxResponseTokens, reasoning: { ...settings.reasoning, enabled: false } };
@@ -70,7 +73,7 @@ export async function runSummarization(session, settings, opts = {}) {
       : null;
 
   const requestSettings = summarizerSettings(settings);
-  const inputLimit = settings.maxContextTokens;
+  const inputLimit = requestInputLimit(requestSettings);
   const frameTokens = MESSAGE_FRAME_TOKENS * 2 + REQUEST_FRAME_TOKENS;
   const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
   const cleanPriorSummary = storyText(priorSummary);
@@ -124,6 +127,9 @@ export async function runSummarization(session, settings, opts = {}) {
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
     });
+    if (r.finishReason === "length") {
+      throw new Error("The summary hit the output limit; the checkpoint was not changed. Raise Summarizer max tokens or use smaller summary chunks.");
+    }
     content = storyText(r.content);
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");
     // Each chunk's summary becomes the "previous summary" for the next chunk.

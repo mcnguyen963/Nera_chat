@@ -1,8 +1,9 @@
 import { loadRewriteDefaultPrompt } from "../rewrite.js";
+import { vibrationSupport } from "../stream-vibration.js";
 import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
-import { importSillyTavern, exportSillyTavern } from "../import-export.js";
+import { importSillyTavern, exportSillyTavern, exportFullBackup } from "../import-export.js";
 import { refreshContextIndicator, getStoryPrivateNote, saveStoryPrivateNote, syncActiveSession } from "./chat-view.js";
 
 import { loadPetCatalog } from "./pet-view.js";
@@ -11,6 +12,7 @@ const el = {};
 const connectionFields = {
   endpoint: "set-endpoint", apiKey: "set-apikey", modelId: "set-model",
   maxResponseTokens: "set-max-resp", temperature: "set-temperature", topP: "set-top-p",
+  modelContextTokens: "set-model-context",
   frequencyPenalty: "set-frequency-penalty", presencePenalty: "set-presence-penalty",
 };
 const contextFields = {
@@ -39,6 +41,7 @@ const raw = (id) => input(id).value;
 const set = (id, value) => { input(id).value = String(value ?? ""); };
 
 export function initSettingsView() {
+  input("stream-vibration-help").hidden = vibrationSupport() !== "unsupported";
   Object.assign(el, {
     overlay: input("settings-tab"), content: input("settings-content"), footer: input("settings-footer"),
     message: input("settings-saved-msg"), save: input("btn-save-settings"), saveSession: input("btn-save-session"),
@@ -104,6 +107,16 @@ export function initSettingsView() {
   input("btn-import-st").addEventListener("click", () => input("file-import-st").click());
   input("file-import-st").addEventListener("change", handleImport);
   input("btn-export-st").addEventListener("click", handleExport);
+  input("btn-export-full").addEventListener("click", async () => {
+    if (!state.sessionId) return feedback("Select a story first.", true);
+    if (state.busy) return feedback("Finish the current reply or summary before exporting.", true);
+    const button = input("btn-export-full");
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await exportFullBackup(state.sessionId); feedback("Full backup exported ✓"); }
+    catch (error) { feedback("Export failed: " + error.message, true); }
+    finally { button.disabled = false; }
+  });
   document.addEventListener("session-changed", (event) => {
     if (!el.overlay.classList.contains("hidden") && panel === "story" && !sessionDirty()) fillSession(event);
   });
@@ -408,8 +421,16 @@ function validatedDraft() {
       }
     }
     profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
+    profile.modelContextTokens = String(profile.modelContextTokens ?? "").trim()
+      ? integerField(profile.modelContextTokens, "set-model-context") : null;
+    if (profile.modelContextTokens != null && profile.maxResponseTokens >= profile.modelContextTokens) {
+      throw new Error("Max response tokens must be lower than the model's total context window.");
+    }
     if (profile.reasoning.enabled && profile.reasoning.mode === "max_tokens") {
       profile.reasoning.maxTokens = integerField(profile.reasoning.maxTokens, "set-reasoning-maxtokens");
+      if (profile.reasoning.maxTokens >= profile.maxResponseTokens) {
+        throw new Error("Reasoning max tokens must be lower than Max response tokens (reasoning counts toward the response limit).");
+      }
     }
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }

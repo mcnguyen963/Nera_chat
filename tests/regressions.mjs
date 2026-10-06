@@ -8,6 +8,7 @@ import vm from 'node:vm';
 async function harness() {
   const elements = new Map();
   class Element {
+    scrollTop = 0; scrollHeight = 500; clientHeight = 500;
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
     classList = { values: new Set(), add(name) { this.values.add(name); }, remove(name) { this.values.delete(name); }, toggle(name, force) { if (force ?? !this.values.has(name)) this.values.add(name); else this.values.delete(name); }, contains(name) { return this.values.has(name); } };
     listeners = {};
@@ -71,7 +72,7 @@ async function harness() {
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, clearTimeout() {}, confirm: () => calls.confirm,
+    setTimeout() {}, clearTimeout() {}, confirm: (text) => { (calls.confirmations ??= []).push(text); return calls.confirm; },
     fetch: async (_url, options) => {
       if (_url === './rewrite_default_prompt.md') {
         calls.promptReads = (calls.promptReads ?? 0) + 1;
@@ -110,18 +111,26 @@ async function harness() {
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'auth.js': { currentUid: () => 'test-user' },
-    'tokenizer.js': { countTokens: async (text) => text.length },
+    'auth.js': { currentUid: () => 'test-user', currentUserInfo: () => ({ email: 'test@example.com' }), logout() {} },
+    'tokenizer.js': { countTokens: async (text) => calls.tokenCount ? calls.tokenCount(text) : text.length,
+      tokenizerReady: () => calls.tokenizerReady !== false },
     'sessions.js': {
+      subscribeSessions: callback => { calls.sidebarCallback = callback; },
+      createSession() {}, renameSession() {}, deleteSession() {},
       getSession: async () => ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
       duplicateSession: async (...args) => { calls.sessionCopies ??= []; calls.sessionCopies.push(args); return 'copied-session'; },
     },
-    'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
+    'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); },
+      exportFullBackup: async (id) => { (calls.fullExports ??= []).push(id); } },
     'messages.js': {
       getMessages: async () => { calls.historyReads = (calls.historyReads ?? 0) + 1; return calls.historyPending ?? calls.historyMessages ?? []; },
       getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
-      addMessage: async (...args) => { calls.messages.push(args); return { id: 'summary-id' }; },
+      getMessagesAfterOrder: async (...args) => {
+        (calls.catchUps ??= []).push(args);
+        return calls.catchUp ? calls.catchUp(...args) : calls.freshMessages ?? [];
+      },
+      addMessage: async (...args) => { calls.messages.push(args); return calls.addMessage ? calls.addMessage(...args) : { id: 'summary-id' }; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
       editPlanThread: async (...args) => {
         calls.privateNoteWrites ??= [];
@@ -130,6 +139,8 @@ async function harness() {
         return { message, summaryReset: false };
       },
       editMessage: async (...args) => calls.editMessage(...args),
+      overwriteMessage: async (...args) => { (calls.overwrites ??= []).push(args);
+        return calls.overwriteMessage ? calls.overwriteMessage(...args) : { tokenCount: args[2].content.length }; },
       deleteMessage: async (...args) => calls.deleteMessage(...args),
     },
   };
@@ -454,7 +465,8 @@ test('Context uses the checkpoint and every later message supplied by the cache'
     ...h.state.settings, maxContextTokens: 100000, maxResponseTokens: 1000,
   }, { messages });
   assert.equal(result.windowedCount, 150);
-  assert.equal(result.apiMessages[1].content, 'Story so far:\nEarlier story');
+  assert.equal(result.apiMessages[1].content, 'turn 0');
+  assert.equal(result.apiMessages[2].content, 'Story so far:\nEarlier story');
   assert.equal(result.apiMessages.at(-1).content, 'turn 149');
 });
 
@@ -466,16 +478,16 @@ test('Sliding context preserves the opening exchange and latest user while eject
   const messages = [
     { id: 'u1', order: 1, role: 'user', content: 'Opening', tokenCount: 25 },
     { id: 'a1', order: 2, role: 'assistant', content: 'Background', tokenCount: 25 },
-    { id: 'u2', order: 3, role: 'user', content: 'Middle', tokenCount: 80 },
+    { id: 'u2', order: 3, role: 'user', content: 'Middle'.repeat(20), tokenCount: 80 },
     { id: 'a2', order: 4, role: 'assistant', content: 'Small recent', tokenCount: 40 },
     { id: 'u3', order: 5, role: 'user', content: 'Latest', tokenCount: 30 },
   ];
   const result = await buildContextForRequest({ id: 's' }, settings, { messages, requireLatestUser: true });
-  assert.deepEqual(Array.from(result.apiMessages.slice(1), (m) => m.content), ['Opening', 'Background', 'Small recent', 'Latest']);
+  assert.deepEqual(Array.from(result.apiMessages.filter(m => m.role !== 'system'), (m) => m.content), ['Opening', 'Background', 'Small recent', 'Latest']);
   assert.equal(result.droppedCount, 1);
   assert.ok(result.usedTokens <= settings.maxContextTokens);
   await assert.rejects(buildContextForRequest({ id: 's' }, settings, {
-    messages: messages.map((m) => m.id === 'u3' ? { ...m, tokenCount: 500 } : m), requireLatestUser: true,
+    messages: messages.map((m) => m.id === 'u3' ? { ...m, content: 'Latest'.repeat(100), tokenCount: 500 } : m), requireLatestUser: true,
   }), /opening story and latest user message exceed/);
 });
 
@@ -492,7 +504,7 @@ test('Opening exchange survives a summary checkpoint and regeneration uses the p
   const session = { id: 's', longTermPlan: 'Future plan', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
   const current = await buildContextForRequest(session, h.state.settings, { messages, requireLatestUser: true });
   assert.deepEqual(Array.from(current.apiMessages.slice(1), (m) => m.content),
-    ['Story so far:\nStory summary', 'The kingdom begins here', 'The first scene', 'Current turn']);
+    ['The kingdom begins here', 'The first scene', 'Story so far:\nStory summary', '[Earlier turns are represented by the summary.]', 'Current turn']);
   const regen = await buildContextForRequest(session, h.state.settings, {
     messages, upToOrder: 2, planOverride: 'Original plan', requireLatestUser: true,
   });
@@ -560,7 +572,9 @@ test('Incomplete streamed replies are rejected', async () => {
   h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"partial"}}]}\n'];
   await assert.rejects(chatCompletion({ settings, messages: [] }), /ended before completion/);
   h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"cut"},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
-  await assert.rejects(chatCompletion({ settings, messages: [] }), /output limit/);
+  const partial = await chatCompletion({ settings, messages: [] });
+  assert.equal(partial.content, 'cut');
+  assert.equal(partial.finishReason, 'length');
 });
 
 test('Model errors and abnormal endings are rejected before a reply is saved', async () => {
@@ -632,11 +646,11 @@ test('Auto-summary triggers when sliding window drops history below the threshol
   const result = await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, narratorSystemPrompt: '', maxContextTokens: 1000,
     maxResponseTokens: 800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
-  }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]);
+  }, [{ id: 'm', order: 1, role: 'user', content: 'large message'.repeat(30), tokenCount: 300 }]);
   assert.equal(result, true);
   assert.equal(await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, autoSummarizationEnabled: false,
-  }, [{ id: 'm', order: 1, role: 'user', content: 'large message', tokenCount: 300 }]), false);
+  }, [{ id: 'm', order: 1, role: 'user', content: 'large message'.repeat(30), tokenCount: 300 }]), false);
 });
 
 test('This story saves private notes for reference without resending them', async () => {
@@ -715,7 +729,7 @@ test('message actions keep consistent order and create copies through the select
     const actions = message.children[0].children[1].children;
     assert.deepEqual(Array.from(actions, (button) => button.textContent), role === 'assistant'
       ? ['Create copy', 'Copy', 'Edit', 'Delete', 'Regenerate']
-      : ['Create copy', 'Copy', 'Edit', 'Delete']);
+      : ['Create copy', 'Copy', 'Edit', 'Delete', 'Retry reply']);
     const click = { type: 'click', stopPropagation() {} };
     h.state.busy = true;
     await actions[0].dispatchEvent(click);
@@ -786,7 +800,7 @@ test('Context contributions match cleaned request text and legacy private-note c
   ];
   const result = await buildContextForRequest({ id: 's', longTermPlan: 'Meet the queen',
     activeSummaryMessageId: 'sum', breakpointOrder: 3 }, h.state.settings, { messages });
-  assert.equal(result.entries[1].content, 'Story so far:\nEarlier events.');
+  assert.equal(result.entries[3].content, 'Story so far:\nEarlier events.');
   assert.equal(result.entries.find((entry) => entry.id === 'a1').tokens, 'The door opens.'.length);
   assert.equal(result.entries.find((entry) => entry.id === 'a3').content, 'The room is quiet.');
   assert.equal(result.omitted['Summary checkpoint'], 1);
@@ -1359,4 +1373,411 @@ test('Stop restores the composer immediately while history is still loading', as
   finishHistory([]);
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(h.calls.requests.length, 0);
+});
+
+async function openTurnChat(h, metadata = {}, messages = []) {
+  const chat = await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('turn-story');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  h.calls.sessionCallbacks.at(-1)({ id: 'turn-story', exists: () => true,
+    data: () => ({ title: 'Story', ...metadata }) });
+  h.calls.latestCallbacks.at(-1)({ messages, hasEarlier: false });
+  h.calls.serverSnapshot = { exists: () => true, data: () => metadata };
+  h.state.settings.modelId = 'test'; h.state.settings.apiKey = 'test-key';
+  h.state.settings.streaming = false;
+  return chat;
+}
+
+test('Stream bubble survives saving and is replaced once the saved message exists', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  let finishSave;
+  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
+    ? { id: 'user', order: 1, tokenCount: 4 }
+    : new Promise(resolve => { finishSave = () => resolve({ id: options.id, order: 2, tokenCount: 7 }); });
+  h.el('chat-input').value = 'Turn';
+  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const list = h.el('message-list');
+  assert.ok(list.children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
+  finishSave(); await pending;
+  assert.equal(list.children.filter(node => node.className === 'msg assistant').length, 1);
+  assert.ok(list.children.find(node => node.dataset.messageId === 'summary-id'));
+});
+
+test('Viewport measurements ignore zoom and preserve keyboard offset at normal scale', async () => {
+  const h = await harness();
+  const { viewportVars } = await h.use('viewport.js');
+  assert.equal(viewportVars({ scale: 1.5, height: 300, offsetTop: 40 }), null);
+  assert.deepEqual(structuredClone(viewportVars({ scale: 1, height: 450, offsetTop: 30 })),
+    { height: '450px', offsetTop: '30px' });
+  assert.equal(viewportVars({ scale: 1, height: 0 }), null);
+});
+
+test('Unsupported vibration is explained without disabling the synced setting', async () => {
+  const h = await harness();
+  const { vibrationSupport } = await h.use('stream-vibration.js');
+  assert.equal(vibrationSupport({ userAgent: 'iPhone OS 18_6 Version/26.5' }), 'unsupported');
+  assert.equal(vibrationSupport({ vibrate() {} }), 'native');
+  (await h.use('ui/settings-view.js')).initSettingsView();
+  assert.equal(h.el('stream-vibration-help').hidden, false);
+  assert.notEqual(h.el('set-stream-vibration').disabled, true);
+});
+
+test('Cached story catches up through metadata once and acknowledges deleted order gaps', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
+  chat.setSession('other'); chat.setSession('turn-story');
+  h.calls.freshMessages = [{ id: 'a', order: 2, role: 'assistant', content: 'Phone reply' }];
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.catchUps.length, 1);
+  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'a'));
+  h.calls.freshMessages = [];
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 5 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 5 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.catchUps.length, 2);
+});
+
+test('Metadata arriving during catch-up triggers one follow-up query', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h);
+  let finish;
+  h.calls.catchUp = () => h.calls.catchUps.length === 1 ? new Promise(resolve => { finish = resolve; }) : [];
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 3 });
+  finish([{ id: 'remote', order: 2, role: 'assistant', content: 'Remote reply' }]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(h.calls.catchUps.map(args => args[1]), [0, 2]);
+});
+
+test('A stale send loads remote turns and does not write a user message', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
+  h.calls.freshMessages = [{ id: 'phone', order: 1, role: 'user', content: 'Phone turn' }];
+  h.el('chat-input').value = 'My draft';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.calls.messages.length, 0);
+  assert.equal(h.calls.requests.length, 0);
+  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'phone'));
+});
+
+test('Failed user save restores the exact draft and stale-send drafts survive', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  h.calls.addMessage = async () => { throw new Error('write denied'); };
+  h.el('chat-input').value = '  My draft\n';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.el('chat-input').value, '  My draft\n');
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 2 }) };
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  assert.equal(h.el('chat-input').value, '  My draft\n');
+});
+
+test('A failed reply renders the saved user with Retry; retry reuses that turn', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  h.calls.responseData = { error: { message: 'provider unavailable' } };
+  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
+    ? { id: 'user', order: 1, tokenCount: 4 }
+    : { id: options.id, order: 2, tokenCount: 7 };
+  h.el('chat-input').value = 'My turn';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  const user = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
+  const retry = user.querySelector('.msg-actions').children.find(button => button.textContent === 'Retry reply');
+  assert.ok(retry);
+  h.calls.responseData = null;
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
+  await retry.dispatchEvent({ type: 'click', stopPropagation() {} });
+  assert.equal(h.calls.requests.length, 2);
+  assert.equal(h.calls.requests[1].messages.at(-1).content, 'My turn');
+  assert.equal(h.calls.messages.filter(args => args[1].role === 'user').length, 1);
+  const updated = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
+  assert.equal(updated.querySelector('.msg-actions').children.some(button => button.textContent === 'Retry reply'), false);
+});
+
+test('Truncated summaries cannot replace the checkpoint and incomplete plans remain absent', async () => {
+  const h = await harness();
+  const { runSummarization } = await h.use('summarizer.js');
+  h.calls.responseData = { choices: [{ finish_reason: 'length', message: { content: 'Incomplete facts' } }] };
+  await assert.rejects(runSummarization({ id: 's' }, { ...h.state.settings,
+    modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
+  }, { messages: [
+    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+    { id: 'a1', order: 2, role: 'assistant', content: 'Opening reply' },
+    { id: 'u2', order: 3, role: 'user', content: 'Fold this' },
+  ] }), /checkpoint was not changed/);
+  assert.equal(h.calls.messages.length, 0);
+  const { extractPlan } = await h.use('plan-parser.js');
+  assert.equal(extractPlan('Story <plan>unfinished'), null);
+});
+
+test('A non-streaming length-limited reply is saved and visibly marked', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  h.calls.responseData = { choices: [{ finish_reason: 'length', message: { content: 'Partial story <plan>unfinished' } }] };
+  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
+    ? { id: 'user', order: 1, tokenCount: 4 }
+    : { id: options.id, order: 2, tokenCount: 7 };
+  h.el('chat-input').value = 'Continue';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  const reply = h.calls.messages.find(args => args[1].role === 'assistant')[1];
+  assert.equal(reply.content, 'Partial story'); assert.equal(reply.truncated, true);
+  const node = h.el('message-list').children.find(item => item.dataset.messageId === 'summary-id');
+  assert.match(node.querySelector('.msg-meta').children[0].textContent, /cut off/);
+});
+
+test('Reasoning budget must leave output room while input and output limits remain independent', async () => {
+  const h = await harness();
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  h.el('set-reasoning-enabled').checked = true;
+  h.el('set-reasoning-mode').value = 'max_tokens';
+  h.el('set-reasoning-maxtokens').value = '8192';
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes.length, 0);
+  assert.match(h.el('settings-saved-msg').textContent, /must be lower/);
+  h.el('set-reasoning-maxtokens').value = '4096';
+  h.el('set-max-context').value = '1024';
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes.length, 1);
+});
+
+test('Known total model window bounds summary input plus reserved output', async () => {
+  const h = await harness();
+  const { runSummarization } = await h.use('summarizer.js');
+  const settings = { ...h.state.settings, modelId: 'test', streaming: false,
+    maxContextTokens: 2000, modelContextTokens: 2100, summarizerMaxTokens: 600,
+    keepRecentMessagesAfterSummary: 0 };
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
+    role: i % 2 ? 'assistant' : 'user', content: 'x'.repeat(300) }));
+  await runSummarization({ id: 's' }, settings, { messages });
+  assert.ok(h.calls.requests.length > 1);
+  for (const request of h.calls.requests) {
+    const input = request.messages.reduce((sum, message) => sum + message.content.length + 8, 8);
+    assert.ok(input <= settings.maxContextTokens);
+    assert.ok(input + request.max_tokens <= settings.modelContextTokens);
+  }
+});
+
+test('Tokenizer recovery recounts identical text and ignores old inflated stored counts', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = [{ id: 'u', order: 1, role: 'user', content: 'Long English sentence', tokenCount: 99999 }];
+  h.calls.tokenizerReady = false;
+  const fallback = await buildContextForRequest({ id: 's' }, h.state.settings, { messages });
+  assert.equal(fallback.entries.at(-1).tokens, messages[0].content.length);
+  h.calls.tokenizerReady = true; h.calls.tokenCount = () => 4;
+  const recovered = await buildContextForRequest({ id: 's' }, h.state.settings, { messages });
+  assert.equal(recovered.entries.at(-1).tokens, 4);
+  assert.equal(recovered.entries[0].tokens, 4);
+});
+
+test('Gap markers count toward input and distinguish summary coverage from later omitted turns', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = [
+    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+    { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
+    { id: 'u2', order: 3, role: 'user', content: 'Folded event' },
+    { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
+    { id: 'a2', order: 5, role: 'assistant', content: 'x'.repeat(500) },
+    { id: 'u3', order: 6, role: 'user', content: 'Current' },
+  ];
+  const session = { id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
+  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
+  const result = await buildContextForRequest(session,
+    { ...h.state.settings, maxContextTokens: base.usedTokens + 220 }, { messages, requireLatestUser: true });
+  const marker = result.entries.find(entry => entry.source === 'Omitted turns marker');
+  assert.match(marker.content, /Later omitted turns are not covered/);
+  assert.equal(result.droppedCount, 1);
+  assert.equal(result.usedTokens, result.contributions.reduce((sum, item) => sum + item.tokens, 0));
+  assert.ok(result.usedTokens <= base.usedTokens + 220);
+  const allFit = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: messages.filter(m => m.role !== 'summary') });
+  assert.equal(allFit.entries.some(entry => entry.source === 'Omitted turns marker'), false);
+});
+
+test('Request-time plan rules remove the legacy lost-plan instruction while preserving custom prompts', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const result = await buildContextForRequest({ id: 's', longTermPlan: 'Reach the harbor' }, h.state.settings, { messages: [] });
+  assert.match(result.apiMessages[0].content, /Their absence never means the plan was lost/);
+  assert.doesNotMatch(result.apiMessages[0].content, /treat that plan as lost from context|remains active even if older/);
+  const custom = await buildContextForRequest({ id: 's' }, { ...h.state.settings, narratorSystemPrompt: 'My custom narrator' }, { messages: [] });
+  assert.match(custom.apiMessages[0].content, /^My custom narrator/);
+});
+
+test('Folded deletes explain checkpoint loss; opening edits do not claim their text is hidden', async () => {
+  const h = await harness();
+  await openTurnChat(h, { activeSummaryMessageId: 'sum', breakpointOrder: 3 }, [
+    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+    { id: 'a1', order: 2, role: 'assistant', content: 'First scene' },
+    { id: 'u2', order: 3, role: 'user', content: 'Folded' },
+    { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
+    { id: 'a2', order: 5, role: 'assistant', content: 'Recent' },
+  ]);
+  const action = (id, text) => h.el('message-list').children.find(node => node.dataset.messageId === id)
+    .querySelector('.msg-actions').children.find(button => button.textContent === text);
+  h.calls.confirm = false;
+  await action('u2', 'Delete').dispatchEvent({ type: 'click', stopPropagation() {} });
+  assert.match(h.calls.confirmations.at(-1), /clears the summary/);
+  await action('a2', 'Delete').dispatchEvent({ type: 'click', stopPropagation() {} });
+  assert.equal(h.calls.confirmations.at(-1), 'Delete this message permanently?');
+  await action('u1', 'Edit').dispatchEvent({ type: 'click', stopPropagation() {} });
+  assert.equal(h.el('message-list').querySelector('.status-line'), null);
+});
+
+for (const unlocked of [false, true]) {
+  test(`Old replies can regenerate only when the story plan is locked (updates=${unlocked})`, async () => {
+    const h = await harness();
+    await openTurnChat(h, { nextOrder: 2, longTermPlan: 'Fixed plan', allowLlmPlanUpdates: unlocked }, [
+      { id: 'u', order: 1, role: 'user', content: 'Opening' },
+      { id: 'a', order: 2, role: 'assistant', content: 'Old reply' },
+    ]);
+    const node = h.el('message-list').children.find(item => item.dataset.messageId === 'a');
+    await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Regenerate')
+      .dispatchEvent({ type: 'click', stopPropagation() {} });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(h.calls.requests.length, unlocked ? 0 : 1);
+    assert.equal(h.calls.overwrites?.length ?? 0, unlocked ? 0 : 1);
+    if (!unlocked) assert.match(h.calls.requests[0].messages[0].content, /Fixed plan/);
+  });
+}
+
+test('Dropped-turn warning explains recovery when automatic summarization is off', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
+  const messages = Array.from({ length: 10 }, (_, index) => ({ id: String(index), order: index + 1,
+    role: 'user', content: 'x'.repeat(100) }));
+  const chat = await openTurnChat(h, { nextOrder: 10 }, messages);
+  h.state.settings.maxContextTokens = base.usedTokens + 260;
+  await chat.updateIndicator();
+  assert.match(h.el('context-label').textContent, /turns not sent/);
+  assert.match(h.el('context-indicator').title, /Turn on auto-summary/);
+  h.state.settings.autoSummarizationEnabled = true;
+  await chat.updateIndicator();
+  assert.doesNotMatch(h.el('context-indicator').title, /Turn on auto-summary/);
+});
+
+test('Provider usage belongs only to its captured request and clears on story reset', async () => {
+  const h = await harness();
+  const view = await h.use('ui/context-view.js');
+  view.initContextInspector(async () => ({}));
+  const context = { usedTokens: 10, max: 100, entries: [], contributions: [], omitted: {} };
+  const first = view.captureContextRequest(context, { model: 'first', messages: [] });
+  const second = view.captureContextRequest(context, { model: 'second', messages: [] });
+  h.el('context-dialog').open = true; h.el('context-mode').value = 'sent';
+  view.captureContextUsage(first, { prompt_tokens: 111 });
+  view.captureContextUsage(second, { prompt_tokens: 222 });
+  assert.match(h.el('context-status').textContent, /Provider counted: 222/);
+  assert.doesNotMatch(h.el('context-status').textContent, /111/);
+  view.resetContextInspector();
+  view.captureContextUsage(second, { prompt_tokens: 333 });
+  await h.fire('context-mode', 'change');
+  assert.match(h.el('context-status').textContent, /No request has been sent/);
+});
+
+test('A snapshot during regeneration cannot remove the stream before overwrite completes', async () => {
+  const h = await harness();
+  const messages = [
+    { id: 'u', order: 1, role: 'user', content: 'Opening' },
+    { id: 'a', order: 2, role: 'assistant', content: 'Old reply' },
+  ];
+  await openTurnChat(h, { nextOrder: 2 }, messages);
+  let finish;
+  h.calls.overwriteMessage = () => new Promise(resolve => { finish = resolve; });
+  const button = h.el('message-list').children.find(node => node.dataset.messageId === 'a')
+    .querySelector('.msg-actions').children.find(node => node.textContent === 'Regenerate');
+  await button.dispatchEvent({ type: 'click', stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  h.calls.latestCallbacks.at(-1)({ messages, hasEarlier: false });
+  assert.ok(h.el('message-list').children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
+  h.calls.latestCallbacks.at(-1)({ messages: [messages[0], { ...messages[1], content: 'summary' }], hasEarlier: false });
+  assert.ok(h.el('message-list').children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
+  finish({ tokenCount: 7 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.el('message-list').children.filter(node => node.className === 'msg assistant').length, 1);
+});
+
+test('Catch-up failure after switching stories cannot show an error in the new story', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h);
+  let fail;
+  h.calls.catchUp = () => new Promise((_resolve, reject) => { fail = reject; });
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
+  chat.setSession('other');
+  fail(new Error('Old story network error'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.el('message-list').children.some(node => node.className === 'msg error'), false);
+});
+
+test('Send waits for an existing catch-up and retains the draft for review', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h);
+  let finish;
+  h.calls.catchUp = () => new Promise(resolve => { finish = resolve; });
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 1 });
+  h.el('chat-input').value = 'Review my draft';
+  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  finish([{ id: 'remote', order: 1, role: 'user', content: 'Remote turn' }]);
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
+  await pending;
+  assert.equal(h.calls.messages.length, 0);
+  assert.equal(h.el('chat-input').value, 'Review my draft');
+});
+
+test('Retry context retains the latest user even after a manual summary folds that turn', async () => {
+  const h = await harness();
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const result = await buildContextForRequest({ id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 },
+    h.state.settings, { requireLatestUser: true, messages: [
+      { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+      { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
+      { id: 'u2', order: 3, role: 'user', content: 'Unanswered turn' },
+      { id: 'sum', order: 4, role: 'summary', content: 'Summary of earlier turns' },
+    ] });
+  assert.equal(result.apiMessages.at(-1).role, 'user');
+  assert.equal(result.apiMessages.at(-1).content, 'Unanswered turn');
+  assert.equal(result.droppedCount, 0);
+  assert.equal(result.usedTokens, result.contributions.reduce((sum, entry) => sum + entry.tokens, 0));
+});
+
+test('Restoring a cached story consumes metadata already held by the sidebar', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
+  (await h.use('ui/sidebar.js')).initSidebar();
+  chat.setSession('other');
+  h.calls.sidebarCallback([{ id: 'turn-story', nextOrder: 3, title: 'Story' }, { id: 'other', title: 'Other' }]);
+  h.calls.freshMessages = [{ id: 'a', order: 3, role: 'assistant', content: 'Already written on phone' }];
+  chat.setSession('turn-story');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.catchUps.length, 1);
+  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'a'));
+});
+
+test('Inspector keeps summaries and omission markers in their actual position among story turns', async () => {
+  const h = await harness();
+  const { computeContextUsage } = await h.use('context-builder.js');
+  const context = await computeContextUsage({ id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 },
+    h.state.settings, [
+      { id: 'u1', order: 1, role: 'user', content: 'Opening' },
+      { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
+      { id: 'u2', order: 3, role: 'user', content: 'Folded event' },
+      { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
+      { id: 'u3', order: 5, role: 'user', content: 'Current turn' },
+    ]);
+  const view = await h.use('ui/context-view.js');
+  view.initContextInspector(async () => context);
+  await h.fire('context-indicator');
+  const group = h.el('context-body').children.find(node => node.className?.includes('context-turn-group'));
+  const labels = group.querySelector('.context-turn-list').children.map(node => node.children[0].textContent);
+  assert.match(labels[0], /Opening exchange/);
+  assert.match(labels[1], /Opening exchange/);
+  assert.match(labels[2], /Active story summary/);
+  assert.match(labels[3], /Omitted turns marker/);
+  assert.match(labels[4], /Recent user messages/);
 });

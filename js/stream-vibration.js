@@ -1,4 +1,8 @@
 // Request-local pulses: no perpetual timer and no replay of hidden-page events.
+export function vibrationSupport(nav = globalThis.navigator) {
+  return typeof nav?.vibrate === "function" ? "native" : "unsupported";
+}
+
 export function createStreamVibration(mode, {
   navigator: nav = globalThis.navigator,
   document: doc = globalThis.document,
@@ -8,7 +12,7 @@ export function createStreamVibration(mode, {
 } = {}) {
   let stopped = false, timer = null, lastPulse = -Infinity, lastArrival = null;
   let pendingDuration = 0, rate = 0;
-  const enabled = ["speed", "spaces"].includes(mode) && typeof nav?.vibrate === "function";
+  const enabled = ["speed", "spaces"].includes(mode) && vibrationSupport(nav) === "native";
   const vibrate = (duration) => { try { nav.vibrate(duration); } catch { /* Unsupported or blocked hardware. */ } };
   const clear = () => {
     if (timer !== null) cancel(timer);

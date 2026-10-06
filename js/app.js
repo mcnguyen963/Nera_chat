@@ -4,6 +4,7 @@ import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
 import { initChatView, setSession } from "./ui/chat-view.js";
 import { initSettingsView, openSettingsPopup } from "./ui/settings-view.js";
+import { initViewport } from "./viewport.js";
 
 const el = {
   loginScreen: document.getElementById("login-screen"),
@@ -23,21 +24,7 @@ let appInitialized = false;
 // hides the composer (100dvh alone is unreliable on iOS). iOS also pushes
 // the whole page up when an input is focused; undo that push so the app
 // stays glued to the top of the keyboard instead of floating above it.
-if (window.visualViewport) {
-  const vv = window.visualViewport;
-  const syncViewport = () => {
-    document.documentElement.style.setProperty("--app-height", vv.height + "px");
-    // While pinch-zoomed, panning the visual viewport is intentional.
-    if (vv.scale === 1 && (window.scrollX !== 0 || window.scrollY !== 0)) {
-      window.scrollTo(0, 0);
-    }
-  };
-  vv.addEventListener("resize", syncViewport);
-  vv.addEventListener("scroll", syncViewport);
-  // Element scrolls don't fire this; only the document scroll does.
-  window.addEventListener("scroll", syncViewport, { passive: true });
-  syncViewport();
-}
+initViewport();
 
 // ---------- mobile sidebar drawer ----------
 function setSidebarOpen(open) {

@@ -230,6 +230,8 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 }
 @media (max-width: 720px) {
   input[type="text"], input[type="email"], input[type="url"], input[type="password"], input[type="number"], select, textarea { font-size: 16px; }
+  .msg-editor { font-size: 16px; }
+  .app { transform: var(--app-viewport-transform, none); }
   .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(84vw, 300px); min-width: 0; transform: translateX(-105%); transition: transform .2s; box-shadow: 15px 0 50px #0008; }
   .app.sidebar-open .sidebar { transform: translateX(0); }
   .icon-btn { display: block; width: 32px; min-height: 32px; padding: 6px; }

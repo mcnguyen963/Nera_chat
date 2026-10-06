@@ -201,8 +201,11 @@
                 <div class="settings-grid">
                   <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
                   <label>Streaming vibration<select id="set-stream-vibration"><option value="off">Off</option><option value="speed">Speed</option><option value="spaces">Spaces</option></select></label>
+                  <p id="stream-vibration-help" class="muted" hidden>Streaming vibration is not supported by this browser.</p>
                   <p class="muted">Vibrates during thinking and writing on supported phones.</p>
                   <label>Max response tokens<input type="text" id="set-max-resp" inputmode="numeric" data-min="1" required /></label>
+                  <label>Model total context tokens (optional)<input type="text" id="set-model-context" inputmode="numeric" data-min="256" placeholder="Model's published context window" /></label>
+                  <p class="muted">When set, reserve response tokens within this total window. Max input context tokens remains your input limit.</p>
                 </div>
                 <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-advanced-enabled" aria-controls="advanced-options" /> Custom sampling parameters</label>
                 <div id="advanced-options" class="hidden">
@@ -257,7 +260,8 @@
               <section data-panel="transfer" class="settings-panel hidden">
                 <h2>Import &amp; export</h2>
                 <p class="muted">Bring your stories with you.</p>
-                <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button></div>
+                <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button><button id="btn-export-full" class="btn">Export full backup (JSON)</button></div>
+                <p class="muted">Full backups include summaries, plans, private notes, and thinking. Restoring a JSON backup is not available yet.</p>
               </section>
               <section data-panel="account" class="settings-panel hidden">
                 <h2>Account</h2><p id="account-email" class="muted account-email"></p>

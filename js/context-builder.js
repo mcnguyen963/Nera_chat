@@ -6,9 +6,11 @@
 // view, so repeated turns and indicator updates need no collection read.
 
 import { getMessages } from "./messages.js";
-import { countTokens } from "./tokenizer.js";
+import { countTokens, tokenizerReady } from "./tokenizer.js";
 import { planInjectionBlock } from "./plan-parser.js";
 import { storyText } from "./story-text.js";
+import { requestInputLimit } from "./request-budget.js";
+import { PLAN_THREAD_RECOVERY_RULE } from "./settings.js";
 
 // Reserve framing tokens for each API message and for the request envelope.
 // Exact framing depends on the model, so these are conservative estimates.
@@ -43,7 +45,7 @@ async function countSystemTokensCached(text) {
   if (cached === undefined) {
     if (systemTokenCache.size > 500) systemTokenCache.clear();
     cached = await countTokens(text);
-    systemTokenCache.set(text, cached);
+    if (tokenizerReady()) systemTokenCache.set(text, cached);
   }
   return cached;
 }
@@ -62,9 +64,10 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const all = opts.messages ?? await getMessages(session.id);
 
   const systemText =
-    (settings.narratorSystemPrompt || "") + "\n\n" + AD_DIRECTIVE_RULE +
+    (settings.narratorSystemPrompt || "").replace(PLAN_THREAD_RECOVERY_RULE, "") + "\n\n" + AD_DIRECTIVE_RULE +
     "\n\n" + planInjectionBlock(opts.planOverride ?? session.longTermPlan, session.allowLlmPlanUpdates === true) +
-    "\n\nThe current plan in this system prompt remains active even if older turns leave the visible history." +
+    "\n\nThe app removes <plan> and <plan_thread> tags from visible history before every request. " +
+    "Their absence never means the plan was lost. The plan in this system prompt is the current plan." +
     (session.allowLlmPlanUpdates === true ? "" :
       "\n\nThe user's story plan is fixed. Ignore any earlier instruction to update it; never output a <plan> block.");
   const systemTokens = await countSystemTokensCached(systemText);
@@ -77,55 +80,106 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     ? all.find((m) => m.id === session.activeSummaryMessageId)
     : null;
   const summaryText = summaryMsg && storyText(summaryMsg.content);
+  let summaryEntry = null;
   if (summaryText) {
     const content = "Story so far:\n" + summaryText;
     const tokens = await countSystemTokensCached(content);
-    parts.push({ role: "system", content });
-    entries.push({ id: summaryMsg.id, role: "system", content, tokens, source: "Active story summary" });
+    summaryEntry = { id: summaryMsg.id, role: "system", content, tokens, source: "Active story summary" };
     used += tokens + MESSAGE_FRAME_TOKENS;
   }
 
-  const available = settings.maxContextTokens - used;
+  const available = requestInputLimit(settings) - used;
   const contentFor = (m) => m.role === "user" ? normalizeAdDirective(m.content) : storyText(m.content);
   const raw = all.filter((m) => ["user", "assistant"].includes(m.role) && m.order < upToOrder && contentFor(m).trim())
     .sort((a, b) => a.order - b.order);
   const latestUser = [...raw].reverse().find((m) => m.role === "user");
   const anchors = openingExchange(raw);
   const recent = raw.filter((m) => m.order > (summaryText ? (session.breakpointOrder ?? 0) : 0));
-  const candidates = [...new Map([...anchors, ...recent].map((m) => [m.id, m])).values()];
+  const candidates = [...new Map([...anchors, ...recent, ...(latestUser ? [latestUser] : [])]
+    .map((m) => [m.id, m])).values()];
   const candidateIds = new Set(candidates.map((m) => m.id));
   const requiredIds = new Set(anchors.map((m) => m.id));
   if (latestUser) requiredIds.add(latestUser.id);
   const costs = new Map();
   for (const m of candidates) {
     const content = contentFor(m);
-    // Older saved assistant counts included planThread; count exactly the story sent.
-    costs.set(m.id, (m.role === "user" && m.tokenCount != null && content === m.content
-      ? m.tokenCount : await countSystemTokensCached(content)) + MESSAGE_FRAME_TOKENS);
+    // Stored counts may come from a CDN fallback or include removed private text.
+    costs.set(m.id, await countSystemTokensCached(content) + MESSAGE_FRAME_TOKENS);
   }
   const requiredCost = candidates.reduce((sum, m) => sum + (requiredIds.has(m.id) ? costs.get(m.id) : 0), 0);
-  const exceedsInputLimit = requiredCost > available;
+  let exceedsInputLimit = requiredCost > available;
   if (opts.requireLatestUser && (!latestUser || exceedsInputLimit)) {
     throw new Error("The opening story and latest user message exceed the context budget. Increase the context limit or shorten one of those messages.");
   }
-  let budget = Math.max(0, available - requiredCost);
-  const selected = new Set(requiredIds);
-  used += requiredCost;
-  for (const m of [...candidates].reverse()) {
-    if (selected.has(m.id)) continue;
-    const cost = costs.get(m.id);
-    if (cost > budget) break; // keep a contiguous recent window after the opening exchange
-    selected.add(m.id);
-    budget -= cost;
-    used += cost;
+  const fixedUsed = used;
+  let selected;
+  const selectWindow = (reserve = 0) => {
+    let budget = Math.max(0, available - requiredCost - reserve);
+    selected = new Set(requiredIds);
+    used = fixedUsed + requiredCost + reserve;
+    for (const m of [...candidates].reverse()) {
+      if (selected.has(m.id)) continue;
+      const cost = costs.get(m.id);
+      if (cost > budget) break; // keep a contiguous recent window after the opening exchange
+      selected.add(m.id);
+      budget -= cost;
+      used += cost;
+    }
+  };
+  selectWindow();
+  const anchorOrder = anchors.at(-1)?.order ?? 0;
+  const coveredGap = Boolean(summaryText && (session.breakpointOrder ?? 0) > anchorOrder);
+  let uncoveredGap = candidates.some((m) => !selected.has(m.id));
+  let gapEntry = null;
+  if (coveredGap || uncoveredGap) {
+    // Reserving the summary marker can itself push a later turn out of the
+    // window. Rebuild the marker once if that creates an uncovered gap.
+    for (let pass = 0; pass < 2; pass++) {
+      const content = "[" + (coveredGap ? "Earlier turns are represented by the summary."
+        : "Earlier turns omitted.") +
+        (uncoveredGap && summaryText ? " Later omitted turns are not covered by the summary." : "") + "]";
+      const tokens = await countSystemTokensCached(content);
+      const cost = tokens + MESSAGE_FRAME_TOKENS;
+      exceedsInputLimit = requiredCost + cost > available;
+      if (opts.requireLatestUser && exceedsInputLimit) {
+        throw new Error("The opening story, latest user message, and omitted turns marker exceed the context budget. Increase the context limit or shorten the required messages.");
+      }
+      selectWindow(cost);
+      gapEntry = { role: "system", content, tokens, source: "Omitted turns marker" };
+      if (uncoveredGap || !candidates.some((m) => !selected.has(m.id))) break;
+      uncoveredGap = true;
+    }
   }
-  for (const m of candidates.filter((m) => selected.has(m.id)).sort((a, b) => a.order - b.order)) {
+  const selectedMessages = candidates.filter((m) => selected.has(m.id)).sort((a, b) => a.order - b.order);
+  const orderedMessages = [
+    ...selectedMessages.filter((m) => anchors.some((anchor) => anchor.id === m.id)),
+    ...selectedMessages.filter((m) => !anchors.some((anchor) => anchor.id === m.id)),
+  ];
+  for (const m of orderedMessages) {
+    if (summaryEntry && !anchors.some((anchor) => anchor.id === m.id)) {
+      parts.push({ role: "system", content: summaryEntry.content });
+      entries.push(summaryEntry);
+      summaryEntry = null;
+    }
+    if (gapEntry && !anchors.some((anchor) => anchor.id === m.id)) {
+      parts.push({ role: "system", content: gapEntry.content });
+      entries.push(gapEntry);
+      gapEntry = null;
+    }
     const content = contentFor(m);
     parts.push({ role: m.role, content });
     entries.push({ id: m.id, order: m.order, role: m.role, content,
       tokens: costs.get(m.id) - MESSAGE_FRAME_TOKENS,
       source: anchors.some((anchor) => anchor.id === m.id) ? "Opening exchange"
         : m.role === "user" ? "Recent user messages" : "Recent assistant story" });
+  }
+  if (summaryEntry) {
+    parts.push({ role: "system", content: summaryEntry.content });
+    entries.push(summaryEntry);
+  }
+  if (gapEntry) {
+    parts.push({ role: "system", content: gapEntry.content });
+    entries.push(gapEntry);
   }
 
   const totals = new Map();
@@ -157,7 +211,7 @@ export async function buildContextForRequest(session, settings, opts = {}) {
 // Indicator metric: tokens that would be sent for the next turn (no new user turn yet).
 export async function computeContextUsage(session, settings, messages = null) {
   const context = await buildContextForRequest(session, settings, { messages });
-  const max = settings.maxContextTokens;
+  const max = requestInputLimit(settings);
   const threshold = (max * settings.autoSummaryThresholdPercent) / 100;
   return { ...context, max, threshold, overThreshold: context.usedTokens >= threshold };
 }

@@ -6,6 +6,7 @@ let latestRequest = null;
 let previewRun = 0;
 let loading = false;
 let opener = null;
+let requestId = 0;
 
 export function initContextInspector(loadPreview) {
   getPreview = loadPreview;
@@ -55,14 +56,23 @@ export function updateContextPreview(context) {
 }
 
 export function captureContextRequest(context, request) {
+  ++requestId;
   latestRequest = structuredClone({ ...context, model: request.model,
     apiMessages: request.messages,
     entries: context.entries.map((entry, index) => ({ ...entry, ...request.messages[index] })),
   });
   if (el?.dialog.open && el.mode.value === "sent") render();
+  return requestId;
+}
+
+export function captureContextUsage(id, usage) {
+  if (id !== requestId || !latestRequest || !Number.isFinite(usage?.prompt_tokens)) return;
+  latestRequest.providerPromptTokens = usage.prompt_tokens;
+  if (el?.dialog.open && el.mode.value === "sent") render();
 }
 
 export function resetContextInspector() {
+  ++requestId;
   ++previewRun;
   loading = false;
   nextContext = latestRequest = null;
@@ -89,6 +99,9 @@ function render() {
     (context.model ? ` · ${context.model}` : "") +
     (sent ? " · latest story request sent" : " · next turn, without unsent composer text") +
     (context.isEstimate ? " · recent history estimate" : "");
+  if (sent && context.providerPromptTokens != null) {
+    el.status.textContent += ` · Provider counted: ${context.providerPromptTokens.toLocaleString()}`;
+  }
   if (context.exceedsInputLimit) {
     el.body.append(node("p", "Required story context exceeds the input limit. Increase the limit or shorten the required messages before sending.", "context-warning"));
   }
@@ -109,7 +122,8 @@ function render() {
   el.body.append(node("h3", "Messages in request order"));
   const turns = context.entries.filter((entry) => entry.role !== "system");
   const turnGroup = node("details", undefined, "context-message context-turn-group");
-  const turnTokens = turns.reduce((total, entry) => total + entry.tokens, 0);
+  const storyEntries = context.entries.slice(1);
+  const turnTokens = storyEntries.reduce((total, entry) => total + entry.tokens, 0);
   turnGroup.append(node("summary", `Conversation turns · ${turns.length.toLocaleString()} messages · ${turnTokens.toLocaleString()} tokens`));
   const turnList = node("div", undefined, "context-turn-list");
   turnGroup.append(turnList);
@@ -123,7 +137,7 @@ function render() {
       if (!details.open || details.querySelector("pre")) return;
       details.append(node("pre", entry.content));
     });
-    if (entry.role === "system") el.body.append(details);
+    if (index === 0) el.body.append(details);
     else {
       if (!groupAdded) { el.body.append(turnGroup); groupAdded = true; }
       turnList.append(details);

@@ -29,6 +29,9 @@ export function initSidebar() {
   document.addEventListener("session-imported", (e) => setSession(e.detail));
 
   let cachedSessions = [];
+  document.addEventListener("chat-cache-restored", () => {
+    syncActiveSession(cachedSessions.find((item) => item.id === state.sessionId));
+  });
   let renderedSignature = "";
   document.addEventListener("session-changed", () => {
     refreshActive(listEl, cachedSessions, titleEl);

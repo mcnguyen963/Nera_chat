@@ -2,8 +2,9 @@
 // Line 1 is a metadata header ({user_name, character_name, create_date}); every
 // subsequent line is one message {name, is_user, send_date, mes}.
 
-import { createSession, getSession } from "./sessions.js";
-import { getMessages, addMessagesBulk } from "./messages.js";
+import { createSession, getSession, getSessionFromServer } from "./sessions.js";
+import { getMessages, addMessagesBulk, ensureChunked } from "./messages.js";
+import { currentUid } from "./auth.js";
 
 export function parseSillyTavernJsonl(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -75,4 +76,38 @@ export async function exportSillyTavern(sessionId) {
   a.download = safeTitle + ".jsonl";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export async function buildFullBackup(sessionId) {
+  const uid = currentUid();
+  const assertAccount = () => {
+    if (uid !== currentUid()) throw new Error("Account changed while exporting. Try again.");
+  };
+  await ensureChunked(sessionId);
+  assertAccount();
+  const before = await getSessionFromServer(sessionId);
+  assertAccount();
+  if (!before) throw new Error("This story no longer exists on the server.");
+  const messages = await getMessages(sessionId);
+  assertAccount();
+  const after = await getSessionFromServer(sessionId);
+  assertAccount();
+  // Every story mutation updates the session doc. Avoid producing an export
+  // whose summary pointer/plan belongs to a different message snapshot.
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new Error("The story changed while exporting. Try again when both devices are idle.");
+  }
+  return { format: "nera-chat-backup", version: 1, exportedAt: new Date().toISOString(), session: after, messages };
+}
+
+export async function exportFullBackup(sessionId) {
+  const backup = await buildFullBackup(sessionId);
+  const blob = new Blob([JSON.stringify(backup, null, 2) + "\n"], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const title = (backup.session.title || "session").replace(/[^\w\- ]+/g, "").trim() || "session";
+  link.href = url;
+  link.download = title + "-backup.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -393,3 +393,30 @@ test('partial copies reject unknown historical generated plans', async () => {
   });
   await assert.rejects(h.sessions.duplicateSession('s', 0), /plan.*cutoff is unknown/);
 });
+
+test('Truncation survives chunk persistence and a complete regeneration clears it', async () => {
+  const h = await setup(0);
+  const saved = await h.api.addMessage('s', { role: 'assistant', content: 'Cut off', truncated: true });
+  assert.equal((await h.api.getMessages('s'))[0].truncated, true);
+  await h.api.overwriteMessage('s', saved.id, { content: 'Complete reply' }, saved.order);
+  assert.equal((await h.api.getMessages('s'))[0].truncated, false);
+});
+
+test('Concurrent append is rejected before a stale user turn can commit', async () => {
+  const h = await setup(0);
+  await h.api.addMessage('s', { role: 'user', content: 'Other device' });
+  await assert.rejects(h.api.addMessage('s', { role: 'user', content: 'Stale draft' },
+    { expectedNextOrder: 0 }), /New messages arrived/);
+  assert.equal((await h.api.getMessages('s')).length, 1);
+});
+
+test('Editing a non-active chunk updates session freshness without changing nextOrder', async () => {
+  const h = await setup(200);
+  await h.api.ensureChunked('s');
+  const session = h.documents.get(h.sessionPath);
+  const order = session.nextOrder;
+  session.updatedAt = { marker: 'before edit' };
+  await h.api.editMessage('s', 'm1', 'Changed opening', 1);
+  assert.ok(h.documents.get(h.sessionPath).updatedAt instanceof Date);
+  assert.equal(h.documents.get(h.sessionPath).nextOrder, order);
+});

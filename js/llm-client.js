@@ -43,12 +43,15 @@ function responseError(data) {
 }
 
 function checkFinishReason(reason) {
-  if (reason === "length") {
-    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
-  }
-  if (reason && reason !== "stop") {
+  if (reason && reason !== "stop" && reason !== "length") {
     throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
   }
+}
+
+function emptyReplyError(reason) {
+  return new Error(reason === "length"
+    ? "The output limit left no reply. Raise Max response tokens or lower the reasoning budget."
+    : "The model returned no reply; nothing was saved.");
 }
 
 export async function chatCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal }) {
@@ -76,12 +79,13 @@ async function nonStreamedCompletion({ settings, messages, onRequest, signal }) 
   checkFinishReason(data.choices[0].finish_reason);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
-    throw new Error("The model returned no reply; nothing was saved.");
+    throw emptyReplyError(data.choices[0].finish_reason);
   }
   return {
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
     usage: data.usage ?? null,
+    finishReason: data.choices[0].finish_reason ?? null,
   };
 }
 
@@ -156,11 +160,12 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, on
   if (buffer.trim()) processLine(buffer);
   if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
   checkFinishReason(finishReason);
-  if (!content.trim()) throw new Error("The model returned no reply; nothing was saved.");
+  if (!content.trim()) throw emptyReplyError(finishReason);
 
   return {
     content,
     thinking: thinking || null,
     usage,
+    finishReason,
   };
 }

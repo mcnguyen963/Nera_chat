@@ -1,5 +1,6 @@
 import { storyText } from "./story-text.js";
 import { countTokens } from "./tokenizer.js";
+import { requestInputLimit } from "./request-budget.js";
 
 let defaultPromptPromise;
 export function loadRewriteDefaultPrompt() {
@@ -31,7 +32,7 @@ export async function buildRewriteMessages(settings, history, draft) {
   ];
   const counts = await Promise.all(messages.map((m) => countTokens(m.content)));
   const tokens = 8 + counts.reduce((sum, count) => sum + count + 8, 0);
-  if (tokens > settings.maxContextTokens) {
+  if (tokens > requestInputLimit(settings)) {
     throw new Error("Rewrite input exceeds the context limit. Reduce recent messages in Settings or shorten your draft.");
   }
   return messages;

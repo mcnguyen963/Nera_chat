@@ -3,15 +3,16 @@ import { doc, getDocFromServer, onSnapshot } from "https://www.gstatic.com/fireb
 import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
-import { buildContextForRequest, computeContextUsage } from "../context-builder.js";
+import { buildContextForRequest, computeContextUsage, openingExchange } from "../context-builder.js";
 import { buildRewriteMessages } from "../rewrite.js";
 import { createStreamVibration } from "../stream-vibration.js";
 import { storyText } from "../story-text.js";
+import { requestInputLimit } from "../request-budget.js";
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
 import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
 import { stripThinking } from "../story-text.js";
-import { initContextInspector, updateContextPreview, captureContextRequest, resetContextInspector } from "./context-view.js";
+import { initContextInspector, updateContextPreview, captureContextRequest, captureContextUsage, resetContextInspector } from "./context-view.js";
 import { updateSession, duplicateSession } from "../sessions.js";
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache, clearChatCache } from "../chat-cache.js";
@@ -43,6 +44,10 @@ let historyLoading = null;
 let sessionEpoch = 0;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
+let wasNearBottom = true;
+let checkedOrder = 0;
+let catchUpTarget = 0;
+let catchUpPromise = null;
 const renderedMessages = new Map();
 
 const el = {};
@@ -58,6 +63,18 @@ export function initChatView() {
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
   el.contextLabel = document.getElementById("context-label");
+  let listHeight = el.list.clientHeight;
+  el.list.addEventListener("scroll", () => {
+    if (el.list.clientHeight === listHeight) wasNearBottom = isNearBottom();
+  }, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      if (el.list.clientHeight === listHeight) return;
+      listHeight = el.list.clientHeight;
+      if (wasNearBottom) scrollToEnd();
+      else clampListScroll();
+    }).observe(el.list);
+  }
   initContextInspector(async () => {
     const requestedSession = state.sessionId;
     if (!session || !state.settings) throw new Error("Select a story first.");
@@ -271,6 +288,8 @@ export function setSession(sessionId) {
   ++sessionEpoch;
   const epoch = sessionEpoch;
   resetContextInspector();
+  checkedOrder = catchUpTarget = 0;
+  catchUpPromise = null;
   session = null;
   streamState = null;
   editingState = null;
@@ -318,7 +337,7 @@ export function setSession(sessionId) {
 }
 
 function chatSnapshot() {
-  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
+  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages, checkedOrder });
 }
 
 function queueCacheSave() {
@@ -336,9 +355,13 @@ function restoreCachedChat(sessionId, saved) {
   hasEarlier = saved.hasEarlier;
   latestReady = true;
   renderMessages(saved.recent);
+  checkedOrder = saved.checkedOrder ?? localMaxOrder();
+  catchUpTarget = session.nextOrder ?? checkedOrder;
+  document.dispatchEvent(new CustomEvent("chat-cache-restored", { detail: { sessionId } }));
   document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
   updateIndicator();
   queueCacheSave(); // refresh recency for the three-entry device cache
+  scheduleCatchUp();
 }
 
 function subscribeChat(sessionId, serverOnly = false) {
@@ -370,6 +393,7 @@ function subscribeChat(sessionId, serverOnly = false) {
     sessionId,
     ({ messages: latest, hasEarlier: olderExists, fromCache }) => {
       if (state.sessionId !== sessionId || epoch !== sessionEpoch || (serverOnly && fromCache)) return;
+      const firstLoad = !latestReady;
       latestReady = true;
       const ids = new Set(latest.map((m) => m.id));
       const oldestOrder = latest[0]?.order ?? Infinity;
@@ -384,6 +408,10 @@ function subscribeChat(sessionId, serverOnly = false) {
       const merged = mergeMessages(lastMessages, latest);
       renderMessages(visibleCount <= PAGE_SIZE ? merged.slice(-PAGE_SIZE) : merged);
       if (historyMessages) historyMessages = mergeMessages(historyMessages, latest);
+      const newestOrder = Math.max(0, ...latest.map((m) => m.order ?? 0));
+      if (firstLoad || oldestOrder <= checkedOrder + 1) checkedOrder = Math.max(checkedOrder, newestOrder);
+      catchUpTarget = Math.max(catchUpTarget, newestOrder);
+      scheduleCatchUp();
       updateIndicator(); // cached data — no extra Firestore reads
       queueCacheSave();
     },
@@ -397,6 +425,7 @@ export function syncActiveSession(metadata) {
   if (!metadata || metadata.id !== state.sessionId || !session) return;
   const previous = session;
   session = { ...session, ...metadata };
+  catchUpTarget = Math.max(catchUpTarget, metadata.nextOrder ?? 0);
   if (session.title !== previous.title || session.longTermPlan !== previous.longTermPlan) {
     document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId: session.id, session } }));
   }
@@ -405,6 +434,70 @@ export function syncActiveSession(metadata) {
       session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
       session.breakpointOrder !== previous.breakpointOrder) updateIndicator();
   queueCacheSave();
+  scheduleCatchUp();
+}
+
+function localMaxOrder() {
+  return Math.max(0, ...(historyMessages ?? lastMessages).map((m) => m.order ?? 0));
+}
+
+function noteLocalOrder(order) {
+  if (order === checkedOrder + 1) checkedOrder = order;
+  catchUpTarget = Math.max(catchUpTarget, order ?? 0);
+}
+
+function scheduleCatchUp() {
+  if (busy || editingState || !session || catchUpTarget <= checkedOrder) return;
+  const sourceId = state.sessionId;
+  const epoch = sessionEpoch;
+  void catchUpMessages().catch((error) => {
+    if (sourceId === state.sessionId && epoch === sessionEpoch) showTransientError("Could not load new turns: " + error.message);
+  });
+}
+
+function catchUpMessages() {
+  if (catchUpPromise) return catchUpPromise;
+  if (editingState || !session) return Promise.resolve();
+  const sourceId = state.sessionId;
+  const epoch = sessionEpoch;
+  const uid = currentUid();
+  const active = () => sourceId === state.sessionId && epoch === sessionEpoch && uid === currentUid();
+  catchUpPromise = (async () => {
+    while (catchUpTarget > checkedOrder && !editingState) {
+      const target = catchUpTarget;
+      const fresh = await messagesApi.getMessagesAfterOrder(sourceId, checkedOrder);
+      if (!active()) throw new Error("Story changed while loading new turns.");
+      if (historyMessages) historyMessages = mergeMessages(historyMessages, fresh);
+      renderMessages(mergeMessages(lastMessages, fresh));
+      // nextOrder can exceed every surviving order after a deletion.
+      checkedOrder = Math.max(target, ...fresh.map((m) => m.order ?? 0));
+      updateIndicator();
+      queueCacheSave();
+    }
+  })().finally(() => { if (active()) catchUpPromise = null; });
+  return catchUpPromise;
+}
+
+async function checkTurnFreshness() {
+  const sourceId = state.sessionId;
+  const epoch = sessionEpoch;
+  const uid = currentUid();
+  const orderAtStart = checkedOrder;
+  if (catchUpPromise) await catchUpPromise;
+  const snap = await getDocFromServer(doc(db, "users", uid, "sessions", sourceId));
+  if (sourceId !== state.sessionId || epoch !== sessionEpoch || uid !== currentUid()) {
+    throw new Error("Story changed while checking for new turns.");
+  }
+  if (!snap.exists()) throw new Error("This story no longer exists on the server.");
+  const metadata = snap.data();
+  const stale = (metadata.nextOrder ?? 0) > orderAtStart || checkedOrder > orderAtStart;
+  syncActiveSession({ ...metadata, id: sourceId });
+  if (stale) {
+    await catchUpMessages();
+    throw new Error("New messages arrived from another device. Review them, then try again.");
+  }
+  // Cross-device edits/deletions still need Sync. Another device can also
+  // append during generation; this preflight check does not lock the story.
 }
 
 export function forgetChatSession(sessionId) {
@@ -441,6 +534,8 @@ export async function syncChatData() {
     historyCache.clear();
     resetContextInspector();
     session = { id: snapshot.id, ...snapshot.data() };
+    checkedOrder = catchUpTarget = session.nextOrder ?? Math.max(0, ...messages.map((m) => m.order));
+    catchUpPromise = null;
     historyMessages = messages;
     historyStartOrder = 0;
     historyLoading = null;
@@ -513,12 +608,16 @@ function applySummaryResult(result) {
     breakpointOrder: result.newBreakpointOrder,
   };
   historyMessages = mergeMessages(historyMessages, [result.summaryMessage]);
+  noteLocalOrder(result.summaryMessage.order);
   renderMessages(mergeMessages(lastMessages, [result.summaryMessage]));
   updateIndicator();
   queueCacheSave();
 }
 
 function renderMessages(msgs) {
+  const savedStream = streamState?.savedId && msgs.some((m) => m.id === streamState.savedId)
+    ? streamState : null;
+  const position = savedStream ? captureListPosition() : null;
   if (!isNearBottom() && msgs.length > lastMessages.length) {
     visibleCount += msgs.length - lastMessages.length;
   }
@@ -534,6 +633,7 @@ function renderMessages(msgs) {
   const sticky = isNearBottom();
   const visible = msgs.slice(-visibleCount);
   const visibleIds = new Set(visible.map((m) => m.id));
+  const latestStory = msgs.filter((m) => m.role !== "summary").at(-1);
   for (const [id, entry] of renderedMessages) {
     if (!visibleIds.has(id)) {
       entry.node.remove();
@@ -546,12 +646,13 @@ function renderMessages(msgs) {
   ) ?? null;
   for (let i = visible.length - 1; i >= 0; i--) {
     const m = visible[i];
+    const retry = !busy && m.role === "user" && m.id === latestStory?.id;
     let entry = renderedMessages.get(m.id);
-    if (!entry || !entry.message || !sameRenderedMessage(entry.message, m)) {
-      const node = renderMessage(m);
+    if (!entry || !entry.message || entry.retry !== retry || !sameRenderedMessage(entry.message, m)) {
+      const node = renderMessage(m, retry);
       node.dataset.messageId = m.id;
       entry?.node.remove();
-      entry = { node, message: m };
+      entry = { node, message: m, retry };
       renderedMessages.set(m.id, entry);
     }
     if (entry.node.parentNode !== el.list || entry.node.nextSibling !== anchor) {
@@ -568,13 +669,21 @@ function renderMessages(msgs) {
     el.earlierBtn.remove();
   }
   updateWelcome();
-  if (sticky) scrollToEnd();
+  if (savedStream && renderedMessages.has(savedStream.savedId)) {
+    if (savedStream.saveCompleted) {
+      if (savedStream.frame) cancelAnimationFrame(savedStream.frame);
+      savedStream.wrap.remove();
+      streamState = null;
+    }
+    restoreListPosition(position, savedStream.saveCompleted ? savedStream.savedId : undefined);
+    refreshPetPlacement();
+  } else if (sticky) scrollToEnd();
   queueCacheSave();
 }
 
 function sameRenderedMessage(a, b) {
   return a.role === b.role && a.content === b.content && a.thinking === b.thinking &&
-    Boolean(a.editedAt) === Boolean(b.editedAt);
+    Boolean(a.editedAt) === Boolean(b.editedAt) && Boolean(a.truncated) === Boolean(b.truncated);
 }
 
 function updateWelcome() {
@@ -592,7 +701,7 @@ function updateWelcome() {
   refreshPetPlacement();
 }
 
-function renderMessage(m) {
+function renderMessage(m, retry = false) {
   const wrap = document.createElement("div");
   wrap.className = "msg " + m.role;
 
@@ -602,6 +711,7 @@ function renderMessage(m) {
   label.textContent =
     m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
   if (m.editedAt) label.textContent += " (edited)";
+  if (m.truncated) label.textContent += " · cut off";
   meta.appendChild(label);
 
   const actions = document.createElement("span");
@@ -633,7 +743,9 @@ function renderMessage(m) {
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
-    if (!confirm("Delete this message permanently?")) return;
+    if (!confirm(isFolded(m)
+      ? "This message is already part of the story summary. Deleting it clears the summary, and the next auto-summary must rebuild it from the full history. Continue?"
+      : "Delete this message permanently?")) return;
     const sourceId = state.sessionId;
     const epoch = sessionEpoch;
     const { summaryReset } = await messagesApi.deleteMessage(sourceId, m.id, m.order);
@@ -648,6 +760,7 @@ function renderMessage(m) {
       void regenerateMessage(m);
     }));
   }
+  if (retry) actions.appendChild(actionBtn("Retry reply", "retry", () => retryReply(m)));
   meta.appendChild(actions);
   wrap.appendChild(meta);
 
@@ -687,10 +800,22 @@ function buildThinking(text, streaming) {
   return det;
 }
 
+function isFolded(m) {
+  return m.role !== "summary" && session?.activeSummaryMessageId && m.order <= (session.breakpointOrder ?? 0);
+}
+
 function startEdit(m, wrap) {
   if (busy) return;
   const contentEl = wrap.querySelector(".msg-content");
   if (!contentEl || editingState) return; // one edit at a time
+  if (isFolded(m)) {
+    const anchors = openingExchange((historyMessages ?? lastMessages)
+      .filter((item) => item.role === "user" || item.role === "assistant")
+      .sort((a, b) => a.order - b.order));
+    if (!anchors.some((item) => item.id === m.id)) {
+      setStatus("This message is already summarized. Editing folded history won't update the summary; run a full re-summary to include the change.");
+    }
+  }
   const wrapRect = wrap.getBoundingClientRect();
   const contentRect = contentEl.getBoundingClientRect();
   const meta = wrap.querySelector(".msg-meta");
@@ -715,6 +840,7 @@ function startEdit(m, wrap) {
     renderMessages(lastMessages);
     const next = renderedMessages.get(m.id)?.node;
     if (next) el.list.scrollTop += next.getBoundingClientRect().top - top;
+    scheduleCatchUp();
   };
   const save = actionBtn("Save", "small", async () => {
     const text = ta.value;
@@ -844,8 +970,11 @@ export async function updateIndicator() {
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
     `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens` +
-    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
+    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} ${state.settings.autoSummarizationEnabled === true ? "out of window" : "turns not sent"}` : "") +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "");
+  document.getElementById("context-indicator").title = usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true
+    ? "Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory."
+    : "Inspect estimated input tokens and included context";
   updateContextPreview({ ...usage, model: state.settings.modelId, isEstimate: !historyMessages && hasEarlier });
 }
 export const refreshContextIndicator = updateIndicator;
@@ -886,12 +1015,14 @@ async function regenerateMessage(message) {
   if (busy || editingState) return;
   setBusy(true);
   try {
-    const all = await ensureHistory();
+    await ensureHistory();
+    await checkTurnFreshness();
+    const all = historyMessages;
     const latest = all.filter((m) => m.role !== "summary").at(-1);
     if (latest?.id !== message.id || message.order <= (session.breakpointOrder ?? 0)) {
       throw new Error("Only the latest, unsummarized reply can be regenerated. Later story turns depend on older replies.");
     }
-    if (message.planBefore == null && session.longTermPlan) {
+    if (message.planBefore == null && session.longTermPlan && session.allowLlmPlanUpdates === true) {
       throw new Error("This reply predates plan history tracking. Its prior plan is unknown, so regeneration could change the story incorrectly.");
     }
     await runAssistantTurn({
@@ -906,7 +1037,8 @@ async function regenerateMessage(message) {
 async function handleSend(e) {
   e.preventDefault();
   if (busy || !session || editingState) return;
-  const text = el.input.value.trim();
+  const draft = el.input.value;
+  const text = draft.trim();
   if (!text) return;
   const settings = structuredClone(state.settings);
   if (!settings?.modelId || !settings?.apiKey) {
@@ -917,26 +1049,51 @@ async function handleSend(e) {
   el.input.value = "";
   el.input.style.height = "auto";
   setBusy(true);
+  const sourceId = state.sessionId;
+  const epoch = sessionEpoch;
+  let saved = false;
   try {
     await ensureHistory();
-    const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
+    await checkTurnFreshness();
+    const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text }, { expectedNextOrder: checkedOrder });
+    saved = true;
+    if (sourceId !== state.sessionId || epoch !== sessionEpoch) return;
+    noteLocalOrder(userMsg.order);
     // Bridge until the snapshot arrives so the context build includes the user turn
     // without re-reading the collection from Firestore.
     if (!lastMessages.some((m) => m.id === userMsg.id)) {
-      lastMessages = lastMessages.concat([
+      lastMessages = mergeMessages(lastMessages, [
         { id: userMsg.id, order: userMsg.order, role: "user", content: text, tokenCount: userMsg.tokenCount },
       ]);
     }
     historyMessages = mergeMessages(historyMessages, [lastMessages.find((m) => m.id === userMsg.id)]);
+    renderMessages(lastMessages);
     // Explicitly pass the bridged cache: opts.messages keeps buildContextForRequest
     // off the racy getMessages() fallback, which would hit the watch cache and
     // potentially miss the just-committed user message.
     await runAssistantTurn({ messages: historyMessages });
   } catch (err) {
+    if (!saved && sourceId === state.sessionId && epoch === sessionEpoch && !el.input.value) setComposerText(draft);
     showTransientError(err.message || String(err));
   } finally {
     setBusy(false);
   }
+}
+
+async function retryReply(message) {
+  if (busy || editingState || !session) return;
+  setBusy(true);
+  try {
+    await checkTurnFreshness();
+    const all = await ensureHistory();
+    const latest = all.filter((m) => m.role !== "summary").at(-1);
+    if (latest?.role !== "user" || latest.id !== message.id) {
+      throw new Error("The latest story turn changed. Review it before retrying.");
+    }
+    await runAssistantTurn({ messages: all });
+  } catch (error) {
+    showTransientError(error.message || String(error));
+  } finally { setBusy(false); }
 }
 
 function clearOriginalDraft() {
@@ -1000,6 +1157,7 @@ async function handleRewrite() {
       },
       onReasoning: (text) => { if (active()) vibration.feed(text); },
     }));
+    if (result.finishReason === "length") throw new Error("Rewrite hit the output limit. Raise Max response tokens or lower the reasoning budget.");
     if (!active()) throw new Error("Rewrite stopped because the account or story changed.");
     const clean = storyText(result.content);
     if (!clean.trim()) throw new Error("The model returned no rewritten reply.");
@@ -1033,17 +1191,16 @@ async function runAssistantTurn(opts = {}) {
       ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
     });
 
-    const { content, thinking } = await chatCompletion({
+    let requestId;
+    const { content, thinking, finishReason, usage } = await chatCompletion({
       settings,
       messages: context.apiMessages,
-      onRequest: (request) => captureContextRequest({ ...context, max: settings.maxContextTokens }, request),
+      onRequest: (request) => { requestId = captureContextRequest({ ...context, max: requestInputLimit(settings) }, request); },
       onDelta: (t) => { vibration.feed(t); updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
       onReasoning: (t) => { vibration.feed(t); updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
     });
+    captureContextUsage(requestId, usage);
     vibration.stop();
-    streamState?.wrap.remove();
-    streamState = null;
-    refreshPetPlacement();
 
     updatePetPhase("saving", petTurn);
 
@@ -1052,6 +1209,8 @@ async function runAssistantTurn(opts = {}) {
     const plan = extractPlan(withoutThinking);
     const planThread = extractPlanThread(withoutThinking);
     const clean = stripPlan(withoutThinking);
+    const truncated = finishReason === "length";
+    if (truncated && !clean) throw new Error("The output limit left no narrative reply. Raise Max response tokens or lower the reasoning budget.");
     if (!clean && !(session.allowLlmPlanUpdates === true && plan?.length > 0)) {
       throw new Error("The model returned no narrative reply; nothing was saved.");
     }
@@ -1063,24 +1222,27 @@ async function runAssistantTurn(opts = {}) {
     // Bridge the local cache for the auto-summary check (avoids a fresh
     // getSession/getMessages round-trip — the snapshots will reconcile shortly).
     let savedMsg;
+    if (streamState) streamState.savedId = opts.overwriteId ?? messagesApi.newMessageId();
     if (opts.overwriteId) {
       const { tokenCount } = await messagesApi.overwriteMessage(session.id, opts.overwriteId, {
-        content: finalContent, thinking, planThread, planBefore,
+        content: finalContent, thinking, planThread, planBefore, truncated,
       }, opts.upToOrder, planUpdate);
       const i = lastMessages.findIndex((m) => m.id === opts.overwriteId);
-      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, planBefore, tokenCount };
+      if (i >= 0) lastMessages[i] = { ...lastMessages[i], content: finalContent, thinking, planThread, planBefore, tokenCount, truncated };
       historyMessages = historyMessages.map((m) =>
-        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, planBefore, tokenCount } : m
+        m.id === opts.overwriteId ? { ...m, content: finalContent, thinking, planThread, planBefore, tokenCount, truncated } : m
       );
     } else {
       savedMsg = await messagesApi.addMessage(session.id, {
-        role: "assistant", content: finalContent, thinking, planThread, planBefore,
-      }, { sessionUpdate: planUpdate });
-      lastMessages = lastMessages.filter((m) => m.id !== savedMsg.id).concat([
-        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, planBefore, tokenCount: savedMsg.tokenCount },
+        role: "assistant", content: finalContent, thinking, planThread, planBefore, truncated,
+      }, { id: streamState?.savedId, sessionUpdate: planUpdate });
+      noteLocalOrder(savedMsg.order);
+      lastMessages = mergeMessages(lastMessages, [
+        { id: savedMsg.id, order: savedMsg.order, role: "assistant", content: finalContent, thinking, planThread, planBefore, truncated, tokenCount: savedMsg.tokenCount },
       ]);
-    historyMessages = mergeMessages(historyMessages, [lastMessages[lastMessages.length - 1]]);
+      historyMessages = mergeMessages(historyMessages, [lastMessages.find((m) => m.id === savedMsg.id)]);
     }
+    if (streamState) streamState.saveCompleted = true;
     renderMessages(lastMessages);
     queueCacheSave();
 
@@ -1104,10 +1266,12 @@ async function runAssistantTurn(opts = {}) {
       }
     }
     finishPetTurn("ready", petTurn);
+    if (truncated) setStatus("The reply hit the output limit and may be cut off. Raise Max response tokens or regenerate.");
   } catch (err) {
     finishPetTurn("blocked", petTurn);
     streamState?.wrap.remove();
     streamState = null;
+    clampListScroll();
     refreshPetPlacement();
     showTransientError(err.message || String(err));
   } finally {
@@ -1153,7 +1317,9 @@ function streamSummaryUI(label) {
     onReasoning: (t) => { thinkAcc += t; schedulePaint(); },
     done: () => {
       if (frame) cancelAnimationFrame(frame);
+      const position = captureListPosition();
       bubble.remove();
+      restoreListPosition(position);
     },
   };
 }
@@ -1295,6 +1461,8 @@ function setBusy(b) {
   el.sendBtn.disabled = b || !state.sessionId;
   el.summarizeBtn.disabled = b || !state.sessionId;
   updateRewriteControls();
+  if (latestReady && !editingState) renderMessages(lastMessages);
+  if (!b) scheduleCatchUp();
 }
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.
@@ -1304,6 +1472,33 @@ function isNearBottom() {
 
 function scrollToEnd() {
   el.list.scrollTop = el.list.scrollHeight;
+  wasNearBottom = true;
+}
+
+function clampListScroll() {
+  el.list.scrollTop = Math.max(0, Math.min(el.list.scrollTop,
+    Math.max(0, el.list.scrollHeight - el.list.clientHeight)));
+}
+
+function captureListPosition() {
+  const edge = el.list.getBoundingClientRect().top;
+  const node = [...el.list.children].find((child) => {
+    const rect = child.getBoundingClientRect();
+    return rect.top + rect.height > edge;
+  });
+  return { sticky: isNearBottom(), node, id: node?.dataset.messageId,
+    top: node?.getBoundingClientRect().top };
+}
+
+function restoreListPosition(position, replacementId) {
+  if (position.sticky) { scrollToEnd(); return; }
+  const node = position.id ? renderedMessages.get(position.id)?.node
+    : position.node?.parentNode === el.list ? position.node
+      : renderedMessages.get(replacementId)?.node;
+  if (node && Number.isFinite(position.top)) {
+    el.list.scrollTop += node.getBoundingClientRect().top - position.top;
+  }
+  clampListScroll();
 }
 
 // Scroll the inner message list (never the window) so the field's bottom edge
@@ -1333,7 +1528,7 @@ function alignFieldToKeyboard(field) {
 
 function setStatus(text, autoHide = false) {
   let statusEl = el.list.querySelector(".status-line");
-  if (!text) { statusEl?.remove(); return; }
+  if (!text) { statusEl?.remove(); clampListScroll(); return; }
   const sticky = isNearBottom();
   if (!statusEl) {
     statusEl = document.createElement("div");
@@ -1341,7 +1536,7 @@ function setStatus(text, autoHide = false) {
     el.list.appendChild(statusEl);
   }
   statusEl.textContent = text;
-  if (autoHide) setTimeout(() => statusEl?.remove(), 4000);
+  if (autoHide) setTimeout(() => { statusEl?.remove(); clampListScroll(); }, 4000);
   if (sticky) scrollToEnd();
 }
 
@@ -1352,5 +1547,5 @@ function showTransientError(text) {
   div.textContent = "⚠ " + text;
   el.list.appendChild(div);
   if (sticky) scrollToEnd();
-  setTimeout(() => div.remove(), 10000);
+  setTimeout(() => { div.remove(); clampListScroll(); }, 10000);
 }
