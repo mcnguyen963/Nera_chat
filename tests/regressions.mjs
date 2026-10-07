@@ -540,7 +540,7 @@ test('Context budget reserves message framing as short turns accumulate', async 
 test('Summarizer bounds each request to the configured context', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
-  const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', modelId: 'test', streaming: false,
+  const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', summarizerSystemPrompt:'Summarize the established events.', modelId: 'test', streaming: false,
     maxContextTokens: 8000,maxResponseTokens:100,summarizerMaxTokens:1000,summarizerChunkTokens:900,
     keepRecentMessagesAfterSummary: 0 };
   const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
@@ -549,6 +549,22 @@ test('Summarizer bounds each request to the configured context', async () => {
   assert.ok(h.calls.requests.length > 1);
   assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(8000 / 3) &&
     request.messages.reduce((sum, message) => sum + message.content.length, 0) + request.max_tokens <= 8000));
+});
+
+test('Summarizer defaults and outgoing requests cap summaries at 20000 tokens', async () => {
+  const h = await harness();
+  const settingsApi = await h.use('settings.js');
+  assert.equal(settingsApi.DEFAULT_SETTINGS.summarizerMaxTokens, 20000);
+  assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 100000 })).summarizerMaxTokens, 20000);
+  assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 5000 })).summarizerMaxTokens, 5000);
+  const { runSummarization } = await h.use('summarizer.js');
+  await runSummarization({ id: 's' }, {
+    ...h.state.settings, narratorSystemPrompt:'Narrate.', modelId:'test', streaming:false,
+    maxContextTokens:120000, summarizerMaxTokens:100000, keepRecentMessagesAfterSummary:0,
+  }, { messages:Array.from({ length:6 }, (_, i) => ({ id:String(i),order:i+1,
+    role:i%2 ? 'assistant' : 'user',content:'Established story event.' })) });
+  assert.ok(h.calls.requests.length > 0);
+  assert.ok(h.calls.requests.every(request => request.max_tokens === 20000));
 });
 
 test('Summarizer disables chat reasoning on every request', async () => {
