@@ -179,6 +179,113 @@ test('ledger starts one update, rejects duplicate starts and skips auto-summary 
   for (let i=0;i<30 && !finish;i++) await new Promise(resolve => setImmediate(resolve)); finish({ content:'NONE' });
   for (let i=0;i<30 && h.updater.isRunning('s');i++) await new Promise(resolve => setImmediate(resolve)); assert.equal(h.commits.length,1); assert.equal(h.live.session.memoryState.extractedThroughOrder,4);
 });
+test('memory updates explicitly disable OpenRouter reasoning without changing the floor model or output budget',async () => {
+  let request;
+  const h=await updaterHarness(async options => { request=options; return {content:'NONE'}; });
+  h.live.settings={...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,mode:'max_tokens',maxTokens:20000}};
+  assert.equal(await h.updater.updateNow('s'),true);
+  const use=await setup(),client=await use('llm-client.js');
+  const body=client.buildRequestBody(request.settings,request.messages);
+  assert.deepEqual(plain(body.reasoning),{enabled:false});
+  assert.equal(body.max_tokens,256);assert.equal(body.model,'z-ai/glm-5.3-flash:floor');
+  assert.match(body.messages[0].content,/under 400 characters/);
+  assert.match(body.messages[0].content,/exact thread title/);
+  assert.equal(client.buildRequestBody({...request.settings,endpoint:'https://example.test'},request.messages).reasoning,undefined);
+});
+test('reorganize explicitly disables reasoning in its serialized request',async () => {
+  const use=await setup(),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),m=await use('memory-settings.js'),client=await use('llm-client.js');
+  const entry=l.makeEntry('characters','Mira');entry.sections.appearance.lines=[line('a','scar',2)];
+  let request;
+  const live={settings:{...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,effort:'high'}},mem:m.normalizeMemory(),messages};
+  await r.runReorganizeBatch(live,[entry],{[entry.id]:['appearance']},'',{complete:async options=>{request=options;return {content:'T2 [char] Mira | appearance: scar'};}});
+  const body=client.buildRequestBody(request.settings,request.messages);
+  assert.deepEqual(plain(body.reasoning),{enabled:false});assert.equal(body.max_tokens,live.mem.reorganizeMaxTokens);
+});
+test('mixed valid and oversized notes never advance extraction past a dropped note',async () => {
+  const content='T1 [event] Mira arrives.\nT2 [event] '+'x'.repeat(401);
+  const h=await updaterHarness(async()=>({content}));
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(h.commits.length,0);
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,0);assert.equal(h.live.entries.length,0);
+  assert.match(h.live.session.memoryState.lastError,/400 characters/);assert.equal(h.updater.lastRawAnswer('s'),content);
+  assert.equal(h.events.find(e=>e.status==='failed').lastError,h.live.session.memoryState.lastError);
+});
+test('full cards fail the whole memory batch and a paused retry commits and clears the error',async () => {
+  const h=await updaterHarness(async()=>({content:'T1 [char] Mira | appearance: scar\nT2 [event] Mira arrives.'}));
+  const use=await setup(),l=await use('lore-lines.js'),card=l.makeEntry('characters','Mira');
+  card.sections.appearance.text='x'.repeat(900000);h.live.entries=[card];
+  for(let i=0;i<3;i++)assert.equal(await h.updater.updateNow('s'),false);
+  assert.equal(h.live.session.memoryState.paused,true);assert.equal(h.commits.length,0);
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,0);assert.match(h.live.session.memoryState.lastError,/Reorganize/);
+  card.sections.appearance.text='Short canon';
+  assert.equal(await h.updater.updateNow('s',{retry:true}),true);assert.equal(h.commits.length,1);
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,4);assert.equal(h.live.session.memoryState.lastError,null);
+  assert.equal(h.live.session.memoryState.failureStreak,0);assert.equal(h.live.session.memoryState.paused,false);
+});
+test('duplicate memory notes are a successful no-op rather than repeated failures',async()=>{
+  const h=await updaterHarness(async()=>({content:'T1 [char] Mira | appearance: scar'}));
+  assert.equal(await h.updater.updateNow('s'),true);
+  h.live.session.memoryState.extractedThroughOrder=0;
+  assert.equal(await h.updater.updateNow('s'),true);assert.equal(h.live.entries[0].sections.appearance.lines.length,1);
+  assert.equal(h.events.filter(e=>e.status==='success').at(-1).notes,0);
+});
+test('raw-answer inspection belongs to the current attempt and preserves rejected partial output only for inspection',async()=>{
+  let attempt=0;
+  const h=await updaterHarness(async()=>{
+    if(++attempt===1)return {content:'bad old response'};
+    if(attempt===2)throw Object.assign(new Error('The model stopped at its output limit.'),{partial:{content:'T1 [event] Incomplete'}});
+    throw new Error('network failed');
+  });
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(h.updater.lastRawAnswer('s'),'bad old response');
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(h.updater.lastRawAnswer('s'),'T1 [event] Incomplete');
+  assert.equal(h.commits.length,0);assert.equal(h.live.session.memoryState.extractedThroughOrder,0);
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(h.updater.lastRawAnswer('s'),'');
+});
+test('failed streamed memory notes remain inspectable without being committed',async()=>{
+  const h=await updaterHarness(async options=>{options.onDelta('T1 [event] Partial note');throw new Error('The model stopped at its output limit.');});
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(h.updater.lastRawAnswer('s'),'T1 [event] Partial note');
+  assert.equal(h.commits.length,0);assert.equal(h.live.session.memoryState.extractedThroughOrder,0);
+});
+test('catch up reports a stopped failure and resumes only the uncommitted batches',async()=>{
+  let calls=0;
+  const h=await updaterHarness(async()=>{if(++calls===1)throw new Error('network failed');return {content:'NONE'};});
+  assert.equal(await h.updater.catchUp('s'),false);assert.equal(calls,1);assert.equal(h.live.session.memoryState.extractedThroughOrder,0);
+  assert.equal(await h.updater.catchUp('s'),true);assert.equal(calls,4);assert.equal(h.live.session.memoryState.extractedThroughOrder,12);
+  assert.equal(h.live.session.memoryState.lastError,null);
+  const controller=new AbortController();controller.abort();assert.equal(await h.updater.catchUp('s',{signal:controller.signal}),false);
+});
+test('T204 summary cutoff stays historical while later scene, placements and current user survive the narrator request',async()=>{
+  // Synthetic reproduction of the reported conflict, not an export of the live story.
+  const use=await setup({'messages.js':{getMessages:async()=>[]},'tokenizer.js':{countTokens:count}});
+  const b=await use('context-builder.js'),l=await use('lore-lines.js'),client=await use('llm-client.js');
+  const history=[
+    {id:'u1',order:1,narratorTurn:1,role:'user',content:'Begin the term.'},
+    {id:'a1',order:2,narratorTurn:1,role:'assistant',content:'The term begins.'},
+    {id:'summary',order:409,role:'summary',cutoffTurn:204,coveredRange:{toOrder:408},content:'End of T204: Nera is mid-hug with Vesper on her floor. Placements are expected on the fourth day.'},
+    {id:'u205',order:410,narratorTurn:205,role:'user',content:'The class placements have been published.'},
+    {id:'a205',order:411,narratorTurn:205,role:'assistant',revision:0,content:'It is morning in the common room. Isolde has the facilities records. The published list places Lysandra in Class A and Vesper in Class B.',thinking:'PRIVATE_REASONING_MUST_NOT_BE_SENT',scene:'date: First week of term · time: morning · place: Common room · present: Nera, Isolde'},
+    {id:'u206',order:412,narratorTurn:206,role:'user',content:'A and B class so I will see Lysandra today. Did you give the records of our meeting with facilities office yesterday to group 3 Isolde? If yes we can go to the class now.'},
+  ];
+  const vesper=l.makeEntry('characters','Vesper',{createdFrom:'import',alwaysLoad:true});
+  Object.assign(vesper.sections.status,{text:'Mid-hug with Nera on her floor.',kind:'snapshot',cutoff:{turn:204,order:408}});
+  const placements=l.makeEntry('facts','Class placements');placements.sections.text.lines=[{id:'placed',text:'Lysandra is in Class A; Vesper is in Class B.',turn:205,when:'First week of term',src:411,by:'auto',at:1,evidence:[{id:'a205',revision:0,order:411}]}];
+  const thread=l.makeEntry('events','Class posting',{kind:'thread',status:'open',createdFrom:'import'});thread.sections.text.text='The posting is expected on the fourth day.';
+  const timeline=l.makeEntry('events','Timeline',{kind:'timeline'});timeline.sections.text.lines=[{id:'published',text:'Class placements were published.',turn:205,when:'First week of term',src:411,by:'auto',at:2,evidence:[{id:'a205',revision:0,order:411}]}];
+  const session={id:'s',activeSummaryMessageId:'summary',breakpointOrder:408,memory:{scene:true,lorebooks:true,memoryBlock:true,protagonist:'Nera'}};
+  const built=await b.buildContextForRequest(session,{...settings,keepRecentMessagesAfterSummary:10},{messages:history,loreEntries:[vesper,placements,thread,timeline],requireLatestUser:true});
+  const body=client.buildRequestBody({...settings,modelId:'z-ai/glm-5.3-flash:floor'},built.apiMessages),wire=JSON.stringify(body),all=body.messages.map(m=>m.content).join('\n');
+  assert.equal(body.model,'z-ai/glm-5.3-flash:floor');assert.equal(body.messages.at(-1).role,'user');
+  assert.match(body.messages.at(-1).content,/facilities office yesterday to group 3 Isolde/);
+  assert.match(all,/Historical summary through T204.*message order 408; this is not the current scene/);
+  assert.match(all,/snapshot; origin: import; T204.*message order 408/);
+  assert.match(all,/\[T205 · First week of term\] Lysandra is in Class A; Vesper is in Class B/);
+  assert.match(all,/\[T205 · First week of term\] Class placements were published/);
+  assert.match(all,/Established scene snapshot at T205 \(message order 411\).*Common room/);
+  assert.match(all,/published class placements supersede an earlier expectation/);
+  assert.doesNotMatch(wire,/PRIVATE_REASONING_MUST_NOT_BE_SENT/);
+  assert.equal(built.report.scene.fromTurn,205);assert.equal(built.droppedCount,0);
+  // Provenance is counted in the fully rendered payload, including event re-rendering.
+  assert.equal(built.usedTokens,8+body.messages.reduce((n,m)=>n+8+m.content.length,0));
+});
 test('reorganize batches stay bounded, ignore outside names and leave user lines and canon intact',async () => {
   const use = await setup({ 'tokenizer.js':{ countTokens:count },'llm-client.js':{ chatCompletion:async () => ({ content:'T2 [char] Mira | appearance: scar' }) } }), r = await use('memory-reorganize.js'), l = await use('lore-lines.js'), { normalizeMemory } = await use('memory-settings.js');
   const e = l.makeEntry('characters','Mira'); e.sections.appearance.text = 'canon'; e.sections.appearance.lines = [line('a','old',1),line('b','scar',2),line('user','my note',2,'user')]; const live = { settings,mem:normalizeMemory(),messages }, sections = { [e.id]:['appearance'] };

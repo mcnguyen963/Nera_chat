@@ -200,7 +200,7 @@ export function initChatView() {
       const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.');
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text, action: d.notes ? 'Review' : null, event: 'lorebooks', options: { filter: 'review' } } }));
     } else if ((d.status==='idle' || d.status==='info') && d.manual && d.message) showTransientInfo(d.message);
-    else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: d.failureStreak >= 3 ? 'Memory updates paused after 3 failures.' : "Memory update didn't work — I'll try again next turn.", action: d.failureStreak >= 3 ? 'Open settings' : null, event: 'memory-settings' } }));
+    else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: (d.failureStreak >= 3 ? 'Memory updates paused after 3 failures. ' : 'Memory update failed. ')+(d.lastError ?? ''), action: 'Open settings', event: 'memory-settings' } }));
   });
   el.list = document.getElementById("message-list");
   let listHeight = el.list.clientHeight;

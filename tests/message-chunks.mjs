@@ -380,6 +380,22 @@ test('extraction commits dotted append fields and pointer together, preserving u
   await h.lore.commitExtraction('s',{ creates:[],appends:[{ entryId:'mira',section:'appearance',line:ln }],aliases:[],statusChanges:[] },{ fromTurn:1,toTurn:2,endOrder:4 });
   assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.text,'canon'); assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,2); assert.equal(h.documents.get(h.sessionPath).memoryState.extractedThroughOrder,4);
 });
+test('extraction transaction rolls back all cards and its checkpoint when a current card is full',async()=>{
+  const h=await setup();await h.lore.createEntry('s',loreEntry('first'));await h.lore.createEntry('s',loreEntry('full'));
+  // Simulate a card enlarged by another client after the extraction planner ran.
+  h.documents.get(h.sessionPath+'/lore/full').sections.appearance.text='x'.repeat(900000);
+  const before=JSON.stringify([...h.documents]);
+  const appends=['first','full'].map(entryId=>({entryId,section:'appearance',line:{id:'new-'+entryId,text:'scar',turn:2,src:4,by:'auto',at:2}}));
+  await assert.rejects(h.lore.commitExtraction('s',{creates:[],appends,aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4}),/card storage full/);
+  assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('oversized new cards cannot advance the extraction checkpoint or partially save earlier cards',async()=>{
+  const h=await setup();await h.lore.createEntry('s',loreEntry('first'));
+  const full=loreEntry('new-full');full.sections.appearance.text='x'.repeat(900000);
+  const before=JSON.stringify([...h.documents]);
+  await assert.rejects(h.lore.commitExtraction('s',{creates:[full],appends:[{entryId:'first',section:'appearance',line:{id:'new',text:'scar',turn:2,src:4,by:'auto',at:2}}],aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4}),/card storage full/);
+  assert.equal(JSON.stringify([...h.documents]),before);
+});
 test('delete and restore preserve cards, remove createdIds and backup pruning keeps twenty groups',async () => {
   const h = await setup(), e = loreEntry(); await h.lore.createEntry('s',e);
   const backup = await h.lore.deleteEntry('s',e); assert.equal(h.documents.has(h.sessionPath+'/lore/mira'),false); await h.lore.restoreBackup('s',backup,[]); assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.text,'canon');

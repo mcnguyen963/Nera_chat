@@ -126,8 +126,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\nOpen threads:\nTimeline (oldest first, 999999 earlier events not shown):\n' : book === 'characters' ? 'Characters:\n' : 'Places:\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events' });
-    const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit) : fit.text;
+    let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:true });
+    const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:true}) : fit.text;
     if (book === 'characters') chars = fit;
     else if (book === 'locations') places = fit;
     if (book === 'characters' || book === 'locations') memory = memoryText();
