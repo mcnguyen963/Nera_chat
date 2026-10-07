@@ -177,7 +177,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .composer-spacer { flex: 1; }
 .composer-action { flex-shrink: 0; min-height: 36px; }
 .composer-action[hidden] { display: none; }
-#btn-rewrite { width: var(--composer-button-size); min-width: 0; padding: 0 1px; font-size: 8px; white-space: nowrap; }
+#btn-rewrite, #btn-stop-reply { width: var(--composer-button-size); min-width: 0; padding: 0 1px; font-size: 8px; white-space: nowrap; }
 .composer-row .composer-chip { min-width: 0; flex-shrink: 1; }
 @media (max-width: 720px) {
   .composer-row { gap: 4px; }

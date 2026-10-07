@@ -216,7 +216,9 @@ async function enterApp() {
   appInitialized = true;
   try {
     state.settings = await loadSettings();
+    state.settingsLoadFailed = false;
   } catch (e) {
+    state.settingsLoadFailed = true;
     console.error("Failed to load settings:", e);
     state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
     alert("Could not load your saved settings. Using defaults for this page; check your connection and Firestore rules before saving.");

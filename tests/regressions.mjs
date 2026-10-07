@@ -69,10 +69,11 @@ async function harness() {
   const context = vm.createContext({
     console, structuredClone, document, TextDecoder, AbortController,
     requestAnimationFrame: (fn) => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout,
-    localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
+    localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value), removeItem: key => localCache.delete(key) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, clearTimeout() {}, confirm: (text) => { (calls.confirmations ??= []).push(text); return calls.confirm; },
+    setTimeout(fn, delay) { const timer = { fn, delay }; (calls.timers ??= []).push(timer); return timer; },
+    clearTimeout(timer) { if (timer) timer.cleared = true; }, confirm: (text) => { (calls.confirmations ??= []).push(text); return calls.confirm; },
     fetch: async (_url, options) => {
       if (_url === './rewrite_default_prompt.md') {
         calls.promptReads = (calls.promptReads ?? 0) + 1;
@@ -111,7 +112,11 @@ async function harness() {
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'auth.js': { currentUid: () => 'test-user', currentUserInfo: () => ({ email: 'test@example.com' }), logout() {} },
+    'chat-cache.js': {
+      loadChatCache: async () => null, saveChatCache: async (...args) => { (calls.cacheSaves ??= []).push(args); }, deleteChatCache: async () => {},
+      clearChatCache: async uid => { (calls.cacheClears ??= []).push(uid); if (calls.cacheClearError) throw new Error('cache denied'); },
+    },
+    'auth.js': { currentUid: () => 'test-user', currentUserInfo: () => ({ email: 'test@example.com' }), logout() { calls.logouts = (calls.logouts ?? 0) + 1; } },
     'tokenizer.js': { countTokens: async (text) => calls.tokenCount ? calls.tokenCount(text) : text.length,
       tokenizerReady: () => calls.tokenizerReady !== false },
     'sessions.js': {
@@ -372,7 +377,7 @@ test('Settings reload from Firestore, while quick model and thinking changes sta
   assert.equal(h.calls.reads, 1);
   assert.equal(h.calls.writes.length, 0);
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).activeProfileId, 'second');
-  assert.equal((await h.settings.loadSettings()).modelId, 'model-a');
+  assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
   assert.equal(h.calls.reads, 2);
   await h.settings.saveSettings({ ...h.state.settings, activeProfileId: 'second', modelId: 'model-b' });
   assert.equal(h.calls.writes.length, 1);
@@ -1780,4 +1785,269 @@ test('Inspector keeps summaries and omission markers in their actual position am
   assert.match(labels[2], /Active story summary/);
   assert.match(labels[3], /Omitted turns marker/);
   assert.match(labels[4], /Recent user messages/);
+});
+
+
+test('Send after the newest message was deleted is not stale', async () => {
+  const h = await harness();
+  await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 3 }) };
+  h.calls.freshMessages = [];
+  h.calls.addMessage = async (_id, message) => ({ id: message.role, order: message.role === 'user' ? 4 : 5, tokenCount: 4 });
+  h.el('chat-input').value = 'Next';
+  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  const users = h.calls.messages.filter(args => args[1].role === 'user');
+  assert.equal(users.length, 1);
+  assert.equal(users[0][2].expectedNextOrder, 3);
+  assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 1);
+});
+
+test('A running zero-message catch-up does not make the send stale', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h);
+  let finish;
+  h.calls.catchUp = () => new Promise(resolve => { finish = resolve; });
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 3 });
+  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 3 }) };
+  h.el('chat-input').value = 'Next';
+  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  finish([]);
+  await pending;
+  assert.equal(h.calls.messages.filter(args => args[1].role === 'user').length, 1);
+  assert.equal(h.calls.messages[0][2].expectedNextOrder, 3);
+});
+
+
+for (const streaming of [false, true]) {
+  test(`Provider finish reasons are normalized and failures blocked (streaming=${streaming})`, async () => {
+    const h = await harness();
+    const { chatCompletion } = await h.use('llm-client.js');
+    const settings = { ...h.state.settings, modelId: 'test', streaming };
+    for (const [reason, expected] of [['end_turn', 'end_turn'], ['eos', 'eos'], ['STOP', 'stop'], ['stop_sequence', 'stop_sequence'], ['future_reason', 'future_reason'], ['MAX_TOKENS', 'length'], ['MAX_OUTPUT_TOKENS', 'length'], ['CONTENT_FILTER', null]]) {
+      h.calls.responseData = { choices: [{ message: { content: 'Reply' }, finish_reason: reason }] };
+      h.calls.streamLines = streaming ? [`data: ${JSON.stringify({ choices: [{ delta: { content: 'Reply' }, finish_reason: reason }] })}\n`] : null;
+      if (expected === null) await assert.rejects(chatCompletion({ settings, messages: [] }), /content_filter/);
+      else {
+        const result = await chatCompletion({ settings, messages: [] });
+        assert.equal(result.content, 'Reply');
+        assert.equal(result.finishReason, expected);
+      }
+    }
+  });
+}
+
+
+test('Message editor fits overflowing text and Cancel restores the bubble', async () => {
+  const h = await harness();
+  const createElement = h.document.createElement;
+  h.document.createElement = tag => {
+    const node = createElement(tag);
+    if (tag === 'textarea') { node.scrollHeight = 900; node.clientHeight = 40; }
+    return node;
+  };
+  await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Long message' }]);
+  const node = h.el('message-list').children.find(node => node.dataset.messageId === 'u');
+  h.el('message-list').scrollTop = 123;
+  await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Edit').dispatchEvent({ type: 'click', stopPropagation() {} });
+  const editor = node.querySelector('.msg-editor');
+  assert.equal(editor.style.height, '900px');
+  assert.equal(node.style.height, '');
+  assert.equal(h.el('message-list').scrollTop, 123);
+  editor.scrollHeight = 1100;
+  await editor.dispatchEvent({ type: 'input' });
+  assert.equal(editor.style.height, '1100px');
+  await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Cancel').dispatchEvent({ type: 'click', stopPropagation() {} });
+  const restored = h.el('message-list').children.find(node => node.dataset.messageId === 'u');
+  assert.equal(restored.querySelector('.msg-editor'), null);
+  assert.ok(restored.querySelector('.msg-content'));
+  assert.equal(restored.style.height, undefined);
+});
+
+
+test('Long story context reuses token counts on the second build', async () => {
+  const h = await harness();
+  let counts = 0;
+  h.calls.tokenCount = text => { counts++; return text.length; };
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const messages = Array.from({ length: 1500 }, (_, i) => ({ id: `m${i}`, order: i + 1,
+    role: i % 2 ? 'assistant' : 'user', content: `Unique short message ${i}` }));
+  await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
+  const first = counts;
+  assert.ok(first >= 1500);
+  await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
+  assert.equal(counts - first, 0);
+});
+
+
+test('Failed settings load blocks writes and recovery loads saved values for review', async () => {
+  const h = await harness();
+  h.calls.serverError = 'offline';
+  await assert.rejects(h.settings.loadSettings(), /offline/);
+  h.state.settingsLoadFailed = true;
+  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
+  assert.equal(h.calls.writes.length, 0);
+  assert.equal(h.state.settingsSaving, false);
+  assert.equal(h.state.settingsLoadFailed, true);
+  h.calls.serverError = null;
+  h.calls.settingsDoc = { modelId: 'saved-model', apiKey: 'saved-secret' };
+  await assert.rejects(h.settings.saveSettings(h.state.settings), /Review them and save again/);
+  assert.equal(h.calls.writes.length, 0);
+  assert.equal(h.state.settings.modelId, 'saved-model');
+  assert.equal(h.state.settings.apiKey, 'saved-secret');
+  assert.equal(h.state.settingsLoadFailed, false);
+  await h.settings.saveSettings(h.state.settings);
+  assert.equal(h.calls.writes[0].apiKey, 'saved-secret');
+});
+
+test('Settings popup replaces the default draft with recovered server settings', async () => {
+  const h = await harness();
+  (await h.use('ui/chat-view.js')).initChatView();
+  const view = await h.use('ui/settings-view.js');
+  view.initSettingsView(); view.openSettingsPopup();
+  h.el('set-model').value = 'default-draft';
+  h.state.settingsLoadFailed = true;
+  h.calls.settingsDoc = { modelId: 'saved-model', apiKey: 'saved-secret' };
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes.length, 0);
+  assert.equal(h.el('set-model').value, 'saved-model');
+  assert.equal(h.el('set-apikey').value, 'saved-secret');
+  assert.match(h.el('settings-saved-msg').textContent, /Review them/);
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes[0].apiKey, 'saved-secret');
+});
+
+
+test('Quick profile and thinking survive reload and remote saves until explicit save', async () => {
+  const h = await harness();
+  const server = { profiles: [{ id: 'a', modelId: 'model-a' }, { id: 'b', modelId: 'model-b' }], activeProfileId: 'a' };
+  h.calls.settingsDoc = server;
+  h.state.settings = await h.settings.loadSettings();
+  const quick = structuredClone(h.state.settings);
+  quick.activeProfileId = 'b';
+  h.settings.mirrorFromActiveProfile(quick);
+  quick.reasoning = { ...quick.reasoning, enabled: true, effort: 'high' };
+  h.settings.useLocalSettings(quick);
+  const loaded = await h.settings.loadSettings();
+  assert.equal(loaded.activeProfileId, 'b');
+  assert.equal(loaded.modelId, 'model-b');
+  assert.equal(loaded.reasoning.effort, 'high');
+  h.settings.watchSettings();
+  h.calls.settingsCallbacks.at(-1)({ exists: () => true, data: () => server, metadata: {} });
+  assert.equal(h.state.settings.activeProfileId, 'b');
+  assert.equal(h.state.settings.reasoning.enabled, true);
+  const explicit = h.settings.hydrateProfiles({ ...structuredClone(h.settings.DEFAULT_SETTINGS), ...structuredClone(server) });
+  await h.settings.saveSettings(explicit);
+  assert.equal(h.localCache.has('roleplay-quick:test-user'), false);
+  assert.equal((await h.settings.loadSettings()).activeProfileId, 'a');
+});
+
+test('Quick overrides ignore missing, deleted and malformed choices', async () => {
+  const h = await harness();
+  const settings = h.state.settings;
+  const before = structuredClone(settings);
+  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
+  h.localCache.set('roleplay-quick:test-user', JSON.stringify({ activeProfileId: 'deleted', reasoning: { enabled: true } }));
+  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
+  h.localCache.set('roleplay-quick:test-user', '{broken');
+  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
+});
+
+
+for (const timeout of [false, true]) {
+  test(`Hung assistant reply unlocks without saving on ${timeout ? 'idle timeout' : 'Stop'}`, async () => {
+    const h = await harness();
+    await openTurnChat(h);
+    h.state.settings.streaming = true;
+    h.calls.addMessage = async (_id, message) => ({ id: message.role, order: 1, tokenCount: 4 });
+    let reading = false;
+    h.calls.streamReader = { read: () => { reading = true; return new Promise(() => {}); } };
+    h.el('chat-input').value = 'Turn';
+    const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+    while (!reading) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(h.state.busy, true);
+    assert.equal(h.el('btn-stop-reply').hidden, false);
+    if (timeout) h.calls.timers.find(timer => timer.delay === 120000 && !timer.cleared).fn();
+    else await h.fire('btn-stop-reply');
+    await pending;
+    assert.equal(h.state.busy, false);
+    assert.equal(h.el('btn-send').disabled, false);
+    assert.equal(h.el('btn-stop-reply').hidden, true);
+    assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 0);
+    const user = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
+    assert.ok(user.querySelector('.msg-actions').children.some(button => button.textContent === 'Retry reply'));
+    assert.match(h.el('message-list').children.find(node => node.className === 'msg error').textContent, timeout ? /stopped responding/ : /Reply stopped/);
+    assert.ok(h.calls.timers.filter(timer => timer.delay === 120000).every(timer => timer.cleared));
+  });
+}
+
+
+for (const fails of [false, true]) {
+  test(`Logout removes account caches and still signs out when cache cleanup ${fails ? 'fails' : 'succeeds'}`, async () => {
+    const h = await harness();
+    (await h.use('ui/chat-view.js')).initChatView();
+    (await h.use('ui/sidebar.js')).initSidebar();
+    h.localCache.set('roleplay-settings:test-user', 'secret');
+    h.localCache.set('roleplay-quick:test-user', 'choice');
+    h.localCache.set('roleplay-settings:other-user', 'other');
+    h.calls.cacheClearError = fails;
+    await h.fire('btn-logout');
+    assert.deepEqual(h.calls.cacheClears, ['test-user']);
+    assert.equal(h.localCache.has('roleplay-settings:test-user'), false);
+    assert.equal(h.localCache.has('roleplay-quick:test-user'), false);
+    assert.equal(h.localCache.get('roleplay-settings:other-user'), 'other');
+    assert.equal(h.calls.logouts, 1);
+  });
+}
+
+
+test('Settings recovery cannot use cached defaults created after the failed startup', async () => {
+  const h = await harness();
+  h.calls.serverError = 'offline';
+  h.state.settingsLoadFailed = true;
+  h.settings.useLocalSettings(h.state.settings);
+  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
+  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
+  assert.equal(h.calls.writes.length, 0);
+  assert.equal(h.state.settingsLoadFailed, true);
+});
+
+test('Logout cancels pending cache writes so cleared stories are not saved again', async () => {
+  const h = await harness();
+  const chat = await openTurnChat(h);
+  (await h.use('ui/sidebar.js')).initSidebar();
+  const pending = h.calls.timers.filter(timer => timer.delay === 250 && !timer.cleared);
+  assert.ok(pending.length > 0);
+  await h.fire('btn-logout');
+  assert.ok(pending.every(timer => timer.cleared));
+  for (const timer of pending) timer.fn();
+  chat.syncActiveSession({ id: 'turn-story', nextOrder: 1 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.cacheSaves?.length ?? 0, 0);
+});
+
+test('Reply deltas reset the idle timeout and stopped late responses cannot save', async () => {
+  const h = await harness();
+  await openTurnChat(h);
+  h.state.settings.streaming = true;
+  h.calls.addMessage = async (_id, message) => ({ id: message.role, order: 1, tokenCount: 4 });
+  let finish, reads = 0;
+  h.calls.streamReader = { read: () => {
+    if (reads++ === 0) return Promise.resolve({ done: false, value: new TextEncoder().encode(
+      'data: {"choices":[{"delta":{"reasoning":"Thinking","content":"Partial"}}]}\n') });
+    return new Promise(resolve => { finish = resolve; });
+  } };
+  h.el('chat-input').value = 'Turn';
+  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
+  while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+  const timers = h.calls.timers.filter(timer => timer.delay === 120000);
+  assert.equal(timers.length, 3);
+  assert.ok(timers[0].cleared && timers[1].cleared);
+  assert.equal(timers[2].cleared, undefined);
+  await h.fire('btn-stop-reply');
+  await pending;
+  finish({ done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Late"},"finish_reason":"stop"}]}\n') });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 0);
+  assert.equal(h.state.busy, false);
+  assert.equal(h.calls.timers.filter(timer => timer.delay === 120000).length, 3);
 });

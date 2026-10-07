@@ -1,4 +1,4 @@
-# Real Firebase config — never commit (injected by CI from repo secrets)
+# Firebase web config is public; CI generates it from deploy.yml before publishing.
 js/firebase-config.js
 .private/
 
@@ -6,3 +6,5 @@ js/firebase-config.js
 register.html
 
 .DS_Store
+
+*:Zone.Identifier

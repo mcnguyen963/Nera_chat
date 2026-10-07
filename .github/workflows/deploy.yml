@@ -35,9 +35,16 @@ jobs:
           };
           EOF
 
+      - name: Collect site files
+        run: |
+          mkdir _site
+          cp -r index.html css js resources rewrite_default_prompt.md _site/
+          find _site -name '*:Zone.Identifier' -delete
+          rm -f _site/js/firebase-config.example.js
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
   deploy:
     needs: build

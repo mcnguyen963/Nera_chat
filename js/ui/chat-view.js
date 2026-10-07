@@ -30,6 +30,7 @@ let session = null;      // latest snapshot of the active session doc
 let streamState = null;  // live streaming UI handle
 let busy = false;
 let rewriteController = null;
+let turnController = null;
 let originalDraft = null;
 let indicatorRun = 0;
 let editingState = null; // { id, ta } while a message is being edited inline
@@ -44,6 +45,7 @@ let historyLoading = null;
 let sessionEpoch = 0;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
+let cacheWritesPaused = false;
 let wasNearBottom = true;
 let checkedOrder = 0;
 let catchUpTarget = 0;
@@ -57,6 +59,7 @@ export function initChatView() {
   el.input = document.getElementById("chat-input");
   el.composer = document.getElementById("composer");
   el.sendBtn = document.getElementById("btn-send");
+  el.stopBtn = document.getElementById("btn-stop-reply");
   el.rewriteBtn = document.getElementById("btn-rewrite");
   el.restoreDraftBtn = document.getElementById("btn-restore-draft");
   el.summarizeBtn = document.getElementById("btn-summarize");
@@ -125,6 +128,7 @@ export function initChatView() {
   });
 
   el.composer.addEventListener("submit", handleSend);
+  el.stopBtn.addEventListener("click", () => turnController?.abort());
   el.rewriteBtn.addEventListener("click", handleRewrite);
   el.restoreDraftBtn.addEventListener("click", () => {
     if (busy || originalDraft === null) return;
@@ -273,7 +277,7 @@ export function setSession(sessionId) {
     return false;
   }
   if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
-  if (state.sessionId && session && latestReady) {
+  if (!cacheWritesPaused && state.sessionId && session && latestReady) {
     const snapshot = chatSnapshot();
     historyCache.delete(state.sessionId);
     historyCache.set(state.sessionId, snapshot);
@@ -340,11 +344,20 @@ function chatSnapshot() {
   return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages, checkedOrder });
 }
 
+export function prepareChatLogout() {
+  cacheWritesPaused = true;
+  if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
+  turnController?.abort();
+  rewriteController?.abort();
+  historyCache.clear();
+}
+
 function queueCacheSave() {
-  if (!session || !latestReady) return;
+  if (cacheWritesPaused || !session || !latestReady) return;
   if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
   cacheSaveTimer = setTimeout(() => {
     cacheSaveTimer = null;
+    if (cacheWritesPaused) return;
     void saveChatCache(currentUid(), state.sessionId, chatSnapshot());
   }, 250);
 }
@@ -482,7 +495,7 @@ async function checkTurnFreshness() {
   const sourceId = state.sessionId;
   const epoch = sessionEpoch;
   const uid = currentUid();
-  const orderAtStart = checkedOrder;
+  const newestAtStart = localMaxOrder();
   if (catchUpPromise) await catchUpPromise;
   const snap = await getDocFromServer(doc(db, "users", uid, "sessions", sourceId));
   if (sourceId !== state.sessionId || epoch !== sessionEpoch || uid !== currentUid()) {
@@ -490,10 +503,12 @@ async function checkTurnFreshness() {
   }
   if (!snap.exists()) throw new Error("This story no longer exists on the server.");
   const metadata = snap.data();
-  const stale = (metadata.nextOrder ?? 0) > orderAtStart || checkedOrder > orderAtStart;
   syncActiveSession({ ...metadata, id: sourceId });
-  if (stale) {
-    await catchUpMessages();
+  if (catchUpTarget > checkedOrder) await catchUpMessages();
+  if (sourceId !== state.sessionId || epoch !== sessionEpoch || uid !== currentUid()) {
+    throw new Error("Story changed while checking for new turns.");
+  }
+  if (localMaxOrder() > newestAtStart) {
     throw new Error("New messages arrived from another device. Review them, then try again.");
   }
   // Cross-device edits/deletions still need Sync. Another device can also
@@ -870,6 +885,14 @@ function startEdit(m, wrap) {
   save.classList.add("btn"); cancel.classList.add("btn");
   actions.replaceChildren(save, cancel);
   contentEl.replaceWith(ta);
+  // Mobile editors use 16px text (no iOS zoom), so fit the box to the real text.
+  const fit = () => {
+    if (ta.scrollHeight <= ta.clientHeight) return;
+    wrap.style.height = "";
+    ta.style.height = ta.scrollHeight + "px";
+  };
+  fit();
+  ta.addEventListener("input", fit);
   editingState = { id: m.id, ta };
   updateRewriteControls();
   ta.focus({ preventScroll: true });
@@ -1181,24 +1204,48 @@ async function runAssistantTurn(opts = {}) {
   const planBefore = session.allowLlmPlanUpdates === true
     ? (opts.planOverride ?? session.longTermPlan ?? "")
     : (session.longTermPlan ?? "");
+  const controller = new AbortController();
+  turnController = controller;
+  let idleTimer, timedOut = false;
+  const resetIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { timedOut = true; controller.abort(); }, 120000);
+  };
+  // Stop also releases the UI if history loading or a response reader hangs.
+  const waitFor = (promise) => new Promise((resolve, reject) => {
+    const abort = () => {
+      controller.signal.removeEventListener("abort", abort);
+      const error = new Error("Reply stopped; nothing was saved.");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (controller.signal.aborted) abort();
+    else controller.signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => controller.signal.removeEventListener("abort", abort));
+  });
+  el.stopBtn.hidden = false;
+  el.stopBtn.disabled = false;
+  resetIdle();
   const petTurn = startPetTurn();
   const vibration = createStreamVibration(settings.streamVibrationMode ?? "spaces");
   setBusy(true);
   try {
     startStreamUI();
-    const allMessages = opts.messages ?? await ensureHistory();
-    const context = await buildContextForRequest(session, settings, {
+    const allMessages = opts.messages ?? await waitFor(ensureHistory());
+    const context = await waitFor(buildContextForRequest(session, settings, {
       ...opts, planOverride: planBefore, messages: allMessages, requireLatestUser: true,
-    });
+    }));
 
     let requestId;
-    const { content, thinking, finishReason, usage } = await chatCompletion({
-      settings,
+    const { content, thinking, finishReason, usage } = await waitFor(chatCompletion({
+      settings, signal: controller.signal,
       messages: context.apiMessages,
       onRequest: (request) => { requestId = captureContextRequest({ ...context, max: requestInputLimit(settings) }, request); },
-      onDelta: (t) => { vibration.feed(t); updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
-      onReasoning: (t) => { vibration.feed(t); updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
-    });
+      onDelta: (t) => { if (controller.signal.aborted) return; resetIdle(); vibration.feed(t); updatePetPhase("writing", petTurn); streamState && appendStream("content", t); },
+      onReasoning: (t) => { if (controller.signal.aborted) return; resetIdle(); vibration.feed(t); updatePetPhase("thinking", petTurn); streamState && appendStream("thinking", t); },
+    }));
+    clearTimeout(idleTimer);
+    el.stopBtn.hidden = true;
     captureContextUsage(requestId, usage);
     vibration.stop();
 
@@ -1273,8 +1320,13 @@ async function runAssistantTurn(opts = {}) {
     streamState = null;
     clampListScroll();
     refreshPetPlacement();
-    showTransientError(err.message || String(err));
+    showTransientError(err.name === "AbortError"
+      ? (timedOut ? "The model stopped responding; nothing was saved. Try Retry reply." : "Reply stopped; nothing was saved.")
+      : err.message || String(err));
   } finally {
+    clearTimeout(idleTimer);
+    turnController = null;
+    el.stopBtn.hidden = true;
     vibration.stop();
     setBusy(false);
   }

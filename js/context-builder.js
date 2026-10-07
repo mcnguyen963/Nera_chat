@@ -17,9 +17,9 @@ import { PLAN_THREAD_RECOVERY_RULE } from "./settings.js";
 export const MESSAGE_FRAME_TOKENS = 8;
 export const REQUEST_FRAME_TOKENS = 8;
 
-// The narrator prompt + plan block rarely change between turns; cache its token count
-// to avoid re-running the tokenizer on every send/indicator refresh.
+// Cache prompt/plan blocks and message bodies between sends and indicator refreshes.
 const systemTokenCache = new Map();
+const SYSTEM_TOKEN_CACHE_MAX = 3000;
 
 const AD_DIRECTIVE_RULE =
   "A user message may contain <ad>...</ad> for an out-of-story author direction. " +
@@ -42,10 +42,15 @@ export function normalizeAdDirective(content) {
 
 async function countSystemTokensCached(text) {
   let cached = systemTokenCache.get(text);
-  if (cached === undefined) {
-    if (systemTokenCache.size > 500) systemTokenCache.clear();
-    cached = await countTokens(text);
-    if (tokenizerReady()) systemTokenCache.set(text, cached);
+  if (cached !== undefined) {
+    systemTokenCache.delete(text);
+    systemTokenCache.set(text, cached); // keep recent entries
+    return cached;
+  }
+  cached = await countTokens(text);
+  if (tokenizerReady()) {
+    systemTokenCache.set(text, cached);
+    if (systemTokenCache.size > SYSTEM_TOKEN_CACHE_MAX) systemTokenCache.delete(systemTokenCache.keys().next().value);
   }
   return cached;
 }

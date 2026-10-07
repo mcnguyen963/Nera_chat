@@ -42,8 +42,16 @@ function responseError(data) {
   return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
 }
 
+// Providers spell finish reasons differently; map them to OpenAI's names.
+function normalizeFinishReason(reason) {
+  if (!reason) return null;
+  const r = String(reason).toLowerCase();
+  return r === "max_tokens" || r === "max_output_tokens" ? "length" : r;
+}
+
+const FAILED_FINISH = new Set(["content_filter", "error", "tool_calls", "function_call", "safety", "recitation", "blocklist", "prohibited_content"]);
 function checkFinishReason(reason) {
-  if (reason && reason !== "stop" && reason !== "length") {
+  if (reason && FAILED_FINISH.has(reason)) {
     throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
   }
 }
@@ -76,16 +84,17 @@ async function nonStreamedCompletion({ settings, messages, onRequest, signal }) 
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
-  checkFinishReason(data.choices[0].finish_reason);
+  const finishReason = normalizeFinishReason(data.choices[0].finish_reason);
+  checkFinishReason(finishReason);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
-    throw emptyReplyError(data.choices[0].finish_reason);
+    throw emptyReplyError(finishReason);
   }
   return {
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
     usage: data.usage ?? null,
-    finishReason: data.choices[0].finish_reason ?? null,
+    finishReason,
   };
 }
 
@@ -129,7 +138,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, on
     if (!Array.isArray(json.choices) && !json.usage) throw responseError(json);
     const delta = json.choices?.[0]?.delta ?? {};
     if (json.choices?.[0]?.finish_reason) {
-      finishReason = json.choices[0].finish_reason;
+      finishReason = normalizeFinishReason(json.choices[0].finish_reason);
       completed = true;
     }
     if (delta.content && typeof delta.content !== "string") throw responseError(json);

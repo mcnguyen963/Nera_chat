@@ -167,6 +167,22 @@ function userSettingsRef() {
 }
 
 const cacheKey = () => `roleplay-settings:${currentUid()}`;
+const quickKey = () => `roleplay-quick:${currentUid()}`;
+
+export function applyQuickOverrides(settings) {
+  let quick;
+  try { quick = JSON.parse(localStorage.getItem(quickKey())); }
+  catch { return settings; }
+  if (!quick || !settings.profiles?.some((p) => p.id === quick.activeProfileId)) return settings;
+  settings.activeProfileId = quick.activeProfileId;
+  normalizeProfiles(settings);
+  mirrorFromActiveProfile(settings);
+  if (quick.reasoning && typeof quick.reasoning === "object" && !Array.isArray(quick.reasoning)) {
+    settings.reasoning = { ...settings.reasoning, ...quick.reasoning };
+    mirrorToActiveProfile(settings);
+  }
+  return settings;
+}
 
 function readCachedSettings() {
   try {
@@ -185,20 +201,20 @@ function cacheSettings(settings) {
   }
 }
 
-export async function loadSettings() {
+export async function loadSettings({ requireServer = false } = {}) {
   const cached = readCachedSettings();
   const ref = userSettingsRef();
   let snap;
   try {
     snap = await getDocFromServer(ref);
   } catch (error) {
-    if (cached) return hydrateProfiles(mergeDefaults(cached));
+    if (cached && !requireServer) return applyQuickOverrides(hydrateProfiles(mergeDefaults(cached)));
     throw error;
   }
   if (snap.exists()) {
     const settings = hydrateProfiles(mergeDefaults(snap.data()));
     cacheSettings(settings);
-    return settings;
+    return applyQuickOverrides(settings);
   }
 
   // New accounts start with their own clean settings. Shared legacy settings
@@ -207,7 +223,7 @@ export async function loadSettings() {
   hydrateProfiles(seed);
   await setDoc(ref, seed);
   cacheSettings(seed);
-  return seed;
+  return applyQuickOverrides(seed);
 }
 
 // Keep an open device current when settings are saved on another device.
@@ -216,7 +232,7 @@ export async function loadSettings() {
 export function watchSettings() {
   return onSnapshot(userSettingsRef(), (snap) => {
     if (!snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
-    const settings = hydrateProfiles(mergeDefaults(snap.data()));
+    const settings = applyQuickOverrides(hydrateProfiles(mergeDefaults(snap.data())));
     if (JSON.stringify(settings) === JSON.stringify(state.settings)) return;
     state.settings = settings;
     cacheSettings(settings);
@@ -231,17 +247,37 @@ export function useLocalSettings(settings) {
   mirrorToActiveProfile(snapshot);
   state.settings = snapshot;
   cacheSettings(snapshot);
+  try {
+    localStorage.setItem(quickKey(), JSON.stringify({ activeProfileId: snapshot.activeProfileId, reasoning: snapshot.reasoning }));
+  } catch {
+    // Storage restrictions must not block quick controls.
+  }
   document.dispatchEvent(new CustomEvent("settings-changed"));
 }
 
 export async function saveSettings(settings) {
   if (state.settingsSaving) throw new Error("A settings save is already in progress. Please try again.");
-  const snapshot = structuredClone(settings);
-  normalizeProfiles(snapshot);
-  mirrorToActiveProfile(snapshot);
   state.settingsSaving = true;
   try {
+    if (state.settingsLoadFailed) {
+      let loaded;
+      try {
+        loaded = await loadSettings({ requireServer: true });
+      } catch {
+        throw new Error("Saved settings could not be loaded, so saving is blocked to protect them. Check your connection and reload.");
+      }
+      state.settingsLoadFailed = false;
+      state.settings = loaded;
+      document.dispatchEvent(new CustomEvent("settings-changed"));
+      const error = new Error("Your saved settings were loaded from the server. Review them and save again.");
+      error.code = "settings-reloaded";
+      throw error;
+    }
+    const snapshot = structuredClone(settings);
+    normalizeProfiles(snapshot);
+    mirrorToActiveProfile(snapshot);
     await setDoc(userSettingsRef(), snapshot);
+    try { localStorage.removeItem(quickKey()); } catch { /* Storage may be unavailable. */ }
     state.settings = snapshot;
     cacheSettings(snapshot);
     document.dispatchEvent(new CustomEvent("settings-changed"));
