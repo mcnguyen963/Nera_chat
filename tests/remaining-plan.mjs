@@ -8,6 +8,24 @@ const plain=x=>JSON.parse(JSON.stringify(x));
 const settings={narratorSystemPrompt:'Narrate.',maxContextTokens:100000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:2,summarizerChunkTokens:1};
 const history=Array.from({length:10},(_,i)=>({id:'m'+i,order:i+1,narratorTurn:Math.floor(i/2)+1,role:i%2?'assistant':'user',content:'Event '+i,revision:0}));
 const use=()=>appHarness({stubs:{'messages.js':{getMessages:async()=>[],getCheckpointMessages:async()=>[],addMessage:async()=>{},newMessageId:()=> 'summary'},'tokenizer.js':{countTokens:async s=>s.length,tokenizerReady:()=>true},'llm-client.js':{chatCompletion:async()=>({content:'A summary',finishReason:'stop'})}}});
+test('summary source accepts reordered memory maps and unrelated lore writes, but rejects real source changes',async()=>{
+ const c=await use()('continuity.js');
+ const initial={historyRevision:3,longTermPlan:'Keep the hearing open',loreRevision:2,activeSummaryMessageId:'s1',breakpointOrder:4,memory:{scene:true,books:{characters:{on:true,budget:4000},events:{on:false}}}};
+ const reordered={...initial,memory:{books:{events:{on:false},characters:{budget:4000,on:true}},scene:true},loreRevision:9};
+ const expected=c.summarySource(initial);
+ assert.doesNotThrow(()=>c.assertSource(reordered,expected));
+ assert.throws(()=>c.assertSource(reordered,c.requestSource(initial)),/Changed: lorebooks/);
+ for(const [key,value,label] of [['historyRevision',4,'story history'],['longTermPlan','A different direction','fixed plan'],['activeSummaryMessageId','s2','active summary'],['breakpointOrder',6,'summary checkpoint'],['memory',{scene:false},'memory settings']]) {
+  assert.throws(()=>c.assertSource({...reordered,[key]:value},expected),new RegExp('Changed: '+label));
+ }
+ assert.throws(()=>c.assertSource(null,expected),/story deleted/);
+});
+test('summary commit uses its captured source while allowing a concurrent lore revision',async()=>{
+ let saved,session={id:'s',historyRevision:3,loreRevision:2,memory:{scene:false,books:{characters:{budget:4000,on:true}}}};
+ const u=appHarness({stubs:{'messages.js':{getMessages:async()=>[],getCheckpointMessages:async()=>[],newMessageId:()=> 'new-summary',addMessage:async(sid,message,opts)=>{const c=await u('continuity.js');c.assertSource({...session,loreRevision:9,memory:{books:{characters:{on:true,budget:4000}},scene:false}},opts.expectedSource);saved=opts;return {...message,historyRevision:4};}},'tokenizer.js':{countTokens:async text=>text.length,tokenizerReady:()=>true},'llm-client.js':{chatCompletion:async()=>({content:'The established hearing remains unresolved.',finishReason:'stop'})}}});
+ const result=await(await u('summarizer.js')).runSummarization(session,{...settings,summarizerChunkTokens:100000},{messages:history});
+ assert.equal(result.skipped,false);assert.equal(saved.expectedSource.sourceKind,'summary');assert.equal(saved.expectedSource.historyRevision,3);assert.equal(saved.sessionUpdate.activeSummaryMessageId,'new-summary');
+});
 test('L2 extraction guard accepts unrelated append/lore/plan/scene changes and rejects range edits or superseded pointers',async()=>{
  const c=await use()('continuity.js'),guard={startPointer:2,startRevision:5,fromOrder:3,endOrder:6};
  const base={memoryState:{extractedThroughOrder:2},historyRevision:9,loreRevision:99,longTermPlan:'New',contentEdits:[{order:1,revision:6},{order:8,revision:7}]};
