@@ -1,7 +1,7 @@
 import {effectivelyPaused} from '../continuity.js';
 import {copyText as copyClipboard} from './clipboard.js';
 import * as tokenizer from '../tokenizer.js';
-import {createBusyGate,bridgeHistory} from './busy-token.js';
+import {createBusyGate,bridgeHistory,waitForPreparation} from './busy-token.js';
 import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
@@ -40,7 +40,7 @@ let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>document.dispatchEvent(new CustomEvent('turn-finished'))});
 const acquireBusy=kind=>busyGate.acquire(kind),releaseBusy=token=>busyGate.release(token);
 class StaleTurn extends Error {}
-function assertActive(token){if(!session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
+function assertActive(token){if(cacheWritesPaused || !session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
 async function historyAction(kind,run) {
   const token=acquireBusy(kind);if(!token)return false;
   try{await run(token);return true;}catch(error){if(!(error instanceof StaleTurn))showTransientError(error.message || String(error));return false;}finally{releaseBusy(token);}
@@ -73,6 +73,8 @@ let loreReady = Promise.resolve();
 let verifiedLoreRevision = null;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
+let cacheWritesPaused = false;
+const pendingCacheWrites = new Set();
 const renderedMessages = new Map();
 
 const el = {};
@@ -111,11 +113,12 @@ function syncLore() {
     void updateIndicator();
   },error=>{if(currentUid()!==owner || state.sessionId!==sid)return;fail(error);loreUnsub?.();loreUnsub=null;loreSessionId=null;loreStatus='error';updateMemoryChip();clearTimeout(loreRetryTimer);const delay=[2000,5000,15000,60000][Math.min(loreRetry++,3)];loreRetryTimer=setTimeout(()=>{if(state.sessionId===sid && currentUid()===owner)syncLore();},delay);if(loreRetry===1)showTransientError('Could not load lorebooks: '+error.message+' Retrying…');});
 }
-async function reconcileStory() {
+async function reconcileStory(token = null) {
   const sid = state.sessionId, owner = currentUid();
   if (!sid) throw new Error('Open a story first.');
   await messagesApi.ensureContinuityMetadata(sid);
   const fresh = await getSessionFromServer(sid);
+  if (token) assertActive(token);
   if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while reconciling.');
   if (!fresh) throw new Error('Story no longer exists.');
   session = fresh;
@@ -125,7 +128,9 @@ async function reconcileStory() {
     try {await loreReady;} catch {syncLore();await loreReady;}
     if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) { const entries = await getLore(sid); if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Story changed while loading lorebooks.'); loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0; }
   }
+  if (token) assertActive(token);
   await ensureHistory(true);
+  if (token) assertActive(token);
   if(fresh.memory?.autoUpdate && fresh.memoryState?.extractedThroughOrder==null && computeTurns(historyMessages).lastTurn<=normalizeMemory(fresh.memory).lagTurns){await updateSession(sid,{'memoryState.extractedThroughOrder':0});if(currentUid()!==owner || state.sessionId!==sid)throw new Error('Story changed while setting memory start.');session={...session,memoryState:{...session.memoryState,extractedThroughOrder:0}};}
   if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while loading.');
   rememberMemoryStory();
@@ -395,11 +400,11 @@ export function setSession(sessionId) {
     return false;
   }
   if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
-  if (state.sessionId && session && latestReady) {
+  if (!cacheWritesPaused && state.sessionId && session && latestReady) {
     const snapshot = chatSnapshot();
     historyCache.delete(currentUid()+':'+state.sessionId);
     historyCache.set(currentUid()+':'+state.sessionId, snapshot);
-    void saveChatCache(currentUid(), state.sessionId, snapshot);
+    saveLocalCache(currentUid(), state.sessionId, snapshot);
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   rememberMemoryStory();
@@ -464,14 +469,34 @@ function chatSnapshot() {
   return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
 }
 
+function saveLocalCache(owner, sid, snapshot) {
+  if (cacheWritesPaused) return;
+  const pending = saveChatCache(owner, sid, snapshot);
+  pendingCacheWrites.add(pending);
+  void pending.then(() => pendingCacheWrites.delete(pending), error => {
+    pendingCacheWrites.delete(pending);
+    console.error('Could not save chat cache:', error);
+  });
+}
+
+export async function prepareChatLogout() {
+  cacheWritesPaused = true;
+  clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
+  busyGate.active?.abort?.();
+  memoryUpdater.stopAll();
+  historyCache.clear(); memoryStories.clear();
+  await Promise.allSettled([...pendingCacheWrites]);
+}
+
 function queueCacheSave() {
+  if (cacheWritesPaused) return;
   const scheduledSid=state.sessionId,scheduledOwner=currentUid();
   if (!session || !latestReady) return;
   if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
   cacheSaveTimer = setTimeout(() => {
-    if(state.sessionId!==scheduledSid || currentUid()!==scheduledOwner)return;
     cacheSaveTimer = null;
-    void saveChatCache(currentUid(), state.sessionId, chatSnapshot());
+    if(cacheWritesPaused || state.sessionId!==scheduledSid || currentUid()!==scheduledOwner)return;
+    saveLocalCache(scheduledOwner, scheduledSid, chatSnapshot());
   }, 250);
 }
 
@@ -946,7 +971,12 @@ function startEdit(m, wrap) {
   save.classList.add("btn"); cancel.classList.add("btn");
   actions.replaceChildren(save, cancel);
   contentEl.replaceWith(ta);
-  ta.style.height=Math.max(contentRect.height,ta.scrollHeight)+'px';
+  const fit = () => {
+    if (ta.scrollHeight <= ta.clientHeight) return;
+    wrap.style.height = '';
+    ta.style.height = Math.max(contentRect.height, ta.scrollHeight) + 'px';
+  };
+  fit(); ta.addEventListener('input', fit);
   editingState = { id: m.id, ta };
   ta.focus({ preventScroll: true });
   el.list.scrollTop = scrollTop;
@@ -1132,14 +1162,14 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   const petTurn = startPetTurn();
   let maintenanceUsed = false;
   try {
-    if(!opts.reconciled)await reconcileStory();assertActive(token);
+    if(!opts.reconciled)await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     if (opts.expectLatestUserId) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
       if (latest?.role !== 'user' || latest.id !== opts.expectLatestUserId) throw new Error('The latest story turn changed. Review it before retrying.');
     }
     let sourceMessages = structuredClone(historyMessages);
     let sourceSession = structuredClone(session);
-    let built = await buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) });
+    let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
     startStreamUI();
     let result;
@@ -1277,6 +1307,7 @@ async function handleSummarize() {
   try {
     await reconcileStory();assertActive(token);
     const r = await runSummarization(session, state.settings, {
+      validateSource: () => assertActive(token),
       messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
       onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
@@ -1310,6 +1341,7 @@ async function handleFullSummarize() {
   try {
     await reconcileStory();assertActive(token);
     const r = await runSummarization(session, state.settings, {
+      validateSource: () => assertActive(token),
       messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       full: true,
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },

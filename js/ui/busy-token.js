@@ -9,3 +9,20 @@ export function bridgeHistory(base,revision,message) {
   if(!base || revision!==message.historyRevision-1)return null;
   const map=new Map(base.map(m=>[m.id,m]));map.set(message.id,message);return [...map.values()].sort((a,b)=>a.order-b.order);
 }
+
+// Stop must release reply preparation even if a storage read or tokenizer hangs.
+export async function waitForPreparation(promise, controller, timeoutMs = 120000) {
+  let timer, abort;
+  const stopped = new Promise((_, reject) => {
+    abort = () => reject(Object.assign(new Error(controller.signal.reason === 'timeout'
+      ? 'Reply preparation stopped responding (120 s). Try Retry reply.' : 'Stopped.'), { name:'AbortError' }));
+    if (controller.signal.aborted) abort();
+    else {
+      controller.signal.addEventListener('abort', abort, { once:true });
+      timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+      timer?.unref?.();
+    }
+  });
+  try { return await Promise.race([promise, stopped]); }
+  finally { clearTimeout(timer); controller.signal.removeEventListener('abort', abort); }
+}

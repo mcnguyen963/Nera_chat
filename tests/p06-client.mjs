@@ -23,16 +23,16 @@ async function client({ streaming, reason, content = 'Narration.' }) {
 
 for (const streaming of [false, true]) {
   test(`P0.6 ${streaming ? 'streamed' : 'non-streamed'} finish reasons preserve strict callers and opt in to truncated narration`, async () => {
-    for (const reason of ['length', 'MAX_TOKENS']) {
+    for (const reason of ['length', 'MAX_TOKENS', 'MAX_OUTPUT_TOKENS']) {
       const h = await client({ streaming, reason });
       await assert.rejects(h.call(), /output limit/);
       assert.equal((await h.call({ allowTruncated: true })).finishReason, 'length');
     }
-    for (const reason of ['STOP', 'end_turn', 'eos', null]) {
+    for (const reason of ['STOP', 'end_turn', 'eos', 'stop_sequence', 'future_reason', null]) {
       const h = await client({ streaming, reason });
       assert.equal((await h.call()).finishReason, reason?.toLowerCase() ?? null);
     }
-    for (const reason of ['content_filter', 'error', 'tool_calls', 'function_call']) {
+    for (const reason of ['content_filter', 'error', 'tool_calls', 'function_call', 'safety', 'recitation', 'blocklist', 'prohibited_content']) {
       const h = await client({ streaming, reason });
       await assert.rejects(h.call({ allowTruncated: true }), new RegExp(reason));
     }

@@ -182,7 +182,7 @@ function cacheSettings(settings) {
   }
 }
 
-export async function loadSettings() {
+export async function loadSettings({ requireServer = false } = {}) {
   const cached = readCachedSettings();
   const ref = userSettingsRef();
   let snap;
@@ -190,9 +190,10 @@ export async function loadSettings() {
     snap = await getDocFromServer(ref);
   } catch (error) {
     state.settingsSource=cached ? 'cache' : 'defaults';
-    if (cached) return withLocal(hydrateProfiles(await mergeDefaults(cached)));
+    if (cached && !requireServer) return withLocal(hydrateProfiles(await mergeDefaults(cached)));
     throw error;
   }
+  if (requireServer && !snap.exists()) throw new Error('Settings did not load from the server; reload before saving.');
   state.settingsSource='server';
   if (snap.exists()) {
     const settings = hydrateProfiles(await mergeDefaults(snap.data()));
@@ -242,13 +243,20 @@ export function useLocalSettings(settings) {
 }
 
 export async function saveSettings(settings) {
-  if (state.settingsSource!=='server') throw new Error('Settings did not load from the server; reload before saving.');
   if (state.settingsSaving) throw new Error("A settings save is already in progress. Please try again.");
-  const snapshot = structuredClone(settings);
-  normalizeProfiles(snapshot);
-  mirrorToActiveProfile(snapshot);
   state.settingsSaving = true;
   try {
+    if (state.settingsSource!=='server') {
+      let recovered;
+      try { recovered=await loadSettings({requireServer:true}); }
+      catch { throw new Error('Settings did not load from the server; reload before saving.'); }
+      state.settings=recovered;
+      document.dispatchEvent(new CustomEvent('settings-changed'));
+      throw Object.assign(new Error('Your saved settings were loaded from the server. Review them and save again.'),{code:'settings-reloaded'});
+    }
+    const snapshot = structuredClone(settings);
+    normalizeProfiles(snapshot);
+    mirrorToActiveProfile(snapshot);
     await setDoc(userSettingsRef(), storedSettings(snapshot));
     try {localStorage.removeItem(localKey());} catch {}
     state.settings = snapshot;

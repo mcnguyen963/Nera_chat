@@ -40,11 +40,11 @@ function responseError(data) {
   return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
 }
 
-const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call']);
+const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call', 'safety', 'recitation', 'blocklist', 'prohibited_content']);
 
 function finishKind(reason) {
   const kind = String(reason ?? '').toLowerCase();
-  return kind === 'length' || kind === 'max_tokens' ? 'length' : kind;
+  return kind === 'length' || kind === 'max_tokens' || kind === 'max_output_tokens' ? 'length' : kind;
 }
 
 function emptyReplyError(reason) {

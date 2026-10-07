@@ -380,7 +380,12 @@ async function handleSaveSettings() {
     original = structuredClone(draft);
     feedback("Saved ✓");
     refreshContextIndicator();
-  } catch (error) { feedback("Save failed: " + error.message, true); }
+  } catch (error) {
+    if (error.code==='settings-reloaded') {
+      original=structuredClone(state.settings); draft=structuredClone(state.settings); renderAll();
+    }
+    feedback("Save failed: " + error.message, true);
+  }
   finally { saving = false; el.save.disabled = false; }
 }
 function feedback(message, error = false) {

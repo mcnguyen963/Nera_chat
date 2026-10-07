@@ -44,6 +44,7 @@ jobs:
           cp -R css js resources _site/
           cp "system prompts/"*.md "_site/system prompts/"
           rm -f "_site/system prompts/README.md"
+          rm -f _site/js/firebase-config.example.js
           find _site \( -name '*:Zone.Identifier' -o -name '.DS_Store' \) -type f -delete
           test -s _site/js/firebase-config.js
           test -s _site/resources/pets/manifest.json

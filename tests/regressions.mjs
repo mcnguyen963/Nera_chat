@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-async function harness({ legacyNarratorHashes = null } = {}) {
+async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null } = {}) {
   const elements = new Map();
   class Element {
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
@@ -81,7 +81,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value),removeItem:key=>localCache.delete(key) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, clearTimeout() {}, confirm: () => calls.confirm,
+    setTimeout: timers?.setTimeout ?? (() => {}), clearTimeout: timers?.clearTimeout ?? (() => {}), confirm: () => calls.confirm,
     fetch: async (_url, options) => {
       if (_url instanceof URL && _url.protocol === 'file:') {
         if (legacyNarratorHashes && _url.pathname.endsWith('/legacy-prompt-default-hashes.md')) return { ok:true, text:async () => legacyNarratorHashes.split(/\s+/).filter(Boolean).map(hash=>`narratorSystemPrompt ${hash}`).join("\n") };
@@ -116,7 +116,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
       saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async () => {}, listBackups: async () => [], removeDeletedLines: async () => 'backup', importLore: async () => 'backup', replaceLines: async () => 'backup',
     },
-    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop() {}, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
+    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop() {}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
     'ui/pet-view.js': {
       initPetView() {}, startPetTurn() {}, finishPetTurn() {},
       refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
@@ -139,6 +139,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
     },
   };
+  if (chatCache) stubs['chat-cache.js'] = chatCache;
   const cache = new Map();
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
@@ -1073,4 +1074,47 @@ test('Final twenty-turn replay keeps narration plus maintenance at two calls and
 });
 test('U7 cached or default settings cannot overwrite server preferences before an authoritative load',async()=>{
  const h=await harness();for(const source of ['cache','defaults']){h.state.settingsSource=source;await assert.rejects(h.settings.saveSettings(h.state.settings),/reload before saving/);}assert.equal(h.calls.writes.length,0);h.state.settingsSource='server';await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
+});
+
+test('main adaptation: failed settings startup recovers server values for review before any write',async()=>{
+ const h=await harness();h.state.settingsSource='cache';
+ h.calls.settingsDoc={...h.settings.DEFAULT_SETTINGS,modelId:'saved-model',apiKey:'saved-key'};
+ await assert.rejects(h.settings.saveSettings(h.state.settings),error=>error.code==='settings-reloaded');
+ assert.equal(h.calls.writes.length,0);assert.equal(h.state.settingsSource,'server');
+ assert.equal(h.state.settings.modelId,'saved-model');assert.equal(h.state.settings.apiKey,'saved-key');
+ await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
+ assert.equal(h.calls.writes[0].profiles[0].modelId,'saved-model');
+});
+test('main adaptation: settings popup replaces fallback fields with recovered server settings',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),view=await h.use('ui/settings-view.js');chat.initChatView();view.initSettingsView();view.openSettingsPopup(h.el('opener'));
+ h.state.settingsSource='defaults';h.calls.settingsDoc={...h.settings.DEFAULT_SETTINGS,modelId:'server-model',apiKey:'server-key'};
+ await h.fire('btn-save-settings');assert.equal(h.calls.writes.length,0);
+ assert.equal(h.el('set-model').value,'server-model');assert.equal(h.el('set-apikey').value,'server-key');
+ await h.fire('btn-save-settings');assert.equal(h.calls.writes.length,1);
+});
+test('main adaptation: mobile editor grows with text and releases the fixed bubble height',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');const create=h.document.createElement;
+ h.document.createElement=tag=>{const node=create(tag);if(tag==='textarea'){node.scrollHeight=900;node.clientHeight=40;}return node;};
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Long message'}],hasEarlier:false});
+ const bubble=h.el('message-list').children.find(node=>node.dataset.messageId==='u');
+ await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Edit').click();
+ const editor=bubble.querySelector('.msg-editor');assert.equal(editor.style.height,'900px');assert.equal(bubble.style.height,'');
+ editor.scrollHeight=1100;await editor.dispatchEvent({type:'input'});assert.equal(editor.style.height,'1100px');
+ await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Cancel').click();
+ assert.equal(h.el('message-list').children.find(node=>node.dataset.messageId==='u').querySelector('.msg-editor'),null);
+});
+test('main adaptation: logout waits for started cache writes and prevents new scheduled writes',async()=>{
+ const writes=[],scheduled=new Map();let finishWrite,sequence=0;
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:(uid,sid)=>{writes.push([uid,sid]);return new Promise(resolve=>{finishWrite=resolve;});},deleteChatCache:async()=>{}},timers:{setTimeout:(fn,ms)=>{const id=++sequence;scheduled.set(id,{fn,ms});return id;},clearTimeout:id=>scheduled.delete(id)}});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('one');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'one',exists:()=>true,data:()=>({title:'One'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'}],hasEarlier:false});
+ chat.setSession('two');assert.equal(writes.length,1);
+ let ready=false;const prepared=chat.prepareChatLogout().then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,false);
+ finishWrite();await prepared;assert.equal(ready,true);
+ await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'two',exists:()=>true,data:()=>({title:'Two'})});h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+ for(const {fn,ms} of [...scheduled.values()])if(ms===250)fn();
+ assert.equal(writes.length,1);assert.equal([...scheduled.values()].some(timer=>timer.ms===250),false);
 });
