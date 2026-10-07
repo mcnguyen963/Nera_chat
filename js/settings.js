@@ -53,7 +53,7 @@ export const DEFAULT_SETTINGS = {
   autoSummarizationEnabled: false,
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
-  summarizerMaxTokens: 100000,
+  summarizerMaxTokens: 20000,
   summarizerChunkTokens: 250000,
   narratorSystemPrompt: prompts.narrator,
   summarizerSystemPrompt: prompts.summarizer,
@@ -68,6 +68,7 @@ export async function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
+  if (Number(merged.summarizerMaxTokens) > 20000) merged.summarizerMaxTokens = 20000;
   for (const key of PROMPT_KEYS) {
     const saved=data?.[key];
     if (typeof saved!=='string' || saved===DEFAULT_SETTINGS[key]) {merged[key]=DEFAULT_SETTINGS[key];continue;}
