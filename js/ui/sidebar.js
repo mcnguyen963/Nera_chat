@@ -1,7 +1,7 @@
 import { state } from "../state.js";
 import { subscribeSessions, createSession, renameSession, deleteSession, duplicateSession } from "../sessions.js";
 import { logout, currentUserInfo } from "../auth.js";
-import { setSession, syncActiveSession, forgetChatSession } from "./chat-view.js";
+import { setSession, syncActiveSession, forgetChatSession, prepareChatLogout } from "./chat-view.js";
 
 export function initSidebar() {
   const listEl = document.getElementById("session-list");
@@ -23,7 +23,7 @@ export function initSidebar() {
     document.dispatchEvent(new CustomEvent("sidebar:close"));
   });
 
-  logoutBtn.addEventListener("click", () => logout());
+  logoutBtn.addEventListener("click", async () => { await prepareChatLogout(); await logout(); });
 
   // Select a freshly imported session.
   document.addEventListener("session-imported", (e) => setSession(e.detail));

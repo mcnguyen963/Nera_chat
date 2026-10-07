@@ -122,3 +122,20 @@ test('U8 IndexedDB writes initialize metadata once, retain three recent sessions
  const request=read=>{const r={};queueMicrotask(()=>{r.result=structuredClone(read());r.onsuccess?.();});return r;};
  const u=appHarness({globals:{indexedDB:{open:()=>{const r={result:db};queueMicrotask(()=>r.onsuccess?.());return r;}}}}),cache=await u('chat-cache.js');for(const sid of ['a','b','c','d','d'])await cache.saveChatCache('u',sid,{sid});assert.equal(bulkReads,1);assert.deepEqual(documents.get('meta:u').order,['d','c','b']);assert.equal(documents.has('u:a'),false);await cache.saveChatCache('other','x',{});await cache.clearChatCache('u');assert.ok(![...documents.keys()].some(k=>k.startsWith('u:') || k==='meta:u'));assert.ok(documents.has('other:x'));
 });
+
+test('main adaptation: stopping preparation releases a hung operation and ignores its late result',async()=>{
+ const w=await use()('ui/busy-token.js'),controller=new AbortController();let resolveLate,continued=false;
+ const pending=w.waitForPreparation(new Promise(resolve=>{resolveLate=resolve;}),controller).then(()=>{continued=true;});
+ controller.abort('user');await assert.rejects(pending,/Stopped/);
+ resolveLate('Old context');await Promise.resolve();assert.equal(continued,false);
+});
+test('main adaptation: preparation times out after 120 seconds without waiting for a hung read',async()=>{
+ let fire,delay,cleared=0;const u=appHarness({globals:{setTimeout:(fn,ms)=>{fire=fn;delay=ms;return 1;},clearTimeout:()=>{cleared++;}}}),w=await u('ui/busy-token.js'),controller=new AbortController();
+ const pending=w.waitForPreparation(new Promise(()=>{}),controller);assert.equal(delay,120000);fire();
+ await assert.rejects(pending,/preparation stopped responding/);assert.equal(controller.signal.reason,'timeout');assert.equal(cleared,1);
+});
+test('main adaptation: failed chat cache cleanup still clears account settings and permits sign-out',async()=>{
+ const removed=[],errors=[];const u=appHarness({stubs:{'chat-cache.js':{clearChatCache:async()=>{throw Error('Cache unavailable');}}},globals:{console:{error:e=>errors.push(e)},localStorage:{'roleplay-settings:u':'saved','nera.settings.local.u':'local','nera.memory.showScene':'1',removeItem:key=>removed.push(key)}}});
+ await(await u('device-caches.js')).clearAccountCaches('u');
+ assert.deepEqual(removed,['roleplay-settings:u','nera.settings.local.u']);assert.equal(errors.length,1);
+});

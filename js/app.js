@@ -7,7 +7,7 @@ import { initAuth, login, register, resetPassword, changePassword, currentUserIn
 import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
-import { initChatView, setSession } from "./ui/chat-view.js";
+import { initChatView, setSession, prepareChatLogout } from "./ui/chat-view.js";
 import { initSettingsView, openSettingsPopup } from "./ui/settings-view.js";
 
 const el = {
@@ -94,6 +94,7 @@ initAuth(async(user)=>{
   // Tear down account-scoped listeners and in-flight work on auth transitions.
   if (appInitialized) {
     stopAll();
+    await prepareChatLogout();
     if(previous && previous!==user?.uid)await clearAccountCaches(previous);
     window.location.reload();
     return;
