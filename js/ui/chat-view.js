@@ -1,7 +1,7 @@
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
-import { extractScene, inspectSceneOutput, formatSceneForDisplay, latestScene, isPureOoc, MAX_SCENE_LENGTH, carryScene, validateSceneValues } from '../scene.js';
-import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn } from '../turn-review.js';
+import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene } from '../scene.js';
+import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns } from '../turns.js';
 import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
@@ -14,7 +14,7 @@ import * as messagesApi from "../messages.js";
 import { buildContextForRequest, computeContextUsage, normalizeAdDirective } from "../context-builder.js";
 import { chatCompletion } from "../llm-client.js";
 import { runSummarization, shouldAutoSummarize } from "../summarizer.js";
-import { extractPlan, extractPlanThread, stripPlan } from "../plan-parser.js";
+import { stripPlan } from "../plan-parser.js";
 import { updateSession, duplicateSession, getSessionFromServer } from "../sessions.js";
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
@@ -31,6 +31,8 @@ let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
 let streamState = null;  // live streaming UI handle
 let busy = false;
+let wasNearBottom = true;
+let lastProviderUsage = null;
 let indicatorRun = 0;
 let editingState = null; // { id, ta } while a message is being edited inline
 const PAGE_SIZE = 100;
@@ -54,7 +56,7 @@ let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = fals
 const memoryStories = new Map();
 let lastMemoryReport = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session) return { session, settings: state.settings, messages: historyMessages ?? lastMessages, entries: loreEntries, busy, report: lastMemoryReport };
+  if (sid === state.sessionId && session) return { session, settings: state.settings, messages: historyMessages ?? lastMessages, entries: loreEntries, busy, report: lastMemoryReport, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
 export async function prepareMemorySnapshot() {
@@ -106,7 +108,7 @@ async function reconcileStory() {
 function updateMemoryChip() {
   const chip = document.getElementById('btn-memory'); if (!chip) return;
   const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
-  const turn = computeTurns(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
+  const turn = turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
   const running = memoryUpdater.isRunning(session?.id);
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
   chip.classList.toggle('running', running); chip.classList.toggle('paused', session?.memoryState?.paused === true);
@@ -165,6 +167,19 @@ export function initChatView() {
     } else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: d.failureStreak >= 3 ? 'Memory updates paused after 3 failures.' : "Memory update didn't work — I'll try again next turn.", action: d.failureStreak >= 3 ? 'Open settings' : null, event: 'memory-settings' } }));
   });
   el.list = document.getElementById("message-list");
+  let listHeight = el.list.clientHeight;
+  el.list.addEventListener("scroll", () => {
+    if (el.list.clientHeight === listHeight) wasNearBottom = isNearBottom();
+  }, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      if (el.list.clientHeight === listHeight) return;
+      listHeight = el.list.clientHeight;
+      if (wasNearBottom) scrollToEnd();
+      else clampListScroll();
+    }).observe(el.list);
+  }
+
   el.input = document.getElementById("chat-input");
   el.composer = document.getElementById("composer");
   el.sendBtn = document.getElementById("btn-send");
@@ -356,7 +371,7 @@ export function setSession(sessionId) {
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   rememberMemoryStory();
-  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null;
+  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastProviderUsage = null;
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -611,6 +626,13 @@ function invalidateRenderedMessages() {
 }
 
 function renderMessages(msgs) {
+  const savedStream = streamState?.savedId && msgs.some(m => m.id === streamState.savedId) ? streamState : null;
+  const position = savedStream ? captureListPosition() : null;
+  const renderHistory=historyMessages ?? msgs;
+  const timeline=sceneTimeline(renderHistory,{startingScene:session?.memory?.startingScene});
+  const lastUserOrder=lastUserOrderOf(renderHistory);
+  const latestAssistant=renderHistory.filter(m => m.role==='assistant').at(-1)?.id;
+  const latestStory = msgs.filter(m => m.role !== 'summary').at(-1);
   if (!isNearBottom() && msgs.length > lastMessages.length) {
     visibleCount += msgs.length - lastMessages.length;
   }
@@ -638,11 +660,15 @@ function renderMessages(msgs) {
   for (let i = visible.length - 1; i >= 0; i--) {
     const m = visible[i];
     let entry = renderedMessages.get(m.id);
-    if (!entry || !entry.message || !sameRenderedMessage(entry.message, m)) {
-      const node = renderMessage(m);
+    const turnLabel=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) : null;
+    const sceneState=timeline.get(m.id),renderedScene=sceneState?.effective;
+    const pending=m.id===latestAssistant && !isAcceptedTurn(m,{lastUserOrder,sceneOn:session?.memory?.scene === true});
+    const retry = !busy && m.role === 'user' && m.id === latestStory?.id;
+    if (!entry || !entry.message || entry.retry !== retry || entry.turnLabel!==turnLabel || entry.renderedScene!==renderedScene || entry.pending!==pending || !sameRenderedMessage(entry.message, m)) {
+      const node = renderMessage(m, retry, sceneState, pending);
       node.dataset.messageId = m.id;
       entry?.node.remove();
-      entry = { node, message: m };
+      entry = { node, message: m, retry, turnLabel, renderedScene, pending };
       renderedMessages.set(m.id, entry);
     }
     if (entry.node.parentNode !== el.list || entry.node.nextSibling !== anchor) {
@@ -659,14 +685,26 @@ function renderMessages(msgs) {
     el.earlierBtn.remove();
   }
   updateWelcome();
-  if (sticky) scrollToEnd();
+  if (savedStream && renderedMessages.has(savedStream.savedId)) {
+    if (savedStream.saveCompleted) {
+      if (savedStream.frame) cancelAnimationFrame(savedStream.frame);
+      savedStream.wrap.remove(); streamState = null;
+    }
+    restoreListPosition(position, savedStream.saveCompleted ? savedStream.savedId : undefined);
+    refreshPetPlacement();
+  } else if (sticky) scrollToEnd();
   queueCacheSave();
 }
 
-function sameRenderedMessage(a, b) {
-  return a.role === b.role && a.content === b.content && a.thinking === b.thinking &&
-    a.scene === b.scene && Boolean(a.editedAt) === Boolean(b.editedAt);
+export function sameRenderedMessage(a,b) {
+  return a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
+    (a.revision ?? 0)===(b.revision ?? 0) && a.acceptance===b.acceptance &&
+    Boolean(a.editedAt)===Boolean(b.editedAt) && Boolean(a.ooc)===Boolean(b.ooc) && Boolean(a.truncated)===Boolean(b.truncated) &&
+    JSON.stringify(a.sceneMeta ?? null)===JSON.stringify(b.sceneMeta ?? null) && JSON.stringify(a.sceneCandidate ?? null)===JSON.stringify(b.sceneCandidate ?? null) &&
+    (a.reviewWarnings ?? []).join('\n')===(b.reviewWarnings ?? []).join('\n');
 }
+let turnsMemo={src:null,value:null};
+export function turnsFor(list) { if (turnsMemo.src!==list) turnsMemo={src:list,value:computeTurns(list)}; return turnsMemo.value; }
 
 function updateWelcome() {
   const welcome = document.getElementById("welcome");
@@ -682,7 +720,7 @@ function updateWelcome() {
   refreshPetPlacement();
 }
 
-function renderMessage(m) {
+function renderMessage(m, retry = false, sceneState = null, pending = false) {
   const wrap = document.createElement("div");
   wrap.className = "msg " + m.role;
 
@@ -691,8 +729,9 @@ function renderMessage(m) {
   const label = document.createElement("span");
   label.textContent =
     m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
-  if (m.role !== 'summary' && anyMemory(normalizeMemory(session?.memory))) label.textContent += ' · T'+(computeTurns(historyMessages ?? lastMessages).turnById.get(m.id) ?? '?');
+  if (m.role !== 'summary' && anyMemory(normalizeMemory(session?.memory))) label.textContent += ' · T'+(turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) ?? '?');
   if (m.editedAt) label.textContent += " (edited)";
+  if (m.truncated) label.textContent += " · cut off";
   meta.appendChild(label);
 
   const actions = document.createElement("span");
@@ -724,6 +763,7 @@ function renderMessage(m) {
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
+    if ((isFolded(m) || isActiveSummary(m)) && !confirm('Deleting this will invalidate the summary. The next summary must rebuild it from history. Continue?')) return;
     if (!confirm("Delete this message permanently?")) return;
     const result = await messagesApi.deleteMessage(state.sessionId, m.id, m.order);
     if (result.summaryReset) clearLocalSummary();
@@ -732,6 +772,7 @@ function renderMessage(m) {
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
     await reconcileDeletedMemory();
   }));
+  if (retry) actions.appendChild(actionBtn('Retry reply', 'retry', () => retryReply(m)));
   if (m.role === "assistant") {
     actions.appendChild(actionBtn("Regenerate", "regen", () => {
       if (busy) return;
@@ -749,7 +790,7 @@ function renderMessage(m) {
   content.className = "msg-content";
   content.textContent = m.content;
   wrap.appendChild(content);
-  if (m.role === 'assistant' && !isAcceptedTurn(m,normalizeMemory(session?.memory).protagonist)) {
+  if (pending) {
     const review = document.createElement('div');review.className = 'muted';
     review.textContent = 'Needs review: '+(m.reviewWarnings?.length ? m.reviewWarnings : lintPlayerAgency(m.content,normalizeMemory(session?.memory).protagonist)).join(' ')+' Memory and summaries wait for acceptance.';
     const accept = actionBtn('Accept reply',async () => {
@@ -759,19 +800,21 @@ function renderMessage(m) {
         await reconcileStory();renderMessages(historyMessages);await updateIndicator();
       } catch (error) { showTransientError(error.message); }
     });
+    if (m.sceneCandidate?.scene) { const candidate=document.createElement('p'); candidate.textContent=m.sceneCandidate.scene;review.append(candidate); }
     review.append(accept,actionBtn('Regenerate',() => { if (!busy) void regenerateMessage(m); }));wrap.append(review);
   }
 
-  if (m.role === 'assistant' && m.scene && normalizeMemory(session?.memory).scene && localStorage.getItem('nera.memory.showScene') !== '0') {
-    const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = formatSceneForDisplay(m.scene); chip.title = 'Edit scene line';
-    if (m.sceneMeta?.kind === 'carried') chip.textContent += ' (carried forward · stale)';
+  if (m.role==='assistant' && m.reviewWarnings?.length) { const note=document.createElement('p');note.className='muted';note.textContent='Note: '+m.reviewWarnings.join(' ');wrap.append(note); }
+  if (m.role === 'assistant' && !m.ooc && normalizeMemory(session?.memory).scene && localStorage.getItem('nera.memory.showScene') !== '0') {
+    const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = sceneState?.effective ? formatSceneForDisplay(sceneState.effective) : '+ Add scene'; chip.title = 'Edit scene line';
+    if (!sceneState?.own && sceneState?.effective) chip.textContent += ' (carried forward · stale)';
     if (m.sceneMeta?.kind === 'inferred') chip.textContent += ' (inferred)';
     chip.addEventListener('click', () => {
-      const row = document.createElement('div'), field = document.createElement('input'); field.value = m.scene; field.maxLength = MAX_SCENE_LENGTH;
+      const row = document.createElement('div'), field = document.createElement('input'); field.value = sceneState?.effective ?? ''; field.maxLength = MAX_SCENE_LENGTH;
       const save = actionBtn('Save', async () => {
         if (busy) return; save.disabled = true;
         try {
-          const raw = field.value.trim() || null; const result = await messagesApi.updateMessageScene(state.sessionId,m.id,m.order,raw);
+          const raw = field.value.trim() || null; const result = await messagesApi.updateMessageScene(state.sessionId,m.id,m.order,raw,sceneState);
           if (result.summaryReset) clearLocalSummary();
           session = { ...session,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations }; historyRevision = result.historyRevision;
           lastMessages = lastMessages.map(x => x.id === m.id ? result.replacement : x);
@@ -809,6 +852,11 @@ function buildThinking(text, streaming) {
   return det;
 }
 
+function isFolded(m) {
+  return m.role !== 'summary' && session?.activeSummaryMessageId && m.order <= (session.breakpointOrder ?? 0);
+}
+const isActiveSummary = m => m.role === 'summary' && m.id === session?.activeSummaryMessageId;
+
 function startEdit(m, wrap) {
   if (busy) return;
   const contentEl = wrap.querySelector(".msg-content");
@@ -840,6 +888,7 @@ function startEdit(m, wrap) {
   };
   const save = actionBtn("Save", "small", async () => {
     const text = ta.value;
+    if ((isFolded(m) || isActiveSummary(m)) && !confirm(isActiveSummary(m) ? 'Saving an edited summary currently deactivates it. Continue?' : 'Saving this edit currently invalidates the summary. Continue?')) return;
     save.disabled = true;
     cancel.disabled = true;
     try {
@@ -958,6 +1007,7 @@ export async function updateIndicator() {
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
   lastMemoryReport = usage.report;
+  el.contextLabel.title = usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '';
   const reserved = state.settings.maxResponseTokens;
   const allocated = usage.usedTokens + reserved;
   const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
@@ -967,9 +1017,9 @@ export async function updateIndicator() {
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
     `${usage.usedTokens.toLocaleString()} input + ${reserved.toLocaleString()} output / ${usage.max.toLocaleString()} tokens` +
-    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} out of window` : "") +
+    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} ${state.settings.autoSummarizationEnabled === true ? "out of window" : "turns not sent"}` : "") +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "") +
-    (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(computeTurns(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
+    (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
   updateMemoryChip();
 }
 export const refreshContextIndicator = updateIndicator;
@@ -1002,11 +1052,25 @@ async function regenerateMessage(message) {
   }
 }
 
+function setComposerText(text) {
+  el.input.value = text; el.input.style.height = 'auto';
+  el.input.style.height = el.input.scrollHeight + 'px'; el.input.scrollTop = el.input.scrollHeight;
+}
+async function retryReply(message) {
+  if (busy || editingState || !session) return;
+  const sid = state.sessionId;
+  if (loreWritesPending()) await waitForLoreWrites();
+  if (busy || !session || sid !== state.sessionId) return;
+  await runAssistantTurn({ expectLatestUserId:message.id });
+}
+
 async function handleSend(e) {
   e.preventDefault();
   if (busy || !session || editingState) return;
   const requestedSessionId = state.sessionId;
-  const text = el.input.value.trim();
+  const draft = el.input.value;
+  let saved = false;
+  const text = draft.trim();
   if (!text) return;
   const settings = structuredClone(state.settings);
   if (!settings?.modelId || !settings?.apiKey) {
@@ -1021,6 +1085,7 @@ async function handleSend(e) {
   try {
     await reconcileStory();
     const userMsg = await messagesApi.addMessage(session.id, { role: "user", content: text });
+    saved = true;
     // Bridge until the snapshot arrives so the context build includes the user turn
     // without re-reading the collection from Firestore.
     if (!lastMessages.some((m) => m.id === userMsg.id)) {
@@ -1036,6 +1101,7 @@ async function handleSend(e) {
     // potentially miss the just-committed user message.
     await runAssistantTurn({ messages: historyMessages });
   } catch (err) {
+    if (!saved && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
     showTransientError(err.message || String(err));
   } finally {
     setBusy(false);
@@ -1049,6 +1115,10 @@ async function runAssistantTurn(opts = {}) {
   let maintenanceUsed = false;
   try {
     await reconcileStory();
+    if (opts.expectLatestUserId) {
+      const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
+      if (latest?.role !== 'user' || latest.id !== opts.expectLatestUserId) throw new Error('The latest story turn changed. Review it before retrying.');
+    }
     let sourceMessages = structuredClone(historyMessages);
     let sourceSession = structuredClone(session);
     let built = await buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) });
@@ -1057,54 +1127,55 @@ async function runAssistantTurn(opts = {}) {
       const ui = streamSummaryUI('Summarizing uncovered history before narration…');
       try {
         const result = await runSummarization(sourceSession,settings,{ messages:sourceMessages,loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta,validateSource:async expected => { const fresh = await getSessionFromServer(sid); assertSource(fresh,expected); } });
+        maintenanceUsed=!result.skipped;
         applySummaryResult(result);
       } finally { ui.done(); }
       await reconcileStory(); sourceMessages = structuredClone(historyMessages); sourceSession = structuredClone(session);
       built = await buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) });
     }
     startStreamUI();
-    const { content,thinking } = await chatCompletion({ settings,messages:built.apiMessages,onDelta:t => { updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
-    streamState?.wrap.remove(); streamState = null; refreshPetPlacement();
+    const { content,thinking,finishReason,usage } = await chatCompletion({ settings,messages:built.apiMessages,allowTruncated:true,onDelta:t => { updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
+    const truncated = finishReason === 'length';
+    lastProviderUsage = usage?.prompt_tokens != null ? { sessionId:sid,promptTokens:usage.prompt_tokens,estimate:built.usedTokens } : null;
     const fresh = await getSessionFromServer(sid);
     if (!fresh) throw new Error('Story no longer exists.');
-    let planThread = extractPlanThread(content); const clean = stripPlan(content);
+    const out=readSceneOutput(content),clean=out.clean;
+    const mem=normalizeMemory(sourceSession.memory),sceneEnabled=mem.scene;
+    let planThread=sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
+    if (truncated && !clean) throw new Error('The output limit left no narrative reply. Raise Max response tokens or lower the reasoning budget.');
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
-    const ooc = isPureOoc(normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? ''));
-    const mem = normalizeMemory(sourceSession.memory),sceneEnabled = mem.scene;
-    const sceneOutput = sceneEnabled ? inspectSceneOutput(content) : { scene:extractScene(content),warning:null };
-    const userText = normalizeAdDirective(sourceMessages.filter(m => m.role === 'user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
-    const prior = latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
-    const reviewWarnings = sceneEnabled && !ooc ? [...lintPlayerAgency(clean,mem.protagonist),...lintUnestablishedTime(clean,{ prior:prior.scene,userText })] : [];
-    const pending = reviewWarnings.length > 0;
-    let acceptedScene = ooc ? { scene:null,sceneMeta:null } : sceneEnabled
-      ? sceneOutput.scene ? validateSceneValues(sceneOutput.scene,{ narration:clean,userText,prior:prior.scene }) : carryScene(prior)
-      : { scene:sceneOutput.scene,sceneMeta:null };
-    let sceneWarning = sceneEnabled && !ooc ? sceneOutput.warning : null;
-    if (acceptedScene.warnings?.length) sceneWarning = [sceneWarning,...acceptedScene.warnings].filter(Boolean).join(' ');
-    if (sceneEnabled && !ooc && !pending && !sceneOutput.scene && mem.sceneFallback && !maintenanceUsed && !memoryUpdater.isRunning(sid)) {
-      maintenanceUsed = true;
-      try {
-        acceptedScene = await recoverScene(settings,{ narration:clean,userText,prior,
-          names:loreEntries.filter(e => e.book === 'characters').map(e => e.name),plan:sourceSession.longTermPlan,
-          model:mem.sceneFallbackModel });
-        planThread ||= acceptedScene.planThread;
-        sceneWarning = 'Missing scene tag recovered as inferred state.'+(acceptedScene.warnings.length ? ' '+acceptedScene.warnings.join(' ') : '');
-      } catch (error) { sceneWarning += ' Scene recovery failed; prior state retained. '+error.message; }
-    } else if (sceneEnabled && !ooc && !pending && !sceneOutput.scene && mem.sceneFallback && (maintenanceUsed || memoryUpdater.isRunning(sid))) {
-      sceneWarning += ' Scene recovery deferred because maintenance is already using the extra call.';
+    const userText=normalizeAdDirective(sourceMessages.filter(m => m.role==='user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
+    const inputKind=classifyUserInput(userText),ooc=inputKind==='ooc' || inputKind==='question' && !out.scene;
+    const prior=latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
+    let acceptedScene={scene:null,sceneMeta:null},sceneWarning=null;
+    if (sceneEnabled && !ooc) {
+      acceptedScene=carryScene(prior);
+      if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene});
+      else if (!truncated && mem.sceneFallback && !maintenanceUsed && !memoryUpdater.isRunning(sid)) {
+        maintenanceUsed=true;
+        try {
+          const recovered=await recoverScene(settings,{narration:clean,userText,prior,
+            names:loreEntries.filter(e => e.book==='characters').map(e => e.name),protagonist:mem.protagonist,plan:sourceSession.longTermPlan,model:mem.sceneFallbackModel});
+          if (recovered) { acceptedScene=recovered; planThread ||= sourceSession.longTermPlan?.trim() ? recovered.planThread : null; }
+        } catch (error) { sceneWarning=String(error?.message ?? 'Scene recovery failed.'); }
+      }
     }
-    const selectedScene = pending && !ooc ? carryScene(prior) : acceptedScene;
-    const message = { role:'assistant',content:clean,thinking,planThread,planBefore:sourceSession.longTermPlan ?? '',
-      scene:selectedScene.scene,sceneMeta:selectedScene.sceneMeta,ooc,
-      ...(sceneEnabled ? { acceptance:pending ? 'pending' : 'accepted',reviewWarnings,
-        sceneCandidate:pending && sceneOutput.scene ? { scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta } : null } : {}) };
+    const reviewWarnings=sceneEnabled && !ooc && !truncated ? [
+      ...lintPlayerAgency(clean,mem.protagonist),
+      ...(!prior.scene?.time && !parseScene(acceptedScene.scene).time ? lintUnestablishedTime(clean,{prior:prior.scene,userText}) : []),
+      ...(acceptedScene.warnings ?? []),...(out.count > 1 ? ['Several scene tags; the last one was used.'] : []),
+      ...(sceneWarning ? [sceneWarning] : [])] : [];
+    const message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
+      scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
+      ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
     updatePetPhase('saving',petTurn);
     let saved;
+    if (streamState) streamState.savedId = opts.overwriteId ?? messagesApi.newMessageId();
     if (opts.overwriteId) {
       const result = await messagesApi.overwriteMessage(sid,opts.overwriteId,message,opts.upToOrder);
       saved = result.replacement; session = { ...fresh,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations,memoryState:{ ...fresh.memoryState,paused:true,needsRebuild:true } };
     } else {
-      saved = await messagesApi.addMessage(sid,message);
+      saved = await messagesApi.addMessage(sid,message,{ id:streamState?.savedId });
       session = { ...fresh,historyRevision:saved.historyRevision };
     }
     // Save completed narration even if inputs changed during generation. Reload
@@ -1112,8 +1183,10 @@ async function runAssistantTurn(opts = {}) {
     const historyChanged = session.historyRevision !== (sourceSession.historyRevision ?? 0) + 1;
     historyMessages = historyChanged ? null : mergeMessages(sourceMessages,[saved]);
     historyRevision = historyChanged ? null : session.historyRevision;
+    if (streamState) { streamState.savedId = saved.id; streamState.saveCompleted = true; }
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
-    if (sceneWarning) showTransientError('Reply saved. '+sceneWarning);
+    if (truncated) showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');
+    else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
     lastMemoryReport = built.report;
     finishPetTurn('ready',petTurn);
     setBusy(false);
@@ -1124,7 +1197,7 @@ async function runAssistantTurn(opts = {}) {
       try { const result = await runSummarization(structuredClone(session),settings,{ messages:structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta }); applySummaryResult(result); } finally { ui.done(); }
     }
   } catch (err) {
-    finishPetTurn('blocked',petTurn); streamState?.wrap.remove(); streamState = null; refreshPetPlacement(); showTransientError(err.message || String(err));
+    finishPetTurn('blocked',petTurn); streamState?.wrap.remove(); streamState = null; refreshPetPlacement(); clampListScroll(); showTransientError(err.message || String(err));
   } finally { setBusy(false); }
 }
 
@@ -1165,7 +1238,7 @@ function streamSummaryUI(label) {
     onReasoning: (t) => { thinkAcc += t; schedulePaint(); },
     done: () => {
       if (frame) cancelAnimationFrame(frame);
-      bubble.remove();
+      bubble.remove(); clampListScroll();
     },
   };
 }
@@ -1309,6 +1382,7 @@ function setBusy(b) {
   updateMemoryChip();
   el.sendBtn.disabled = b;
   el.summarizeBtn.disabled = b;
+  if (!editingState) renderMessages(lastMessages);
 }
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.
@@ -1318,6 +1392,33 @@ function isNearBottom() {
 
 function scrollToEnd() {
   el.list.scrollTop = el.list.scrollHeight;
+  wasNearBottom = true;
+}
+
+function clampListScroll() {
+  el.list.scrollTop = Math.max(0, Math.min(el.list.scrollTop,
+    Math.max(0, el.list.scrollHeight - el.list.clientHeight)));
+}
+
+function captureListPosition() {
+  const edge = el.list.getBoundingClientRect().top;
+  const node = [...el.list.children].find((child) => {
+    const rect = child.getBoundingClientRect();
+    return rect.top + rect.height > edge;
+  });
+  return { sticky: isNearBottom(), node, id: node?.dataset.messageId,
+    top: node?.getBoundingClientRect().top };
+}
+
+function restoreListPosition(position, replacementId) {
+  if (position.sticky) { scrollToEnd(); return; }
+  const node = position.id ? renderedMessages.get(position.id)?.node
+    : position.node?.parentNode === el.list ? position.node
+      : renderedMessages.get(replacementId)?.node;
+  if (node && Number.isFinite(position.top)) {
+    el.list.scrollTop += node.getBoundingClientRect().top - position.top;
+  }
+  clampListScroll();
 }
 
 // Scroll the inner message list (never the window) so the field's bottom edge
@@ -1347,7 +1448,7 @@ function alignFieldToKeyboard(field) {
 
 function setStatus(text, autoHide = false) {
   let statusEl = el.list.querySelector(".status-line");
-  if (!text) { statusEl?.remove(); return; }
+  if (!text) { statusEl?.remove(); clampListScroll(); return; }
   const sticky = isNearBottom();
   if (!statusEl) {
     statusEl = document.createElement("div");
@@ -1355,8 +1456,14 @@ function setStatus(text, autoHide = false) {
     el.list.appendChild(statusEl);
   }
   statusEl.textContent = text;
-  if (autoHide) setTimeout(() => statusEl?.remove(), 4000);
+  if (autoHide) setTimeout(() => { statusEl?.remove(); clampListScroll(); }, 4000);
   if (sticky) scrollToEnd();
+}
+
+function showTransientInfo(text) {
+  const sticky=isNearBottom(),div=document.createElement('div');
+  div.className='msg info muted'; div.textContent=text;el.list.append(div);
+  if (sticky) scrollToEnd();setTimeout(() => {div.remove();clampListScroll();},10000);
 }
 
 function showTransientError(text) {
@@ -1366,7 +1473,7 @@ function showTransientError(text) {
   div.textContent = "⚠ " + text;
   el.list.appendChild(div);
   if (sticky) scrollToEnd();
-  setTimeout(() => div.remove(), 10000);
+  setTimeout(() => { div.remove(); clampListScroll(); }, 10000);
 }
 
 async function reconcileDeletedMemory() {

@@ -429,3 +429,9 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .lore-names>small{flex-basis:100%}
 .settings-panel[data-panel=memory] .checkbox-label{min-height:44px}
 @media(max-width:720px){.chat-toolbar:has(.memory-chip:not(.hidden)){flex-wrap:wrap}.chat-toolbar .memory-chip{font-size:11px;max-width:155px}.lore-editor>h2{font:25px Georgia,serif}}
+
+.boot-error { position: fixed; inset: 0; z-index: 1000; display: grid; place-content: center; gap: 12px; padding: 24px; background: #111; color: #eee; text-align: center; }
+@media (max-width: 720px) {
+  .msg-editor { font-size: 16px; }
+  .app { transform: var(--app-viewport-transform, none); }
+}

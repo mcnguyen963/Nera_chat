@@ -47,7 +47,7 @@ export function resolveScene(scene, index) {
   if (!place && scene?.place) place = [...index.locations].sort((a,b) => b.normTerm.length-a.normTerm.length).find(t => new RegExp('(?<![\\p{L}\\p{N}])'+escapeRegex(t.normTerm)+'(?![\\p{L}\\p{N}])','iu').test(normalizeName(scene.place)))?.entryId;
   return { characters:[...new Set(characters)], place:place ?? null, unmatched, ambiguous };
 }
-export function selectEntries(entries, mem, text, scene) {
+export function selectEntries(entries, mem, text, scene, recentText = '') {
   const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
   for (const book of ['characters','locations','facts','events']) {
     selected[book] = [];
@@ -64,6 +64,7 @@ export function selectEntries(entries, mem, text, scene) {
       if (book === 'locations' && resolved.place) add(resolved.place,'current place');
       if (book === 'characters') for (const id of resolved.characters) add(id,'in scene');
       for (const id of findMentions(text,index,book)) add(id,'mentioned');
+      for (const id of findMentions(recentText,index,book)) add(id,'recent mention');
       const cap = always+mem.books[book].maxCards;
       for (const x of selected[book].splice(cap)) skipped.push({ entryId:x.entry.id, book, name:x.entry.name, reason:`card limit (${mem.books[book].maxCards}) reached` });
     }
@@ -74,23 +75,23 @@ export function selectEntries(entries, mem, text, scene) {
 }
 export function renderLine(line) { return '- ['+[line.turn != null ? 'T'+line.turn : null,line.when].filter(Boolean).join(' · ')+'] '+line.text; }
 export function sectionLabel(key, protagonist) { return key === 'bond' ? 'Bond with '+(protagonist || 'the protagonist') : key === 'text' ? '' : key[0].toUpperCase()+key.slice(1); }
-export function renderEntry(entry, lineIds = null, protagonist = '') {
+export function renderEntry(entry, lineIds = null, protagonist = '', { provenance = false } = {}) {
   const out = [`## ${entry.name}${entry.aliases?.length ? ' (also called: '+entry.aliases.join(', ')+')' : ''}`];
   for (const key of SECTION_KEYS[entry.book]) {
     const s = entry.sections[key]; if (!s) continue;
     const lines = sortLines(s.lines ?? []).filter(l => !lineIds || lineIds.has(l.id));
     if (!s.text && !lines.length) continue;
     const label = sectionLabel(key,protagonist);
-    if (s.text) { const meta = sectionMeta(s,entry); out.push(`[${meta.kind}; origin: ${meta.origin}; ${meta.kind === 'canon' ? 'author authority' : cutoffLabel(meta.cutoff)}]`); out.push(label ? label+':'+(s.text.includes('\n') ? '\n' : ' ')+s.text : s.text); }
+    if (s.text) { const meta = sectionMeta(s,entry); if (provenance) out.push(`[${meta.kind}; origin: ${meta.origin}; ${meta.kind === 'canon' ? 'author authority' : cutoffLabel(meta.cutoff)}]`); out.push(label ? label+':'+(s.text.includes('\n') ? '\n' : ' ')+s.text : s.text); }
     else if (label) out.push(label+':');
     out.push(...lines.map(renderLine));
   }
   return out.join('\n');
 }
-export async function fitBook(selected, budget, count, { protagonist = '', events = false } = {}) {
+export async function fitBook(selected, budget, count, { protagonist = '', events = false, provenance = false } = {}) {
   const cap = Math.floor(Math.max(0,budget)*.98), included = [], skipped = []; let used = 0;
   for (const item of selected) {
-    const base = renderEntry(item.entry,new Set(),protagonist);
+    const base = renderEntry(item.entry,new Set(),protagonist,{provenance});
     const tokens = await count(base+'\n');
     if (used+tokens > cap) { skipped.push({ entryId:item.entry.id, book:item.entry.book, name:item.entry.name, reason:'over budget' }); continue; }
     included.push({ ...item, lineIds:new Set(), tokens, queue:sortLines(Object.values(item.entry.sections).flatMap(s => s.lines ?? [])).reverse(), stopped:false }); used += tokens;
@@ -109,24 +110,24 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
     await roundRobin(threads);
   } else await roundRobin(included);
   // Verify the complete rendering: section labels and separators also cost tokens.
-  let text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist)).join('\n\n');
+  let text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist,{provenance})).join('\n\n');
   let actual = await count(text);
   while (actual > budget && included.length) {
     const victim = [...included].reverse().find(e => e.lineIds.size);
     if (victim) { const oldest = sortLines(Object.values(victim.entry.sections).flatMap(s => s.lines ?? []).filter(l => victim.lineIds.has(l.id)))[0]; victim.lineIds.delete(oldest.id); }
     else { const e = included.pop(); skipped.push({ entryId:e.entry.id, book:e.entry.book, name:e.entry.name, reason:'over budget' }); }
-    text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist)).join('\n\n'); actual = await count(text);
+    text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist,{provenance})).join('\n\n'); actual = await count(text);
   }
-  for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist)); }
+  for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist,{provenance})); }
   return { included, skipped, text, tokens:actual, cut:included.reduce((n,e) => n+e.linesCut,0) };
 }
 export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
-export function renderEventsBlock(fit) {
+export function renderEventsBlock(fit, { provenance = false } = {}) {
   const out = [], threads = fit.included.filter(e => e.entry.kind === 'thread'), timeline = fit.included.find(e => e.entry.kind === 'timeline');
-  if (threads.length) out.push('Open threads:',...threads.map(e => renderEntry(e.entry,e.lineIds)));
+  if (threads.length) out.push('Open threads:',...threads.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
   if (timeline && (timeline.entry.sections.text.text || timeline.lineIds.size)) {
     out.push('Timeline (oldest first'+(timeline.linesCut ? ', '+timeline.linesCut+' earlier events not shown' : '')+'):');
-    if (timeline.entry.sections.text.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); out.push(`[${meta.kind}; origin: ${meta.origin}; ${cutoffLabel(meta.cutoff)}]`,timeline.entry.sections.text.text); }
+    if (timeline.entry.sections.text.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(`[${meta.kind}; origin: ${meta.origin}; ${cutoffLabel(meta.cutoff)}]`); out.push(timeline.entry.sections.text.text); }
     out.push(...sortLines(timeline.entry.sections.text.lines).filter(l => timeline.lineIds.has(l.id)).map(renderLine));
   }
   return out.length ? prompts.eventsHeader+'\n'+out.join('\n') : '';

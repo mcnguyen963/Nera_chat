@@ -1,20 +1,23 @@
 const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-export function isAcceptedTurn(message, protagonist = '') {
-  if (!message) return false;
-  if (['pending','rejected'].includes(message.acceptance)) return false;
-  if (message.acceptance === 'accepted' || message.role !== 'assistant' || message.ooc) return true;
-  return lintPlayerAgency(message.content,protagonist).length === 0;
+export function isAcceptedTurn(message, { lastUserOrder = -Infinity, sceneOn = true } = {}) {
+  if (message?.role !== 'assistant' || !sceneOn) return true;
+  return !['pending','rejected'].includes(message.acceptance) || Number(message.order) < Number(lastUserOrder);
+}
+export function lastUserOrderOf(messages, upToOrder = Infinity) {
+  return messages.reduce((max,m) => m.role === 'user' && m.order < upToOrder ? Math.max(max,m.order) : max,-Infinity);
+}
+export function stripDialogue(text) {
+  return String(text ?? '').split(/(\n\s*\n)/).map(p => p.replace(/“[^”]*(?:”|$)|"[^"]*(?:"|$)/g,'')).join('');
 }
 export function lintPlayerAgency(text, protagonist = '') {
-  const prose = String(text ?? '').replace(/<(?:scene|plan|plan_thread)>[\s\S]*?<\/(?:scene|plan|plan_thread)>/gi,'');
   const names = [protagonist,protagonist.trim().split(/\s+/)[0]].filter(Boolean).map(escape);
   const player = '(?:you'+(names.length ? '|'+[...new Set(names)].join('|') : '')+')';
+  const start = '(?:^|[.!?]\\s+|\\n|,\\s*|\\band\\s+|\\bthen\\s+)';
+  const verbs = 'say|says|said|reply|replies|replied|ask|asks|asked|whisper|whispers|whispered|shout|shouts|shouted|tell|tells|told|decide|decides|decided|agree|agrees|agreed|choose|chooses|chose|refuse|refuses|refused|realize|realizes|realized|think|thinks|thought|feel|feels|felt|want|wants|wanted|promise|promises|promised';
+  const prose = stripDialogue(String(text ?? '').replace(/<(?:scene|plan|plan_thread)>[\s\S]*?<\/(?:scene|plan|plan_thread)>/gi,''));
   const warnings = [];
-  const unquoted = prose.replace(/["“][\s\S]*?["”]/g,'');
-  if (new RegExp('\\b'+player+'\\s+(?:say|says|said|reply|replies|replied|ask|asks|asked|whisper|whispers|whispered|shout|shouts|shouted|decide|decides|decided|think|thinks|thought|realize|realizes|realized|choose|chooses|chose|glance|glances|nod|nods|reach|reaches|sign|signs|smile|smiles|shrug|shrugs|turn|turns|take|takes)\\b','i').test(unquoted)
-    || /\byour (?:gaze|glance|hand) (?:flicks|crosses|moves|reaches|lifts|closes)\b/i.test(unquoted)
-    || /["“][^"”\n]+["”][\s\S]{0,200}\byour (?:own )?voice\b/i.test(prose)) warnings.push('Possible player speech, thoughts, action or decision written by the narrator.');
-  if (/(?:^|\n|[.!?]\s+)(?:I(?:\s+(?:am|was|have|had|do|did|say|said|look|walk|decide|think|feel|want|will|can|reach|take|sit|stand|nod)|['’](?:m|ve|ll|d)))\b/i.test(unquoted)) warnings.push('Possible first-person player narration.');
+  if (new RegExp(start+player+'\\s+(?:'+verbs+')\\b','i').test(prose)) warnings.push('Possible player speech, thoughts or decision written by the narrator.');
+  if (/(?:^|\n|[.!?]\s+)(?:I(?:\s+(?:am|was|have|had|do|did|say|said|look|walk|decide|think|feel|want|will|can|reach|take|sit|stand|nod)|['’](?:m|ve|ll|d)))\b/i.test(prose)) warnings.push('Possible first-person player narration.');
   return warnings;
 }
 

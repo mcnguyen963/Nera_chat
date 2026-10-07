@@ -141,15 +141,14 @@ async function setup(legacyCount = 0) {
       : new vm.SourceTextModule(await readFile(new URL('../js/' + path, import.meta.url), 'utf8'),
         { context, identifier: path, initializeImportMeta:promptImportMeta });
     modules.set(path, module);
-    await module.link((specifier, parent) => load(specifier.startsWith('https:')
-      ? specifier : new URL(specifier, 'https://local/' + parent.identifier).pathname.slice(1)));
     return module;
   }
-  const messages = await load('messages.js');
+  const link=async module => { if (module.status==='unlinked') await module.link((specifier,parent) => load(specifier.startsWith('https:') ? specifier : new URL(specifier,'https://local/'+parent.identifier).pathname.slice(1))); };
+  const messages = await load('messages.js'); await link(messages);
   await messages.evaluate();
-  const sessions = await load('sessions.js');
+  const sessions = await load('sessions.js'); await link(sessions);
   await sessions.evaluate();
-  const lore = await load('lore-store.js'); await lore.evaluate();
+  const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
   return { lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath };
 }
 
@@ -196,7 +195,7 @@ test('assistant plan thread is stored separately from visible content', async ()
   assert.equal(message.planThread, 'steering toward the reveal');
   await h.api.editMessage('s', saved.id, 'A quiet room.', saved.order);
   message = (await h.api.getMessages('s'))[0];
-  assert.equal(message.planThread, null);
+  assert.equal(message.planThread, 'steering toward the reveal');
 });
 
 test('assistant plan updates are committed with the message', async () => {
@@ -349,10 +348,10 @@ test('copy through a clicked message includes that message despite gaps in order
   assert.deepEqual([...h.documents.keys()], paths);
 });
 
-test('scene changes preserve timestamps; prose edits clear old metadata', async () => {
+test('scene changes preserve timestamps; prose edits keep scene metadata', async () => {
   const h = await setup(); const saved = await h.api.addMessage('s',{ role:'assistant',content:'Story',scene:'Day 1 · Inn' });
-  await h.api.updateMessageScene('s',saved.id,saved.order,'Day 2 · Inn'); let m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,'Day 2 · Inn'); assert.equal(m.editedAt,null);
-  await h.api.editMessage('s',saved.id,'Edited story',saved.order); m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,null);
+  await h.api.updateMessageScene('s',saved.id,saved.order,'Day 2 · night · Inn'); let m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,'date: Day 2 · time: night · place: Inn · present: unknown'); assert.equal(m.editedAt,null);
+  await h.api.editMessage('s',saved.id,'Edited story',saved.order); m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,'date: Day 2 · time: night · place: Inn · present: unknown');
   await h.api.overwriteMessage('s',saved.id,{ content:'New reply',scene:'Day 3 · Market' },saved.order); m = (await h.api.getMessages('s'))[0]; assert.equal(m.scene,'Day 3 · Market');
 });
 test('long scene attendance survives storage, edits and reload; oversized edits cannot write partial state',async () => {
@@ -448,10 +447,10 @@ test('prose edits and scene corrections invalidate summary and memory without de
   const e = loreEntry(); e.sections.appearance.lines[0].src = a.order; await h.lore.createEntry('s',e);
   Object.assign(h.documents.get(h.sessionPath),{ activeSummaryMessageId:'summary',breakpointOrder:a.order,memoryState:{ extractedThroughOrder:a.order } });
   const result = await h.api.editMessage('s',a.id,'Edited',a.order);
-  assert.equal(result.summaryReset,true); assert.equal(result.replacement.scene,null); assert.equal(result.replacement.planThread,null);
+  assert.equal(result.summaryReset,true); assert.equal(result.replacement.scene,'Day 1 · Inn'); assert.equal(result.replacement.planThread,'Reminder');
   const session = h.documents.get(h.sessionPath); assert.equal(session.activeSummaryMessageId,null); assert.equal(session.memoryState.needsRebuild,true); assert.equal(session.memoryState.paused,true);
   assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,1);
-  await h.api.updateMessageScene('s',a.id,a.order,'unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,2);
+  await h.api.updateMessageScene('s',a.id,a.order,'unknown · unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,2);
 });
 test('earlier session copies exclude future evidence and make later snapshots unavailable while preserving fixed plan',async () => {
   const h = await setup(); const a = await h.api.addMessage('s',{ role:'assistant',content:'One' }), b = await h.api.addMessage('s',{ role:'assistant',content:'Two' });
@@ -480,4 +479,21 @@ test('accepting a flagged reply is revision checked, persists its candidate scen
   assert.equal((await h.api.getMessages('s'))[0].sceneMeta.provenance.time,'unknown');
   const replacement = await h.api.overwriteMessage('s',reply.id,{ content:'Mira waits.',scene:'Inn',sceneMeta:{ kind:'inferred' },acceptance:'accepted' },reply.order);
   assert.equal(replacement.replacement.sceneMeta.kind,'inferred');assert.equal(replacement.replacement.sceneCandidate,null);
+});
+
+test('S10 manual scenes reject unreadable input, blank clears, and editing pending replies keeps the candidate',async () => {
+ const h=await setup();const scene='date: Day 2 · time: night · place: Inn · present: Mira';
+ const a=await h.api.addMessage('s',{role:'assistant',content:'Reply',acceptance:'pending',sceneCandidate:{scene,sceneMeta:{kind:'declared'}}});
+ const edited=await h.api.editMessage('s',a.id,'Reply edited',a.order);
+ assert.equal(edited.replacement.scene,scene);assert.equal(edited.replacement.acceptance,'accepted');assert.equal(edited.replacement.sceneCandidate,null);
+ await assert.rejects(h.api.updateMessageScene('s',a.id,a.order,'Tavern, night'),/Could not read/);
+ const cleared=await h.api.updateMessageScene('s',a.id,a.order,'',{fromId:'previous',fromOrder:1});
+ assert.equal(cleared.replacement.scene,null);assert.equal(cleared.replacement.sceneMeta.kind,'carried');assert.equal(cleared.replacement.sceneMeta.fromId,'previous');
+});
+
+test('P0 and U4 regeneration clears edited and cut-off fields and omits review metadata with Scene off',async () => {
+ const h=await setup();const a=await h.api.addMessage('s',{role:'assistant',content:'Partial',truncated:true,acceptance:'pending',reviewWarnings:['warning'],sceneCandidate:{scene:'candidate'}});
+ await h.api.editMessage('s',a.id,'Edited',a.order);
+ const result=await h.api.overwriteMessage('s',a.id,{content:'Complete'},a.order);
+ assert.equal(result.replacement.truncated,false);assert.equal('editedAt' in result.replacement,false);assert.equal('acceptance' in result.replacement,false);assert.equal('reviewWarnings' in result.replacement,false);assert.equal('sceneCandidate' in result.replacement,false);
 });

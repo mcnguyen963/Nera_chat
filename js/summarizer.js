@@ -1,7 +1,7 @@
 import { prompts, renderPrompt } from './system-prompts.js';
 import { CONTINUITY_RULE, requestSource, evidenceFor } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
-import { isAcceptedTurn } from './turn-review.js';
+import { isAcceptedTurn, lastUserOrderOf } from './turn-review.js';
 // Rolling summarization (spec §8). The new summary always folds in the old summary
 // plus everything since the last breakpoint; only the newest summary is referenced by
 // the session going forward — older summary docs remain in the log as history.
@@ -64,7 +64,7 @@ export async function runSummarization(session, settings, opts = {}) {
   if (toFold.length === 0) {
     return { skipped: true, reason: "Nothing new to fold in since the last breakpoint." };
   }
-  if (toFold.some(m => m.role === 'assistant' && !isAcceptedTurn(m,session.memory?.protagonist))) {
+  if (toFold.some(m => m.role === 'assistant' && !isAcceptedTurn(m,{lastUserOrder:lastUserOrderOf(raw),sceneOn:session.memory?.scene === true}))) {
     return { skipped:true,reason:'Review or regenerate flagged replies before summarizing their turns.' };
   }
 
@@ -126,7 +126,9 @@ export async function runSummarization(session, settings, opts = {}) {
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
       signal:opts.signal,
+      allowTruncated: true,
     });
+    if (r.finishReason === 'length') throw new Error('The summary hit the output limit; the checkpoint was not changed. Raise Summarizer max tokens or use smaller summary chunks.');
     await opts.validateSource?.(expectedSource);
     content = r.content;
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");

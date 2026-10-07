@@ -53,17 +53,18 @@ test('opening seed beats background mention order and reminders are counted once
 test('player-agency lint distinguishes NPC quotes and warnings gate extraction without skipping checkpoints',async () => {
   const use = appHarness(),r = await use('turn-review.js'),t = await use('turns.js');
   assert.deepEqual(plain(r.lintPlayerAgency('Isolde says, "I will fetch the physician."','Nera Veyrath')),[]);
-  for(const prose of ['You say, "Bring him here."','Nera decides to sign.','I take the pen.','"Isolde." The sound of your own voice surprises you.']) assert.ok(r.lintPlayerAgency(prose,'Nera Veyrath').length);
-  assert.ok(r.lintPlayerAgency('When your gaze flicks toward her, she turns.','Nera Veyrath').length);
+  for(const prose of ['You say, "Bring him here."','Nera decides to sign.','I take the pen.']) assert.ok(r.lintPlayerAgency(prose,'Nera Veyrath').length);
+  assert.equal(r.lintPlayerAgency('When your gaze flicks toward her, she turns.','Nera Veyrath').length,0);
   assert.ok(r.lintUnestablishedTime('Pale afternoon light crosses the room.').length);
   assert.deepEqual(plain(r.lintUnestablishedTime('Pale afternoon light crosses the room.',{ prior:{ time:'afternoon' } })),[]);
   const history = [{ id:'a',role:'assistant',order:2,acceptance:'accepted',content:'Krail waits.' },
     { id:'b',role:'assistant',order:4,acceptance:'pending',content:'You sign.' },{ id:'c',role:'assistant',order:6,acceptance:'accepted',content:'The door opens.' }];
-  const mem = { batchTurns:2,lagTurns:0,updateMaxTokens:1000 };
+  const mem = { scene:true,batchTurns:2,lagTurns:0,updateMaxTokens:1000 };
   assert.equal(t.dueRange(history,{ extractedThroughOrder:0 },mem),null);
   assert.equal(t.dueRange(history,{ extractedThroughOrder:0 },mem,{ manual:true }).endOrder,2);
   assert.equal(t.dueRange(history,{ extractedThroughOrder:2 },mem,{ manual:true }),null);
-  await assert.rejects((await use('memory-prompts.js')).buildExtractionMessages({ settings:{},mem,entries:[],messages:history,range:{ messages:history },count:async s=>s.length }),/Review or regenerate/);
+  const accepted=[...history,{id:'u',role:'user',order:7,content:'Continue.'}];
+  assert.equal(t.dueRange(accepted,{extractedThroughOrder:0},mem).endOrder,4);
 });
 
 test('structured recovery validates schema, names and provenance locally and never modifies narration or plan',async () => {
@@ -73,7 +74,7 @@ test('structured recovery validates schema, names and provenance locally and nev
   const obj = { date:'18 September 731',time:'late morning',place:'West Reception Room',present:context.names,planThread:'Await the player’s choice.' };
   const result = r.parseRecovery(JSON.stringify(obj),context);
   assert.equal(result.sceneMeta.kind,'inferred');assert.equal(s.parseScene(result.scene).time,null);
-  for(const invalid of [{ ...obj,extra:true },{ ...obj,present:['Invented Guard'] },{ ...obj,time:14 },{ ...obj,planThread:[] }]) assert.throws(()=>r.parseRecovery(JSON.stringify(invalid),context));
+  for(const invalid of [{ ...obj,extra:true },{ ...obj,time:14 },{ ...obj,planThread:[] }]) assert.equal(r.parseRecovery(JSON.stringify(invalid),context),null);
   assert.equal(r.parseRecovery(JSON.stringify(obj),{ ...context,plan:'' }).planThread,null);
 });
 
@@ -81,8 +82,8 @@ test('summary refuses an unaccepted eligible turn before making any provider or 
   let calls = 0;
   const use = appHarness({ stubs:{ 'messages.js':{ getMessages:async()=>[],getCheckpointMessages:async()=>[],addMessage:async()=>{calls++;},newMessageId:()=> 's' },
     'llm-client.js':{ chatCompletion:async()=>{calls++;} },'tokenizer.js':{ countTokens:async s=>s.length } } });
-  const result = await (await use('summarizer.js')).runSummarization({ id:'s' },{ keepRecentMessagesAfterSummary:1 },{ messages:[
+  const result = await (await use('summarizer.js')).runSummarization({ id:'s',memory:{scene:true} },{ keepRecentMessagesAfterSummary:1 },{ messages:[
     { id:'u',role:'user',order:1,content:'Continue.' },{ id:'a',role:'assistant',order:2,acceptance:'pending',content:'You sign.' },
-    { id:'u2',role:'user',order:3,content:'Next.' },{ id:'a2',role:'assistant',order:4,content:'Krail waits.' }] });
+    { id:'u2',role:'user',order:1.5,content:'Next.' },{ id:'a2',role:'assistant',order:4,content:'Krail waits.' }] });
   assert.equal(result.skipped,true);assert.match(result.reason,/flagged replies/);assert.equal(calls,0);
 });

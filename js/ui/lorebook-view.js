@@ -25,9 +25,21 @@ const dirty = () => staged && JSON.stringify(staged) !== JSON.stringify(base);
 const canLeave = () => !dirty() || confirm('Discard changes?');
 const seenKey = () => 'nera.lore.seen.'+sid;
 function seen() { try { return JSON.parse(localStorage.getItem(seenKey()) ?? '{}'); } catch { return {}; } }
-function deletedOrders() { return new Set((live()?.messages ?? []).filter(m => m.role === 'assistant').map(m => m.order)); }
-function deletedLine(l) { return l.src != null && !deletedOrders().has(l.src); }
-function editedSource(l) { const all = live()?.messages ?? [], turns = computeTurns(all), t = turns.assistants.find(a => a.order === l.src); return t && all.some(m => turns.turnById.get(m.id) === t.turn && (m.editedAt?.toMillis?.() ?? (typeof m.editedAt?.seconds === 'number' ? m.editedAt.seconds*1000+(m.editedAt.nanoseconds ?? 0)/1e6 : m.editedAt ? new Date(m.editedAt).getTime() : 0)) > l.at); }
+let lineMemo={src:null,value:null};
+function lineContext() {
+  const all=live()?.messages ?? [];
+  if (lineMemo.src===all) return lineMemo.value;
+  const turns=computeTurns(all),orders=new Set(),turnByOrder=new Map(),editedAtByTurn=new Map();
+  for (const a of turns.assistants) { orders.add(a.order);turnByOrder.set(a.order,a.turn); }
+  for (const m of all) {
+    const t=turns.turnById.get(m.id),at=m.editedAt?.toMillis?.() ?? (m.editedAt?.seconds!=null ? m.editedAt.seconds*1000+(m.editedAt.nanoseconds ?? 0)/1e6 : m.editedAt ? new Date(m.editedAt).getTime() : 0);
+    editedAtByTurn.set(t,Math.max(at,editedAtByTurn.get(t) ?? 0));
+  }
+  lineMemo={src:all,value:{orders,turnByOrder,editedAtByTurn}};return lineMemo.value;
+}
+function deletedOrders() {return lineContext().orders;}
+function deletedLine(l) {return l.src!=null && !lineContext().orders.has(l.src);}
+function editedSource(l) {const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
 const newCount = e => linesOf(e).filter(l => l.at > (seen()[e.id] ?? 0)).length;
 export function initLorebookView() {
   window.addEventListener('popstate',event => {

@@ -1,22 +1,19 @@
 import { prompts, renderPrompt } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
-import { SCENE_RULE, latestScene } from './scene.js';
+import { SCENE_RULE, latestScene, sceneTimeline, readSceneOutput } from './scene.js';
 import { replyContract } from './reply-contract.js';
-import { isAcceptedTurn } from './turn-review.js';
 import { computeTurns } from './turns.js';
 import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
-import { planInjectionBlock } from './plan-parser.js';
+import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
 import { CONTINUITY_RULE, usableLore, cutoffLabel, revisionOf } from './continuity.js';
 const FRAME = 8;
 function stripOcc(content) {
-  return content.replace(/<OCC\b[^>]*>[\s\S]*?(?:<\/OCC\s*>|$)|<\/OCC\s*>/gi, '');
+  const cleaned=content.replace(/<\s*(OOC|OCC)\b[^>]*>[\s\S]*?(?:<\/\s*\1\s*>|$)|<\/\s*(?:OOC|OCC)\s*>/gi, '');
+  return cleaned.trim() ? cleaned : content;
 }
 // Both modes use this renderer and count the entire rendered request on every fit.
 export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd }) {
   const mem = normalizeMemory(session.memory), limit = Number(settings.maxContextTokens)-Number(settings.maxResponseTokens);
-  // The turn orchestrator must explicitly activate this path once extraction,
-  // persistence and maintenance scheduling are connected. Settings alone cannot.
-  const separate = mem.scene && mem.sceneMode === 'extract' && opts.separateSceneExtraction === true;
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
   const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
@@ -27,15 +24,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const required = new Set(anchorIds);
   if (latest) required.add(latest.id);
   if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
-  let narrator = settings.narratorSystemPrompt || '';
-  if (separate && narrator === prompts.narrator) narrator = narrator
-    .replace('and (when enabled) the scene tag','the current scene snapshot')
-    .replace('The scene tag is its only structured state.','The app maintains a separate scene snapshot.')
-    .replace('Follow the app-provided rules for hidden tags, including the scene output contract when Scene line is enabled.','The app maintains metadata separately; write prose and NPC dialogue only.')
-    .replace('Never exceed 800 words of visible text; hidden tags do not count.','Never exceed 800 words of visible text.')
-    .replace('   - Required hidden tags are present and match the visible text.','');
-  const planBlock = separate ? renderPrompt(prompts.writingPlan,{ PLAN:session.longTermPlan?.trim() || prompts.emptyPlan }) : planInjectionBlock(session.longTermPlan);
-  const system = narrator+'\n\n'+adRule+'\n\n'+CONTINUITY_RULE+'\n\n'+planBlock+(mem.scene && !separate ? '\n\n'+SCENE_RULE(mem.protagonist) : '');
+  let narrator = (settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
+  const planBlock = planInjectionBlock(session.longTermPlan);
+  const system = narrator+'\n\n'+adRule+'\n\n'+CONTINUITY_RULE+'\n\n'+planBlock+(mem.scene ? '\n\n'+SCENE_RULE(mem.protagonist) : '');
   const head = [{ role:'system',content:system }], blocks = [{ key:'system',label:'Instructions and fixed author plan',tokens:await count(system)+FRAME }];
   let summary = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upTo ? all.find(m => m.id === session.activeSummaryMessageId && !m.needsReview) : null;
   if (summary && ((summary.evidence ?? []).some(e => !all.some(m => m.id === e.id && revisionOf(m) === e.revision)) || (session.memoryInvalidations ?? []).some(i => (summary.sourceRevision ?? 0) < i.revision && i.fromOrder <= (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0)))) summary = null;
@@ -44,24 +35,22 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const content = renderPrompt(prompts.historicalSummary, { CUTOFF: cutoffLabel({ order:checkpoint,turn:summary.cutoffTurn }), SUMMARY: summary.content });
     head.push({ role:'system',content }); blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content)+FRAME });
   }
+  const timeline=sceneTimeline(raw,{startingScene:mem.startingScene});
   const contentFor = m => {
-    let text = m.role === 'user' ? normalizeAd(m.content) : m.content;
-    const accepted = isAcceptedTurn(m,mem.protagonist);
-    if (!accepted) text = '[Unaccepted narrator reply: this turn awaits review. Do not treat its new actions, decisions or changes as established canon until the user accepts or corrects it.]\n'+text;
-    if (m.role === 'assistant' && !separate) text += (m.planThread && accepted ? '\n<plan_thread>'+m.planThread+'</plan_thread>' : '')+(mem.scene && m.scene && m.sceneMeta?.kind !== 'carried' && accepted ? '\n<scene>'+m.scene+'</scene>' : '');
-    if (m.id !== latest?.id) text = stripOcc(text);
-    // An opening message that is also the active latest user keeps its current role.
-    if (anchorIds.has(m.id) && m.id !== latest?.id) text = renderPrompt(prompts.openingExchange, { TURN: turns.turnById.get(m.id), CONTENT: text });
+    let text = m.role === 'assistant' ? readSceneOutput(normalizeAd(m.content)).clean : normalizeAd(m.content);
+    if (m.role === 'assistant' && mem.scene && !m.ooc) {
+      if (session.longTermPlan?.trim() && m.planThread) text+='\n<plan_thread>'+m.planThread+'</plan_thread>';
+      const effective=timeline.get(m.id)?.effective;
+      if (effective) text+='\n<scene>'+effective+'</scene>';
+    }
+    if (m.id !== latest?.id) text=stripOcc(text);
+    if (anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{TURN:turns.turnById.get(m.id),CONTENT:text});
     return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
-  const contract = separate ? renderPrompt(prompts.writingContract,{ PROTAGONIST:mem.protagonist || 'the player character' }) : mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
+  const contract = mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
   if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
-  if (mem.scene && current.missingStreak > 0) warnings.push(separate
-    ? `${current.missingStreak} narrative ${current.missingStreak === 1 ? 'reply has' : 'replies have'} missing or unverified scene changes. ${current.scene ? 'The retained scene may be stale; review it before continuing.' : 'No established scene is available for selecting present characters and the current location.'}`
-    : `${current.missingStreak} narrative ${current.missingStreak === 1 ? 'reply is' : 'replies are'} missing scene metadata. ${current.scene ? 'The last established scene is retained with its source cutoff.' : 'No established scene is available for selecting present characters and the current location.'}`);
-  const snapshot = separate ? '[APP SCENE SNAPSHOT — accepted state'+(current.missingStreak ? '; stale, latest changes could not be verified' : '')+']\n'+(current.scene?.raw ?? 'No scene established. Date and time are unknown.')+'\nSource message order: '+(current.fromOrder ?? 'unknown') : '';
-  if (snapshot) blocks.push({ key:'sceneSnapshot',label:'App scene snapshot',tokens:await count(snapshot)+FRAME });
+  if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
   let memory = '';
   const render = () => {
     const history = raw.filter(m => selected.has(m.id)).map(m => ({ id:m.id,role:m.role,content:contentFor(m) }));
@@ -75,13 +64,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
         history.splice(at,0,{ role:'system',content:memory });
       }
     }
-    if (snapshot) {
-      const at = history.findIndex(m=>m.id === latest?.id);
-      history.splice(at < 0 ? history.length : at,0,{ role:'system',content:snapshot });
-    }
     if (contract && latest) {
       const at = history.findIndex(m => m.id === latest.id);
-      if (separate || mem.replyContract === 'user') history[at].content = contract+'\n\n[Current user input]\n'+history[at].content;
+      if (mem.replyContract === 'user') history[at].content = contract+'\n\n[Current user input]\n'+history[at].content;
       else history.splice(at,0,{ role:'system',content:contract });
     }
     return [...head,...books,...history].map(({ role,content }) => ({ role,content }));
@@ -104,7 +89,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
   let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
   const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
-  const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null);
+  const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content).clean).join('\n'));
   const skipped = [...filtered.skipped,...selection.skipped];
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && 'Characters:\n'+chars.text,places.text && 'Places:\n'+places.text].filter(Boolean).join('\n\n');

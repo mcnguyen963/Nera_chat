@@ -35,9 +35,28 @@ jobs:
           };
           EOF
 
+      - name: Assemble site (app files only)
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p "_site/system prompts"
+          cp index.html _site/
+          cp -R css js resources _site/
+          cp "system prompts/"*.md "_site/system prompts/"
+          rm -f "_site/system prompts/README.md"
+          find _site \( -name '*:Zone.Identifier' -o -name '.DS_Store' \) -type f -delete
+          test -s _site/js/firebase-config.js
+          test -s _site/resources/pets/manifest.json
+          for f in $(grep -o '"[A-Za-z0-9-]*\.md"' js/system-prompts.js | tr -d '"'); do
+            test -s "_site/system prompts/$f"
+          done
+          for p in investigate docs starting tests scripts private memory.md opencode.json REVIEW_FINDINGS.md improvePlan.md; do
+            test ! -e "_site/$p"
+          done
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
   deploy:
     needs: build

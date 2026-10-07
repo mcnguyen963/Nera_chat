@@ -2,15 +2,13 @@ import { prompts, renderPrompt } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
 import { buildLoreIndex, findMentions, resolveScene, fitBook, renderEntry } from './lore-select.js';
-import { parseScene } from './scene.js';
-import { isAcceptedTurn } from './turn-review.js';
+import { parseScene, sceneTimeline } from './scene.js';
 export const DEFAULT_MEMORY_EXTRACTION_PROMPT = prompts.memoryExtraction;
 export const DEFAULT_MEMORY_REORGANIZE_PROMPT = prompts.memoryReorganize;
 export function fillProtagonist(text, protagonist) { return String(text).replaceAll('{{PROTAGONIST}}', protagonist || 'the main character'); }
 export const LOREBOOK_TEMPLATE_MD = prompts.lorebookMarkdown;
 export const LOREBOOK_TEMPLATE_JSON = prompts.lorebookJson;
 export async function buildExtractionMessages({ settings, mem, entries, messages, range, count }) {
-  if (range.messages.some(m => m.role === 'assistant' && !isAcceptedTurn(m,mem.protagonist))) throw new Error('Review or regenerate flagged replies before extracting their turns.');
   const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = settings.maxContextTokens - mem.updateMaxTokens - await count(prompt) - 500;
   const turns = computeTurns(messages);
@@ -24,8 +22,9 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   const transcript = formatTurnsTranscript(messages, turns, { range: fitted });
   const index = buildLoreIndex(entries), ids = new Set();
   for (const book of ['characters', 'locations']) for (const id of findMentions(transcript, index, book)) ids.add(id);
-  for (const m of fitted.messages.filter(m => m.scene)) {
-    const resolved = resolveScene(parseScene(m.scene), index);
+  const timeline=sceneTimeline(messages);
+  for (const m of fitted.messages.filter(m => timeline.get(m.id)?.own)) {
+    const resolved = resolveScene(parseScene(timeline.get(m.id).own), index);
     for (const id of resolved.characters) ids.add(id);
     if (resolved.place) ids.add(resolved.place);
   }
@@ -34,8 +33,8 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
     known.push(label+': '+entries.filter(e => e.book === book && (book !== 'events' || e.kind === 'thread' && e.status !== 'closed')).map(e => e.name+(e.aliases?.length ? ' ('+e.aliases.join(', ')+')' : '')+(e.draft ? ' [draft]' : '')).join('; '));
   const fixed = `PROTAGONIST: ${mem.protagonist || 'the main character'}\n\n${known.join('\n')}\n\nCURRENT NOTES ABOUT THE PEOPLE AND PLACES IN THESE TURNS\n\nNEW TURNS ${fitted.fromTurn}–${fitted.toTurn}\n${transcript}`;
   if (await count(fixed) > inputBudget) throw new Error('Known names and turns exceed the memory update input budget.');
-  const notes = await fitBook(entries.filter(e => ids.has(e.id) || e.book === 'facts' || e.book === 'events' && e.kind === 'thread').map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { protagonist: mem.protagonist });
-  const content = fixed.replace('\n\nNEW TURNS', '\n'+notes.included.map(e => renderEntry(e.entry, e.lineIds, mem.protagonist)).join('\n')+'\n\nNEW TURNS');
+  const notes = await fitBook(entries.filter(e => ids.has(e.id) || e.book === 'facts' || e.book === 'events' && e.kind === 'thread').map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { protagonist: mem.protagonist, provenance:true });
+  const content = fixed.replace('\n\nNEW TURNS', '\n'+notes.included.map(e => renderEntry(e.entry, e.lineIds, mem.protagonist,{provenance:true})).join('\n')+'\n\nNEW TURNS');
   if (await count(content)+await count(prompt)+24 > settings.maxContextTokens-mem.updateMaxTokens) throw new Error('Memory update input exceeds the context budget.');
   return { messages: [{ role:'system', content:prompt }, { role:'user', content }], range: fitted };
 }

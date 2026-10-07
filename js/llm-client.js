@@ -24,6 +24,7 @@ export function buildRequestBody(settings, messages) {
       body.reasoning = { max_tokens: r.maxTokens };
     }
   }
+  if (r?.enabled === false && r.explicitDisable && /^https:\/\/openrouter\.ai\//.test(settings.endpoint)) body.reasoning = {enabled:false};
   return body;
 }
 
@@ -39,11 +40,26 @@ function responseError(data) {
   return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
 }
 
-function checkFinishReason(reason) {
-  if (reason === "length") {
+const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call']);
+
+function finishKind(reason) {
+  const kind = String(reason ?? '').toLowerCase();
+  return kind === 'length' || kind === 'max_tokens' ? 'length' : kind;
+}
+
+function emptyReplyError(reason) {
+  return new Error(finishKind(reason) === 'length'
+    ? "The output limit left no reply. Raise Max response tokens or lower the reasoning budget."
+    : "The model returned no reply; nothing was saved.");
+}
+
+function checkFinishReason(reason, allowTruncated) {
+  const kind = finishKind(reason);
+  if (kind === "length") {
+    if (allowTruncated) return;
     throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
   }
-  if (reason && reason !== "stop") {
+  if (BAD_FINISH.has(kind)) {
     throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
   }
 }
@@ -53,21 +69,20 @@ function serializedRequestBody(settings, messages, stream = false, format = {}) 
     ...(format.responseFormat ? { response_format:format.responseFormat } : {}),
     ...(format.provider ? { provider:format.provider } : {}) };
   const serialized = JSON.stringify(body);
-  console.log("[LLM request body]", serialized);
   return serialized;
 }
 
-export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider }) {
+export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider });
+    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated });
 }
 
-async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider }) {
+async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
@@ -77,19 +92,20 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
-  checkFinishReason(data.choices[0].finish_reason);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
-    throw new Error("The model returned no reply; nothing was saved.");
+    throw emptyReplyError(data.choices[0].finish_reason);
   }
+  checkFinishReason(data.choices[0].finish_reason, allowTruncated);
   return {
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
     usage: data.usage ?? null,
+    finishReason: finishKind(data.choices[0].finish_reason) || null,
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
@@ -157,12 +173,13 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
   if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
-  checkFinishReason(finishReason);
-  if (!content.trim()) throw new Error("The model returned no reply; nothing was saved.");
+  if (!content.trim()) throw emptyReplyError(finishReason);
+  checkFinishReason(finishReason, allowTruncated);
 
   return {
     content,
     thinking: thinking || null,
     usage,
+    finishReason: finishKind(finishReason) || null,
   };
 }

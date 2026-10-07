@@ -31,6 +31,7 @@ export function readMemory(validate = false, integerField) {
     try { out.startingScene = sceneLine({ ...seed,present:seed.present.split(',').map(n => n.trim()).filter(Boolean) }); }
     catch (error) { if (validate) throw error; }
   }
+  if (!out.startingScene && filled.startingSceneRaw) out.startingSceneRaw=filled.startingSceneRaw;
   for (const key of numbers) out[key] = validate ? integerField(get(key).value,'mem-'+key) : get(key).value;
   for (const book of Object.keys(out.books)) { out.books[book].on = get(book+'-on').checked; for (const key of ['budget',...(book === 'characters' || book === 'locations' ? ['maxCards'] : [])]) out.books[book][key] = validate ? integerField(get(book+'-'+key).value,'mem-'+book+'-'+key) : get(book+'-'+key).value; }
   return normalizeMemory(out);
@@ -62,6 +63,7 @@ export function updateMemorySettingsHints() {
   get('scene-options').classList.toggle('hidden',!mem.scene);
   for (const book of Object.keys(mem.books)) { get(book+'-on').disabled = !mem.lorebooks && !mem.autoUpdate; get(book+'-budget').disabled = !mem.lorebooks; if (get(book+'-maxCards')) get(book+'-maxCards').disabled = !mem.lorebooks; }
   const hints = [];
+  if (mem.startingSceneRaw) hints.push('Could not read this starting scene: '+mem.startingSceneRaw+'. Enter its date, time, location and attendees above.');
   if (mem.lorebooks && !mem.scene) hints.push('Turn on Scene line so characters who are present (not just mentioned) are remembered.');
   if (mem.autoUpdate && !mem.scene) hints.push('Notes will be stamped with turn numbers only — turn on Scene line to add in-story dates.');
   if (mem.memoryBlock && !mem.scene && !mem.lorebooks) hints.push('The memory block will only contain a reminder of the fixed system plan.');
