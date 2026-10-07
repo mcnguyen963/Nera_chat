@@ -762,6 +762,21 @@ test('Memory panel-only save does not rewrite title or plan and invalid values s
   h.el('mem-lorebooks').checked=true; await h.fire('btn-save-session'); assert.deepEqual(Object.keys(h.calls.sessionWrites[0][1]),['memory']);
   h.el('mem-batchTurns').value='not a number'; h.calls.confirm=false; await h.fire('btn-close-settings'); assert.equal(h.el('settings-tab').classList.contains('hidden'),false); await h.fire('btn-save-session'); assert.match(h.el('settings-saved-msg').textContent,/whole number/); assert.equal(h.calls.sessionWrites.length,1);
 });
+test('Memory model selector shares saved profiles and saves per story without switching the narrator',async()=>{
+  const h=await harness();h.state.sessionId='story-id';h.state.settings.profiles.push({id:'scribe',name:'Memory scribe',modelId:'z-ai/glm-5.3-flash:floor'});
+  const active=h.state.settings.activeProfileId,view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();
+  const select=h.el('mem-updateProfileId');assert.deepEqual(select.children.map(o=>o.value),['',...h.state.settings.profiles.map(p=>p.id)]);
+  assert.match(select.children.at(-1).textContent,/Memory scribe.*:floor/);select.value='scribe';
+  await h.fire('nav-story');await h.fire('nav-memory');assert.equal(select.value,'scribe');
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,1);assert.equal(h.calls.sessionWrites[0][1].memory.updateProfileId,'scribe');
+  assert.equal(h.state.settings.activeProfileId,active);assert.equal(h.calls.writes.length,0);
+  const panel=await h.use('ui/memory-settings-view.js');panel.fillMemory({updateProfileId:'scribe'});assert.equal(select.value,'scribe');assert.equal(panel.memoryDirty({updateProfileId:'scribe'}),false);
+  h.state.settings.profiles.find(p=>p.id==='scribe').name='Renamed';await h.document.dispatchEvent({type:'settings-changed'});
+  assert.equal(select.value,'scribe');assert.match(select.children.at(-1).textContent,/Renamed/);
+  h.state.settings.profiles=h.state.settings.profiles.filter(p=>p.id!=='scribe');await h.document.dispatchEvent({type:'settings-changed'});
+  assert.equal(select.value,'scribe');assert.equal(select.children.at(-1).disabled,true);assert.match(select.children.at(-1).textContent,/Unavailable/);
+  select.value='';assert.equal(panel.memoryDirty({updateProfileId:'scribe'}),true);assert.equal(panel.readMemory().updateProfileId,'');
+});
 test('legacy stories attach no lore listener and memory stories attach exactly one',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
   const callback=h.calls.sessionCallbacks.at(-1); callback({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); assert.equal(h.calls.loreSubscriptions ?? 0,0);
