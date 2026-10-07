@@ -1,0 +1,1 @@
+The fixed author plan IS ACTIVE. Its future and pending items remain pending until established events or the user resolve them. Write one short <plan_thread> naming the immediate pending target; never output or revise <plan>.

@@ -1,9 +1,11 @@
+import {effectivelyPaused} from '../continuity.js';
+import {updateSession} from '../sessions.js';
 import { normalizeMemory, memoryValidationRanges } from '../memory-settings.js';
 import { parseScene, sceneLine } from '../scene.js';
-import { computeTurns, dueRange } from '../turns.js';
+import { computeTurns, dueRange, dueRangeStatus } from '../turns.js';
 import { state } from '../state.js';
 import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
-import { isRunning, updateNow, catchUp, stop } from '../memory-updater.js';
+import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-updater.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
 const booleans = ['scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
@@ -50,13 +52,15 @@ export function initMemorySettings(openLore) {
   get('showScene').addEventListener('change',() => { localStorage.setItem('nera.memory.showScene',get('showScene').checked ? '1' : '0'); document.dispatchEvent(new CustomEvent('scene-preference')); });
   get('open-lore').addEventListener('click',openLore);
   get('update-now').addEventListener('click',() => void manualUpdate());
+  get('reextract')?.addEventListener('click',async()=>{try{const live=memorySnapshot(),order=live?.session.memoryState?.rebuildFromOrder;if(order==null)return;if(!confirm('Re-extract edited history from this turn? Generated notes will be marked for review and backed up.'))return;await rebuildFrom(live.session.id,order);toast('Re-extraction finished; review prior notes in Lorebooks.');}catch(e){toast(e.message);}});
+  get('choose-start')?.addEventListener('click',async()=>{try{const live=await prepareMemorySnapshot(),mem=normalizeMemory(live.session.memory),pointer=await chooseMemoryStart(mem,mem,live.session,true);if(pointer==='cancel' || pointer==null)return;await updateSession(live.session.id,{'memoryState.extractedThroughOrder':pointer});document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
   get('retry').addEventListener('click',() => void manualUpdate(true));
   get('catch-up').addEventListener('click',() => void catchUpDialog());
   document.addEventListener('memory-refresh',updateMemorySettingsHints);
 }
-async function manualUpdate(retry = false) { try { await prepareMemorySnapshot(); await updateNow(state.sessionId,{ retry }); } catch (e) { toast(e.message); } }
+async function manualUpdate(retry=false){try{await prepareMemorySnapshot();const ok=await updateNow(state.sessionId,{retry});if(ok===false)toast('Nothing to update yet, or an update is already running.');} catch (e) { toast(e.message); } }
 export function updateMemorySettingsHints() {
-  const mem = readMemory(), available = (state.settings?.maxContextTokens ?? 120000)-(state.settings?.maxResponseTokens ?? 8192);
+  const mem = readMemory(), available = state.settings?.maxContextTokens ?? 120000;
   const budget = mem.lorebooks ? Object.values(mem.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
   get('budget-summary').textContent = `Up to ${budget.toLocaleString()} of ${available.toLocaleString()} available tokens. Recent conversation has priority; lore uses the remaining space.`+(budget>available*.5 ? ' Leaves little room for recent messages.' : ''); get('budget-summary').style.color = budget>available*.5 ? 'var(--danger)' : '';
   get('show-scene-row').classList.toggle('hidden',!mem.scene);
@@ -73,14 +77,17 @@ export function updateMemorySettingsHints() {
   const recent = turns.assistants.slice(-20), totalTokens = (live?.messages ?? []).filter(m => recent.some(a => turns.turnById.get(m.id) === a.turn)).reduce((n,m) => n+(m.tokenCount ?? 0),0);
   if (mem.autoUpdate && totalTokens && recent.length) { const windowTurns = Math.floor(Math.max(0,available-budget-(live?.report?.blocks.filter(b => ['system','summary','anchor'].includes(b.key)).reduce((n,b) => n+b.tokens,0) ?? 0))/(totalTokens/recent.length)); if (windowTurns < mem.batchTurns+mem.lagTurns+1) hints.push(`Your recent-message window holds about ${windowTurns} turns, but up to ${mem.batchTurns+mem.lagTurns} turns can be waiting for a memory update. Those turns could drop out of context. Lower the book budgets or the batch size.`); }
   get('hints').textContent = hints.join('\n\n');
-  const savedOn = live?.session.memory?.autoUpdate === true, paused = live?.session.memoryState?.paused;
+  const savedOn = live?.session.memory?.autoUpdate === true, paused = effectivelyPaused(live?.session.memoryState);
   get('update-actions').classList.toggle('hidden',!savedOn);
   for (const key of ['update-now','catch-up','retry']) { get(key).disabled = !!state.busy || isRunning(state.sessionId); get(key).title = state.busy ? 'Wait for the current reply or summary.' : isRunning(state.sessionId) ? 'A memory update is already running.' : ''; }
   get('retry').classList.toggle('hidden',!paused);
-  get('update-status').textContent = paused ? 'Paused. '+live.session.memoryState.lastError : pointer == null ? `Not started yet — the first update runs after turn ${mem.batchTurns+mem.lagTurns}.` : done ? `Updated through turn ${done} · next update after turn ${done+mem.batchTurns+mem.lagTurns}.` : `Waiting for ${Math.max(0,mem.batchTurns-pending)} more turns.`;
+  const rebuildOrder=live?.session.memoryState?.rebuildFromOrder;get('reextract')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);if(get('reextract') && rebuildOrder!=null)get('reextract').textContent='Re-extract from T'+(turns.turnById.get(live.messages.find(m=>m.order===rebuildOrder)?.id) ?? '?');
+  get('choose-start')?.classList.toggle('hidden',pointer!=null);
+  const status=dueRangeStatus(live?.messages ?? [],live?.session.memoryState,mem);
+  get('update-status').textContent = paused ? ['Paused.',live.session.memoryState.lastError].filter(Boolean).join(' ') : pointer == null ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : done ? `Updated through turn ${done} · next update after turn ${done+mem.batchTurns+mem.lagTurns}.` : `Waiting for ${Math.max(0,mem.batchTurns-pending)} more turns.`;
 }
-export async function chooseMemoryStart(mem,previous,session) {
-  if (!mem.autoUpdate || previous.autoUpdate) return null;
+export async function chooseMemoryStart(mem,previous,session,force=false) {
+  if (!mem.autoUpdate || previous.autoUpdate && !force) return null;
   const live = await prepareMemorySnapshot(), turns = computeTurns(live.messages), pointer = session.memoryState?.extractedThroughOrder;
   const done = turns.assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
   if (pointer != null && turns.lastTurn-mem.lagTurns-done <= mem.batchTurns*3) return null;
@@ -98,11 +105,11 @@ export async function chooseMemoryStart(mem,previous,session) {
 async function catchUpDialog() {
   try {
     const live = await prepareMemorySnapshot(), mem = normalizeMemory(live.session.memory), turns = computeTurns(live.messages);
-    const eligible = turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a => a.order > (live.session.memoryState?.extractedThroughOrder ?? Infinity));
-    const calls = Math.ceil(eligible.length/mem.batchTurns), tokens = live.messages.filter(m => m.order>(live.session.memoryState?.extractedThroughOrder ?? Infinity)).reduce((n,m) => n+(m.tokenCount ?? 0),0);
+    const eligible = turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a => a.order > (live.session.memoryState?.extractedThroughOrder ?? 0));
+    const calls = Math.ceil(eligible.length/mem.batchTurns), tokens = live.messages.filter(m => m.order>(live.session.memoryState?.extractedThroughOrder ?? 0)).reduce((n,m) => n+(m.tokenCount ?? 0),0);
     const controller = new AbortController();
     const s = subSheet('Catch up…',{ close:() => { controller.abort(); stop(live.session.id); return true; } });
     const body = node('div',null,'memory-content'), progress = node('p',`Catch up on ${eligible.length} turns? This makes about ${calls} model calls (about ${tokens.toLocaleString()} input tokens). You can stop at any time.`);
-    body.append(progress,button('Catch up',async b => { b.disabled = true; await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent = 'Finished. Saved updates are kept.'; }),button('Stop',s.hide)); s.dialog.append(body);
+    body.append(progress,button('Catch up',async b => { b.disabled=true;try {await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent='Finished. Saved updates are kept.';}finally{b.disabled=false;b.textContent='Done';} }),button('Stop',s.hide)); s.dialog.append(body);
   } catch (e) { toast(e.message); }
 }

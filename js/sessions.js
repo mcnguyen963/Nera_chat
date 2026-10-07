@@ -70,7 +70,7 @@ export async function deleteSession(sessionId) {
   if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('memory-session-deleting', { detail: { sessionId } }));
   await waitForStoryWrites(sessionId);
   // Migrated sessions retain their legacy docs for recovery. Delete both trees.
-  for (const name of ["messageChunks", "messages", "lore", "loreBackups"]) {
+  for (const name of ["messageChunks", "messages", "lore", "loreBackups", "loreMeta"]) {
     const snap = await getDocsFromServer(collection(db, "users", currentUid(), "sessions", sessionId, name));
     for (let i = 0; i < snap.docs.length; i += 450) {
       const batch = writeBatch(db);

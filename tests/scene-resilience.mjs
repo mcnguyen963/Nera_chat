@@ -40,11 +40,11 @@ test('opening seed beats background mention order and reminders are counted once
     const built = await buildContextForRequest({ longTermPlan:'A pending hearing.',memory:{ scene:true,lorebooks:true,startingScene:seed,
       replyContract:variant,books:{ characters:{ maxCards:2 } } } },settings,{ messages,loreEntries:entries,requireLatestUser:true });
     assert.deepEqual(plain(built.report.loaded.filter(e=>e.book==='characters').map(e=>e.name)),['Nera Veyrath','Isolde Veyless']);
-    const contracts = built.apiMessages.filter(m=>m.content.includes('CURRENT REPLY CONTRACT'));
+    const contracts = built.apiMessages.filter(m=>m.content.includes('[Reply format —' ));
     assert.equal(contracts.length,variant==='off' ? 0 : 1);
-    if(variant==='system') assert.ok(built.apiMessages.at(-2).content.startsWith('CURRENT REPLY CONTRACT'));
+    if(variant==='system') assert.ok(built.apiMessages.at(-2).content.startsWith('[Reply format —' ));
     if(variant==='user') assert.equal(built.apiMessages.at(-1).role,'user');
-    if(variant!=='off') { assert.match(contracts[0].content,/IS ACTIVE/);assert.ok(built.usedTokens>previous); }
+    if(variant!=='off') { assert.match(contracts[0].content,/active/i);assert.ok(built.usedTokens>previous); }
     previous = variant==='off' ? built.usedTokens : previous;
     assert.equal(built.usedTokens,8+built.apiMessages.reduce((n,m)=>n+8+m.content.length,0));
   }
@@ -82,8 +82,8 @@ test('summary refuses an unaccepted eligible turn before making any provider or 
   let calls = 0;
   const use = appHarness({ stubs:{ 'messages.js':{ getMessages:async()=>[],getCheckpointMessages:async()=>[],addMessage:async()=>{calls++;},newMessageId:()=> 's' },
     'llm-client.js':{ chatCompletion:async()=>{calls++;} },'tokenizer.js':{ countTokens:async s=>s.length } } });
-  const result = await (await use('summarizer.js')).runSummarization({ id:'s',memory:{scene:true} },{ keepRecentMessagesAfterSummary:1 },{ messages:[
-    { id:'u',role:'user',order:1,content:'Continue.' },{ id:'a',role:'assistant',order:2,acceptance:'pending',content:'You sign.' },
-    { id:'u2',role:'user',order:1.5,content:'Next.' },{ id:'a2',role:'assistant',order:4,content:'Krail waits.' }] });
+  const result = await (await use('summarizer.js')).runSummarization({ id:'s',memory:{scene:true} },{maxContextTokens:50000,maxResponseTokens:1000, keepRecentMessagesAfterSummary:1 },{ messages:[
+    { id:'u',role:'user',order:1,content:'Continue.' },{ id:'a',role:'assistant',order:2,acceptance:'accepted',content:'Opening.' },{id:'blocked',role:'assistant',order:3,acceptance:'pending',content:'You sign.'},
+    { id:'a2',role:'assistant',order:4,content:'Krail waits.' }] });
   assert.equal(result.skipped,true);assert.match(result.reason,/flagged replies/);assert.equal(calls,0);
 });

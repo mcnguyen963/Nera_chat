@@ -19,9 +19,9 @@ export function buildRequestBody(settings, messages) {
   if (r?.enabled) {
     // Never send both effort and max_tokens together (spec §4.1).
     if (r.mode === "effort") {
-      body.reasoning = { effort: r.effort };
+      body.reasoning = {effort:['minimal','low','medium','high','xhigh','max','none'].includes(r.effort) ? r.effort : 'medium'};
     } else {
-      body.reasoning = { max_tokens: r.maxTokens };
+      body.reasoning = {max_tokens:Math.max(0,Math.min(Number(r.maxTokens)||0,settings.maxResponseTokens-1))};
     }
   }
   if (r?.enabled === false && r.explicitDisable && /^https:\/\/openrouter\.ai\//.test(settings.endpoint)) body.reasoning = {enabled:false};
@@ -72,14 +72,28 @@ function serializedRequestBody(settings, messages, stream = false, format = {}) 
   return serialized;
 }
 
-export async function chatCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false }) {
+export async function chatCompletion(options) {
+  const controller=new AbortController();let timer,content='',thinking='';
+  const kick=()=>{globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort('timeout'),120000);timer?.unref?.();};
+  const cancel=()=>controller.abort(options.signal?.reason ?? 'user');
+  if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
+  let rejectAbort;
+  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
+  kick();
+  try {
+    if(controller.signal.aborted)rejectAbort();
+    return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{content+=t;options.onDelta?.(t);},onReasoning:t=>{thinking+=t;options.onReasoning?.(t);}}),aborted]);
+  } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
+}
+
+async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false, kick }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated });
+    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated, kick });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick });
 }
 
 async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated }) {
@@ -105,7 +119,7 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
@@ -159,8 +173,12 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     if (json.usage) usage = json.usage;
   };
 
+  const cancelReader=()=>{Promise.resolve(reader.cancel?.()).catch(()=>{});};
+  signal?.addEventListener('abort',cancelReader,{once:true});
+  try {
   while (true) {
     const { done, value } = await reader.read();
+    kick?.();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let nl;
@@ -170,6 +188,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
       processLine(line);
     }
   }
+  } finally {signal?.removeEventListener('abort',cancelReader);cancelReader();}
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
   if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");

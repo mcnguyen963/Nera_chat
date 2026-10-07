@@ -32,7 +32,7 @@ async function setup(legacyCount = 0) {
       const last = keys.at(-1);
       holder[last] = field?.kind === 'arrayUnion'
         ? [...(holder[last] ?? []), ...field.values.filter(v => !(holder[last] ?? []).some(x => JSON.stringify(x) === JSON.stringify(v)))]
-        : field?.kind === 'serverTimestamp' ? new Date() : field;
+        : field?.kind === 'serverTimestamp' ? new Date() : field?.kind === 'increment' ? (holder[last] ?? 0)+field.amount : field;
     }
     documents.set(target.path, structuredClone(result));
   };
@@ -47,6 +47,7 @@ async function setup(legacyCount = 0) {
     Timestamp: { now: () => new Date() },
     arrayUnion: (...values) => ({ kind: 'arrayUnion', values }),
     serverTimestamp: () => ({ kind: 'serverTimestamp' }),
+    increment: amount => ({kind:'increment',amount}),
     getDocFromServer: async (target) => {
       reads.documents++;
       return snapshot(target.path);
@@ -212,7 +213,7 @@ test('assistant plan updates are committed with the message', async () => {
   assert.equal((await h.api.getMessages('s'))[0].content, 'A revised event');
 });
 
-test('Editing folded story history atomically invalidates its summary checkpoint', async () => {
+test('Editing folded story history preserves its summary checkpoint; deletion resets it', async () => {
   const h = await setup();
   const first = await h.api.addMessage('s', { role: 'user', content: 'Old fact' });
   await h.api.addMessage('s', { role: 'assistant', content: 'Reply' });
@@ -221,9 +222,9 @@ test('Editing folded story history atomically invalidates its summary checkpoint
   });
   assert.equal(summary.order, 3);
   const edited = await h.api.editMessage('s', first.id, 'Corrected fact', first.order);
-  assert.equal(edited.summaryReset, true);
-  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, null);
-  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 0);
+  assert.equal(edited.summaryReset, false);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, "summary");
+  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 2);
   const secondSummary = await h.api.addMessage('s', { role: 'summary', content: 'Rebuilt' }, {
     sessionUpdate: { activeSummaryMessageId: 'summary2', breakpointOrder: 2 }, id: 'summary2',
   });
@@ -390,8 +391,8 @@ test('merge keeps canon, aliases and lines; reorganize preserves concurrent and 
   await h.lore.createEntry('s',a); await h.lore.createEntry('s',b); const backup = await h.lore.mergeEntries('s',a,b); const merged = h.documents.get(h.sessionPath+'/lore/b'); assert.equal(merged.sections.appearance.text,'target canon'); assert.ok(merged.aliases.includes('Old Tom')); assert.ok(merged.sections.appearance.lines.some(l => l.text==='From Old Tom: canon')); assert.equal(h.documents.has(h.sessionPath+'/lore/a'),false);
   await h.lore.restoreBackup('s',backup,[{ id:'b',...merged }]); assert.equal(h.documents.has(h.sessionPath+'/lore/a'),true);
   const current = h.documents.get(h.sessionPath+'/lore/a'); current.sections.appearance.lines.push({ id:'late',text:'late',by:'auto',at:100 },{ id:'user',text:'my note',by:'user',at:2 });
-  await h.lore.replaceLines('s',[{ entry:a,sections:{ appearance:[{ id:'tidied',text:'tidied',by:'reorganize',at:101 }] } }],50);
-  const after = h.documents.get(h.sessionPath+'/lore/a'); assert.equal(after.sections.appearance.text,'canon'); assert.deepEqual(after.sections.appearance.lines.map(l => l.id),['old','late','user','tidied']);
+  await h.lore.replaceLines('s',[{ entry:a,snapshot:{appearance:['old']},sections:{ appearance:[{ id:'tidied',text:'tidied',by:'reorganize',at:101 }] } }],50);
+  const after = h.documents.get(h.sessionPath+'/lore/a'); assert.equal(after.sections.appearance.text,'canon'); assert.deepEqual(after.sections.appearance.lines.map(l => l.id),['user','tidied','late']);
 });
 test('copy filters future lore, clamps pointer and delete removes lore and backups',async () => {
   const h = await setup(); const a = await h.api.addMessage('s',{ role:'assistant',content:'one' }); const b = await h.api.addMessage('s',{ role:'assistant',content:'two' });
@@ -447,10 +448,10 @@ test('prose edits and scene corrections invalidate summary and memory without de
   const e = loreEntry(); e.sections.appearance.lines[0].src = a.order; await h.lore.createEntry('s',e);
   Object.assign(h.documents.get(h.sessionPath),{ activeSummaryMessageId:'summary',breakpointOrder:a.order,memoryState:{ extractedThroughOrder:a.order } });
   const result = await h.api.editMessage('s',a.id,'Edited',a.order);
-  assert.equal(result.summaryReset,true); assert.equal(result.replacement.scene,'Day 1 · Inn'); assert.equal(result.replacement.planThread,'Reminder');
-  const session = h.documents.get(h.sessionPath); assert.equal(session.activeSummaryMessageId,null); assert.equal(session.memoryState.needsRebuild,true); assert.equal(session.memoryState.paused,true);
+  assert.equal(result.summaryReset,false); assert.equal(result.replacement.scene,'Day 1 · Inn'); assert.equal(result.replacement.planThread,'Reminder');
+  const session = h.documents.get(h.sessionPath); assert.equal(session.activeSummaryMessageId,"summary"); assert.equal(session.memoryState.needsRebuild,true); assert.notEqual(session.memoryState.paused,true);
   assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,1);
-  await h.api.updateMessageScene('s',a.id,a.order,'unknown · unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,2);
+  await h.api.updateMessageScene('s',a.id,a.order,'unknown · unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,1);
 });
 test('earlier session copies exclude future evidence and make later snapshots unavailable while preserving fixed plan',async () => {
   const h = await setup(); const a = await h.api.addMessage('s',{ role:'assistant',content:'One' }), b = await h.api.addMessage('s',{ role:'assistant',content:'Two' });
@@ -474,8 +475,8 @@ test('accepting a flagged reply is revision checked, persists its candidate scen
   assert.equal((await h.api.getMessages('s'))[0].acceptance,'pending');
   const accepted = await h.api.acceptMessage('s',reply.id,reply.order,0);
   assert.equal(accepted.replacement.acceptance,'accepted');assert.equal(accepted.replacement.scene,candidate.scene);
-  assert.equal(accepted.replacement.sceneCandidate,null);assert.equal(accepted.replacement.revision,1);
-  assert.equal(h.documents.get(h.sessionPath).memoryState.paused,true);
+  assert.equal(accepted.replacement.sceneCandidate,null);assert.equal(accepted.replacement.revision,0);
+  assert.notEqual(h.documents.get(h.sessionPath).memoryState?.paused,true);
   assert.equal((await h.api.getMessages('s'))[0].sceneMeta.provenance.time,'unknown');
   const replacement = await h.api.overwriteMessage('s',reply.id,{ content:'Mira waits.',scene:'Inn',sceneMeta:{ kind:'inferred' },acceptance:'accepted' },reply.order);
   assert.equal(replacement.replacement.sceneMeta.kind,'inferred');assert.equal(replacement.replacement.sceneCandidate,null);
@@ -496,4 +497,26 @@ test('P0 and U4 regeneration clears edited and cut-off fields and omits review m
  await h.api.editMessage('s',a.id,'Edited',a.order);
  const result=await h.api.overwriteMessage('s',a.id,{content:'Complete'},a.order);
  assert.equal(result.replacement.truncated,false);assert.equal('editedAt' in result.replacement,false);assert.equal('acceptance' in result.replacement,false);assert.equal('reviewWarnings' in result.replacement,false);assert.equal('sceneCandidate' in result.replacement,false);
+});
+
+test('U3 backup index writes prune with one read after initialization and listing fetches only metadata',async()=>{
+ const h=await setup(),e=loreEntry();await h.lore.writeBackup('s','test','First',[e]);const before=h.reads.documents;await h.lore.writeBackup('s','test','Second',[e]);assert.equal(h.reads.documents-before,1);const start=h.reads.documents,groups=await h.lore.listBackups('s');assert.equal(h.reads.documents-start,1);assert.equal(groups.length,2);assert.equal(groups[0].count,1);assert.equal('entries' in groups[0],false);const fetched=await h.lore.loadBackupGroup('s',groups[0].id);assert.equal(fetched[0].entries[0].id,e.id);
+});
+test('U3 pre-index backups remain restorable and build a metadata index once',async()=>{
+ const h=await setup(),e=loreEntry();h.documents.set(h.sessionPath+'/loreBackups/old',{partOf:'old',part:1,label:'Old',reason:'delete',createdMs:1,entries:[{id:e.id,data:e}],createdIds:[]});const groups=await h.lore.listBackups('s');assert.equal(groups[0].id,'old');assert.ok(h.documents.has(h.sessionPath+'/loreMeta/backups'));await h.lore.restoreBackup('s','old',[]);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').name,'Mira');
+});
+test('L2 extraction rebases notes and aliases onto current canon, refreshes stale twins, and returns its lore revision',async()=>{
+ const h=await setup(),e=loreEntry();e.sections.appearance.lines=[{id:'stale',text:'A scar.',by:'auto',needsReview:true,src:2,at:1}];await h.lore.createEntry('s',e);h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:0};h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.text='New manual canon';
+ const line={id:'candidate',text:'a scar',by:'auto',src:4,turn:2,at:2,evidence:[],sourceRevision:0};const r=await h.lore.commitExtraction('s',{creates:[],appends:[{entryId:'mira',section:'appearance',line}],aliases:[{entryId:'mira',alias:'Witch'}],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4,guard:{startPointer:0,startRevision:0,fromOrder:1,endOrder:4}});const card=h.documents.get(h.sessionPath+'/lore/mira');assert.equal(card.sections.appearance.text,'New manual canon');assert.equal(card.sections.appearance.lines.length,1);assert.equal(card.sections.appearance.lines[0].id,'stale');assert.equal(card.sections.appearance.lines[0].needsReview,false);assert.ok(card.aliases.includes('Witch'));assert.equal(r.loreRevision,h.documents.get(h.sessionPath).loreRevision);assert.equal(r.entries[0].sections.appearance.text,'New manual canon');
+});
+test('L6 changed sent text refuses replacement and missing snapshot notes are replaced while fresh and user notes survive',async()=>{
+ const h=await setup(),e=loreEntry();await h.lore.createEntry('s',e);const sent=e.sections.appearance.lines.map(l=>({id:l.id,text:l.text})),snapshot={appearance:sent.map(l=>l.id)},preview={entry:e,sent:{appearance:sent},snapshot,sections:{appearance:[{id:'new',text:'tidied',by:'reorganize',at:5}]}};
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text='Edited elsewhere';await assert.rejects(h.lore.replaceLines('s',[preview],3),/changed since the preview/);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text,'Edited elsewhere');
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text=sent[0].text;h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'fresh',text:'fresh',by:'auto',at:6},{id:'user',text:'mine',by:'user',at:1});await h.lore.replaceLines('s',[preview],3);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['user','new','fresh']);
+});
+test('L1 content edits cap the edit log without pausing and metadata corrections create no invalidations',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Story'});h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:a.order};for(let i=0;i<25;i++)await h.api.editMessage('s',a.id,'Story '+i,a.order);const session=h.documents.get(h.sessionPath);assert.equal(session.contentEdits.length,20);assert.ok(session.contentEditsFloor>0);assert.notEqual(session.memoryState.paused,true);const n=session.memoryInvalidations.length,revision=(await h.api.getMessages('s'))[0].revision;await h.api.updateMessageScene('s',a.id,a.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,n);assert.equal((await h.api.getMessages('s'))[0].revision,revision);
+});
+test('L2 rebuild cleanup backs up unreproduced notes and preserves refreshed, imported, user and out-of-range notes',async()=>{
+ const h=await setup(),e=loreEntry();e.sections.appearance.lines=[{id:'remove',by:'auto',text:'old',needsReview:true,src:4,at:1},{id:'updated',by:'auto',text:'reproduced',needsReview:false,src:4,at:2},{id:'later',by:'auto',text:'outside',needsReview:true,src:8,at:1},{id:'mine',by:'user',text:'mine',needsReview:true,src:4,at:1},{id:'import',by:'import',text:'canon',needsReview:true,src:4,at:1}];await h.lore.createEntry('s',e);const backup=await h.lore.removeReviewedLines('s',[e],3,6);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['updated','later','mine','import']);await h.lore.restoreBackup('s',backup,[]);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,5);
 });

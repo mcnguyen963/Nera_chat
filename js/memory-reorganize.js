@@ -1,3 +1,4 @@
+import {requestInputLimit} from './request-budget.js';
 import { buildReorganizeMessages } from './memory-prompts.js';
 import { parseMemoryLines, applyOps } from './lore-lines.js';
 import { countTokens } from './tokenizer.js';
@@ -6,7 +7,7 @@ import { computeTurns } from './turns.js';
 export async function planReorganize(live,entries,sections,instruction = '',count = countTokens) {
   const mem = live.mem, settings = live.settings, batches = [], warnings = []; let batch = [];
   const cost = async cards => { const messages = buildReorganizeMessages({ settings,mem,entries:cards,sections,instruction }); return 24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0); };
-  const cap = settings.maxContextTokens-mem.reorganizeMaxTokens-500;
+  const cap = requestInputLimit({...settings,maxResponseTokens:mem.reorganizeMaxTokens})-500;
   for (const original of entries) {
     const e = structuredClone(original);
     for (const s of Object.values(e.sections)) { s.userCanon = s.lines.filter(l => l.by === 'user'); s.lines = s.lines.filter(l => l.by !== 'user' && !l.needsReview); }
@@ -25,7 +26,7 @@ export async function planReorganize(live,entries,sections,instruction = '',coun
 }
 export async function runReorganizeBatch(live,entries,sections,instruction,{ signal,onDelta,count = countTokens,complete = chatCompletion } = {}) {
   const messages = buildReorganizeMessages({ settings:live.settings,mem:live.mem,entries,sections,instruction });
-  if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>live.settings.maxContextTokens-live.mem.reorganizeMaxTokens) throw new Error('Reorganize input exceeds the context budget.');
+  if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>requestInputLimit({...live.settings,maxResponseTokens:live.mem.reorganizeMaxTokens})) throw new Error('Reorganize input exceeds the context budget.');
   const result = await complete({ settings:{ ...live.settings,reasoning:{ ...live.settings.reasoning,enabled:false },maxResponseTokens:live.mem.reorganizeMaxTokens },messages,signal,onDelta,onReasoning:() => {} });
   const parsed = parseMemoryLines(result.content,{ reorganize:true,allowPersonality:true,entries,messages:live.messages,mem:live.mem });
   if (!parsed.valid) { const error = new Error("Invalid reorganization; nothing was changed."); error.raw = result.content; throw error; }
@@ -34,9 +35,9 @@ export async function runReorganizeBatch(live,entries,sections,instruction,{ sig
   const accepted = changes.appends.filter(a => sections[a.entryId]?.includes(a.section));
   if (!accepted.length) { const error = new Error("The model's answer couldn't be read as notes. Nothing was changed."); error.raw = result.content; throw error; }
   const turns = computeTurns(live.messages);
-  const previews = entries.map(e => ({ entry:e,include:true,sections:Object.fromEntries((sections[e.id] ?? []).map(key => [key,accepted.filter(a => a.entryId === e.id && a.section === key).map(a => {
+  const previews = entries.map(e => ({ entry:e,include:true,sent:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.filter(l=>l.by!=='user').map(l=>({id:l.id,text:l.text}))])),snapshot:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.map(l=>l.id)])),sections:Object.fromEntries((sections[e.id] ?? []).map(key => [key,accepted.filter(a => a.entryId === e.id && a.section === key).map(a => {
     const original = [...e.sections[key].lines].filter(l => l.turn === a.line.turn).sort((a,b) => a.at-b.at).at(-1) ?? e.sections[key].lines.at(-1);
-    return { ...a.line,when:original?.when ?? a.line.when,src:original?.src ?? turns.assistants.find(t => t.turn === a.line.turn)?.order ?? null,evidence:[...new Map(e.sections[key].lines.flatMap(l => l.evidence ?? []).map(ev => [ev.id,ev])).values()],sourceRevision:Math.min(...e.sections[key].lines.map(l => l.sourceRevision ?? 0)) };
+    return { ...a.line,when:original?.when ?? a.line.when,src:original?.src ?? turns.assistants.find(t => t.turn === a.line.turn)?.order ?? null,evidence:original?.evidence ?? a.line.evidence ?? [],sourceRevision:original?.sourceRevision ?? a.line.sourceRevision ?? 0 };
   })])) }));
   return { previews,skipped:[...parsed.skipped,...changes.skipped],raw:result.content };
 }

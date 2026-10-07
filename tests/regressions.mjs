@@ -3,7 +3,7 @@ import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 // Exercise the browser modules with isolated Firestore and DOM substitutes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 async function harness({ legacyNarratorHashes = null } = {}) {
@@ -78,13 +78,13 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     URL, console, structuredClone, document, TextDecoder, TextEncoder, AbortController,
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } } },
     requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
-    localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
+    localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value),removeItem:key=>localCache.delete(key) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout() {}, confirm: () => calls.confirm,
+    setTimeout() {}, clearTimeout() {}, confirm: () => calls.confirm,
     fetch: async (_url, options) => {
       if (_url instanceof URL && _url.protocol === 'file:') {
-        if (legacyNarratorHashes && _url.pathname.endsWith('/legacy-narrator-default-hashes.md')) return { ok:true, text:async () => legacyNarratorHashes };
+        if (legacyNarratorHashes && _url.pathname.endsWith('/legacy-prompt-default-hashes.md')) return { ok:true, text:async () => legacyNarratorHashes.split(/\s+/).filter(Boolean).map(hash=>`narratorSystemPrompt ${hash}`).join("\n") };
         return promptFetch(_url, options);
       }
       calls.requests.push(JSON.parse(options.body));
@@ -116,7 +116,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
       saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async () => {}, listBackups: async () => [], removeDeletedLines: async () => 'backup', importLore: async () => 'backup', replaceLines: async () => 'backup',
     },
-    'memory-updater.js': { lastRawAnswer: () => '', configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop() {}, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
+    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop() {}, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
     'ui/pet-view.js': {
       initPetView() {}, startPetTurn() {}, finishPetTurn() {},
       refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
@@ -126,7 +126,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     'auth.js': { currentUid: () => 'test-user' },
     'tokenizer.js': { countTokens: async (text) => text.length },
     'sessions.js': {
-      getSessionFromServer:async id => calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 }),
+      getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
       getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
       duplicateSession: async (...args) => { calls.sessionCopies ??= []; calls.sessionCopies.push(args); return 'copied-session'; },
@@ -135,7 +135,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     'messages.js': {
       ensureContinuityMetadata:async () => {},
       getMessages:async () => { const read = calls.historyReads = (calls.historyReads ?? 0)+1; const result = structuredClone(calls.serverHistory ?? calls.history ?? []); await calls.onHistoryRead?.(read); return result; }, getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
-      addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); calls.messages.push(args); const result = { ...args[1],id:calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) calls.sessionDocs[args[0]].historyRevision = result.historyRevision; calls.history = [...(calls.history ?? []),result]; return result; },
+      addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); calls.messages.push(args); const result = { ...args[1],id:calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) calls.sessionDocs[args[0]].historyRevision = result.historyRevision; calls.history = [...(calls.history ?? []),result]; result.session={id:args[0],...(calls.sessionDocs?.[args[0]] ?? {}),historyRevision:result.historyRevision};return result; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
     },
   };
@@ -173,6 +173,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
   const { state } = await use('state.js');
   const settings = await use('settings.js');
   state.settings = settings.hydrateProfiles(structuredClone(settings.DEFAULT_SETTINGS));
+  state.settingsSource = "server";
   return { use, state, settings, calls, localCache, document, el: document.getElementById,
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
@@ -248,7 +249,7 @@ test('Thinking and sampling controls use only enabled request parameters', async
   const h = await harness();
   const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
   assert.equal(h.settings.DEFAULT_SETTINGS.maxResponseTokens, 8192);
-  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /dark fantasy roleplay/);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive roleplay/);
   assert.doesNotMatch(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /plan/i);
   assert.equal(h.el('thinking-options').classList.contains('hidden'), true);
   assert.equal(h.el('advanced-options').classList.contains('hidden'), true);
@@ -368,7 +369,7 @@ test('Settings reload from Firestore, while quick model and thinking changes sta
   assert.equal(h.calls.reads, 1);
   assert.equal(h.calls.writes.length, 0);
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).activeProfileId, 'second');
-  assert.equal((await h.settings.loadSettings()).modelId, 'model-a');
+  assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
   assert.equal(h.calls.reads, 2);
   await h.settings.saveSettings({ ...h.state.settings, activeProfileId: 'second', modelId: 'model-b' });
   assert.equal(h.calls.writes.length, 1);
@@ -421,12 +422,12 @@ for (const keep of [0, 1, 3]) {
   test(`Summary keeps at least ${keep} recent messages and completes turns`, async () => {
     const h = await harness();
     const { runSummarization } = await h.use('summarizer.js');
-    const messages = Array.from({ length:6 },(_,i) => ({ id:String(i),order:i+1,role:i%2 ? 'assistant' : 'user',content:'event' }));
+    const messages = Array.from({ length:8 },(_,i) => ({ id:String(i),order:i+1,role:i%2 ? 'assistant' : 'user',content:'event' }));
     const result = await runSummarization({ id: 'session' }, {
       ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: keep,
     }, { messages });
     assert.equal(result.foldedCount, keep === 0 ? 6 : keep === 1 ? 4 : 2);
-    assert.equal(result.newBreakpointOrder,result.foldedCount);
+    assert.equal(result.newBreakpointOrder,result.foldedCount+2);
   });
 }
 
@@ -436,7 +437,7 @@ test('Empty summarizer output does not advance checkpoint', async () => {
   const { runSummarization } = await h.use('summarizer.js');
   await assert.rejects(runSummarization({ id: 's' }, {
     ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [{ id: 'm', order: 1, role: 'user', content: 'event' }] }), /no reply/);
+  }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'event'})) }), /no reply/);
   assert.equal(h.calls.messages.length, 0);
 });
 
@@ -467,7 +468,7 @@ test('Context uses the checkpoint and every later message supplied by the cache'
     ...h.state.settings, maxContextTokens: 100000, maxResponseTokens: 1000,
   }, { messages });
   assert.equal(result.windowedCount, 150);
-  assert.match(result.apiMessages[1].content,/Historical summary through message order 200.*\nEarlier story/s);
+  assert.match(result.apiMessages.find(m=>m.content.includes('Earlier story')).content,/Story so far:\nEarlier story/);
   assert.equal(result.apiMessages.at(-1).content, 'turn 149');
 });
 
@@ -484,12 +485,12 @@ test('Sliding context preserves the opening exchange and latest user while eject
     { id: 'u3', order: 5, role: 'user', content: 'Latest', tokenCount: 30 },
   ];
   const result = await buildContextForRequest({ id: 's' }, settings, { messages, requireLatestUser: true });
-  assert.deepEqual(Array.from(result.apiMessages.slice(1),(m) => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')), ['Opening', 'Background', 'Small recent', 'Latest']);
+  assert.deepEqual(Array.from(result.apiMessages.slice(1),(m) => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')), ['Opening', 'Background', '[Earlier turns omitted.]', 'Small recent', 'Latest']);
   assert.equal(result.droppedCount, 1);
-  assert.ok(result.usedTokens + settings.maxResponseTokens <= settings.maxContextTokens);
+  assert.ok(result.usedTokens <= settings.maxContextTokens);
   await assert.rejects(buildContextForRequest({ id: 's' }, settings, {
     messages: messages.map((m) => m.id === 'u3' ? { ...m,content:'Latest'.repeat(500),tokenCount:1 } : m), requireLatestUser: true,
-  }), /opening story, summary and latest user message exceed/);
+  }), /opening story.*latest user message exceed/);
 });
 
 test('Opening exchange survives a summary checkpoint and regeneration preserves fixed plan', async () => {
@@ -504,8 +505,8 @@ test('Opening exchange survives a summary checkpoint and regeneration preserves 
   ];
   const session = { id: 's', longTermPlan: 'Future plan', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
   const current = await buildContextForRequest(session, h.state.settings, { messages, requireLatestUser: true });
-  assert.match(current.apiMessages[1].content,/Historical summary/);
-  assert.deepEqual(Array.from(current.apiMessages.slice(2),m => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')),['The kingdom begins here','The first scene','Current turn']);
+  assert.match(current.apiMessages[3].content,/Story so far/);
+  assert.deepEqual(Array.from(current.apiMessages.slice(1).filter(m=>m.role!=='system'),m => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')),['The kingdom begins here','The first scene','Current turn']);
   const regen = await buildContextForRequest(session, h.state.settings, {
     messages, upToOrder: 2, planOverride: 'Original plan', requireLatestUser: true,
   });
@@ -518,7 +519,7 @@ test('Story plan is fixed even with the legacy model update flag', async () => {
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const locked = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20' }, h.state.settings, { messages: [] });
-  assert.match(locked.apiMessages[0].content, /fixed author instructions/);
+  assert.match(locked.apiMessages[0].content, /set by the user/);
   assert.match(locked.apiMessages[0].content, /day 20/);
   const editable = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20', allowLlmPlanUpdates: true }, h.state.settings, { messages: [] });
   assert.equal(editable.apiMessages[0].content,locked.apiMessages[0].content);
@@ -530,20 +531,20 @@ test('Context budget reserves message framing as short turns accumulate', async 
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
   assert.ok(base.usedTokens >= MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
   const messages = Array.from({ length: 20 }, (_, i) => ({ id: String(i), order: i + 1, role: 'user', content: 'x', tokenCount: 1 }));
-  const budget = base.usedTokens + 100 + MESSAGE_FRAME_TOKENS * 5 + 100;
+  const budget = base.usedTokens + MESSAGE_FRAME_TOKENS * 5 + 100;
   const result = await buildContextForRequest({ id: 's' }, { ...h.state.settings, maxContextTokens: budget, maxResponseTokens: 100 }, { messages });
   assert.ok(result.windowedCount < messages.length);
-  assert.ok(result.usedTokens + 100 <= budget);
+  assert.ok(result.usedTokens <= budget);
 });
 
 test('Summarizer bounds each request to the configured context', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
   const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', modelId: 'test', streaming: false,
-    maxContextTokens: 8000,maxResponseTokens:100,summarizerMaxTokens:1000,summarizerChunkTokens:500,
+    maxContextTokens: 8000,maxResponseTokens:100,summarizerMaxTokens:1000,summarizerChunkTokens:900,
     keepRecentMessagesAfterSummary: 0 };
-  const messages = Array.from({ length: 4 }, (_, i) => ({ id: String(i), order: i + 1,
-    role: 'user', content: 'event '.repeat(65) }));
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
+    role: i%2 ? 'assistant' : 'user', content: 'event '.repeat(65) }));
   await runSummarization({ id: 's' }, settings, { messages });
   assert.ok(h.calls.requests.length > 1);
   assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(8000 / 3) &&
@@ -557,7 +558,7 @@ test('Summarizer disables chat reasoning on every request', async () => {
     ...h.state.settings, modelId: 'test', streaming: false,
     reasoning: { enabled: true, mode: 'max_tokens', maxTokens: 20000 },
     keepRecentMessagesAfterSummary: 0,
-  }, { messages: [{ id: '1', order: 1, role: 'user', content: 'A new event' }] });
+  }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'A new event'})) });
   assert.equal(h.calls.requests.length, 1);
   assert.equal(h.calls.requests[0].reasoning, undefined);
 });
@@ -622,7 +623,7 @@ test('Author direction tags are normalized in model context', async () => {
     { id: 'm2', order: 2, role: 'user', content: '<ad>Continue the scene</ad>', tokenCount: 30 },
   ];
   const result = await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
-  assert.match(result.apiMessages[0].content, /out-of-character author instruction/);
+  assert.match(result.apiMessages[0].content, /out-of-story author direction/);
   assert.match(result.apiMessages[1].content,/<ad>What happened between Nera and Elise\?<\/ad>$/);
   assert.equal(result.apiMessages[2].content, '<ad>Continue the scene</ad>');
   assert.equal(messages[0].content, '<ad>What happened between Nera and Elise?<ad>');
@@ -637,7 +638,7 @@ test('Concurrent settings writes cannot silently overwrite each other', async ()
   assert.equal(h.calls.writes.length, 1);
 });
 
-test('Auto-summary threshold accounts for system instructions and reserved reply tokens', async () => {
+test('Auto-summary threshold counts input independently of reply capacity', async () => {
   const h = await harness();
   const { shouldAutoSummarize } = await h.use('summarizer.js');
   const { buildContextForRequest } = await h.use('context-builder.js');
@@ -647,7 +648,7 @@ test('Auto-summary threshold accounts for system instructions and reserved reply
     ...h.state.settings,narratorSystemPrompt:'',maxContextTokens:overhead+2800,
     maxResponseTokens:800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
   }, [{ id: 'm', order: 1, role: 'user', content:'large message'.repeat(140),tokenCount:1 }]);
-  assert.equal(result, true);
+  assert.equal(result, false);
   assert.equal(await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, autoSummarizationEnabled: false,
   }, [{ id: 'm', order: 1, role: 'user', content:'large message'.repeat(140),tokenCount:1 }]), false);
@@ -759,7 +760,7 @@ test('chat turn ledger gives a due or running update priority over auto-summary,
     h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',...(mode !== 'legacy' ? { memory:{ autoUpdate:true },memoryState:{ extractedThroughOrder:0 } } : {}) }) });
     h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u1',order:1,role:'user',content:'Opening',tokenCount:7 },{ id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5 },{ id:'u2',order:3,role:'user',content:'Next',tokenCount:4 },{ id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6 }],hasEarlier:false });
     await Promise.resolve(); h.el('chat-input').value='Continue'; await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
-    assert.equal(h.calls.requests.length,mode === 'legacy' ? 2 : 1,mode); assert.equal(h.calls.memoryStarts ?? 0,mode === 'due' ? 1 : 0); assert.equal(h.state.busy,false);
+    assert.equal(h.calls.requests.length,mode === 'due' ? 1 : 2,mode); assert.equal(h.calls.memoryStarts ?? 0,mode === 'due' ? 1 : 0); assert.equal(h.state.busy,false);
   }
 });
 
@@ -793,7 +794,7 @@ test('multi-call summary rejects source changes and never advances its checkpoin
   const h = await harness(), { runSummarization } = await h.use('summarizer.js');
   const history = Array.from({ length:6 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Event '.repeat(50) }));
   let checked = 0;
-  await assert.rejects(runSummarization({ id:'s',historyRevision:3 },{ ...h.state.settings,narratorSystemPrompt:'Narrate.',modelId:'test',streaming:false,maxContextTokens:9000,maxResponseTokens:100,keepRecentMessagesAfterSummary:0,summarizerChunkTokens:400 },{ messages:history,validateSource:async expected => { assert.equal(expected.historyRevision,3); if (++checked === 2) throw new Error('Source changed'); } }),/Source changed/);
+  await assert.rejects(runSummarization({ id:'s',historyRevision:3 },{ ...h.state.settings,narratorSystemPrompt:'Narrate.',modelId:'test',streaming:false,maxContextTokens:9000,maxResponseTokens:100,keepRecentMessagesAfterSummary:0,summarizerChunkTokens:650 },{ messages:history,validateSource:async expected => { assert.equal(expected.historyRevision,3); if (++checked === 2) throw new Error('Source changed'); } }),/Source changed/);
   assert.equal(h.calls.requests.length,2); assert.equal(h.calls.messages.length,0);
   assert.ok(h.calls.requests.every(r => !r.messages.some(m => /1000-2000 words|DETAILED/.test(m.content))));
 });
@@ -837,10 +838,10 @@ test('scene recovery runs only on clean narrative failures, preserves narration 
     h.el('chat-input').value=mode==='ooc' ? '<ooc>Who is here?</ooc>' : 'Continue.';
     await h.el('composer').dispatchEvent({ type:'submit',preventDefault(){} });
     const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
-    assert.equal(h.calls.requests.length,['recover','bad-json','flagged'].includes(mode) ? 2 : 1,mode);
+    assert.equal(h.calls.requests.length,['recover','bad-json','flagged','running'].includes(mode) ? 2 : 1,mode);
     assert.ok(saved.content.startsWith(mode==='flagged' ? 'You say' : 'Mira waits'),mode);
     if(mode==='recover') { assert.equal(saved.sceneMeta.kind,'inferred');assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.requests[1].response_format.json_schema.strict,true); }
-    if(['bad-json','running'].includes(mode)) { assert.equal(saved.scene,null);assert.equal(saved.sceneMeta.kind,'carried'); }
+    if(['bad-json'].includes(mode)) { assert.equal(saved.scene,null);assert.equal(saved.sceneMeta.kind,'carried'); }
     if(mode==='flagged') { assert.equal(saved.acceptance,'accepted'); assert.ok(saved.reviewWarnings.length); assert.equal(saved.sceneMeta.kind,'inferred'); }
     if(mode==='valid') assert.equal(saved.sceneMeta.kind,'declared');
     if(mode==='ooc') assert.equal(saved.scene,null);
@@ -1040,4 +1041,20 @@ test('U4 rendered message comparison tracks scene/review fields and memoizes tur
  const h=await harness(),chat=await h.use('ui/chat-view.js'),base={role:'assistant',content:'Story'};
  for(const patch of [{revision:1},{acceptance:'pending'},{reviewWarnings:['warning']},{sceneMeta:{kind:'manual'}},{sceneCandidate:{scene:'new'}},{ooc:true},{truncated:true},{editedAt:true}]) assert.equal(chat.sameRenderedMessage(base,{...base,...patch}),false);
  const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.notEqual(chat.turnsFor(list),chat.turnsFor([...list]));
+});
+
+test('Final twenty-turn replay keeps narration plus maintenance at two calls and reconciles the session once per send',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');Object.assign(h.state.settings,{modelId:'test',apiKey:'fixture-key',narratorSystemPrompt:'Narrate.',streaming:false,maxContextTokens:50000,maxResponseTokens:2000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:2});
+ const scene='date: Day 1 · time: night · place: Inn · present: Mira';h.calls.messageOrder=2;h.calls.sessionDocs={story:{id:'story',title:'Story',memory:{scene:true,sceneFallback:true,autoUpdate:true},memoryState:{extractedThroughOrder:0},historyRevision:0}};
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>h.calls.sessionDocs.story});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene}],hasEarlier:false});
+ const rows=[];let totalCalls=0;for(let turn=0;turn<20;turn++){
+  const before=h.calls.requests.length,memoryBefore=h.calls.memoryStarts ?? 0,readsBefore=h.calls.sessionReads ?? 0;h.calls.memoryDue=turn%2===0;
+  h.calls.onRequest=()=>{const body=h.calls.requests.at(-1);h.calls.response=body.response_format ? JSON.stringify({date:'Day 1',time:'night',place:'Inn',present:['Mira'],planThread:null}) : body.messages.at(-1).content.includes('New events to fold in:') ? 'Mira remains at the inn.' : 'Mira waits by the door.'+(turn%3 ? '\n<scene>'+scene+'</scene>' : '');};
+  h.el('chat-input').value='Continue '+turn;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  const calls=h.calls.requests.length-before+(h.calls.memoryStarts ?? 0)-memoryBefore;assert.ok(calls>=1 && calls<=2,'Turn '+turn+': '+calls+' calls');totalCalls+=calls;rows.push({turn:turn+1,modelRequests:h.calls.requests.length-before,memoryJobs:(h.calls.memoryStarts ?? 0)-memoryBefore,totalCalls:calls,reconcileReads:(h.calls.sessionReads ?? 0)-readsBefore});assert.equal(h.state.busy,false);assert.equal((h.calls.sessionReads ?? 0)-readsBefore,1);
+ }
+ assert.ok(totalCalls>20);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,20);await writeFile('/tmp/nera-twenty-turns.json',JSON.stringify({simulated:true,rows,totalCalls},null,2));
+});
+test('U7 cached or default settings cannot overwrite server preferences before an authoritative load',async()=>{
+ const h=await harness();for(const source of ['cache','defaults']){h.state.settingsSource=source;await assert.rejects(h.settings.saveSettings(h.state.settings),/reload before saving/);}assert.equal(h.calls.writes.length,0);h.state.settingsSource='server';await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
 });

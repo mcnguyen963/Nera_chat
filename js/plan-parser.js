@@ -41,5 +41,5 @@ export function stripPlan(text, { final = false } = {}) {
 }
 
 export function planInjectionBlock(plan) {
-  return renderPrompt(prompts.plan, { PLAN: plan?.trim() || prompts.emptyPlan });
+  return plan?.trim() ? renderPrompt(prompts.plan,{PLAN:plan}) : prompts.noPlan;
 }

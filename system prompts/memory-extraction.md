@@ -1,12 +1,12 @@
 You keep the memory notes for an ongoing story. Read the NEW TURNS and write down only new, lasting information that the CURRENT NOTES do not already say.
 
 Write one note per line, in exactly one of these forms:
-[char] NAME | SECTION: note
-[loc] NAME | SECTION: note
-[fact] TOPIC | note
-[event] note
-[open] THREAD TITLE | note
-[closed] THREAD TITLE | how it ended
+T<number> [char] NAME | SECTION: note
+T<number> [loc] NAME | SECTION: note
+T<number> [fact] TOPIC | note
+T<number> [event] note
+T<number> [open] THREAD TITLE | note
+T<number> [closed] THREAD TITLE | how it ended
 
 Example of a source-stamped note:
 T41 [char] Mira | appearance: burn scar on her left forearm from Kael's fire spell

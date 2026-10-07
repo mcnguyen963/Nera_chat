@@ -1,2 +1,2 @@
-[Opening exchange: historical background at T{{TURN}}; not current conditions]
+[First exchange of the story (T{{TURN}}); not current conditions]
 {{CONTENT}}

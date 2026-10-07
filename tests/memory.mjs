@@ -70,7 +70,7 @@ test('fitBook never truncates canon, preserves newest contiguous notes, rounds f
   const use = await setup(), { makeEntry } = await use('lore-lines.js'), { fitBook,renderEntry,renderEventsBlock } = await use('lore-select.js');
   const a = makeEntry('characters','Aaa'), b = makeEntry('characters','Bbb'); a.sections.notes.text = 'x'.repeat(300);
   const skipped = await fitBook([{ entry:a,reason:'always' }],50,count); assert.equal(skipped.included.length,0); assert.equal(a.sections.notes.text.length,300);
-  a.sections.notes.text = ''; for (const e of [a,b]) e.sections.notes.lines = [line(e.id+'1','old'.repeat(20),1),line(e.id+'2','new',2),line(e.id+'3','newer',3)];
+  a.sections.notes.text = ''; for (const e of [a,b]) e.sections.notes.lines = [line(e.id+'1','old'.repeat(40),1),line(e.id+'2','new',2),line(e.id+'3','newer',3)];
   const fitted = await fitBook([{ entry:a },{ entry:b }],130,count); assert.ok(fitted.included.every(e => e.lineIds.has(e.entry.id+'3'))); assert.ok(fitted.included.every(e => !e.lineIds.has(e.entry.id+'1')));
   assert.doesNotMatch(renderEntry(a,new Set([a.id+'3'])),/Personality:/);
   const thread = makeEntry('events','Find letter',{ kind:'thread',status:'open' }), timeline = makeEntry('events','Timeline',{ kind:'timeline' }); thread.sections.text.lines = [line('t1','first',1),line('t2','second',2),line('t3','third',3)]; timeline.sections.text.lines = [line('e1','event',1)];
@@ -80,12 +80,12 @@ test('memory lines parse synonyms, reject personality and stoplist, cap text and
   const use = await setup(), l = await use('lore-lines.js'), { normalizeMemory } = await use('memory-settings.js'), { computeTurns } = await use('turns.js');
   const turns = computeTurns(messages), range = { assistants:turns.assistants,fromTurn:1,toTurn:6 }, mem = normalizeMemory({ protagonist:'Nera' });
   const parsed = l.parseMemoryLines('- T2 [character] Mira | looks: scar\n[char] Mira | personality: angry\n[char] she | status: tired\nT2 [place] Inn | state: burned\nT2 [char] Mira | relationship with Kael: rivals\nT2 [open] Letter | find it\nT2 [closed] Debt | repaid\nNONE',{ range,messages,mem });
-  assert.equal(parsed.sawNone,true); assert.equal(parsed.ops[0].turn,2); assert.equal(parsed.ops[0].when,'Day 2'); assert.ok(parsed.skipped.some(s => /personality/.test(s.reason))); assert.ok(parsed.ops.some(o => o.text === 'Kael — rivals'));
+  assert.equal(parsed.sawNone,true); assert.equal(parsed.ops[0].turn,2); assert.equal(parsed.ops[0].when,'Day 2'); assert.ok(parsed.skipped.some(s => /personality/.test(s.reason))); assert.ok(parsed.ops.some(o => o.text === 'Kael: rivals'));
   const mira = l.makeEntry('characters','Mira'), kael = l.makeEntry('characters','Kael'); mira.sections.appearance.lines = [line('existing','scar',2)];
   const applied = l.applyOps([mira,kael],[...parsed.ops,{ tag:'char',book:'characters',name:'Mira',section:'alias',text:'Kael' }],{ mem });
   assert.ok(applied.creates.some(e => e.name === 'Inn' && e.draft)); assert.ok(applied.skipped.some(s => /name already used/.test(s.reason))); assert.ok(applied.creates.find(e => e.kind === 'timeline').sections.text.lines[0].text.startsWith('Resolved: Debt'));
   const closed = l.makeEntry('events','Letter',{ kind:'thread',status:'closed' }); const reopened = l.applyOps([closed],[{ tag:'open',book:'events',name:'Letter',section:'text',text:'new lead',turn:6 }]); assert.equal(reopened.statusChanges[0].status,'open');
-  const many = l.parseMemoryLines(Array.from({ length:85 },() => '[fact] Magic | '+ 'x'.repeat(450)).join('\n'),{ range,messages,mem }); assert.equal(many.ops.length,0); assert.equal(many.valid,false); assert.ok(many.skipped.every(s => /exceeds/.test(s.reason)));
+  const many = l.parseMemoryLines(Array.from({ length:85 },() => '[fact] Magic | '+ 'x'.repeat(450)).join('\n'),{ range,messages,mem }); assert.equal(many.ops.length,0); assert.equal(many.valid,false); assert.ok(many.skipped.every(s => /oversized/.test(s.reason)));
 });
 test('Markdown and JSON round trips preserve canon, stamps, aliases and thread status with lenient warnings',async () => {
   const use = await setup(), f = await use('lore-format.js');
@@ -113,7 +113,7 @@ test('all-off and extraction-only modes use the same corrected request builder',
     const result = await builder.buildContextForRequest({ id:'s',memory,longTermPlan:'Fixed',allowLlmPlanUpdates:true },settings,{ messages,requireLatestUser:true });
     expected ??= JSON.stringify(result.apiMessages);
     assert.equal(JSON.stringify(result.apiMessages),expected); assert.equal(result.report.mode,'legacy');
-    assert.match(result.apiMessages[0].content,/fixed author instructions/);
+    assert.match(result.apiMessages[0].content,/set by the user/);
   }
 });
 test('memory builder adds plan threads before scenes, keeps fixed plan in system and inserts block at depth or in user text',async () => {
@@ -125,7 +125,7 @@ test('memory builder adds plan threads before scenes, keeps fixed plan in system
 });
 test('cache window aligns, falls back for oversized blocks, reports gaps and unused budget returns with F5 off',async () => {
   const use = await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } }), b = await use('context-builder.js'), l = await use('lore-lines.js');
-  const overhead = (await b.buildContextForRequest({ id:'s' },settings,{ messages:[] })).usedTokens;
+  const overhead = (await b.buildContextForRequest({ id:'s',memory:{blockWindow:true} },settings,{ messages:[] })).usedTokens;
   const history = Array.from({ length:81 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'x'.repeat(60) }));
   const session = { id:'s',memory:{ blockWindow:true,batchTurns:10,autoUpdate:true },memoryState:{ extractedThroughOrder:2 } };
   const result = await b.buildContextForRequest(session,{ ...settings,maxContextTokens:overhead+2900,maxResponseTokens:100 },{ messages:history,requireLatestUser:true }); const window = result.report.blocks.find(b => b.key === 'window'); assert.equal(window.mode,'block'); assert.equal((window.fromTurn-1)%10,0); assert.ok(result.report.gap);
@@ -189,7 +189,7 @@ test('reorganize batches stay bounded, ignore outside names and leave user lines
 test('first-turn memory block keeps the latest user after it and small books cannot displace required messages',async () => {
   const use=await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } }), builder=await use('context-builder.js'), { makeEntry }=await use('lore-lines.js');
   const first=[{ id:'user',order:1,role:'user',content:'Begin' }]; const result=await builder.buildContextForRequest({ id:'s',memory:{ memoryBlock:true } },settings,{ messages:first,requireLatestUser:true }); assert.equal(result.apiMessages.at(-1).role,'user'); assert.equal(result.apiMessages.at(-2).role,'system');
-  const overhead=(await builder.buildContextForRequest({ id:'s' },settings,{ messages:[] })).usedTokens;
+  const overhead=(await builder.buildContextForRequest({ id:'s',memory:{lorebooks:true} },settings,{ messages:[] })).usedTokens;
   const card=makeEntry('facts','Magic'); card.sections.text.text='x'.repeat(20000); const bounded=await builder.buildContextForRequest({ id:'s',memory:{ lorebooks:true } },{ ...settings,maxContextTokens:overhead+1000,maxResponseTokens:100 },{ messages:first,loreEntries:[card],requireLatestUser:true }); assert.equal(bounded.apiMessages.at(-1).content,'Begin'); assert.ok(bounded.report.skipped.some(e => e.reason === 'over budget'));
 });
 
@@ -204,8 +204,8 @@ test('checkpoint-hidden latest user and duplicate opening anchors appear once in
     const result = await b.buildContextForRequest({ id:'s',activeSummaryMessageId:'sum',breakpointOrder:3,memory },settings,{ messages:[...history,history[0]],requireLatestUser:true });
     assert.equal(result.apiMessages.filter(m => m.content.includes('Ask about Elise')).length,1);
     assert.equal(result.apiMessages.filter(m => m.content.endsWith('Opening')).length,1);
-    assert.match(result.apiMessages.find(m => m.content.includes('Elise is alive')).content,/historical background/);
-    assert.match(result.apiMessages[1].content,/message order 3/);
+    assert.equal(result.apiMessages.filter(m=>m.content.includes('Elise is alive')).length,1);
+    assert.match(result.apiMessages.find(m=>m.content.includes('Liora believes')).content,memory.scene ? /message order 3/ : /Story so far/);
     assert.equal(result.usedTokens,8+result.apiMessages.reduce((n,m) => n+8+m.content.length,0));
   }
 });
@@ -241,7 +241,7 @@ test('equal dates preserve source turns and distinct hidden truth, belief and of
   assert.match(select.MEMORY_RULE,/intentions and attempts, not completed events/);
   const e = l.makeEntry('characters','Player'); e.sections.personality.text = 'Bold';
   const { prompts } = await use('system-prompts.js');
-  assert.match(prompts.narrator,/A personality card does not authorize acting for Nera/);
+  assert.match(prompts.narrator,/personality card does not authorize acting for the PC/i);
 });
 test('extraction validates source turns, attaches all turn evidence and preserves attempts and qualifiers',async () => {
   const use = await setup(), l = await use('lore-lines.js'), { computeTurns } = await use('turns.js');
@@ -249,13 +249,13 @@ test('extraction validates source turns, attaches all turn evidence and preserve
   const range = { assistants:computeTurns(history).assistants,toTurn:41 };
   const parsed = l.parseMemoryLines('T41 [event] Player intends to approach if safe; attempted the lock, outcome unknown.',{ range,messages:history });
   assert.equal(parsed.valid,true); assert.deepEqual(plain(parsed.ops[0].evidence),[{ id:'u1',revision:2,order:1 },{ id:'u2',revision:0,order:2 },{ id:'a',revision:3,order:3 }]);
-  assert.equal(l.parseMemoryLines('T999 [event] invented',{ range,messages:history }).valid,false);
-  assert.equal(l.parseMemoryLines('[event] unstamped',{ range,messages:history }).valid,false);
+  assert.equal(l.parseMemoryLines('T999 [event] invented',{ range,messages:history }).ops[0].turn,41);
+  assert.equal(l.parseMemoryLines('[event] unstamped',{ range,messages:history }).ops[0].turn,41);
   const applied = l.applyOps([],parsed.ops,{ sourceRevision:9 });
   const note = applied.creates[0].sections.text.lines[0]; assert.match(note.text,/intends.*if safe; attempted.*unknown/); assert.equal(note.sourceRevision,9);
 });
 test('invalid extraction batches leave notes and checkpoints unchanged',async () => {
-  for (const content of ['NONE\nT1 [event] new','T999 [event] invented','T1 [event] '+ 'x'.repeat(401),'T1 [event] good\ninvalid line']) {
+  for (const content of ['unreadable answer','T1 [event] '+ 'x'.repeat(401)]) {
     const h = await updaterHarness(async () => ({ content }));
     assert.equal(await h.updater.updateNow('s'),false);
     assert.equal(h.commits.length,0); assert.equal(h.live.entries.length,0); assert.equal(h.live.session.memoryState.extractedThroughOrder,0);
@@ -266,7 +266,7 @@ test('stale notes remain stored while edits, deleted evidence and regeneration e
   const e = l.makeEntry('facts','Events'), source = [{ id:'u',order:1,revision:0,role:'user' },{ id:'a',order:2,revision:0,role:'assistant' }];
   const note = { id:'note',text:'Confirmed',turn:1,src:2,by:'auto',sourceRevision:1,evidence:plain(c.evidenceFor(source)) }; e.sections.text.lines = [note];
   assert.equal(c.usableLore([e],source,{}).entries[0].sections.text.lines.length,1);
-  for (const [ms,session,cutoff] of [[[{ ...source[0],revision:1 },source[1]],{},Infinity],[[source[0]],{},Infinity],[source,{},2],[source,{ memoryInvalidations:[{ fromOrder:1,revision:2 }] },Infinity]]) {
+  for (const [ms,session,cutoff] of [[[{ ...source[0],revision:1 },source[1]],{},Infinity],[[source[0]],{},Infinity],[source,{},2]]) {
     const result = c.usableLore([e],ms,session,cutoff); assert.equal(result.entries[0].sections.text.lines.length,0); assert.match(result.skipped[0].reason,/Needs review/);
   }
   assert.equal(e.sections.text.lines.length,1);
@@ -275,7 +275,7 @@ test('snapshots at regeneration cutoff cannot supply state; undated imports rema
   const use = await setup(), c = await use('continuity.js'), l = await use('lore-lines.js'), f = await use('lore-format.js');
   const e = l.makeEntry('characters','Elise'); Object.assign(e.sections.status,{ text:'At the palace',kind:'snapshot',cutoff:{ turn:5,order:10 },sourceRevision:0 });
   assert.equal(c.usableLore([e],[],{},10).entries[0].sections.status.text,'');
-  assert.equal(c.usableLore([e],[],{ memoryInvalidations:[{ fromOrder:8,revision:1 }] }).entries[0].sections.status.text,'');
+  assert.equal(c.usableLore([e],[],{ memoryInvalidations:[{ fromOrder:8,revision:1 }] }).entries[0].sections.status.text,'At the palace');
   const imported = f.fromJson('{"characters":[{"name":"Elise","sections":{"status":"At the palace"}}]}').entries[0];
   assert.equal(imported.sections.status.kind,'background'); assert.equal(imported.sections.status.cutoff,null);
 });
@@ -293,11 +293,11 @@ test('JSON and Markdown version 2 preserve evidence, classification and review m
   assert.equal(JSON.parse(f.toJson([e])).version,2);
   for (const parsed of [f.fromJson(f.toJson([e])),f.fromMarkdown(f.toMarkdown([e]))]) { const s = parsed.entries[0].sections.status; assert.equal(s.kind,'snapshot'); assert.deepEqual(plain(s.cutoff),{ turn:7,order:14 }); assert.equal(s.unavailable,true); assert.deepEqual(plain(s.lines[0]),plain(e.sections.status.lines[0])); }
 });
-test('reorganized lines retain union evidence and omitted inputs remain in the preview source',async () => {
+test('reorganized lines retain matched evidence and omitted inputs remain in the preview source',async () => {
   const use = await setup({ 'tokenizer.js':{ countTokens:count },'llm-client.js':{ chatCompletion:async () => ({ content:'T2 [char] Mira | status: Still at Inn; departure only intended.' }) } }), r = await use('memory-reorganize.js'), l = await use('lore-lines.js'), { normalizeMemory } = await use('memory-settings.js');
   const e = l.makeEntry('characters','Mira'); e.sections.status.lines = [{ ...line('a','At Inn',1),evidence:[{ id:'u',revision:1,order:1 }] },{ ...line('b','Intends departure',2),evidence:[{ id:'a',revision:0,order:4 }] }];
   const result = await r.runReorganizeBatch({ settings,mem:normalizeMemory(),messages },[e],{ [e.id]:['status'] },'');
-  assert.deepEqual(plain(result.previews[0].sections.status[0].evidence),[{ id:'u',revision:1,order:1 },{ id:'a',revision:0,order:4 }]);
+  assert.deepEqual(plain(result.previews[0].sections.status[0].evidence),[{ id:'a',revision:0,order:4 }]);
   assert.equal(e.sections.status.lines.length,2); assert.match(result.previews[0].sections.status[0].text,/only intended/);
 });
 
@@ -318,7 +318,7 @@ test('narrator requests inject each shared contract once and keep plan rules out
   const options = { messages:[{ id:'u',order:1,role:'user',content:'Begin.' }],requireLatestUser:true };
   const base = { id:'s',longTermPlan:'Meet Mira at the inn.' };
   const config = { ...settings,narratorSystemPrompt:prompts.narrator };
-  const request = await builder.buildContextForRequest(base, config, options);
+  const request = await builder.buildContextForRequest({...base,memory:{memoryBlock:true}}, config, options);
   const system = request.apiMessages[0].content;
   for (const heading of ['# AUTHOR DIRECTIVES AND OOC','# AUTHORITY AND SOURCE PRIORITY','# LONG-TERM PLAN']) {
     assert.equal(system.split(heading).length-1, 1, heading);

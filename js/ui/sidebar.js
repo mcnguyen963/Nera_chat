@@ -36,7 +36,7 @@ export function initSidebar() {
   subscribeSessions(
     (sessions) => {
       cachedSessions = sessions;
-      syncActiveSession(sessions.find((s) => s.id === state.sessionId));
+      // The active-chat listener owns authoritative metadata; sidebar snapshots only render navigation.
       const signature = JSON.stringify(sessions.map((s) => [s.id, s.title]));
       if (signature !== renderedSignature) {
         render(listEl, sessions);

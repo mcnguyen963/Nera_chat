@@ -1,3 +1,4 @@
+const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|<!-- nera-)/.test(l)?'\\'+l:l).join('\n');
 import { sectionMeta } from './continuity.js';
 import { makeEntry, newLoreId, normalizeName, sectionKey, SECTION_MAP, SECTION_KEYS } from './lore-lines.js';
 import { sortLines, sectionLabel } from './lore-select.js';
@@ -21,7 +22,18 @@ export function fromJson(text) {
   validateInput(text); const source = unfence(text); let data;
   try { data = JSON.parse(source); } catch (e) { const p = Number(e.message.match(/position (\d+)/)?.[1]); if (Number.isFinite(p)) { const before = source.slice(0,p), line = before.split('\n').length, column = before.length-(before.lastIndexOf('\n')+1)+1; throw new Error(`JSON error at line ${line}, column ${column}: ${e.message}`); } throw new Error('JSON error: '+e.message); }
   if (!data || typeof data !== 'object' || !['characters','locations','facts','events'].some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
-  if (data.version === 2 && Array.isArray(data.entries)) { for (const e of data.entries) { if (!SECTION_KEYS[e.book] || typeof e.name !== 'string' || !e.sections) throw new Error('Invalid version 2 lorebook entry.'); for (const key of SECTION_KEYS[e.book]) { const section = e.sections[key] ??= { text:'',lines:[] }; Object.assign(section,sectionMeta(section,e)); if (!Array.isArray(section.lines) || typeof section.text !== 'string') throw new Error('Invalid version 2 section.'); } } return { entries:data.entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k => k in data || data.entries.some(e => e.book === k)),story:data.story ?? '',format:'json' }; }
+  if(data.version===2 && Array.isArray(data.entries)) {
+    const entries=data.entries.map(e=>{
+      if(!SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.sections)throw new Error('Invalid version 2 lorebook entry.');
+      const normalized={...makeEntry(e.book,e.name),...e,aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
+      normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
+        const raw=e.sections[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
+        if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');
+        return [key,{...section,text:String(section.text ?? ''),...sectionMeta({...section,kind:section.kind ?? 'background',origin:section.origin ?? 'import'},normalized),lines:(section.lines ?? []).map(l=>typeof l==='string' ? importedLine(l) : {...importedLine(l),...l})}];
+      }));return normalized;
+    });
+    return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>k in data || entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};
+  }
   const entries = [], warnings = [], books = Object.keys(BOOK_LABELS).filter(k => k in data);
   const warnUnknown = (obj,allowed,name) => { for (const key of Object.keys(obj ?? {})) if (!allowed.includes(key)) warnings.push({ line:source.slice(0,Math.max(0,source.indexOf('"'+key+'"'))).split('\n').length,reason:`ignored key '${key}' in ${name}` }); };
   warnUnknown(data,['format','version','story','exportedAt','entries',...Object.keys(BOOK_LABELS)],'file');
@@ -59,8 +71,8 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
         const s = e.sections[key]; if (!s || !s.text && !s.lines.length) continue;
         if (key !== 'text') out.push('#### '+sectionLabel(key,''));
         out.push('<!-- nera-section: '+JSON.stringify({ ...sectionMeta(s,e),unavailable:s.unavailable ?? false,sourceRevision:s.sourceRevision ?? 0 })+' -->');
-        if (s.text) out.push(s.text);
-        if (s.lines.length) { out.push('Updates:'); for (const l of sortLines(s.lines)) { const stamp = [l.turn != null ? 'T'+l.turn : '',l.when ?? ''].filter(Boolean).join(' · '); out.push('- '+(stamp ? '['+stamp+'] ' : '')+l.text,'<!-- nera-line: '+JSON.stringify(exportLine(l))+' -->'); } }
+        if (s.text) out.push(escapeContent(s.text));
+        if (s.lines.length) { out.push('Updates:'); for (const l of sortLines(s.lines)) { const stamp = [l.turn != null ? 'T'+l.turn : '',l.when ?? ''].filter(Boolean).join(' · '); out.push('- '+(stamp ? '['+stamp+'] ' : '')+String(l.text).split('\n').map((v,i)=>(i?'  ':'')+escapeContent(v)).join('\n'),'<!-- nera-line: '+JSON.stringify(exportLine(l))+' -->'); } }
         out.push('');
       }
     }
@@ -100,10 +112,10 @@ export function fromMarkdown(text, { protagonist = '' } = {}) {
       if (bullet) {
         let value = bullet[1], turn = null, when = null; const stamp = value.match(/^\[([^\]]+)\]\s*/);
         if (stamp) { const t = stamp[1].match(/^T(\d+)(?:\s*[·|,]\s*(.*))?$/i); if (t) { turn = Number(t[1]); when = t[2]?.trim() || null; } else when = stamp[1].trim(); value = value.slice(stamp[0].length); }
-        if (value.trim()) entry.sections[key].lines.push(importedLine({ text:prefix+value.trim(),turn,when }));
+        if (value.trim()) entry.sections[key].lines.push(importedLine({ text:prefix+(value.startsWith('\\')?value.slice(1):value).trim(),turn,when }));
       } else if (/^\s+\S/.test(line) && entry.sections[key].lines.length) entry.sections[key].lines.at(-1).text += ' '+trimmed;
       else if (trimmed) warn(i+1,'update line could not be read');
-    } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+line : '');
+    } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(line.startsWith('\\')?line.slice(1):line) : '');
   }
   for (const e of entries) for (const s of Object.values(e.sections)) s.text = s.text.trim();
   if (!books.length) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');

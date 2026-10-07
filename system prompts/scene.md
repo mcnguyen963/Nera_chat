@@ -14,6 +14,6 @@ Write all four fields on one line, in that order, with lowercase labels and exac
 
 Use each person's fullest established name, taking the exact canonical card heading when available and excluding any alias annotation. Expand shortened names only from supplied evidence; never invent surnames. A person with only one established name keeps that name. Split grouped people into individual names; never add ages, roles, titles, injuries, relationships, status notes or parenthetical annotations. Keep the same spelling unless an explicit correction changes it.
 
-Write "unknown" for each unsupported field, including "present: unknown" when attendance cannot be established. Apply the shared continuity rules to the latest scene snapshot and subsequent confirmed events; serialize the resulting state at the end of this reply. If a field has not changed, repeat its established value. Historical or malformed tags are input records, not output templates.
+Write "unknown" for each unsupported field, including "present: unknown" when attendance cannot be established. Apply the shared continuity rules to the most recent scene record and the confirmed events after it; serialize the resulting state at the end of this reply. If a field has not changed, repeat its established value. Historical or malformed tags are input records, not output templates.
 
-Put scene state only in the final hidden tag. Do not write a visible [Scene: ...] header, a prose "Date: ... Location: ... Active event: ... Present: ..." report, or app input labels in the narration. Visible narration comes first; hidden tags alone are not a reply.
+Put scene state only in the final hidden tag, written exactly as the structure above. Visible narration comes first; hidden tags alone are not a reply.

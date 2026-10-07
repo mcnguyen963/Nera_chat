@@ -1,6 +1,6 @@
 import { computeTurns } from './turns.js';
 import { canonicalScene } from './scene.js';
-import { assertSource, revisionOf } from './continuity.js';
+import { assertSource, revisionOf, trimInvalidations } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
   limitToLast, updateDoc, collection, runTransaction, writeBatch, serverTimestamp,
@@ -147,7 +147,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     } else {
       tx.set(chunkRef(sessionId, activeId, owner), chunkRecord([item]));
     }
-    return { ...item,historyRevision:(data.historyRevision ?? 0)+1 };
+    return {...item,historyRevision:(data.historyRevision ?? 0)+1,session:{id:sessionId,...data,nextOrder:order,historyRevision:(data.historyRevision ?? 0)+1,nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role==='assistant' ? 1 : 0),activeChunkId:activeId,activeChunkBytes:bytes,activeChunkCount:count,...(opts.sessionUpdate ?? {})}};
   });
 }
 
@@ -269,23 +269,31 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
     assertSource(data,expectedSource);
     const current = previous.messages.find(m => m.id === messageId);
     if (!current) throw new Error('Message not found.');
-    const changed = await change(current), replacement = changed ? { ...changed,revision:revisionOf(current)+1 } : null;
+    const changed=await change(current),contentChanged=!changed || changed.content!==current.content;
+    const replacement=changed ? {...changed,revision:revisionOf(current)+(contentChanged ? 1 : 0)} : null;
     const updated = previous.messages.flatMap(m => m.id === messageId ? (replacement ? [replacement] : []) : [m]);
     const groups = packMessages(updated);
     const records = groups.length ? groups.map((group,index) => ({ id:index === 0 ? old.id : chunkId(group[0].order),data:chunkRecord(group,index === 0 ? previous.firstOrder : group[0].order,index === groups.length-1 ? previous.lastOrder : group.at(-1).order) })) : [{ id:old.id,data:{ ...previous,messages:[],count:0,byteSize:chunkBytes([]) } }];
-    const summaryReset = !!data.activeSummaryMessageId && (current.role !== 'summary' && order <= (data.breakpointOrder ?? 0) || current.id === data.activeSummaryMessageId);
+    const summaryReset=!!data.activeSummaryMessageId && !replacement && (current.role!=='summary' && order<=(data.breakpointOrder ?? 0) || current.id===data.activeSummaryMessageId);
     const historyRevision = (data.historyRevision ?? 0)+1;
     const patch = { historyRevision,updatedAt:serverTimestamp(),...(summaryReset ? { activeSummaryMessageId:null,breakpointOrder:0 } : {}),...sessionUpdate };
-    if (current.role !== 'summary') {
-      patch.memoryInvalidations = [...(data.memoryInvalidations ?? []),{ fromOrder:order,revision:historyRevision }];
-      patch['memoryState.needsRebuild'] = true;
-      patch['memoryState.paused'] = true;
-      patch['memoryState.lastError'] = 'History changed; affected notes need review. Rebuild explicitly.';
+    const pointer=data.memoryState?.extractedThroughOrder;
+    if(contentChanged && current.role!=='summary' && pointer!=null) {
+      const edits=[...(data.contentEdits ?? []),{order,revision:historyRevision}];
+      patch.contentEdits=edits.slice(-20);
+      if(edits.length>20)patch.contentEditsFloor=Math.max(data.contentEditsFloor ?? 0,...edits.slice(0,-20).map(e=>e.revision));
+      if(order<=pointer) {
+        patch.memoryInvalidations=trimInvalidations([...(data.memoryInvalidations ?? []),{fromOrder:order,revision:historyRevision}]);
+        patch['memoryState.needsRebuild']=true;
+        patch['memoryState.rebuildFromOrder']=Math.min(data.memoryState?.rebuildFromOrder ?? Infinity,order);
+      }
     }
     if (data.activeChunkId === old.id) { const active = records.at(-1); Object.assign(patch,{ activeChunkId:active.id,activeChunkBytes:active.data.byteSize,activeChunkCount:active.data.count }); }
     for (const record of records) tx.set(chunkRef(sessionId,record.id,owner),record.data);
     tx.update(target,patch);
-    return { replacement,summaryReset,historyRevision,memoryInvalidations:patch.memoryInvalidations };
+    const after={id:sessionId,...data};
+    for(const [key,value] of Object.entries(patch)) {if(key==='updatedAt')continue;if(key.startsWith('memoryState.'))after.memoryState={...after.memoryState,[key.slice(12)]:value};else after[key]=value;}
+    return {session:after,replacement,summaryReset,historyRevision,memoryInvalidations:patch.memoryInvalidations,memoryStatePatch:Object.fromEntries(Object.entries(patch).filter(([k])=>k.startsWith('memoryState.')).map(([k,v])=>[k.slice(12),v])) };
   });
 }
 

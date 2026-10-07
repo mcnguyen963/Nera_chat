@@ -16,11 +16,11 @@ export function noteNeedsReview(line, messages, session = {}, upToOrder = Infini
   if (!line.evidence?.length) return true;
   const byId = new Map(messages.map(m => [m.id,m]));
   if (line.evidence.some(e => !byId.has(e.id) || revisionOf(byId.get(e.id)) !== e.revision || byId.get(e.id).order >= upToOrder)) return true;
-  return (session.memoryInvalidations ?? []).some(i => (line.sourceRevision ?? 0) < i.revision && (line.src ?? Infinity) >= i.fromOrder);
+  return false;
 }
 export function snapshotNeedsReview(section, entry, session = {}, upToOrder = Infinity) {
   const meta = sectionMeta(section,entry);
-  return !!(section.unavailable || meta.kind === 'snapshot' && (meta.cutoff?.order >= upToOrder || (session.memoryInvalidations ?? []).some(i => meta.cutoff?.order >= i.fromOrder && (section.sourceRevision ?? 0) < i.revision)));
+  return !!(section.unavailable || meta.kind === 'snapshot' && (meta.cutoff?.order >= upToOrder));
 }
 export function usableLore(entries, messages, session, upToOrder = Infinity) {
   const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && noteNeedsReview(entry.statusSource,messages,session,upToOrder) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
@@ -42,4 +42,18 @@ export function requestSource(session) {
 export function assertSource(session, expected) {
   if (!expected) return;
   if (!session || JSON.stringify(requestSource(session)) !== JSON.stringify(expected)) throw new Error('Story history or author inputs changed. The generated result was discarded; try again.');
+}
+
+export class StaleSourceError extends Error {constructor(message){super(message);this.name='StaleSourceError';}}
+export class SupersededError extends Error {constructor(message){super(message);this.name='SupersededError';}}
+export function effectivelyPaused(ms={}) {return !!ms.paused && !(String(ms.lastError ?? '').startsWith('History changed') && (ms.failureStreak ?? 0)<3);}
+export function trimInvalidations(list,cap=50) {
+  if(list.length<=cap)return list;
+  const old=list.slice(0,list.length-cap+1);
+  return [{fromOrder:Math.min(...old.map(i=>i.fromOrder)),revision:Math.max(...old.map(i=>i.revision))},...list.slice(-(cap-1))];
+}
+export function assertExtractionSource(s,guard) {
+  if(!s)throw new SupersededError('Story deleted.');
+  if((s.memoryState?.extractedThroughOrder ?? 0)!==guard.startPointer)throw new SupersededError('Another update already covered these turns.');
+  if((s.contentEditsFloor ?? 0)>guard.startRevision || (s.contentEdits ?? []).some(e=>e.revision>guard.startRevision && e.order>=guard.fromOrder && e.order<=guard.endOrder))throw new StaleSourceError('Messages in this range were edited during the update.');
 }

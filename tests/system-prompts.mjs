@@ -31,7 +31,7 @@ test('prompt files load once at a Pages subpath and preserve text and template d
   }
   assert.doesNotMatch(api.prompts.narrator, /plan/i);
   assert.match(api.prompts.plan, /Never output <plan>/);
-  assert.match(api.prompts.plan, /Omit it for pure OOC/);
+  assert.match(api.prompts.planThread, /Omit it for pure OOC/);
   assert.match(api.prompts.continuity, /A lower line is not automatically truer/);
   const text = '$& {{PROTAGONIST}} <scene>literal</scene>';
   assert.ok(api.renderPrompt(api.prompts.plan, { PLAN:text }).includes('\n'+text+'\nEND FIXED AUTHOR PLAN'));

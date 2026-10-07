@@ -107,3 +107,36 @@ node --experimental-vm-modules --test tests/*.mjs
 ## 2026-10-07 parser implementation checkpoint (offline replay)
 
 Reconstructed visible narrator content from all 52 saved SSE response files and compared the HEAD strict scene inspector with the new tolerant parser. Existing inspector: 31 parseable responses; new parser: 33; regressions: 0. Among the 36 files whose names are neither OOC nor fallback, parseability rose from 31/36 (86.1%) to 33/36 (91.7%). The input responses are unchanged, so this does not establish improved tag-generation behavior. New long-history provider evaluation is pending C1-C4. No provider calls were made for this replay.
+
+
+## Improvement plan completion — 2026-10-07 (local evidence)
+
+All required code phases are implemented locally; see `../improveProgress.md` for task coverage and live-check limitations. The narrator range is 200–600 visible words. No new provider calls or saved-story edits were made.
+
+- 279 local tests pass, including 13 frozen-main payload/usage scenarios.
+- A 20-turn simulated orchestration replay recorded 40 narrator/maintenance calls or jobs, at most two per turn, and one session reconciliation per send. This is not a live request or billing measurement.
+- A 200-message deterministic-tokenizer benchmark against `03b7a9d` measured 44.62 ms before and 4.48 ms after (9.97 times faster). See `final-local-checks.json`.
+- 52 saved SSE responses replayed: original pre-phase parser accepts 31; current parser accepts 33; zero regressions. This measures parser tolerance on fixed output, not new tag generation.
+- Browser discovery found no available connection. Real iPhone, live provider/Firestore, Pages publication, and long-real-history generation checks remain unverified. The archived JSONL story here contains only two messages.
+
+## Approved live verification — 7 October 2026
+
+The user authorized sharing the archived story/lore/current prompts with OpenRouter and a maximum of five calls. Exactly **five provider calls completed**, using **`z-ai/glm-5.3-flash:floor`**, high reasoning, 15,000 max output tokens and SSE. All returned `z-ai/glm-5.3-flash` via **Relace**, with `finish_reason: stop`. Returned usage totals **$0.0048984888**. An earlier sandbox DNS failure never connected; it remains explicitly marked `connectionFailure` in the ledger. Artifact numbers 2–6 refer to five completed calls following that failed attempt. No automatic retries, summaries, extraction or recovery calls were made.
+
+| Scenario | Visible words | Result |
+| --- | ---: | --- |
+| Original opening, first sample | 585 | Readable scene and plan thread; correct five actors; invented morning |
+| Original opening, second sample | 543 | Readable scene and plan thread; correct five actors; invented morning |
+| Synthetic established opening, Krail exits | 264 | Krail removed; four remaining actors; time unknown |
+| OOC attendance after actual exit response | 54 | Correct four inside; Krail, Magerrett and Taigar outside; no event advancement or hidden tags |
+| Narrative continuation after actual exit response | 392 | Correct four remaining actors; time unknown; scene and plan thread retained |
+
+The 200–600 range applies to narrative replies; the brief OOC answer is appropriate. Human review found no new PC dialogue or consequential PC decision; all automatic agency lint results were empty. The first opening nevertheless narrates mainly in third person, despite the requested second person. The samples invent other background details, so this is not blanket factual-compliance evidence.
+
+Actual paid requests use the working-tree context builder, Markdown prompt loader and LLM request serializer/client. The two followups branch independently from the same real exit reply. Scene/date/time validation and next-request lore loading are additionally replayed offline through current app functions. They prioritize the five/four physically present actors and resolve West Reception Room; Krail can still load as a recent mention after exiting, without being marked present. Firestore persistence, billing and browser interactions are not tested. Budget fitting uses a UTF-8-bytes/4 stub, not native tokenizer evidence. Archived history contains only the opening pair; the exit fixture is synthetic, not a long-history test or an edit to the user's story.
+
+**Conclusion: the observed serialization, narrative length and exit-to-OOC attendance failures do not recur in these five samples, but the system is not fully fixed.** Both opening samples invent morning when user evidence does not supply time. The lexical scene validator accepts the invented time because it appears in narration; it cannot verify whether narration itself invented it. Opening lore selection also still omits Bastian Krail: no previous scene exists, and earlier mentioned characters fill the selected slots. Next-turn selection corrects this once scene state exists. No production code was changed in this test.
+
+Earlier provider tests routed through OpenInference; these route through Relace under the same requested floor model. Therefore observed improvement cannot be attributed exclusively to code/prompt changes. Four compliant narrative samples are not a reliability guarantee.
+
+Local private evidence: `current-live/ledger.json`, numbered request/SSE/parsed/context artifacts, `current-live/analysis.json` and offline next requests. Runner: `current-live.mjs`; analyzer: `analyze-current-live.mjs`. All remain ignored and contain no API key. Five-call authorization is exhausted; no more calls were made.

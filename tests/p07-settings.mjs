@@ -8,7 +8,7 @@ async function settingsHarness() {
   const settingsSource = await readFile(new URL('../js/settings.js', import.meta.url), 'utf8');
   const use = appHarness({
     sources: {
-      'settings.js': settingsSource + '\nexport { mergeDefaults };',
+      'settings.js': settingsSource,
       'ui/settings-view.js': viewSource + '\nexport function validateForTest(value) { draft = value; return validatedDraft(); }',
     },
     stubs: {
@@ -24,7 +24,7 @@ async function settingsHarness() {
   return { settings: await use('settings.js'), view: await use('ui/settings-view.js') };
 }
 
-test('Reasoning budget must leave response room without changing the context validation', async () => {
+test('Reasoning budget leaves response room while the input limit stays independent', async () => {
   const { settings, view } = await settingsHarness();
   assert.equal(settings.DEFAULT_SETTINGS.reasoning.maxTokens, 4096);
   const draft = structuredClone(settings.DEFAULT_SETTINGS);
@@ -40,7 +40,7 @@ test('Reasoning budget must leave response room without changing the context val
   draft.profiles[0].reasoning.maxTokens = 20000;
   assert.equal(view.validateForTest(draft).reasoning.maxTokens, 20000);
   draft.maxContextTokens = 8192;
-  assert.throws(() => view.validateForTest(draft), /Max context tokens must exceed max response tokens/);
+  assert.equal(view.validateForTest(draft).maxContextTokens,8192);
   const legacy = await settings.mergeDefaults({ reasoning: { maxTokens: 20000 } });
   assert.equal(legacy.reasoning.maxTokens, 20000);
 });
