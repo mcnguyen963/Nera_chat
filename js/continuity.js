@@ -36,12 +36,28 @@ export function usableLore(entries, messages, session, upToOrder = Infinity) {
   })) }));
   return { entries:available, skipped };
 }
+// Firestore map order is not story state. Compare nested maps by their contents.
+function orderedValue(value) {
+  if (Array.isArray(value)) return value.map(orderedValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key,orderedValue(value[key])]));
+  return value;
+}
 export function requestSource(session) {
-  return { historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(session.memory ?? null), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
+  return { historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(orderedValue(session.memory ?? null)), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
+}
+export function summarySource(session) {
+  const { loreRevision, ...source } = requestSource(session);
+  // The summarizer receives transcript and prior summary, not lorebook content.
+  return { ...source,sourceKind:'summary' };
 }
 export function assertSource(session, expected) {
   if (!expected) return;
-  if (!session || JSON.stringify(requestSource(session)) !== JSON.stringify(expected)) throw new Error('Story history or author inputs changed. The generated result was discarded; try again.');
+  const actual=session && (expected.sourceKind==='summary' ? summarySource(session) : requestSource(session));
+  const changed=actual ? Object.keys(expected).filter(key => actual[key]!==expected[key]) : ['story'];
+  if (changed.length) {
+    const labels={historyRevision:'story history',longTermPlan:'fixed plan',memory:'memory settings',loreRevision:'lorebooks',activeSummaryMessageId:'active summary',breakpointOrder:'summary checkpoint',story:'story deleted'};
+    throw new Error('Story history or author inputs changed. The generated result was discarded; try again. Changed: '+changed.map(key => labels[key] ?? key).join(', ')+'.');
+  }
 }
 
 export class StaleSourceError extends Error {constructor(message){super(message);this.name='StaleSourceError';}}

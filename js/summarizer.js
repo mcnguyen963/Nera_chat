@@ -1,7 +1,7 @@
 import {memoryActive,normalizeMemory} from './memory-settings.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts, renderPrompt } from './system-prompts.js';
-import { CONTINUITY_RULE, requestSource, evidenceFor } from './continuity.js';
+import { CONTINUITY_RULE, summarySource } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
 import { isAcceptedTurn, lastUserOrderOf } from './turn-review.js';
 // Rolling summarization (spec §8). The new summary always folds in the old summary
@@ -59,7 +59,8 @@ export async function runSummarization(session, settings, opts = {}) {
   try{return await runSummary(session,settings,opts);}finally{summaryRunning.delete(session.id);}
 }
 async function runSummary(session,settings,opts) {
-  const expectedSource=requestSource(session),all=structuredClone(opts.messages ?? (opts.full ? await getMessages(session.id) : await getCheckpointMessages(session)));
+  session=structuredClone(session);
+  const expectedSource=summarySource(session),all=structuredClone(opts.messages ?? (opts.full ? await getMessages(session.id) : await getCheckpointMessages(session)));
   // The running gate belongs to this call; planning is pure over the captured history.
   const plan=planSummary(session,settings,all,{full:opts.full});
   if(plan.skip)return {skipped:true,reason:plan.skip==='pending-reply' ? 'Review flagged replies before summarizing their turns.' : 'Nothing new to fold in since the last breakpoint.'};
