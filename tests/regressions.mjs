@@ -1046,12 +1046,26 @@ test('S1 pending review controls are hidden with Scene off and after a later use
  }
 });
 
-test('S12 recent narration selects cards after current input mentions; narrator cards omit provenance',async () => {
+test('S12 recent narration selects cards after current input mentions; rendering supports source labels',async () => {
  const h=await harness();const {makeEntry}=await h.use('lore-lines.js'),s=await h.use('lore-select.js'),{normalizeMemory}=await h.use('memory-settings.js');
  const cards=['Mira','Kael'].map(n => makeEntry('characters',n));cards[0].sections.appearance.text='Silver hair';
  const selection=s.selectEntries(cards,normalizeMemory({lorebooks:true}), 'Mira',null,'Kael arrives.');
  assert.deepEqual(Array.from(selection.selected.characters,x => x.reason),['mentioned','recent mention']);
  assert.doesNotMatch(s.renderEntry(cards[0]),/origin:/);assert.match(s.renderEntry(cards[0],null,'',{provenance:true}),/origin:/);
+});
+test('memory failure details appear on the first failure in the toast and settings panel',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ const lastError='A memory note was empty or longer than 400 characters. No turns were marked updated.';
+ const story={title:'Story',memory:{autoUpdate:true},memoryState:{extractedThroughOrder:0,failureStreak:1,paused:false,lastError}};
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});
+ let detail;h.document.addEventListener('memory-toast',e=>{detail=e.detail;});
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'story',status:'failed',failureStreak:1,lastError}});
+ assert.match(detail.text,/400 characters/);assert.equal(detail.action,'Open settings');
+ const panel=await h.use('ui/memory-settings-view.js');panel.fillMemory(story.memory);
+ assert.match(h.el('mem-update-status').textContent,/Last update failed:.*400 characters/);
+ story.memoryState={...story.memoryState,paused:true,failureStreak:3};
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});panel.updateMemorySettingsHints();
+ assert.match(h.el('mem-update-status').textContent,/Paused.*400 characters/);
 });
 
 test('U4 rendered message comparison tracks scene/review fields and memoizes turn computation',async () => {

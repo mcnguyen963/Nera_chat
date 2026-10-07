@@ -19,3 +19,5 @@ Dialogue establishes what someone said, not that it is true. Keep actual events,
 Do not invent events inside omitted history. An omitted note does not erase an established person, injury, resource, promise, or relationship. When a needed fact is truly unknown, keep it unknown.
 
 Preserve intentions and attempts as intentions and attempts, not completed events. Keep player-action qualifiers exact.
+
+A summary's final scene is the scene at its cutoff, not the point from which to resume when later chat exists. Continue from the newest narrative and the current user message. Source turn labels date the evidence; they are not instructions to replay that turn. A later confirmed completion supersedes an older open goal about the same event (for example, published class placements supersede an earlier expectation of their publication). Do not move the story back to the summary cutoff or repeat completed events to resolve stale notes. If sources genuinely conflict and later chat does not resolve them, keep that fact uncertain rather than inventing a bridge.

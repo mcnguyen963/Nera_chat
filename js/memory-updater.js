@@ -44,27 +44,28 @@ export async function rebuild(sid, options = {}) {
   runtime.patch(sid,{},changed);
   await updateSession(sid,{ 'memoryState.extractedThroughOrder':0,'memoryState.paused':false,'memoryState.needsRebuild':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':null,memoryInvalidations:[] });
   runtime.patch(sid,{ extractedThroughOrder:0,paused:false,needsRebuild:false,failureStreak:0 });
-  await catchUp(sid,options);
+  const finished=await catchUp(sid,options);
   offerRebuildCleanup(sid,0,options);
-  return true;
+  return finished;
 }
 export async function catchUp(sid,{ signal,onProgress } = {}) {
   await runtime?.prepare?.(sid);
   let i = 0;
   while (!signal?.aborted) {
     const live = runtime?.get(sid), mem = normalizeMemory(live?.session.memory);
-    if (!live) break;
-    const range = dueRange(live.messages,live.session.memoryState,mem,{ manual:true }); if (!range) break;
+    if (!live) return false;
+    const range = dueRange(live.messages,live.session.memoryState,mem,{ manual:true }); if (!range) return true;
     onProgress?.({ range,index:++i });
     const cancel = () => stop(sid); signal?.addEventListener('abort',cancel,{ once:true });
-    try { if (!await start(sid,range,true)) break; } finally { signal?.removeEventListener('abort',cancel); }
+    try { if (!await start(sid,range,true)) return false; } finally { signal?.removeEventListener('abort',cancel); }
   }
+  return false;
 }
 async function start(sid,range,manual) {
   if (isRunning(sid)) return false;
   const controller = new AbortController(),owner = currentUid();
-  let live,mem,settings,source,entries;
-  inFlight.set(sid,controller); emit({ sessionId:sid,status:'running' });
+  let live,mem,settings,source,entries,streamedAnswer='';
+  inFlight.set(sid,controller); rawAnswers.delete(sid); emit({ sessionId:sid,status:'running' });
   try {
     await runtime?.prepare?.(sid);
     if (controller.signal.aborted || currentUid() !== owner) return false;
@@ -74,10 +75,12 @@ async function start(sid,range,manual) {
     const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session).entries,messages:source,range,count:countTokens }); range = built.range;
     const snapshot = stamp(range.messages);
     const guard={startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
-    const result = await chatCompletion({ settings:{ ...settings,reasoning:{ ...settings.reasoning,enabled:false },maxResponseTokens:mem.updateMaxTokens },messages:built.messages,onDelta:() => {},signal:controller.signal });
+    const result = await chatCompletion({ settings:{ ...settings,reasoning:{ enabled:false,explicitDisable:true },maxResponseTokens:mem.updateMaxTokens },messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
-    if (!parsed.valid) throw new Error("The model's answer wasn't in the note format.");
+    if (!parsed.valid) throw new Error("The model's answer wasn't in the note format."+(parsed.skipped[0] ? ' Line '+parsed.skipped[0].line+': '+parsed.skipped[0].reason+'.' : ''));
+    // Never checkpoint past a note that was dropped for exceeding storage limits.
+    if (parsed.skipped.some(s => s.reason === 'empty or oversized note')) throw new Error('A memory note was empty or longer than 400 characters. No turns were marked updated.');
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || currentUid() !== owner) return false;
     const latest = runtime.get(sid);
@@ -87,6 +90,7 @@ async function start(sid,range,manual) {
     const latestMem=normalizeMemory(latest.session.memory);
     if(!manual && !latestMem.autoUpdate)return false;
     const changes=applyOps(latest.entries,parsed.ops,{mem:latestMem,protagonist:mem.protagonist,sourceRevision:guard.startRevision,messages:latest.messages,session:latest.session});
+    if (changes.skipped.some(s => s.reason === 'card storage full')) throw new Error('A memory card is full. Reorganize it, then retry; no turns were marked updated.');
     if(!changes.appends.length && !changes.creates.length && !changes.aliases.length && !changes.statusChanges.length && !parsed.sawNone && changes.skipped.length===parsed.ops.length)throw new Error('No usable notes in the model response.');
     const committed=await commitExtraction(sid,changes,{...range,guard});
     const nextEntries=committed?.entries ? latest.entries.filter(e=>!committed.entries.some(w=>w.id===e.id)).concat(committed.entries) : changes.entries;
@@ -96,10 +100,11 @@ async function start(sid,range,manual) {
   } catch (error) {
     if(error instanceof StaleSourceError || error instanceof SupersededError){emit({sessionId:sid,status:'info',message:error.message,manual});return false;}
     if (controller.signal.aborted || currentUid() !== owner) return false;
+    if (error.partial?.content || streamedAnswer) rawAnswers.set(sid,error.partial?.content || streamedAnswer);
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || !runtime.get(sid)) return false;
     const failureStreak = (runtime.get(sid).session.memoryState?.failureStreak ?? 0)+1;
-    const lastError = /output limit|cut off/i.test(error.message) ? "The update was cut off. Raise 'Max response tokens for updates' in Memory settings." : String(error.message).slice(0,240);
+    const lastError = /output limit|cut off/i.test(error.message) ? "The update was cut off. Raise 'Max response tokens for updates' in Memory settings." : /card storage full/i.test(error.message) ? 'A memory card is full. Reorganize it, then retry; no turns were marked updated.' : String(error.message).slice(0,240);
     await updateSession(sid,{ 'memoryState.failureStreak':failureStreak,'memoryState.lastError':lastError,'memoryState.paused':failureStreak>=3 });
     runtime.patch(sid,{ failureStreak,lastError,paused:failureStreak>=3 }); emit({ sessionId:sid,status:'failed',failureStreak,lastError,manual }); return false;
   } finally { inFlight.delete(sid); emit({ sessionId:sid,status:'idle' }); }
@@ -119,7 +124,7 @@ export async function rebuildFrom(sid,fromOrder,options={}) {
   const remaining=(live.session.memoryInvalidations ?? []).filter(i=>i.fromOrder<fromOrder),rebuildFromOrder=remaining.length ? Math.min(...remaining.map(i=>i.fromOrder)) : null;
   await updateSession(sid,{memoryInvalidations:remaining,'memoryState.extractedThroughOrder':previous,'memoryState.needsRebuild':remaining.length>0,'memoryState.paused':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':rebuildFromOrder});live.session.memoryInvalidations=remaining;
   runtime.patch(sid,{extractedThroughOrder:previous,needsRebuild:remaining.length>0,paused:false,failureStreak:0,rebuildFromOrder},changed);
-  await catchUp(sid,options);offerRebuildCleanup(sid,fromOrder,options);return true;
+  const finished=await catchUp(sid,options);offerRebuildCleanup(sid,fromOrder,options);return finished;
 }
 
 function offerRebuildCleanup(sid,fromOrder,options) {

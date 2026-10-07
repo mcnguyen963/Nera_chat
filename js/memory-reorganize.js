@@ -27,7 +27,7 @@ export async function planReorganize(live,entries,sections,instruction = '',coun
 export async function runReorganizeBatch(live,entries,sections,instruction,{ signal,onDelta,count = countTokens,complete = chatCompletion } = {}) {
   const messages = buildReorganizeMessages({ settings:live.settings,mem:live.mem,entries,sections,instruction });
   if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>requestInputLimit({...live.settings,maxResponseTokens:live.mem.reorganizeMaxTokens})) throw new Error('Reorganize input exceeds the context budget.');
-  const result = await complete({ settings:{ ...live.settings,reasoning:{ ...live.settings.reasoning,enabled:false },maxResponseTokens:live.mem.reorganizeMaxTokens },messages,signal,onDelta,onReasoning:() => {} });
+  const result = await complete({ settings:{ ...live.settings,reasoning:{ enabled:false,explicitDisable:true },maxResponseTokens:live.mem.reorganizeMaxTokens },messages,signal,onDelta,onReasoning:() => {} });
   const parsed = parseMemoryLines(result.content,{ reorganize:true,allowPersonality:true,entries,messages:live.messages,mem:live.mem });
   if (!parsed.valid) { const error = new Error("Invalid reorganization; nothing was changed."); error.raw = result.content; throw error; }
   const empty = entries.map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,lines:[] }])) }));

@@ -133,10 +133,11 @@ async function commitExtractionImpl(sid,changes,range) {
       }
       for(const al of changes.aliases.filter(a=>a.entryId===id))if(!(data.aliases ?? []).some(x=>normalizeName(x)===normalizeName(al.alias)))(data.aliases ??= []).push(al.alias);
       for(const st of changes.statusChanges.filter(a=>a.entryId===id)){data.status=st.status;if(st.source)data.statusSource=st.source;}
-      try{guardSize(data,true);}catch{skipped.push({entryId:id,reason:'card full; reorganize it'});continue;}
+      // A full card must abort the transaction, including its extraction checkpoint.
+      guardSize(data,true);
       tx.update(ref(sid,id),{sections:data.sections,aliases:data.aliases ?? [],status:data.status ?? null,...(data.statusSource ? {statusSource:data.statusSource} : {}),updatedAt:serverTimestamp()});written.push(data);notes+=cardNotes;
     }
-    for(const e of changes.creates){try{guardSize(e,true);}catch{skipped.push({entryId:e.id,reason:'card full; reorganize it'});continue;}tx.set(ref(sid,e.id),{...clean(e),createdAt:serverTimestamp(),updatedAt:serverTimestamp()});written.push(e);notes+=Object.values(e.sections).reduce((n,s)=>n+(s.lines?.length ?? 0),0);}
+    for(const e of changes.creates){guardSize(e,true);tx.set(ref(sid,e.id),{...clean(e),createdAt:serverTimestamp(),updatedAt:serverTimestamp()});written.push(e);notes+=Object.values(e.sections).reduce((n,s)=>n+(s.lines?.length ?? 0),0);}
     const loreRevision=(session.loreRevision ?? 0)+1;
     tx.update(target,{loreRevision,'memoryState.extractedThroughOrder':range.endOrder,'memoryState.lastUpdateAt':serverTimestamp(),'memoryState.lastUpdateTurns':range.fromTurn+'–'+range.toTurn,'memoryState.failureStreak':0,'memoryState.lastError':null,'memoryState.paused':false});
     return {entries:written,skipped,loreRevision,notes};
