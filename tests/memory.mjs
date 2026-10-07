@@ -192,6 +192,37 @@ test('memory updates explicitly disable OpenRouter reasoning without changing th
   assert.match(body.messages[0].content,/exact thread title/);
   assert.equal(client.buildRequestBody({...request.settings,endpoint:'https://example.test'},request.messages).reasoning,undefined);
 });
+test('memory profile resolves its own connection and sampling without switching narration or sharing its credentials',async()=>{
+  const use=await setup(),m=await use('memory-settings.js'),client=await use('llm-client.js');
+  const narrator={...settings,activeProfileId:'narrator',modelId:'narrator-model',endpoint:'https://narrator.test',apiKey:'narrator-key',temperature:1,advancedParametersEnabled:true,reasoning:{enabled:true,effort:'high'},profiles:[{id:'narrator',modelId:'old-mirrored-model'},{id:'scribe',name:'Scribe',endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:'scribe-key',modelId:'z-ai/glm-5.3-flash:floor',streaming:false,temperature:0.2,advancedParametersEnabled:true,maxResponseTokens:9000,reasoning:{enabled:true,effort:'high'}}]};
+  const before=JSON.stringify(narrator),mem=m.normalizeMemory({updateProfileId:'scribe',updateMaxTokens:3000});
+  const task=m.memoryTaskSettings(narrator,mem),body=client.buildRequestBody(task,[]);
+  assert.equal(task.endpoint,narrator.profiles[1].endpoint);assert.equal(task.apiKey,'scribe-key');assert.equal(task.streaming,false);
+  assert.equal(body.model,'z-ai/glm-5.3-flash:floor');assert.equal(body.temperature,0.2);assert.equal(body.max_tokens,3000);assert.deepEqual(plain(body.reasoning),{enabled:false});
+  assert.equal(JSON.stringify(narrator),before);
+  const following=m.memoryTaskSettings(narrator,m.normalizeMemory());assert.equal(following.modelId,'narrator-model');
+  const pinnedActive=m.memoryTaskSettings(narrator,m.normalizeMemory({updateProfileId:'narrator'}));assert.equal(pinnedActive.modelId,'narrator-model');
+  const changed={...narrator,activeProfileId:'another',modelId:'another-model'};assert.equal(m.memoryTaskSettings(changed,mem).modelId,body.model);
+  const sparse={...narrator,profiles:[{id:'scribe',modelId:'memory-only'}]};const independent=m.memoryTaskSettings(sparse,mem);
+  assert.equal(independent.apiKey,'');assert.equal(independent.endpoint,'');assert.equal(independent.temperature,null);assert.equal(independent.advancedParametersEnabled,false);
+  assert.equal(m.normalizeMemory({updateProfileId:' scribe '}).updateProfileId,'scribe');
+});
+test('update and catch-up requests use the selected memory profile rather than the narrative model',async()=>{
+  const requests=[];
+  const h=await updaterHarness(async options=>{requests.push(options);return {content:'NONE'};});
+  h.live.settings={...settings,activeProfileId:'narrator',modelId:'narrator-model',endpoint:'https://narrator.test',apiKey:'narrator-key',profiles:[{id:'scribe',name:'Scribe',modelId:'z-ai/glm-5.3-flash:floor',endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:'scribe-key'}]};
+  h.live.session.memory.updateProfileId='scribe';
+  assert.equal(await h.updater.updateNow('s'),true);assert.equal(await h.updater.catchUp('s'),true);
+  assert.equal(requests.length,3);for(const r of requests){assert.equal(r.settings.modelId,'z-ai/glm-5.3-flash:floor');assert.equal(r.settings.apiKey,'scribe-key');assert.equal(r.settings.maxResponseTokens,256);}
+  assert.equal(h.live.settings.activeProfileId,'narrator');assert.equal(h.live.settings.modelId,'narrator-model');
+});
+test('deleted memory profiles fail without a model call or checkpoint movement',async()=>{
+  let calls=0;const h=await updaterHarness(async()=>{calls++;return {content:'NONE'};});
+  h.live.session.memory.updateProfileId='deleted';
+  assert.equal(await h.updater.updateNow('s'),false);assert.equal(calls,0);assert.equal(h.live.session.memoryState.extractedThroughOrder,0);
+  assert.match(h.live.session.memoryState.lastError,/profile no longer exists/);
+  h.live.session.memory.updateProfileId='';assert.equal(await h.updater.updateNow('s'),true);assert.equal(calls,1);
+});
 test('reorganize explicitly disables reasoning in its serialized request',async () => {
   const use=await setup(),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),m=await use('memory-settings.js'),client=await use('llm-client.js');
   const entry=l.makeEntry('characters','Mira');entry.sections.appearance.lines=[line('a','scar',2)];
@@ -200,6 +231,15 @@ test('reorganize explicitly disables reasoning in its serialized request',async 
   await r.runReorganizeBatch(live,[entry],{[entry.id]:['appearance']},'',{complete:async options=>{request=options;return {content:'T2 [char] Mira | appearance: scar'};}});
   const body=client.buildRequestBody(request.settings,request.messages);
   assert.deepEqual(plain(body.reasoning),{enabled:false});assert.equal(body.max_tokens,live.mem.reorganizeMaxTokens);
+});
+test('reorganization uses the selected memory connection and its own task output budget',async()=>{
+  const use=await setup(),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),m=await use('memory-settings.js');
+  const card=l.makeEntry('characters','Mira');card.sections.appearance.lines=[line('scar','scar',2)];
+  const live={settings:{...settings,activeProfileId:'narrator',modelId:'narrator-model',profiles:[{id:'scribe',endpoint:'https://scribe.test',apiKey:'scribe-key',modelId:'scribe-model'}]},mem:m.normalizeMemory({updateProfileId:'scribe',reorganizeMaxTokens:7000}),messages};
+  const sections={[card.id]:['appearance']},plan=await r.planReorganize(live,[card],sections);
+  let request;await r.runReorganizeBatch(live,plan.batches[0],sections,'',{complete:async options=>{request=options;return {content:'T2 [char] Mira | appearance: scar'};}});
+  assert.equal(request.settings.modelId,'scribe-model');assert.equal(request.settings.endpoint,'https://scribe.test');assert.equal(request.settings.maxResponseTokens,7000);assert.equal(request.settings.reasoning.enabled,false);
+  assert.equal(live.settings.modelId,'narrator-model');
 });
 test('mixed valid and oversized notes never advance extraction past a dropped note',async () => {
   const content='T1 [event] Mira arrives.\nT2 [event] '+'x'.repeat(401);

@@ -9,7 +9,7 @@ import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-upda
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
 const booleans = ['scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
-const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract'];
+const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
 const seedKeys = ['date','time','place','present'];
 const numbers = ['batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
 let filled = null;
@@ -17,6 +17,7 @@ export function fillMemory(raw) {
   filled = normalizeMemory(raw);
   for (const key of booleans) get(key).checked = filled[key];
   for (const key of [...strings,...numbers]) get(key).value = filled[key];
+  refreshMemoryProfiles(filled.updateProfileId);
   const seed = parseScene(filled.startingScene);
   for (const key of seedKeys) get('starting-'+key).value = key === 'present' ? seed.present.join(', ') : key === 'date' ? seed.when ?? '' : seed[key] ?? (key === 'time' ? 'unknown' : '');
   for (const [book,b] of Object.entries(filled.books)) { get(book+'-on').checked = b.on; get(book+'-budget').value = b.budget; if (b.maxCards) get(book+'-maxCards').value = b.maxCards; }
@@ -57,6 +58,15 @@ export function initMemorySettings(openLore) {
   get('retry').addEventListener('click',() => void manualUpdate(true));
   get('catch-up').addEventListener('click',() => void catchUpDialog());
   document.addEventListener('memory-refresh',updateMemorySettingsHints);
+  document.addEventListener('settings-changed',()=>refreshMemoryProfiles());
+}
+export function refreshMemoryProfiles(selected = get('updateProfileId')?.value ?? '') {
+  const select=get('updateProfileId');if(!select)return;
+  const profiles=state.settings?.profiles ?? [];
+  const option=(value,label)=>{const item=document.createElement('option');item.value=value;item.textContent=label;return item;};
+  const options=[option('','Use narrator profile'),...profiles.map(p=>option(p.id,p.name+(p.modelId ? ' — '+p.modelId : '')))];
+  if(selected && !profiles.some(p=>p.id===selected)){const missing=option(selected,'Unavailable profile — choose another');missing.disabled=true;options.push(missing);}
+  select.replaceChildren(...options);select.value=selected;
 }
 async function manualUpdate(retry=false){try{await prepareMemorySnapshot();await updateNow(state.sessionId,{retry});} catch (e) { toast(e.message); } }
 export function updateMemorySettingsHints() {

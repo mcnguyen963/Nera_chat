@@ -6,7 +6,7 @@ export const memoryValidationRanges = {
 export const DEFAULT_MEMORY = {
   v: 1, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false,
   books: { characters: { on: true, budget: 4000, maxCards: 6 }, locations: { on: true, budget: 4000, maxCards: 2 }, facts: { on: true, budget: 1000 }, events: { on: true, budget: 3000 } },
-  batchTurns: 10, lagTurns: 4, updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'system',
+  batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'system',
 };
 export const DEFAULT_MEMORY_STATE = { extractedThroughOrder: null, lastUpdateAt: null, lastUpdateTurns: null, failureStreak: 0, paused: false, lastError: null };
 export function normalizeMemory(raw) {
@@ -17,6 +17,7 @@ export function normalizeMemory(raw) {
   out.startingScene = typeof raw.startingScene === 'string' ? canonicalScene(raw.startingScene) : null;
   if (!out.startingScene && (raw.startingScene || raw.startingSceneRaw)) out.startingSceneRaw=String(raw.startingScene || raw.startingSceneRaw);
   out.sceneFallbackModel = String(raw.sceneFallbackModel ?? '').trim().slice(0,200);
+  out.updateProfileId = String(raw.updateProfileId ?? '').trim().slice(0,200);
   out.replyContract = ['system','user'].includes(raw.replyContract) ? raw.replyContract : 'off';
   const clamp = (k, value, fallback) => {
     const [min, max] = memoryValidationRanges[k];
@@ -35,3 +36,19 @@ export function normalizeMemory(raw) {
 }
 export function memoryActive(mem) { return !!(mem?.scene || mem?.lorebooks || mem?.memoryBlock || mem?.blockWindow); }
 export function anyMemory(mem) { return memoryActive(mem) || mem?.autoUpdate === true; }
+
+// Resolve a task-local connection without switching the narrator's active profile.
+export function memoryTaskSettings(settings, mem, outputTokens = mem.updateMaxTokens) {
+  let task = { ...settings };
+  if (mem.updateProfileId) {
+    const profile = settings.profiles?.find(p => p.id === mem.updateProfileId);
+    if (!profile) throw new Error('The memory model profile no longer exists. Choose another profile in Memory settings.');
+    // Flat fields include the current profile's device-local overrides.
+    if (profile.id !== settings.activeProfileId) {
+      task = { ...task,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',streaming:profile.streaming ?? true,
+        advancedParametersEnabled:profile.advancedParametersEnabled ?? ['temperature','topP','frequencyPenalty','presencePenalty'].some(key => profile[key] != null && profile[key] !== '') };
+      for (const key of ['temperature','topP','frequencyPenalty','presencePenalty']) task[key] = profile[key] ?? null;
+    }
+  }
+  return { ...task,maxResponseTokens:outputTokens,reasoning:{enabled:false,explicitDisable:true} };
+}

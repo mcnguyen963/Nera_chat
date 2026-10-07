@@ -4,8 +4,9 @@ import { parseMemoryLines, applyOps } from './lore-lines.js';
 import { countTokens } from './tokenizer.js';
 import { chatCompletion } from './llm-client.js';
 import { computeTurns } from './turns.js';
+import { memoryTaskSettings } from './memory-settings.js';
 export async function planReorganize(live,entries,sections,instruction = '',count = countTokens) {
-  const mem = live.mem, settings = live.settings, batches = [], warnings = []; let batch = [];
+  const mem = live.mem, settings = memoryTaskSettings(live.settings,mem,mem.reorganizeMaxTokens), batches = [], warnings = []; let batch = [];
   const cost = async cards => { const messages = buildReorganizeMessages({ settings,mem,entries:cards,sections,instruction }); return 24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0); };
   const cap = requestInputLimit({...settings,maxResponseTokens:mem.reorganizeMaxTokens})-500;
   for (const original of entries) {
@@ -25,9 +26,10 @@ export async function planReorganize(live,entries,sections,instruction = '',coun
   return { batches,warnings,inputTokens:(await Promise.all(batches.map(cost))).reduce((a,b) => a+b,0) };
 }
 export async function runReorganizeBatch(live,entries,sections,instruction,{ signal,onDelta,count = countTokens,complete = chatCompletion } = {}) {
-  const messages = buildReorganizeMessages({ settings:live.settings,mem:live.mem,entries,sections,instruction });
-  if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>requestInputLimit({...live.settings,maxResponseTokens:live.mem.reorganizeMaxTokens})) throw new Error('Reorganize input exceeds the context budget.');
-  const result = await complete({ settings:{ ...live.settings,reasoning:{ enabled:false,explicitDisable:true },maxResponseTokens:live.mem.reorganizeMaxTokens },messages,signal,onDelta,onReasoning:() => {} });
+  const settings=memoryTaskSettings(live.settings,live.mem,live.mem.reorganizeMaxTokens);
+  const messages = buildReorganizeMessages({ settings,mem:live.mem,entries,sections,instruction });
+  if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>requestInputLimit(settings)) throw new Error('Reorganize input exceeds the context budget.');
+  const result = await complete({ settings,messages,signal,onDelta,onReasoning:() => {} });
   const parsed = parseMemoryLines(result.content,{ reorganize:true,allowPersonality:true,entries,messages:live.messages,mem:live.mem });
   if (!parsed.valid) { const error = new Error("Invalid reorganization; nothing was changed."); error.raw = result.content; throw error; }
   const empty = entries.map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,lines:[] }])) }));

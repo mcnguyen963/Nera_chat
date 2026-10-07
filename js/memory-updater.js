@@ -1,5 +1,5 @@
 import { requestSource, usableLore, effectivelyPaused, StaleSourceError, SupersededError, assertExtractionSource } from './continuity.js';
-import { normalizeMemory } from './memory-settings.js';
+import { normalizeMemory, memoryTaskSettings } from './memory-settings.js';
 import { dueRange } from './turns.js';
 import { buildExtractionMessages } from './memory-prompts.js';
 import { parseMemoryLines, applyOps } from './lore-lines.js';
@@ -70,12 +70,12 @@ async function start(sid,range,manual) {
     await runtime?.prepare?.(sid);
     if (controller.signal.aborted || currentUid() !== owner) return false;
     live = runtime.get(sid); if (!live) return false;
-    mem = normalizeMemory(live.session.memory); settings = structuredClone(live.settings); source = structuredClone(live.messages); entries = structuredClone(live.entries);
+    mem = normalizeMemory(live.session.memory); settings = structuredClone(memoryTaskSettings(live.settings,mem)); source = structuredClone(live.messages); entries = structuredClone(live.entries);
     range = dueRange(source,live.session.memoryState,mem,{ manual }); if (!range) return false;
     const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session).entries,messages:source,range,count:countTokens }); range = built.range;
     const snapshot = stamp(range.messages);
     const guard={startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
-    const result = await chatCompletion({ settings:{ ...settings,reasoning:{ enabled:false,explicitDisable:true },maxResponseTokens:mem.updateMaxTokens },messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
+    const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
     if (!parsed.valid) throw new Error("The model's answer wasn't in the note format."+(parsed.skipped[0] ? ' Line '+parsed.skipped[0].line+': '+parsed.skipped[0].reason+'.' : ''));
