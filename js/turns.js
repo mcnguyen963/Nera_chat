@@ -52,3 +52,12 @@ export function formatTurnsTranscript(messages, turns = computeTurns(messages), 
   }
   return lines.join('\n\n');
 }
+
+export function dueRangeStatus(messages,ms,mem,opts={}) {
+  if(ms?.extractedThroughOrder==null)return {reason:'pointer-unset'};
+  const turns=computeTurns(messages),eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a=>a.order>ms.extractedThroughOrder);
+  const pending=eligible.find(a=>!isAcceptedTurn(messages.find(m=>m.id===a.id),{lastUserOrder:lastUserOrderOf(messages),sceneOn:mem.scene}));
+  const range=dueRange(messages,ms,mem,opts);
+  if(range)return {range};
+  return pending ? {reason:'pending',turn:pending.turn} : {reason:'waiting',have:eligible.length,need:opts.manual?1:mem.batchTurns,lag:mem.lagTurns};
+}

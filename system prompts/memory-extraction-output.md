@@ -1,1 +1,1 @@
-Every note requires a valid T<number> from NEW TURNS. Output NONE alone if there are no notes.
+Prefer T<number> from NEW TURNS on every note, identifying its source turn. If there are no notes, output NONE alone.

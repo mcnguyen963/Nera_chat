@@ -14,7 +14,7 @@ export function openContextViewer() {
   if (open) return;
   open = true;
   sheet(document.getElementById('context-viewer'),'NEXT REQUEST',{ className:'context-sheet',close:() => { open = false; ++version; clearTimeout(timer); return true; } });
-  void render();
+  void prepareMemorySnapshot().then(()=>render()).catch(e=>toast(e.message));
 }
 async function render() {
   const dialog = document.querySelector('#context-viewer .sheet'); if (!dialog) return;
@@ -22,18 +22,18 @@ async function render() {
   let live = memorySnapshot(); if (!live) { body.append(node('p','Open a story to see its context.','muted')); return; }
   const run = ++version;
   try {
-    live = await prepareMemorySnapshot();
+    body.append(button('Refresh',async()=>{await prepareMemorySnapshot();void render();}));
     const draftText = document.getElementById('chat-input').value;
     const built = await buildContextForRequest(live.session,state.settings,{ messages:live.messages,loreEntries:live.entries,draftText });
     if (run !== version || !open) return;
     const r = built.report;
-    body.append(node('p',`${r.totals.input.toLocaleString()} input + ${r.totals.reserved.toLocaleString()} reply / ${r.totals.max.toLocaleString()} tokens`));
+    body.append(node('p',`${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens · ${r.totals.reserved.toLocaleString()} max reply`));
     if (live.providerUsage) body.append(node('p',`Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`,'muted'));
     if (draftText.trim()) body.append(node('p','including your draft','muted'));
     const bar = node('div',null,'context-segments');
     for (const [i,b] of r.blocks.entries()) { const seg = node('span'); seg.style.width = (100*b.tokens/r.totals.max)+'%'; seg.style.background = `hsl(0 0% ${30+i*7}%)`; seg.title = b.label+': '+b.tokens; bar.append(seg); } body.append(bar);
     for (const b of r.blocks) { const row = node('div',null,'context-block-row'); row.append(node('span',b.label),node('span',b.tokens.toLocaleString()+(b.budget ? ' / '+b.budget.toLocaleString() : ''))); body.append(row); if (b.cut) body.append(node('p',b.cut+' older notes not sent','muted')); if (b.key === 'window' && b.fromTurn) body.append(node('p',`turns ${b.fromTurn}–${b.toTurn} · ${b.messages} messages · ${b.mode === 'block' ? 'moves in steps of '+b.step : b.mode}`,'muted')); }
-    body.append(node('p','Reserved for the reply: '+r.totals.reserved.toLocaleString(),'muted'));
+    body.append(node('p','Separate max reply: '+r.totals.reserved.toLocaleString(),'muted'));
     if (r.loaded.length || r.skipped.length) body.append(node('h3','LOADED NOTES','eyebrow'));
     for (const e of [...r.loaded,...r.skipped]) {
       const row = node('div',null,'context-block-row');
@@ -42,7 +42,7 @@ async function render() {
       body.append(row);
     }
     if (r.scene) body.append(node('h3','SCENE','eyebrow'),node('p',r.scene.raw+' (from turn '+r.scene.fromTurn+')','muted'));
-    if (live.session.memory?.autoUpdate) { const update = button(live.session.memoryState?.paused ? 'Retry' : 'Update now',() => updateNow(live.session.id,{ retry:live.session.memoryState?.paused })); update.disabled = !!state.busy || isRunning(live.session.id); update.title = state.busy ? 'Wait for the current reply or summary.' : isRunning(live.session.id) ? 'A memory update is already running.' : ''; body.append(node('h3','MEMORY UPDATES','eyebrow'),node('p',live.session.memoryState?.lastUpdateTurns ? 'Updated through turns '+live.session.memoryState.lastUpdateTurns : 'Not started yet','muted'),update); }
+    if (live.session.memory?.autoUpdate) { const update = button(live.session.memoryState?.paused ? 'Retry' : 'Update now',async b=>{b.disabled=true;try{const ok=await updateNow(live.session.id,{retry:live.session.memoryState?.paused});if(ok===false)toast('Nothing to update yet, or an update is already running.');}finally{b.disabled=false;void render();}}); update.disabled = !!state.busy || isRunning(live.session.id); update.title = state.busy ? 'Wait for the current reply or summary.' : isRunning(live.session.id) ? 'A memory update is already running.' : ''; body.append(node('h3','MEMORY UPDATES','eyebrow'),node('p',live.session.memoryState?.lastUpdateTurns ? 'Updated through turns '+live.session.memoryState.lastUpdateTurns : 'Not started yet','muted'),update); }
     for (const warning of r.warnings) body.append(node('p',warning,'memory-warning'));
     if (r.mode === 'legacy' && !anyMemory(normalizeMemory(live.session.memory))) body.append(node('p','Memory is off for this story.','muted'),button('Set up memory',() => { closeViewer(); document.dispatchEvent(new CustomEvent('memory-settings')); }));
     const raw = lastRawAnswer(live.session.id); if (raw && live.session.memoryState?.lastError) { const d = node('details'); d.append(node('summary','Show last raw answer'),node('pre',raw)); body.append(d); }

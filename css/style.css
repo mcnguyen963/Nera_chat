@@ -435,3 +435,5 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .msg-editor { font-size: 16px; }
   .app { transform: var(--app-viewport-transform, none); }
 }
+
+@media (max-width:720px) {input:not([type]),input[type="search"],input[type="tel"],.msg-editor,.settings-prompts textarea,.full-label textarea,.msg input {font-size:16px;}}

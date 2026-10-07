@@ -36,6 +36,7 @@ export function createTokenizer({ importer = (url) => import(url), now = () => D
   }
   return {
     tokenizerReady: () => ready,
+    tokenizerStatus:()=>ready ? 'ok' : retryAfter ? 'fallback' : 'loading',
     async countTokens(text) {
       if (!text) return 0;
       try {
@@ -54,3 +55,5 @@ export function createTokenizer({ importer = (url) => import(url), now = () => D
 const tokenizer = createTokenizer();
 export const countTokens = tokenizer.countTokens;
 export const tokenizerReady = tokenizer.tokenizerReady;
+
+export const tokenizerStatus=tokenizer.tokenizerStatus;

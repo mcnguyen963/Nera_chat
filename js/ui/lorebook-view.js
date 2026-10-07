@@ -1,5 +1,5 @@
 import { noteNeedsReview, snapshotNeedsReview, sectionMeta, cutoffLabel } from '../continuity.js';
-import { rebuild } from '../memory-updater.js';
+import { rebuild, rebuildFrom } from '../memory-updater.js';
 import { state } from '../state.js';
 import { normalizeMemory } from '../memory-settings.js';
 import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
@@ -55,6 +55,7 @@ export function initLorebookView() {
       renderShell();
     } finally { fromHistory = false; }
   });
+  document.addEventListener('memory-rebuild-review',async e=>{const d=e.detail;if(d.sessionId!==state.sessionId || !confirm(`${d.count} old notes were not reproduced by the rebuild. Remove them? A backup will be made.`))return;try{const snapshot=memorySnapshot(d.sessionId);if(!snapshot)return;const backup=await store.removeReviewedLines(d.sessionId,snapshot.entries,d.fromOrder,d.throughOrder);if(backup)toast('Unreproduced notes removed.','Undo',()=>store.restoreBackup(d.sessionId,backup,memorySnapshot(d.sessionId)?.entries ?? []));}catch(error){toast(error.message);}});
   document.addEventListener('lorebooks',e => openLorebooks(e.detail ?? {}));
   document.addEventListener('lore-changed',e => {
     if (!opened || e.detail.sessionId !== sid) return;
@@ -102,7 +103,7 @@ function renderShell() {
   if (!sid) { body.append(node('p','Open a story to see its lorebooks.','muted')); return; }
   if (!live()?.session.memory?.lorebooks) { const banner = node('div',null,'lore-banner'); banner.append(node('span',"Lorebooks aren't used in replies for this story yet."),button('Turn on in Memory settings',() => { if (closeManager()) document.dispatchEvent(new CustomEvent('memory-settings')); },'btn small')); body.append(banner); }
   rail = node('nav',null,'lore-rail'); rail.setAttribute('aria-label','Lorebooks');
-  const columns = node('div',null,'lore-columns'); list = node('div',null,'lore-list'); editor = node('div',null,'lore-editor');
+  const columns = node('div',null,'lore-columns');columns.id='lorebook-columns'; list = node('div',null,'lore-list'); editor = node('div',null,'lore-editor');
   columns.append(rail,list,editor); body.append(columns); renderRail();
   if (screen === 'transfer') renderTransfer(); else if (screen === 'backups') void renderBackups(); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
 }
@@ -111,6 +112,7 @@ function renderRail() {
   for (const [key,label] of Object.entries(BOOK_LABELS)) {
     const cards = entries().filter(e => e.book === key), drafts = cards.filter(e => e.draft).length, openThreads = cards.filter(e => e.kind === 'thread' && e.status !== 'closed').length;
     const b = button(label+' · '+cards.length,() => { if (!canLeave()) return; book = key; screen = 'list'; selected = null; staged = base = null; search = ''; renderShell(); },'btn lore-book'+(key === book ? ' selected' : ''));
+    b.setAttribute('aria-controls','lorebook-columns');b.setAttribute('aria-expanded',String(key===book && screen==='list'));
     b.append(node('small',key === 'events' ? openThreads+' open threads' : drafts ? drafts+' to review' : live()?.session.memory?.books?.[key]?.on === false ? 'Not used' : '')); rail.append(b);
   }
   rail.append(button('Import & export',() => { if (!canLeave()) return; staged = base = null; screen = 'transfer'; renderShell(); }),button('Backups',() => { if (!canLeave()) return; staged = base = null; screen = 'backups'; renderShell(); }));
@@ -133,7 +135,8 @@ function renderList() {
   const renderFilters = () => { filters.replaceChildren();
   for (const [value,label] of [['all','All'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) { const count = books.filter(e => passes(e,value)).length; if (!count && value !== 'all') continue; filters.append(button(label+' '+count,() => { filter = value; renderList(); },'btn small'+(filter === value ? ' selected' : ''))); } }; renderFilters(); list.append(filters);
   const rows = node('div',null,'lore-rows'); rows.setAttribute('role','listbox'); rows.setAttribute('aria-label',BOOK_LABELS[book]); list.append(rows); renderRows(rows);
-  list.append(button('Rebuild generated memory',async () => { const snapshot = await prepareMemorySnapshot(); await rebuild(snapshot.session.id); toast('Memory rebuild finished; prior notes remain for review.'); },'btn small'));
+  const edited=live()?.session.memoryState?.rebuildFromOrder;if(live()?.session.memoryState?.needsRebuild && edited!=null){const t=computeTurns(live().messages).turnById.get(live().messages.find(m=>m.order===edited)?.id) ?? '?';list.append(button('History edited at T'+t+' · Re-extract from there',async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}));}
+  list.append(button('Rebuild generated memory',async () => { const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; await rebuild(snapshot.session.id); toast('Memory rebuild finished; prior notes remain for review.'); },'btn small'));
   list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small'));
   if (filter === 'deleted') { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,async () => { if (!confirm('Remove all '+count+' notes from deleted turns?')) return; await undoAction(await store.removeDeletedLines(sid,affected,deletedOrders()),'Removed '+count+' notes.'); },'btn danger')); }
   const missing = books.filter(e => !sizes.has(e.id));
@@ -274,6 +277,7 @@ function renderTransfer() {
   }));
   changeFormat(format);
   async function readImport(text) {
+    if(new TextEncoder().encode(text).length>2*1024*1024){toast('The file is larger than 2 MB. Split it by book.');return false;}
     try {
       const detected = detectFormat(text), parsed = detected === 'json' ? fromJson(text) : fromMarkdown(text,{ protagonist:normalizeMemory(live()?.session.memory).protagonist });
       let plan = planImport(entries(),parsed,{ mode:mode.value,conflict:conflict.value });
@@ -296,10 +300,10 @@ function renderTransfer() {
   editor.append(button('Copy prompt for an AI',async () => { await copy(prompt()); toast('Prompt copied'); })); const disclosure = node('details'); disclosure.append(node('summary','Show prompt'),node('pre',prompt())); editor.append(disclosure,node('p','1. Export this story (Settings → Import & export → Export current story), or export the transcript above.\n2. Paste the prompt and the file into an AI chat.\n3. Save its answer as a .md (or .json) file and import it here.','muted'));
 }
 async function renderBackups() {
-  list.replaceChildren(); editor.replaceChildren(); list.append(node('h2','Backups')); const backups = await store.listBackups(sid), groups = backups.filter(b => b.part == null || b.part === 1);
+  list.replaceChildren(); editor.replaceChildren(); list.append(node('h2','Backups')); const groups = await store.listBackups(sid);
   for (const b of groups) {
-    const all = backups.filter(x => (x.partOf ?? x.id) === (b.partOf ?? b.id)), saved = all.flatMap(x => x.entries), createdIds = all.flatMap(x => x.createdIds ?? []);
-    const row = node('div',null,'lore-list-item'); row.append(node('p',b.label+' · '+new Date(b.createdMs).toLocaleString()+' · '+saved.length+' cards'),button('Restore',async () => {
+    const row = node('div',null,'lore-list-item'); row.append(node('p',b.label+' · '+new Date(b.createdMs).toLocaleString()+' · '+b.count+' cards'),button('Restore',async () => {
+      const all=await store.loadBackupGroup(sid,b.id),saved=all.flatMap(x=>x.entries),createdIds=all.flatMap(x=>x.createdIds ?? []);
       const ids = new Set(saved.flatMap(e => linesOf({ sections:e.data.sections }).map(l => l.id))), count = entries().filter(e => saved.some(s => s.id === e.id) || createdIds.includes(e.id)).reduce((n,e) => n+linesOf(e).filter(l => !ids.has(l.id)).length,0);
       if (!confirm(`Restore ${saved.length} card(s) to how they were on ${new Date(b.createdMs).toLocaleString()}? Notes added since then to these cards will be removed (${count} notes).`)) return;
       await store.restoreBackup(sid,b.partOf ?? b.id,entries()); toast('Restored'); void renderBackups();
@@ -345,6 +349,7 @@ async function reorganize(cards) {
               const untouched = original.sections[key].lines.filter(l => l.by !== 'user' && !sentIds.has(l.id));
               preview.sections[key] = [...untouched,...preview.sections[key]];
             }
+            preview.snapshot=Object.fromEntries(Object.entries(original.sections).map(([key,section])=>[key,section.lines.map(l=>l.id)]));
             preview.entry = original;
           }
           previews.push(...result.previews); if (result.skipped.length) warnings.push(`${result.skipped.length} lines mentioned names that aren't part of these cards or couldn't be read and were ignored.`);
@@ -373,6 +378,8 @@ async function reorganize(cards) {
         const columns = node('div',null,'reorganize-columns'), before = node('div',null,'reorganize-before'), afterView = node('div',null,'reorganize-after'); before.append(node('h4','Before'),node('pre',sortLines(original).map(l => 'T'+(l.turn ?? '')+' '+l.text).join('\n'))); afterView.append(node('h4','After'));
         const tabs = node('div',null,'segmented mobile-back'); tabs.append(button('Before',() => { before.classList.remove('mobile-hidden'); afterView.classList.add('mobile-hidden'); }),button('After',() => { afterView.classList.remove('mobile-hidden'); before.classList.add('mobile-hidden'); })); section.append(tabs); before.classList.add('mobile-hidden');
         const rows = node('div'); const render = () => { rows.replaceChildren(); for (const ln of after) { const f = field('T'+(ln.turn ?? ''),ln.text,{ textarea:true }); f.input.addEventListener('input',() => ln.text = f.input.value); f.wrap.append(button('×',() => { after.splice(after.indexOf(ln),1); render(); },'btn small')); rows.append(f.wrap); } }; render(); afterView.append(rows,button('+ Add line',() => { after.push({ id:newLoreId('ln'),text:'',turn:original.at(-1)?.turn ?? null,when:original.at(-1)?.when ?? null,src:original.at(-1)?.src ?? null,by:'reorganize',at:Date.now() }); render(); },'btn small'));
+        const removed=original.filter(l=>(p.sent?.[key] ?? []).some(sent=>sent.id===l.id) && !after.some(n=>n.id===l.id || n.src!=null && n.src===l.src));
+        if(removed.length){afterView.append(node('h4','Will be removed'));for(const old of removed){const keep=field('Keep: '+old.text,'',{type:'checkbox'});keep.input.addEventListener('change',()=>{if(keep.input.checked){if(!after.some(l=>l.id===old.id))after.push({...old});}else{const i=after.findIndex(l=>l.id===old.id);if(i>=0)after.splice(i,1);}render();});afterView.append(keep.wrap);}}
         columns.append(before,afterView); section.append(columns); body.append(section);
       }
       const current = entries().find(e => e.id === p.entry.id), fresh = current ? linesOf(current).filter(l => l.at>snapshotAt).length : 0; if (fresh) body.append(node('p',`${fresh} new notes arrived during reorganize. They'll be kept below the new lines.`,'muted'));

@@ -1,4 +1,4 @@
-import { requestSource, usableLore } from './continuity.js';
+import { requestSource, usableLore, effectivelyPaused, StaleSourceError, SupersededError, assertExtractionSource } from './continuity.js';
 import { normalizeMemory } from './memory-settings.js';
 import { dueRange } from './turns.js';
 import { buildExtractionMessages } from './memory-prompts.js';
@@ -17,13 +17,13 @@ export function stop(sid) { inFlight.get(sid)?.abort(); }
 export function stopAll() { for (const controller of inFlight.values()) controller.abort(); }
 const emit = detail => document.dispatchEvent(new CustomEvent('memory-status',{ detail }));
 const editTime = value => value?.toMillis?.() ?? (typeof value?.seconds === 'number' ? value.seconds*1000+Math.floor((value.nanoseconds ?? 0)/1e6) : value instanceof Date ? value.getTime() : value ?? null);
-const stamp = messages => JSON.stringify(messages.map(m => ({ id:m.id,order:m.order,editedAt:editTime(m.editedAt),content:m.content,scene:m.scene })));
+const stamp = messages => JSON.stringify(messages.map(m => ({ id:m.id,order:m.order,role:m.role,content:m.content })));
 export function rangeUnchanged(range,messages,snapshot) { return stamp(messages.filter(m => range.messages.some(r => r.id === m.id))) === snapshot; }
 export function shouldSkipAutoSummary(mem, running, due) { return running || mem.autoUpdate && !!due; }
 export function maybeStartAfterTurn(sid) {
   const live = runtime?.get(sid); if (!live) return false;
   const mem = normalizeMemory(live.session.memory);
-  if (!mem.autoUpdate || live.session.memoryState?.needsRebuild || live.session.memoryState?.paused || isRunning(sid)) return false;
+  if (!mem.autoUpdate || effectivelyPaused(live.session.memoryState) || isRunning(sid)) return false;
   const range = dueRange(live.messages,live.session.memoryState,mem);
   if (!range) return false;
   void start(sid,range,false).catch(e => console.error('Memory update:',e)); return true;
@@ -40,11 +40,12 @@ export async function updateNow(sid,{ retry = false } = {}) {
 export async function rebuild(sid, options = {}) {
   if (isRunning(sid) || runtime?.busy()) return false;
   await runtime?.prepare?.(sid);
-  await markGeneratedForReview(sid);
-  await runtime?.prepare?.(sid);
-  await updateSession(sid,{ 'memoryState.extractedThroughOrder':0,'memoryState.paused':false,'memoryState.needsRebuild':false,'memoryState.failureStreak':0 });
+  const changed=await markGeneratedForReview(sid);
+  runtime.patch(sid,{},changed);
+  await updateSession(sid,{ 'memoryState.extractedThroughOrder':0,'memoryState.paused':false,'memoryState.needsRebuild':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':null,memoryInvalidations:[] });
   runtime.patch(sid,{ extractedThroughOrder:0,paused:false,needsRebuild:false,failureStreak:0 });
   await catchUp(sid,options);
+  offerRebuildCleanup(sid,0,options);
   return true;
 }
 export async function catchUp(sid,{ signal,onProgress } = {}) {
@@ -72,7 +73,7 @@ async function start(sid,range,manual) {
     range = dueRange(source,live.session.memoryState,mem,{ manual }); if (!range) return false;
     const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session).entries,messages:source,range,count:countTokens }); range = built.range;
     const snapshot = stamp(range.messages);
-    const expectedSource = requestSource(live.session);
+    const guard={startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
     const result = await chatCompletion({ settings:{ ...settings,reasoning:{ ...settings.reasoning,enabled:false },maxResponseTokens:mem.updateMaxTokens },messages:built.messages,onDelta:() => {},signal:controller.signal });
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
@@ -80,15 +81,20 @@ async function start(sid,range,manual) {
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || currentUid() !== owner) return false;
     const latest = runtime.get(sid);
-    if (!latest || JSON.stringify(requestSource(latest.session)) !== JSON.stringify(expectedSource) || !rangeUnchanged(range,latest.messages,snapshot)) { console.info('Discarded stale memory update for',sid); return false; }
-    // Reapply against current cards so a manual edit or alias change wins.
-    const changes = applyOps(latest.entries,parsed.ops,{ mem:normalizeMemory(latest.session.memory),protagonist:mem.protagonist,sourceRevision:expectedSource.historyRevision,messages:latest.messages,session:latest.session });
-    if (changes.skipped.length) throw new Error(changes.skipped[0].reason);
-    await commitExtraction(sid,changes,{ ...range,expectedSource });
-    runtime.patch(sid,{ extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false },changes.entries);
-    const notes = changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
-    emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,skipped:[...parsed.skipped,...changes.skipped] }); return true;
+    if(!latest)return false;
+    assertExtractionSource(latest.session,guard);
+    if(!rangeUnchanged(range,latest.messages,snapshot))throw new StaleSourceError('Messages in this range were edited during the update.');
+    const latestMem=normalizeMemory(latest.session.memory);
+    if(!manual && !latestMem.autoUpdate)return false;
+    const changes=applyOps(latest.entries,parsed.ops,{mem:latestMem,protagonist:mem.protagonist,sourceRevision:guard.startRevision,messages:latest.messages,session:latest.session});
+    if(!changes.appends.length && !changes.creates.length && !changes.aliases.length && !changes.statusChanges.length && !parsed.sawNone && changes.skipped.length===parsed.ops.length)throw new Error('No usable notes in the model response.');
+    const committed=await commitExtraction(sid,changes,{...range,guard});
+    const nextEntries=committed?.entries ? latest.entries.filter(e=>!committed.entries.some(w=>w.id===e.id)).concat(committed.entries) : changes.entries;
+    runtime.patch(sid,{extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false},nextEntries,committed?.loreRevision);
+    const notes = committed?.notes ?? changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
+    emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
   } catch (error) {
+    if(error instanceof StaleSourceError || error instanceof SupersededError){emit({sessionId:sid,status:'info',message:error.message,manual});return false;}
     if (controller.signal.aborted || currentUid() !== owner) return false;
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || !runtime.get(sid)) return false;
@@ -97,4 +103,29 @@ async function start(sid,range,manual) {
     await updateSession(sid,{ 'memoryState.failureStreak':failureStreak,'memoryState.lastError':lastError,'memoryState.paused':failureStreak>=3 });
     runtime.patch(sid,{ failureStreak,lastError,paused:failureStreak>=3 }); emit({ sessionId:sid,status:'failed',failureStreak,lastError,manual }); return false;
   } finally { inFlight.delete(sid); emit({ sessionId:sid,status:'idle' }); }
+}
+
+export function dueRangeFor(sid) {
+  const live=runtime?.get(sid);if(!live)return null;
+  const mem=normalizeMemory(live.session.memory);
+  return mem.autoUpdate && !effectivelyPaused(live.session.memoryState) ? dueRange(live.messages,live.session.memoryState,mem) : null;
+}
+export async function rebuildFrom(sid,fromOrder,options={}) {
+  if(isRunning(sid) || runtime?.busy())return false;
+  await runtime?.prepare?.(sid);
+  const changed=await markGeneratedForReview(sid,fromOrder);
+  const live=runtime?.get(sid);if(!live)return false;
+  const previous=live.messages.filter(m=>m.role==='assistant' && m.order<fromOrder).at(-1)?.order ?? 0;
+  const remaining=(live.session.memoryInvalidations ?? []).filter(i=>i.fromOrder<fromOrder),rebuildFromOrder=remaining.length ? Math.min(...remaining.map(i=>i.fromOrder)) : null;
+  await updateSession(sid,{memoryInvalidations:remaining,'memoryState.extractedThroughOrder':previous,'memoryState.needsRebuild':remaining.length>0,'memoryState.paused':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':rebuildFromOrder});live.session.memoryInvalidations=remaining;
+  runtime.patch(sid,{extractedThroughOrder:previous,needsRebuild:remaining.length>0,paused:false,failureStreak:0,rebuildFromOrder},changed);
+  await catchUp(sid,options);offerRebuildCleanup(sid,fromOrder,options);return true;
+}
+
+function offerRebuildCleanup(sid,fromOrder,options) {
+  if(options.signal?.aborted)return;
+  const live=runtime?.get(sid);if(!live)return;
+  const throughOrder=live.session.memoryState?.extractedThroughOrder ?? 0;
+  const count=live.entries.reduce((n,e)=>n+Object.values(e.sections).reduce((n,s)=>n+(s.lines ?? []).filter(l=>l.needsReview && !['user','import'].includes(l.by) && l.src!=null && l.src>=fromOrder && l.src<=throughOrder).length,0),0);
+  if(count)emit({sessionId:sid,status:'rebuild-review',count,fromOrder,throughOrder});
 }

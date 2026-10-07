@@ -46,7 +46,9 @@ export async function importSillyTavern(file) {
   await addMessagesBulk(sessionId,messages);
   if (metadata?.session) {
     const allowed = ['longTermPlan','memory','memoryState','activeSummaryMessageId','breakpointOrder','memoryInvalidations','historyRevision','nextNarratorTurn'];
-    await updateSession(sessionId,Object.fromEntries(allowed.filter(k => k in metadata.session).map(k => [k,metadata.session[k]])));
+    const patch=Object.fromEntries(allowed.filter(k=>k in metadata.session).map(k=>[k,metadata.session[k]]));
+    if(patch.memory?.autoUpdate && patch.memoryState?.extractedThroughOrder==null){patch.memoryState={...patch.memoryState,extractedThroughOrder:Array.isArray(metadata.lore) && metadata.lore.length ? messages.filter(m=>m.role==='assistant').at(-1)?.order ?? messages.reduce((last,m,i)=>m.role==='assistant'?i+1:last,0) : 0};}
+    await updateSession(sessionId,patch);
     if (Array.isArray(metadata.lore)) await importLore(sessionId,{ writes:metadata.lore.map(e => ({ id:e.id,data:e })) },[]);
   }
   return sessionId;

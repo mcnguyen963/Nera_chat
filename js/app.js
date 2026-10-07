@@ -1,3 +1,4 @@
+import {clearAccountCaches} from './device-caches.js';
 import { initViewport } from "./viewport.js";
 import { initLorebookView } from './ui/lorebook-view.js';
 import { initContextViewer } from './ui/context-viewer.js';
@@ -87,10 +88,13 @@ document.addEventListener("click", (e) => {
 });
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
-initAuth((user) => {
+let previousAuthUid=null;
+initAuth(async(user)=>{
+  const previous=previousAuthUid;previousAuthUid=user?.uid ?? null;
   // Tear down account-scoped listeners and in-flight work on auth transitions.
   if (appInitialized) {
     stopAll();
+    if(previous && previous!==user?.uid)await clearAccountCaches(previous);
     window.location.reload();
     return;
   }
@@ -225,7 +229,7 @@ async function enterApp() {
   } catch (e) {
     console.error("Failed to load settings:", e);
     state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
-    alert("Could not load your saved settings. Using defaults for this page; check your connection and Firestore rules before saving.");
+    alert("Could not load your saved settings. Using defaults for this page. Reload before saving settings.");
   }
   initChatView();
   initSidebar();

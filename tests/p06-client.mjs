@@ -60,12 +60,13 @@ test('P0.6 truncated summaries cannot replace the checkpoint', async () => {
     { id: 'a1', order: 2, role: 'assistant', content: 'The gate opens.' },
     { id: 'u2', order: 3, role: 'user', content: 'Enter.' },
     { id: 'a2', order: 4, role: 'assistant', content: 'You see a hall.' },
+    {id:'u3',order:5,role:'user',content:'Continue'}, {id:'a3',order:6,role:'assistant',content:'Reply'},
   ];
   const use = appHarness({ stubs: {
     'messages.js': { getMessages: async () => all, getCheckpointMessages: async () => all, newMessageId: () => 'summary', addMessage: async () => { saves++; } },
     'tokenizer.js': { countTokens: async text => Math.ceil(String(text).length / 4) },
     'context-builder.js': { buildContextForRequest: async () => ({ usedTokens: 100, report: { warnings: [] } }), computeContextUsage: async () => ({}), MESSAGE_FRAME_TOKENS: 8, REQUEST_FRAME_TOKENS: 8 },
-    'llm-client.js': { chatCompletion: async opts => { calls++; assert.equal(opts.allowTruncated, true); return { content: 'Partial summary', finishReason: 'length' }; } },
+    'llm-client.js': { chatCompletion: async opts => { calls++; assert.equal(opts.allowTruncated, false); return { content: 'Partial summary', finishReason: 'length' }; } },
   } });
   const api = await use('summarizer.js');
   await assert.rejects(api.runSummarization({ id: 'story', breakpointOrder: 0 }, { maxContextTokens: 20000, maxResponseTokens: 2000, keepRecentMessagesAfterSummary: 2 }, { messages: all }), /summary hit the output limit; the checkpoint was not changed/);

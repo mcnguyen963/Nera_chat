@@ -1,3 +1,5 @@
+Before changing a default prompt, append the outgoing text SHA-256 and setting key to legacy-prompt-default-hashes.md.
+
 # System prompts
 
 All built-in LLM instruction text lives here. The app loads the Markdown files directly at startup, once per page load. Edit the files, publish the site as usual, and reload the app; no generated JavaScript prompt copy is needed. Missing or empty files stop loading with an error.

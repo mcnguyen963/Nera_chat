@@ -1,3 +1,4 @@
+import {requestInputLimit} from '../request-budget.js';
 import { fillMemory, readMemory, memoryDirty, initMemorySettings, chooseMemoryStart } from './memory-settings-view.js';
 import { normalizeMemory } from '../memory-settings.js';
 import { state } from "../state.js";
@@ -60,6 +61,8 @@ export function initSettingsView() {
   });
   document.querySelectorAll("[data-settings-panel]").forEach((button) =>
     button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
+  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);clearMessage();}));
+  for(const id of ['set-reasoning-maxtokens','set-max-resp'])input(id).addEventListener('input',syncOptionalControls);
   el.profiles.addEventListener("change", () => {
     capture();
     draft.activeProfileId = el.profiles.value;
@@ -191,6 +194,7 @@ function renderAll() {
   renderProfile();
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
+  set('set-model-context',draft.modelContextTokens ?? '');
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
   set("set-memory-update-prompt", draft.memoryExtractionPrompt);
@@ -245,6 +249,7 @@ function renderPetChoices(selectedIds = []) {
   el.petChoices.replaceChildren(...choices);
 }
 function syncOptionalControls() {
+  const cap=Math.max(0,Math.min(Number(raw('set-reasoning-maxtokens'))||0,(Number(raw('set-max-resp'))||0)-1));input('set-reasoning-cap').textContent=Number(raw('set-reasoning-maxtokens'))>=Number(raw('set-max-resp')) ? `Reasoning budget capped at ${cap} (must be below max response tokens).` : '';
   const thinking = input("set-reasoning-enabled").checked;
   const maxTokens = thinking && raw("set-reasoning-mode") === "max_tokens";
   input("thinking-options").classList.toggle("hidden", !thinking);
@@ -276,6 +281,7 @@ function capture() {
   draft.autoSummarizationEnabled = input("set-auto-summary-enabled").checked;
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
+  draft.modelContextTokens=raw('set-model-context').trim();
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
   draft.memoryExtractionPrompt = raw("set-memory-update-prompt");
@@ -292,6 +298,7 @@ function resetPanel() {
     mirrorFromActiveProfile(draft);
     renderProfile();
   } else if (panel === "context") {
+    draft.modelContextTokens=null;set('set-model-context','');
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
     draft.autoSummarizationEnabled = DEFAULT_SETTINGS.autoSummarizationEnabled;
     input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled;
@@ -351,8 +358,10 @@ function validatedDraft() {
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
+  result.modelContextTokens=String(result.modelContextTokens ?? '').trim() ? integerField(result.modelContextTokens,'set-model-context') : null;
   mirrorFromActiveProfile(result);
-  if (result.maxResponseTokens >= result.maxContextTokens) throw new Error("Max context tokens must exceed max response tokens.");
+  requestInputLimit(result);
+
   return result;
 }
 async function handleSaveSettings() {
@@ -422,7 +431,7 @@ async function handleSaveSession() {
     if (panel === 'memory' || memoryDirty(sessionOriginal.memory)) {
       partial.memory = readMemory(true, integerField);
       const budget = partial.memory.lorebooks ? Object.values(partial.memory.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
-      if (budget > .9*(state.settings.maxContextTokens-state.settings.maxResponseTokens)) throw new Error('Book budgets are larger than the space available. Lower them or raise Max context tokens (Context & summaries).');
+      if (budget > .9*(requestInputLimit(state.settings))) throw new Error('Book budgets are larger than the space available. Lower them or raise Max context tokens (Context & summaries).');
       const start = await chooseMemoryStart(partial.memory, normalizeMemory(sessionOriginal.memory), sessionOriginal);
       if (start === 'cancel') return;
       if (start != null) partial['memoryState.extractedThroughOrder'] = start;
@@ -433,6 +442,7 @@ async function handleSaveSession() {
     sessionOriginal = { ...sessionOriginal, title, longTermPlan, allowLlmPlanUpdates, ...(partial.memory ? { memory: partial.memory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
     document.dispatchEvent(new CustomEvent('memory-session-saved', { detail: { sessionId: requestedId, partial } }));
     set("set-session-title", title);
+    if(partial.memory)fillMemory(normalizeMemory(sessionOriginal.memory));
     feedback("Session saved ✓");
     refreshContextIndicator();
   } catch (error) { feedback("Save failed: " + error.message, true); }

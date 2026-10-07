@@ -1,3 +1,4 @@
+import {clearAccountCaches} from './device-caches.js';
 import {
   getAuth,
   signInWithEmailAndPassword,
@@ -51,5 +52,6 @@ export async function changePassword(currentPassword, newPassword) {
 }
 
 export async function logout() {
+  await clearAccountCaches(currentUid());
   await signOut(getAuth());
 }
