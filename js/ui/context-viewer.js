@@ -28,6 +28,7 @@ async function render() {
     if (run !== version || !open) return;
     const r = built.report;
     body.append(node('p',`${r.totals.input.toLocaleString()} input + ${r.totals.reserved.toLocaleString()} reply / ${r.totals.max.toLocaleString()} tokens`));
+    if (live.providerUsage) body.append(node('p',`Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`,'muted'));
     if (draftText.trim()) body.append(node('p','including your draft','muted'));
     const bar = node('div',null,'context-segments');
     for (const [i,b] of r.blocks.entries()) { const seg = node('span'); seg.style.width = (100*b.tokens/r.totals.max)+'%'; seg.style.background = `hsl(0 0% ${30+i*7}%)`; seg.title = b.label+': '+b.tokens; bar.append(seg); } body.append(bar);

@@ -344,6 +344,9 @@ function validatedDraft() {
     profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
     if (profile.reasoning.enabled && profile.reasoning.mode === "max_tokens") {
       profile.reasoning.maxTokens = integerField(profile.reasoning.maxTokens, "set-reasoning-maxtokens");
+      if (profile.reasoning.maxTokens >= profile.maxResponseTokens) {
+        throw new Error("Reasoning max tokens must be lower than Max response tokens (reasoning counts toward the response limit).");
+      }
     }
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }

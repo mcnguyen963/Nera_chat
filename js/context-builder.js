@@ -8,7 +8,7 @@ import { buildMemoryContext } from './memory-context.js';
 // view, so repeated turns and indicator updates need no collection read.
 
 import { getMessages } from "./messages.js";
-import { countTokens } from "./tokenizer.js";
+import * as tokenizer from "./tokenizer.js";
 
 // Reserve framing tokens for each API message and for the request envelope.
 // Exact framing depends on the model, so these are conservative estimates.
@@ -18,6 +18,7 @@ export const REQUEST_FRAME_TOKENS = 8;
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
 const systemTokenCache = new Map();
+const tokenizerIsReady = () => tokenizer.tokenizerReady?.() !== false;
 
 const AD_DIRECTIVE_RULE = prompts.authorDirection;
 export function normalizeAdDirective(content) {
@@ -35,8 +36,9 @@ export function normalizeAdDirective(content) {
 async function countSystemTokensCached(text) {
   let cached = systemTokenCache.get(text);
   if (cached === undefined) {
+    cached = await tokenizer.countTokens(text);
+    if (!tokenizerIsReady()) return cached;
     if (systemTokenCache.size >= 5000) systemTokenCache.clear();
-    cached = await countTokens(text);
     systemTokenCache.set(text, cached);
   }
   return cached;

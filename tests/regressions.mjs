@@ -19,6 +19,9 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     replaceChildren(...children) { for (const c of this.children) c.parentNode=null; this.children = []; this.append(...children); }
     setAttribute(key,value) { (this.attributes ??= {})[key]=value; }
     scrollIntoView() {}
+    getBoundingClientRect() { return { top:0,height:40,width:320,bottom:40 }; }
+    get nextSibling() { const a=this.parentNode?.children ?? []; return a[a.indexOf(this)+1] ?? null; }
+    scrollTop = 0; scrollHeight = 500; clientHeight = 500;
     get lastElementChild() { return this.children.at(-1) ?? null; }
     get selectedOptions() { return this.children.filter(c => c.value === this.value); }
     replaceWith(replacement) { const p = this.parentNode; if (!p) return; const index = p.children.indexOf(this); p.children.splice(index,1,replacement); replacement.parentNode=p; this.parentNode=null; }
@@ -74,7 +77,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
   const context = vm.createContext({
     URL, console, structuredClone, document, TextDecoder, TextEncoder, AbortController,
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } } },
-    requestAnimationFrame: fn => { fn(); return 1; },
+    requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
     localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
@@ -132,7 +135,7 @@ async function harness({ legacyNarratorHashes = null } = {}) {
     'messages.js': {
       ensureContinuityMetadata:async () => {},
       getMessages:async () => { const read = calls.historyReads = (calls.historyReads ?? 0)+1; const result = structuredClone(calls.serverHistory ?? calls.history ?? []); await calls.onHistoryRead?.(read); return result; }, getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
-      addMessage:async (...args) => { calls.messages.push(args); const result = { ...args[1],id:calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) calls.sessionDocs[args[0]].historyRevision = result.historyRevision; calls.history = [...(calls.history ?? []),result]; return result; },
+      addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); calls.messages.push(args); const result = { ...args[1],id:calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) calls.sessionDocs[args[0]].historyRevision = result.historyRevision; calls.history = [...(calls.history ?? []),result]; return result; },
       subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
     },
   };
@@ -606,7 +609,9 @@ test('Plan thread stays out of visible text but remains in the next model contex
   const result = await buildContextForRequest({ id: 'story' }, h.state.settings, {
     messages: [{ id: 'm', order: 1, role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion', tokenCount: 12 }],
   });
-  assert.match(result.apiMessages.at(-1).content, /<plan_thread>steering toward the reunion<\/plan_thread>/);
+  assert.doesNotMatch(result.apiMessages.at(-1).content, /<plan_thread>/);
+  const sceneRequest=await buildContextForRequest({id:'story',longTermPlan:'Fixed plan',memory:{scene:true}},h.state.settings,{messages:[{id:'a',order:1,role:'assistant',content:'The door opens.',planThread:'steering toward the reunion'}]});
+  assert.match(sceneRequest.apiMessages.at(-1).content, /<plan_thread>steering toward the reunion<\/plan_thread>/);
 });
 
 test('Author direction tags are normalized in model context', async () => {
@@ -689,7 +694,7 @@ test('message actions keep consistent order and create copies through the select
     const actions = message.children[0].children[1].children;
     assert.deepEqual(Array.from(actions, (button) => button.textContent), role === 'assistant'
       ? ['Create copy', 'Copy', 'Edit', 'Delete', 'Regenerate']
-      : ['Create copy', 'Copy', 'Edit', 'Delete']);
+      : ['Create copy', 'Copy', 'Edit', 'Delete', 'Retry reply']);
     const click = { type: 'click', stopPropagation() {} };
     h.state.busy = true;
     await actions[0].dispatchEvent(click);
@@ -806,14 +811,14 @@ test('narrative AD replies save valid scene state; invalid metadata warns while 
     h.el('chat-input').value='<ad>Continue the scene. Have Kael leave.</ad>';
     await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
     const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
-    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : 'Day 2 · night · Inn · present: Nera, Mira, Kael');
+    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : null);
     if (!valid) { assert.equal(saved.sceneMeta.kind,'carried');assert.equal(saved.sceneMeta.fromOrder,2); }
     assert.ok(saved.content.startsWith('Kael leaves the inn.'));
     assert.equal(h.calls.requests.length,1,'No automatic model retry or repair call');
     const current=(await h.use('scene.js')).latestScene(chat.memorySnapshot().messages);
     assert.equal(current.missingStreak,valid ? 0 : 1);
     assert.equal(current.scene.present.includes('Kael'),!valid);
-    if (!valid) assert.ok(h.el('message-list').children.some(x => /Reply saved\. The model omitted/.test(x.textContent ?? '')));
+    if (!valid) assert.ok(h.el('message-list').children.some(x => /No scene tag in this reply/.test(x.textContent ?? '')));
   }
 });
 
@@ -832,11 +837,11 @@ test('scene recovery runs only on clean narrative failures, preserves narration 
     h.el('chat-input').value=mode==='ooc' ? '<ooc>Who is here?</ooc>' : 'Continue.';
     await h.el('composer').dispatchEvent({ type:'submit',preventDefault(){} });
     const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
-    assert.equal(h.calls.requests.length,['recover','bad-json'].includes(mode) ? 2 : 1,mode);
+    assert.equal(h.calls.requests.length,['recover','bad-json','flagged'].includes(mode) ? 2 : 1,mode);
     assert.ok(saved.content.startsWith(mode==='flagged' ? 'You say' : 'Mira waits'),mode);
     if(mode==='recover') { assert.equal(saved.sceneMeta.kind,'inferred');assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.requests[1].response_format.json_schema.strict,true); }
-    if(['bad-json','running','flagged'].includes(mode)) { assert.equal(saved.scene,raw);assert.equal(saved.sceneMeta.kind,'carried'); }
-    if(mode==='flagged') assert.equal(saved.acceptance,'pending');
+    if(['bad-json','running'].includes(mode)) { assert.equal(saved.scene,null);assert.equal(saved.sceneMeta.kind,'carried'); }
+    if(mode==='flagged') { assert.equal(saved.acceptance,'accepted'); assert.ok(saved.reviewWarnings.length); assert.equal(saved.sceneMeta.kind,'inferred'); }
     if(mode==='valid') assert.equal(saved.sceneMeta.kind,'declared');
     if(mode==='ooc') assert.equal(saved.scene,null);
     assert.equal(h.state.busy,false);
@@ -861,7 +866,7 @@ test('model plan output cannot change fixed author instructions and pure OOC pre
   h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',longTermPlan:'Elise survives',allowLlmPlanUpdates:true,memory:{ scene:true,memoryBlock:true } }) });
   h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Elise',narratorTurn:1 }],hasEarlier:false });
   h.calls.response = 'Liora believes Elise died.\n<plan>Elise dies</plan>\n<plan_thread>Preserve the mystery</plan_thread>\n<scene>Day 9 · noon · Palace · present: Liora</scene>';
-  h.el('chat-input').value = '<ad>What does Liora believe?<ad>';
+  h.el('chat-input').value = '<ooc>What does Liora believe?</ooc>';
   await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
   const saved = h.calls.messages.find(c => c[1].role === 'assistant')[1];
   assert.equal(saved.ooc,true); assert.equal(saved.scene,null); assert.equal(saved.content,'Liora believes Elise died.');
@@ -953,4 +958,86 @@ test('an old session load cannot clear the new session shared history job',async
   const snapshot = chat.prepareMemorySnapshot(); await new Promise(resolve => setTimeout(resolve,0));
   assert.equal(h.calls.historyReads,2,'new callers must join the still-running B read');
   releases.get(2)(); const result = await snapshot; assert.equal(result.session.id,'b'); assert.equal(result.messages[0].content,'b');
+});
+
+async function openImprovementChat(h, metadata = {}, messages = []) {
+  const chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('improvement');
+  await new Promise(resolve => setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({ id:'improvement',exists:() => true,data:() => ({ title:'Story',...metadata }) });
+  h.calls.latestCallbacks.at(-1)({ messages,hasEarlier:false });
+  Object.assign(h.state.settings,{modelId:'model',apiKey:'key',streaming:false}); h.calls.messageOrder=messages.length || 1;
+  return chat;
+}
+
+test('P0 failed user save restores the exact draft, and Retry uses a saved user turn once',async () => {
+  const h=await harness(); await openImprovementChat(h);
+  const draft='  A draft\nwith spacing.  '; h.el('chat-input').value=draft;
+  h.calls.addMessage=async () => { throw new Error('save failed'); };
+  await h.el('composer').dispatchEvent({type:'submit',preventDefault() {}});
+  assert.equal(h.el('chat-input').value,draft); assert.equal(h.calls.requests.length,0);
+  h.calls.addMessage=null; h.calls.responseData={ error:{message:'wrong key'} };
+  await h.el('composer').dispatchEvent({type:'submit',preventDefault() {}});
+  const retry=h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply');
+  assert.ok(retry); h.calls.responseData=null; h.calls.response='A reply.'; await retry.click();
+  assert.equal(h.calls.messages.filter(c => c[1].role==='user').length,1);
+  assert.equal(h.calls.messages.filter(c => c[1].role==='assistant').length,1);
+});
+
+test('P0 streaming bubble remains during persistence and swaps after the saved reply exists',async () => {
+  const h=await harness(); await openImprovementChat(h,{},[{id:'user',order:1,role:'user',content:'Begin.'}]);
+  let finish;
+  h.calls.addMessage=async (_sid,message,options) => new Promise(resolve => { finish=() => resolve({...message,id:options.id,order:2,historyRevision:1}); });
+  const retry=h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply');
+  const pending=retry.click(); await new Promise(resolve => setTimeout(resolve,0));
+  assert.ok(h.el('message-list').children.some(n => n.className==='msg assistant' && !n.dataset.messageId));
+  finish(); await pending;
+  assert.equal(h.el('message-list').children.filter(n => n.className==='msg assistant').length,1);
+  assert.ok(h.el('message-list').children.some(n => n.dataset.messageId==='summary-id'));
+});
+
+test('P0 cut-off reply persists without scene recovery and provider usage clears on story reset',async () => {
+  const h=await harness(); const chat=await openImprovementChat(h,{memory:{scene:true,sceneFallback:true}},[{id:'user',order:1,role:'user',content:'Begin.'}]);
+  h.calls.responseData={choices:[{finish_reason:'length',message:{content:'A cut-off scene.\n<scene>date:'}}],usage:{prompt_tokens:1234}};
+  await h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply').click();
+  const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
+  assert.equal(saved.truncated,true); assert.equal(saved.acceptance,'accepted'); assert.equal(h.calls.requests.length,1);
+  assert.ok(h.el('message-list').querySelectorAll('span').some(n => /cut off/.test(n.textContent ?? '')));
+  assert.equal(chat.memorySnapshot().providerUsage.promptTokens,1234);
+  chat.setSession('other'); assert.equal(chat.memorySnapshot()?.providerUsage ?? null,null);
+});
+
+test('P0 custom narrator keeps its text while obsolete lost-plan rules are removed',async () => {
+  const h=await harness(); const { buildContextForRequest }=await h.use('context-builder.js');
+  const built=await buildContextForRequest({id:'s',longTermPlan:'Plan',memory:{scene:true}}, {...h.state.settings,narratorSystemPrompt:'Custom. If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears, treat that plan as lost until the user sets a new one.'},{messages:[{id:'u',order:1,role:'user',content:'Begin.'}]});
+  assert.match(built.apiMessages[0].content,/Custom\./); assert.doesNotMatch(built.apiMessages[0].content,/treat that plan as lost/);
+});
+
+test('S5 valid scenes survive lint warnings, render a note, and plan threads require an active plan',async () => {
+ const h=await harness();await openImprovementChat(h,{longTermPlan:'',memory:{scene:true,protagonist:'Nera'}},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.response='You decide to stay.\n<plan_thread>Unused target</plan_thread>\n<scene>date: unknown · time: unknown · place: Inn · present: Mira</scene>';
+ await h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply').click();
+ const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];assert.equal(saved.acceptance,'accepted');assert.equal(saved.sceneMeta.kind,'declared');assert.ok(saved.reviewWarnings.length);assert.equal(saved.planThread,null);
+ assert.ok(h.el('message-list').querySelectorAll('p').some(n => n.textContent?.startsWith('Note: ')));
+ assert.equal(h.el('message-list').querySelectorAll('button').some(b => b.textContent==='Accept reply'),false);
+});
+
+test('S1 pending review controls are hidden with Scene off and after a later user message',async () => {
+ for(const [scene,later] of [[false,false],[true,true]]) {
+  const h=await harness();await openImprovementChat(h,{memory:{scene}},[{id:'p',order:2,role:'assistant',content:'Flagged',acceptance:'pending'},...(later ? [{id:'u',order:3,role:'user',content:'Continue.'}] : [])]);
+  assert.equal(h.el('message-list').querySelectorAll('button').some(b => b.textContent==='Accept reply'),false);
+ }
+});
+
+test('S12 recent narration selects cards after current input mentions; narrator cards omit provenance',async () => {
+ const h=await harness();const {makeEntry}=await h.use('lore-lines.js'),s=await h.use('lore-select.js'),{normalizeMemory}=await h.use('memory-settings.js');
+ const cards=['Mira','Kael'].map(n => makeEntry('characters',n));cards[0].sections.appearance.text='Silver hair';
+ const selection=s.selectEntries(cards,normalizeMemory({lorebooks:true}), 'Mira',null,'Kael arrives.');
+ assert.deepEqual(Array.from(selection.selected.characters,x => x.reason),['mentioned','recent mention']);
+ assert.doesNotMatch(s.renderEntry(cards[0]),/origin:/);assert.match(s.renderEntry(cards[0],null,'',{provenance:true}),/origin:/);
+});
+
+test('U4 rendered message comparison tracks scene/review fields and memoizes turn computation',async () => {
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),base={role:'assistant',content:'Story'};
+ for(const patch of [{revision:1},{acceptance:'pending'},{reviewWarnings:['warning']},{sceneMeta:{kind:'manual'}},{sceneCandidate:{scene:'new'}},{ooc:true},{truncated:true},{editedAt:true}]) assert.equal(chat.sameRenderedMessage(base,{...base,...patch}),false);
+ const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.notEqual(chat.turnsFor(list),chat.turnsFor([...list]));
 });

@@ -33,7 +33,7 @@ test('scene parsing accepts separators and missing fields, selects last tag, tra
   const use = await setup(), s = await use('scene.js');
   for (const separator of [' · ',' | ',' - ']) { const p = s.parseScene(['Day 9','night','Inn','present: A, a, B'].join(separator)); assert.equal(p.when,'Day 9'); assert.equal(p.place,'Inn'); assert.deepEqual(plain(p.present),['A','B']); }
   assert.equal(s.parseScene('Inn').when,null); assert.equal(s.parseScene('Day 2 | Inn').time,null);
-  assert.equal(s.extractScene('<scene>one</scene>\n<SCENE>two\nthree</SCENE>'),'two three');
+  assert.equal(s.extractScene('<scene>one</scene>\n<SCENE>two\nthree</SCENE>'),null);
   const history = [{ role:'assistant',order:1,scene:'Inn' },{ role:'assistant',order:2,scene:null },{ role:'assistant',order:3 }];
   assert.equal(s.latestScene(history).missingStreak,2); assert.equal(s.latestScene(history,2).fromOrder,1); assert.equal(s.formatSceneForDisplay('Day 2 · present: A'),'Day 2 · A');
 });
@@ -227,14 +227,14 @@ test('tight budgets reserve a recent suffix before optional lore and report its 
   const result = await b.buildContextForRequest(session,cfg,{ messages:history,loreEntries:[card],requireLatestUser:true });
   assert.ok(result.report.warnings.some(w => w.startsWith('Recent window reduced')));
   assert.ok(result.report.skipped.some(s => s.reason === 'over budget'));
-  const retained = result.apiMessages.filter(m => m.role !== 'system').slice(2).map(m => history.find(x => x.content === m.content)?.order);
+  const retained = result.apiMessages.filter(m => m.role !== 'system').slice(2).map(m => history.find(x => x.content.trim() === m.content.trim())?.order);
   assert.deepEqual(plain(retained),Array.from({ length:retained.length },(_,i) => 25-retained.length+1+i));
   assert.equal(result.droppedCount,result.report.gaps.reduce((n,g) => n+history.filter(m => m.order >= g.fromOrder && m.order <= g.toOrder).length,0));
 });
 test('equal dates preserve source turns and distinct hidden truth, belief and official record',async () => {
   const use = await setup(), l = await use('lore-lines.js'), f = await use('lore-format.js'), select = await use('lore-select.js');
   const parsed = f.fromJson('{"facts":[{"name":"Elise","text":"Elise is alive; this is a hidden truth.","lines":[{"turn":7,"when":"Day 2","text":"Liora believes Elise died."},{"turn":8,"when":"Day 2","text":"Cassian recorded her death in the official account."}]}]}');
-  const rendered = select.renderEntry(parsed.entries[0]);
+  const rendered = select.renderEntry(parsed.entries[0],null,'',{provenance:true});
   assert.match(rendered,/background; origin: import; unknown cutoff/);
   assert.match(rendered,/\[T7 · Day 2\] Liora believes Elise died/); assert.match(rendered,/\[T8 · Day 2\] Cassian recorded/);
   assert.match(select.MEMORY_RULE,/narrator-only secrets, public accounts, NPC beliefs, rumors/);

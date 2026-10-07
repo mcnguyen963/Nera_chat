@@ -102,3 +102,8 @@ node --experimental-vm-modules --test tests/*.mjs
 ```
 
 `analyze-live.mjs` reparses archived responses without making requests. `live-checks.mjs` requires the local ignored key, serializes execution and reserves a conservative per-call amount against the new $0.50 ceiling. Newly prepared reminder scenarios include an [OpenRouter price filter](https://openrouter.ai/docs/guides/routing/provider-selection#max-price), without changing the model or reasoning setting. Each scenario runs once unless an explicit repetition is prepared. Actual transmitted payloads remain archived separately from offline post-fix/next-experiment payloads. Investigation artifacts contain private story text but no copy of the API key.
+
+
+## 2026-10-07 parser implementation checkpoint (offline replay)
+
+Reconstructed visible narrator content from all 52 saved SSE response files and compared the HEAD strict scene inspector with the new tolerant parser. Existing inspector: 31 parseable responses; new parser: 33; regressions: 0. Among the 36 files whose names are neither OOC nor fallback, parseability rose from 31/36 (86.1%) to 33/36 (91.7%). The input responses are unchanged, so this does not establish improved tag-generation behavior. New long-history provider evaluation is pending C1-C4. No provider calls were made for this replay.

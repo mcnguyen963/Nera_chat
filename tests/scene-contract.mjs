@@ -27,7 +27,7 @@ test('the current scene contract parses values without retaining field labels or
   assert.equal(parsed.present.length,5);
   const unknown = scene.parseScene('date: unknown · time: unknown · place: unknown · present: unknown');
   assert.deepEqual(plain([unknown.when,unknown.time,unknown.place,unknown.present]),[null,null,null,[]]);
-  assert.equal(scene.parseScene(labeled.replace('West Reception Room','West Wing - Reception Room | Upstairs')).place,'West Wing - Reception Room | Upstairs');
+  assert.equal(scene.parseScene(labeled.replace('West Reception Room','West Wing - Reception Room, Upstairs')).place,'West Wing - Reception Room, Upstairs');
 });
 
 test('scene extraction preserves a long attendance list and rejects oversized output without saving partial names',async () => {
@@ -42,21 +42,6 @@ test('scene extraction preserves a long attendance list and rejects oversized ou
   assert.equal(scene.extractScene('<!--HIDDEN-->[Scene: Inn]<!--/HIDDEN-->'),null);
 });
 
-test('fresh scene output requires one final labeled tag while historical parsing stays tolerant',async () => {
-  const use = appHarness(), scene = await use('scene.js');
-  assert.equal(scene.inspectSceneOutput(`Krail waits.\n<scene>${labeled}</scene>`).scene,labeled);
-  for (const output of ['No tag.',`<scene>${labeled}</scene>\nAfterward.`,
-    `Prose <scene>${labeled}</scene>`,`<scene>${labeled}</scene>\n<scene>${labeled}</scene>`,
-    `<scene>Day 2 · night · Inn · present: Mira</scene>`,
-    '```\n<scene>'+labeled+'</scene>\n```',
-    '<scene>'+labeled.replace('time: unknown','time: night: late')+'</scene>',
-    '<scene>'+labeled.replace('time: unknown','time: ')+'</scene>',
-    '<scene>'+labeled.replace(' · time:', '\n · time:')+'</scene>']) {
-    assert.equal(scene.inspectSceneOutput(output).scene,null);
-    assert.ok(scene.inspectSceneOutput(output).warning);
-  }
-  assert.equal(scene.parseScene('Day 2 · night · Inn · present: Mira').place,'Inn');
-});
 
 test('present characters and current place precede unrelated mentions under card limits',async () => {
   const use = appHarness(), { makeEntry } = await use('lore-lines.js');

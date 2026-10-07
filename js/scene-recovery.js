@@ -13,13 +13,12 @@ export function recoveryMessages({ narration,userText,prior,names,plan }) {
     fixedPlanActive:!!plan?.trim(),pendingPlan:plan?.trim() || null }) }];
 }
 export function parseRecovery(text, context) {
-  const obj = JSON.parse(text);
-  const keys = ['date','time','place','present','planThread'];
-  if (!obj || Array.isArray(obj) || Object.keys(obj).length !== keys.length || Object.keys(obj).some(k => !keys.includes(k))
-    || !['date','time','place'].every(k => typeof obj[k] === 'string') || !Array.isArray(obj.present)
-    || obj.present.some(n => typeof n !== 'string' || !n.trim()) || obj.present.length > 50
-    || !(obj.planThread === null || typeof obj.planThread === 'string' && obj.planThread.length <= 500)) throw new Error('Invalid scene recovery JSON.');
-  if (context.names?.length && obj.present.some(n => !context.names.includes(n))) throw new Error('Scene recovery used an unknown character name.');
+  let obj;
+  try { text=String(text);obj=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1)); } catch {return null;}
+  const keys=['date','time','place','present','planThread'];
+  if (!obj || Array.isArray(obj) || Object.keys(obj).some(k => !keys.includes(k)) || !['date','time','place'].every(k => typeof obj[k]==='string') || !Array.isArray(obj.present) || obj.present.some(n => typeof n!=='string') || obj.present.length > 50 || !(obj.planThread==null || typeof obj.planThread==='string' && obj.planThread.length <= 500)) return null;
+  const names=[...(context.names ?? []),context.protagonist].filter(Boolean);
+  obj.present=obj.present.map(n => names.find(x => x.toLowerCase()===n.trim().toLowerCase()) ?? n.trim()).filter(n => n && (names.includes(n) || (context.narration+' '+context.userText).toLowerCase().includes(n.toLowerCase())));
   const checked = validateSceneValues(sceneLine(obj),{ narration:context.narration,userText:context.userText,prior:context.prior?.scene });
   return { ...checked,sceneMeta:{ ...checked.sceneMeta,kind:'inferred' },
     planThread:context.plan?.trim() ? obj.planThread : null };
@@ -30,7 +29,7 @@ export async function recoverScene(settings, context, { signal } = {}) {
   if (tokens+maxResponseTokens > settings.maxContextTokens) throw new Error('Scene recovery input exceeds the context budget.');
   const isOpenRouter = /^https:\/\/openrouter\.ai\//.test(settings.endpoint);
   const result = await chatCompletion({ settings:{ ...settings,modelId:context.model || settings.modelId,streaming:false,
-    advancedParametersEnabled:false,maxResponseTokens,reasoning:{ ...settings.reasoning,enabled:false } },messages,signal,
-    responseFormat:SCENE_RECOVERY_FORMAT,provider:isOpenRouter ? { require_parameters:true,max_price:{ prompt:1,completion:2,request:0.001 } } : undefined });
+    advancedParametersEnabled:false,maxResponseTokens,reasoning:{ ...settings.reasoning,enabled:false,explicitDisable:true } },messages,signal,
+    responseFormat:SCENE_RECOVERY_FORMAT,provider:isOpenRouter ? { max_price:{ prompt:1,completion:2,request:0.001 } } : undefined });
   return parseRecovery(result.content,context);
 }
