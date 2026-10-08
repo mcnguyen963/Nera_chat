@@ -27,7 +27,7 @@ async function render() {
     const built = await buildContextForRequest(live.session,state.settings,{ messages:live.messages,loreEntries:live.entries,draftText });
     if (run !== version || !open) return;
     const r = built.report;
-    body.append(node('p',`${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens · ${r.totals.reserved.toLocaleString()} max reply`));
+    body.append(node('p',`${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens`));
     if (live.providerUsage) body.append(node('p',`Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`,'muted'));
     if (draftText.trim()) body.append(node('p','including your draft','muted'));
     const bar = node('div',null,'context-segments');

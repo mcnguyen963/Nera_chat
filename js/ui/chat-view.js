@@ -1039,7 +1039,6 @@ export async function updateIndicator() {
   lastMemoryReport = usage.report;
   const estimated=tokenizer.tokenizerStatus?.()==='fallback';if(estimated && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
   el.contextLabel.title = usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '';
-  const reserved = state.settings.maxResponseTokens;
   const allocated=usage.usedTokens;
   const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
   el.contextFill.style.width = Math.min(100, pct) + "%";
@@ -1047,7 +1046,7 @@ export async function updateIndicator() {
   el.contextThreshold.style.left =
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
   el.contextLabel.textContent =
-    `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens · ${reserved.toLocaleString()} max reply` +
+    `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens` +
     (usage.droppedCount > 0 ? ` · ${usage.droppedCount} ${state.settings.autoSummarizationEnabled === true ? "out of window" : "turns not sent"}` : "") +
     (chatStatus==='reconnecting' ? ' · reconnecting' : '') +
     (estimated ? ' · estimate (tokenizer unavailable)' : '') +
