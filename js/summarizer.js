@@ -116,7 +116,7 @@ async function runSummary(session,settings,opts) {
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
       signal:opts.signal,
-      allowTruncated: false,
+      allowTruncated: true,
     });
     if (r.finishReason === 'length') throw new Error('The summary hit the output limit; the checkpoint was not changed. Raise Summarizer max tokens or use smaller summary chunks.');
     await opts.validateSource?.(expectedSource);
@@ -140,7 +140,7 @@ async function runSummary(session,settings,opts) {
     summaryId: newMsg.id,
     newBreakpointOrder,
     foldedCount: offset,
-    summaryMessage:{ ...summaryMessage,...newMsg },
+    summaryMessage:{ ...summaryMessage,...(newMsg.message ?? Object.fromEntries(Object.entries(newMsg).filter(([key])=>key!=='session'))) },
     historyRevision:newMsg.historyRevision,
   };
 }

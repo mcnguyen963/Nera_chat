@@ -1,0 +1,1 @@
+Frozen prompt blobs from commit 03b7a9d938d7f1ccda5c633fa339b1791c5a9fc0 (read directly from local object files, without git). Hashes are computed on trimmed text, matching settings migration.
