@@ -1,30 +1,31 @@
-Before changing a default prompt, append the outgoing text SHA-256 and setting key to legacy-prompt-default-hashes.md.
-
 # System prompts
 
-All built-in LLM instruction text lives here. The app loads the Markdown files directly at startup, once per page load. Edit the files, publish the site as usual, and reload the app; no generated JavaScript prompt copy is needed. Missing or empty files stop loading with an error.
+Built-in LLM instructions and labels live in this folder. `js/system-prompts.js` loads the registered Markdown files once at startup using `cache: 'no-cache'`. Missing or empty registered files stop startup. Edit the files and reload after publishing; no build step or generated prompt copy is needed.
 
-## Where to edit
+## Narrative instructions
 
-- `narrator.md`: dark fantasy narration, Nera's player control, NPC behavior and knowledge, context interpretation, style, length and a compact private workflow. It contains no plan references.
-- `author-direction.md`: scoped author directives, markup handling and OOC replies.
-- `continuity.md`: the shared source-priority, attribution and chronology rules. It is also supplied to summary and memory operations.
-- `fixed-author-plan.md`: the user-controlled outline and hidden plan-thread rules, injected separately from the narrator default.
-- `scene.md`: the optional hidden scene-tag contract, including exact fields, full names, unknown values and the OOC exception.
-- `summarizer.md`, `summary-output.md`: summary task and runtime output budget.
-- `memory-extraction.md`, `memory-extraction-output.md`: memory-update task and mandatory source-turn/output contract.
-- `memory-reorganize.md`: consolidating update lines without changing author text.
-- `lorebook-conversion-markdown.md`, `lorebook-conversion-json.md`: standalone prompts exported for external conversion. Each includes its own input instructions because it is used independently.
-- `historical-summary.md`, `opening-exchange.md`, `memory-header.md`, `world-facts-header.md`, `story-memory-header.md`: context templates and labels.
-- `known-names-header.md`, `memory-reorganize-section.md`, `memory-reorganize-canon.md`, `empty-plan.md`: additional request templates.
-- `legacy-narrator-default-hashes.md`: SHA-256 identifiers for two obsolete untouched app defaults. These identifiers are migration data and are never sent to the model; conflicting old prompt text is not retained.
+- `narrator.md`: dark fantasy narration, player agency for the configured protagonist, NPC knowledge and behavior, continuity, and the owner's 600-word visible reply cap.
+- `author-direction.md`, `continuity.md`: author directives and source priority. Later chat establishes the current moment.
+- `fixed-author-plan.md`, `plan-thread.md`, `plan-status-active.md`, `plan-status-inactive.md`, `no-plan.md`: the author's fixed plan and optional hidden pending-plan notes.
+- `scene.md`, `reply-contract.md`, `scene-reminder.md`, `scene-reminder-plan.md`, `scene-recovery.md`: optional scene output and recovery contracts.
+- `historical-summary.md`, `opening-exchange.md`: earlier-history wrappers. The narrator receives no app turn or message-order labels in these wrappers. Old summaries are cleaned when rendered, preserving stored text.
+- `summarizer.md`, `summary-output.md`: summary instructions and output budget. New summaries end with **Open stakes at the cutoff** and omit physical blocking and turn labels.
 
-The previous narrator draft has been consolidated into `narrator.md`. Shared contracts are defined in their own files rather than repeated in the narrator. The obsolete plan-loss rule and the repeated memory-block plan reminder were removed.
+## Lore and maintenance
 
-Keep the placeholders used by each template: `{{PROTAGONIST}}`, `{{PLAN}}`, `{{MAX_OUTPUT_TOKENS}}`, `{{CUTOFF}}`, `{{SUMMARY}}`, `{{TURN}}`, `{{CONTENT}}`, `{{SECTION}}`, `{{KIND}}` and `{{TEXT}}`. The code fills them at runtime. Do not add explanatory prose to prompt files unless you want it sent to the model.
+- `memory-extraction.md`, `memory-extraction-output.md`, `memory-extraction-frame.md`: extraction instructions and transcript frame. Extraction retains source turn stamps.
+- `memory-reorganize.md`, `memory-reorganize-section.md`, `memory-reorganize-canon.md`: reorganize generated notes while preserving author text.
+- `lore-labels.md`: named label templates consumed by `renderLoreLabel`. Values may contain placeholders; leading/trailing spaces are intentional.
+- `memory-header.md`, `world-facts-header.md`, `story-memory-header.md`, `known-names-header.md`: context block labels.
+- `lorebook-conversion-markdown.md`, `lorebook-conversion-json.md`: standalone prompts for externally converting an exported story.
+- `omitted-turns.md`, `omitted-turns-summary.md`, `omitted-turns-partial.md`, `omitted-turns-partial-uncovered.md`: omission markers. Memory mode attaches the marker to retained user input when possible.
 
-## Existing accounts
+## Compatibility and default migration
 
-The two exact obsolete narrator defaults are replaced with the current default when settings load or sync. Custom prompts stay as saved. To use the new narrator with an existing custom prompt, reset prompts in Settings and save, or copy `narrator.md` into the narrator field. The migrated value is saved to Firestore on the next explicit Settings save.
+`legacy-summary.md`, `legacy-fixed-plan.md`, `legacy-plan-presence.md`, `legacy-no-plan.md`, `legacy-plan.md`, and `legacy-author-direction.md` preserve the request path with all memory toggles off. The golden tests compare it with the frozen MAIN builder, including the complete obsolete plan-recovery rule and a summary followed by an uncovered gap.
 
-Story facts, user-authored outlines, lorebook entries and transcript formatting remain runtime data. Local tests check request assembly and settings migration; they do not establish provider compliance with the prose or hidden-tag rules.
+Before changing a saved default, append its outgoing trimmed-text SHA-256 and settings key to `legacy-prompt-default-hashes.md`. Exact old defaults migrate when settings load; custom prompts remain saved. The four frozen outgoing texts are in `tests/fixtures/outgoing-prompts/`, with their source identified in `SOURCE.txt`. The duplicate extraction hash and unexplained `f630e25…` narrator trigger were removed. Fixed contracts such as continuity have no saved settings key; their outgoing source hash is documented in the B10 task report rather than made into an inactive migration trigger.
+
+Keep the placeholders present in each template. Runtime facts, lore and transcripts remain data; do not add explanatory prose to registered prompt files unless it should reach the model. The unused `empty-plan.md` is no longer registered. `system-prompts.js` is the authoritative registry, and deployment checks require every registered file.
+
+See [RELEASE.md](../RELEASE.md) for publication and owner acceptance steps. Local tests establish request assembly, not model compliance or live Firebase behavior.
