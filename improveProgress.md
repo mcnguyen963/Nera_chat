@@ -79,3 +79,13 @@ A browser connection was unavailable, so visual/interaction QA and real iPhone k
 Five real OpenRouter calls using `z-ai/glm-5.3-flash:floor` completed, all via Relace with normal stop. Four narrative replies (585, 543, 264, 392 words) had readable scene and plan-thread tags. A 54-word OOC answer correctly tracked Krail's exit. Returned total cost: $0.0048984888. The request/client path was real; persistence and next-request lore selection were replayed offline. No browser or Firestore verification. See `investigate/report.md` for evidence and limits.
 
 Remaining observed gaps: both opening samples invented morning, which the lexical scene validator accepts once narrated; one used third-person narration; initial lore selection still omitted Krail's card until scene state existed. Older calls used a different routed provider, so improvement is not a controlled code-only comparison. These results establish improvement on these samples, not full model compliance. No production code changed during the live test, and no further provider calls are authorized by the five-call allowance.
+
+## Production stability work — 2026-10-08
+
+The earlier S9 completion claim did not cover all narrator provenance labels. B10 now removes narrator turn/order labels and section provenance while preserving them for extraction, the UI, and exports. Old summaries are cleaned only when building the narrator request. New summaries end with Open stakes at the cutoff. B22 defaults new stories to a User memory block and attaches omission markers to retained user input.
+
+The 600-word narration cap is the owner's decision (O4), differing from FIX_PLAN's 800. The owner reaffirmed dark fantasy on 2026-10-08.
+
+The owner is handling registration restrictions in Firebase. Do not deploy owner-UID rules without obtaining and checking the Auth uid; firebase-config.js contains the project configuration, not that uid. Production code/test status and outstanding deployed checks are recorded in RELEASE.md and production-reports/IMPLEMENTATION.md. Local tests are not a deployed-site acceptance result.
+
+Earlier claims of zero-read manual lore gates, whole-batch extraction rejection, and imported paid-feature settings have been superseded by the production changes. Narrator/extraction saves retain their existing session reads; manual lore/backup operations add guarded reads. See the per-task reports for exact scope.
