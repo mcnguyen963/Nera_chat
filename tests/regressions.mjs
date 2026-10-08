@@ -1255,6 +1255,7 @@ test('Q3 P0.13 folded deletion asks twice and a recent deletion asks once',async
 test('Q3 P0.14 omitted history indicator shows turns not sent with actionable tooltip',async()=>{
   const h=await harness(),history=Array.from({length:40},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'story '+i+' '+ 'x'.repeat(300)}));
   const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:3000,maxResponseTokens:100,autoSummarizationEnabled:false});await chat.updateIndicator();
+  assert.match(h.el('context-label').textContent,/input \/ [\d,]+ tokens/);assert.doesNotMatch(h.el('context-label').textContent,/max reply/);
   assert.match(h.el('context-label').textContent,/\d+ turns not sent/);assert.match(h.el('context-label').title,/Older turns no longer fit/);assert.match(h.el('context-label').title,/Turn on auto-summary or run Summarize/);
 });
 
