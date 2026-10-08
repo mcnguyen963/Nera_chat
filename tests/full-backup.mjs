@@ -16,11 +16,15 @@ async function setup(changed = false) {
   const module = new vm.SourceTextModule(await readFile(new URL('../js/import-export.js', import.meta.url), 'utf8'), { context });
   await module.link(specifier => {
     const exports = specifier.includes('sessions') ? {
-      createSession() {}, getSession() {}, getSessionFromServer: async () => {
+      createSession() {}, getSession() {}, updateSession(){}, deleteSession(){},listSessions:async()=>[], getSessionFromServer: async () => {
         reads++;
         return { ...session, nextOrder: changed && reads > 1 ? 4 : 3 };
       },
     } : specifier.includes('messages') ? { getMessages: async () => messages, addMessagesBulk() {}, ensureChunked: async () => {} }
+      : specifier.includes('lore-format') ? {normalizeLoreEntry:x=>x}
+      : specifier.includes('lore-store') ? {getLore:async()=>[],importLore(){}}
+      : specifier.includes('memory-settings') ? {normalizeMemory:()=>({})}
+      : specifier.includes('memory-ui') ? {download(){}}
       : { currentUid: () => 'owner' };
     return new vm.SyntheticModule(Object.keys(exports), function () {
       for (const [name, value] of Object.entries(exports)) this.setExport(name, value);

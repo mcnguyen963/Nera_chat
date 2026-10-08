@@ -331,3 +331,7 @@ Confirmed current format: SillyTavern exports chats as **JSONL** — one JSON ob
 ---
 
 This spec is intentionally scoped to exactly what you described — no added features beyond the two flagged, necessary clarifications (reserving response-token budget separately, and the fixed-overhead accounting in §6). Nothing here has been built; it's ready to hand to whatever environment you build it in.
+
+## Memory (optional, per story)
+
+Each story can enable a hidden Scene line, four author-controlled lorebooks, automatic append-only memory updates, a memory block near the end of requests, and a cache-friendly history window. All controls default to off; existing stories retain their original request path. The context indicator always opens a read-only context viewer. See [memory.md](memory.md) for settings, storage, budgets, plain-text note formats, import/export, backups, and verification.

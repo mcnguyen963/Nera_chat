@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src *; frame-src 'self' https://*.firebaseapp.com; object-src 'none'; base-uri 'self'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -66,6 +67,7 @@
       <ul id="session-list" class="session-list"></ul>
       <div class="sidebar-footer">
         <div class="account-row"><span class="account-avatar" aria-hidden="true">You</span><div class="account-info"><span class="account-label">Your workspace</span><div id="current-user" class="muted"></div></div></div>
+        <button id="btn-export-all" class="btn small" type="button">Download all my stories</button>
         <button id="btn-logout" class="btn small">Log out</button>
       </div>
     </aside>
@@ -87,10 +89,11 @@
       <!-- Chat tab -->
       <section id="chat-tab" class="chat-tab">
         <div class="chat-toolbar">
-          <button type="button" id="context-indicator" class="btn context-indicator" title="Inspect estimated input tokens and included context" aria-haspopup="dialog" aria-controls="context-dialog">
-            <span class="context-caption">Context</span><span class="context-bar"><span id="context-fill" class="context-fill"></span><span id="context-threshold" class="context-threshold"></span></span>
+          <div id="context-indicator" role="button" tabindex="0" class="context-indicator" title="Tokens that would be sent next turn / context budget">
+            <span class="context-caption">Context</span><div class="context-bar"><div id="context-fill" class="context-fill"></div><div id="context-threshold" class="context-threshold"></div></div>
             <span id="context-label" class="muted">—</span>
-          </button>
+          </div>
+          <button id="btn-memory" class="btn small memory-chip hidden" type="button">Memory</button>
           <button id="btn-summarize" class="btn small">Summarize</button>
           <div class="top-menu-wrap">
             <button id="btn-top-menu" class="btn small top-menu-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
@@ -98,8 +101,10 @@
               <button class="top-menu-item" data-action="sessions">Sessions</button>
               <button class="top-menu-item" data-action="chat">Chat</button>
               <button class="top-menu-item" data-action="settings">Settings</button>
-              <button class="top-menu-item" data-action="summarize-full">Summarize full history</button>
+              <button class="top-menu-item" data-action="lorebooks">Lorebooks</button>
               <button class="top-menu-item" data-action="sync-chat">Sync latest data</button>
+              <button class="top-menu-item" data-action="context-details">Context details</button>
+              <button class="top-menu-item" data-action="summarize-full">Summarize full history</button>
               <button class="top-menu-item" data-action="reset-summary">Reset summary checkpoint</button>
             </div>
           </div>
@@ -129,7 +134,7 @@
             </div>
             <div class="composer-action-column">
               <button type="submit" id="btn-send" class="composer-send" aria-label="Send"><span aria-hidden="true">↑</span></button>
-              <button type="button" id="btn-stop-reply" class="btn small composer-action" hidden>Stop</button>
+              <button type="button" id="btn-stop" class="btn small composer-action hidden">Stop</button>
               <button type="button" id="btn-rewrite" class="btn small composer-action" disabled>Rewrite</button>
             </div>
             <div id="composer-popover" class="composer-popover" hidden>
@@ -176,6 +181,7 @@
               <button type="button" data-settings-panel="pets">Pets</button>
               <button type="button" data-settings-panel="prompts">Prompts</button>
               <button type="button" data-settings-panel="story">This story</button>
+              <button type="button" data-settings-panel="memory">Memory</button>
               <button type="button" data-settings-panel="transfer">Import &amp; export</button>
               <button type="button" data-settings-panel="account">Account</button>
             </nav>
@@ -196,17 +202,14 @@
                 <div id="thinking-options" class="settings-grid hidden">
                   <label>Thinking mode<select id="set-reasoning-mode"><option value="effort">effort</option><option value="max_tokens">max_tokens</option></select></label>
                   <label id="thinking-effort-field">Effort<select id="set-reasoning-effort"><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
-                  <label id="thinking-max-field" class="hidden">Thinking max_tokens<input type="text" id="set-reasoning-maxtokens" inputmode="numeric" data-min="1" required /></label>
+                  <p id="set-reasoning-cap" class="muted"></p><label id="thinking-max-field" class="hidden">Thinking max_tokens<input type="text" id="set-reasoning-maxtokens" inputmode="numeric" data-min="1" required /></label>
                 </div>
                 <h3>Parameters</h3>
                 <div class="settings-grid">
                   <label class="checkbox-label"><input type="checkbox" id="set-streaming" /> Streaming</label>
                   <label>Streaming vibration<select id="set-stream-vibration"><option value="off">Off</option><option value="speed">Speed</option><option value="spaces">Spaces</option></select></label>
                   <p id="stream-vibration-help" class="muted" hidden>Streaming vibration is not supported by this browser.</p>
-                  <p class="muted">Vibrates during thinking and writing on supported phones.</p>
                   <label>Max response tokens<input type="text" id="set-max-resp" inputmode="numeric" data-min="1" required /></label>
-                  <label>Model total context tokens (optional)<input type="text" id="set-model-context" inputmode="numeric" data-min="256" placeholder="Model's published context window" /></label>
-                  <p class="muted">When set, reserve response tokens within this total window. Max input context tokens remains your input limit.</p>
                 </div>
                 <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-advanced-enabled" aria-controls="advanced-options" /> Custom sampling parameters</label>
                 <div id="advanced-options" class="hidden">
@@ -222,12 +225,11 @@
               <section data-panel="context" class="settings-panel hidden">
                 <h2>Context &amp; summaries</h2>
                 <div class="settings-grid">
-                  <label>Max input context tokens<input type="text" id="set-max-context" inputmode="numeric" data-min="256" required /></label>
-                  <p class="muted">Output limits are separate. Input plus output must fit your provider's model capacity.</p>
+                  <label>Max input tokens<input type="text" id="set-max-context" inputmode="numeric" data-min="256" required /></label><label>Model total context size (optional)<input type="text" id="set-model-context" inputmode="numeric" data-min="256" placeholder="Unknown" /></label>
                   <label class="checkbox-label"><input type="checkbox" id="set-auto-summary-enabled" /> Automatically summarize when context fills</label>
                   <label>Auto-summary threshold (%)<input type="text" id="set-auto-threshold" inputmode="numeric" data-min="1" data-max="100" required /></label>
                   <label>Keep recent messages after summary<input type="text" id="set-keep-n" inputmode="numeric" data-min="0" required /></label>
-                  <label>Summarizer max response tokens<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" required /></label>
+                  <label>Summarizer max response tokens<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" data-max="20000" required /></label>
                   <label>Summarizer input chunk (tokens per call)<input type="text" id="set-summarizer-chunk" inputmode="numeric" data-min="2000" required /></label>
                 </div>
               </section>
@@ -241,31 +243,30 @@
               </section>
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts</h2>
-                <div class="settings-prompts">
                   <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
                   <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
-                  <p id="rewrite-prompt-help" class="muted">The default comes from rewrite_default_prompt.md.</p>
+                  <p id="rewrite-prompt-help" class="muted">The default comes from system prompts/rewrite.md.</p>
                   <button type="button" id="btn-reset-rewrite-prompt" class="btn small">Use default rewrite prompt</button>
-                  <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label>
-                  <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label>
+                <div class="settings-prompts">
+                  <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="narratorSystemPrompt" data-prompt-field="set-narrator-prompt">Reset to app default</button>
+                  <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="summarizerSystemPrompt" data-prompt-field="set-summarizer-prompt">Reset to app default</button>
+                  <label>Memory update prompt<textarea id="set-memory-update-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryExtractionPrompt" data-prompt-field="set-memory-update-prompt">Reset to app default</button>
+                  <label>Reorganize prompt<textarea id="set-memory-reorganize-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryReorganizePrompt" data-prompt-field="set-memory-reorganize-prompt">Reset to app default</button>
                 </div>
               </section>
               <section data-panel="story" class="settings-panel hidden">
                 <h2>This story</h2>
                 <div class="settings-grid"><label>Title<input type="text" id="set-session-title" /></label></div>
-                <label class="checkbox-label"><input type="checkbox" id="set-allow-llm-plan-updates" /> Allow the model to update this story's plan</label>
                 <label class="full-label">Story notes &amp; long-term plan<textarea id="set-session-plan" rows="8"></textarea></label>
-                <label class="full-label">LLM private note<textarea id="set-session-private-note" rows="5" aria-describedby="session-private-note-help" disabled></textarea></label>
-                <p id="session-private-note-help" class="muted">The latest reply's saved private note, kept for reference. It is excluded from model context.</p>
               </section>
+              <section data-panel="memory" class="settings-panel hidden"><h2>Memory</h2><p class="muted">Memory helps long stories stay consistent. Your story gets four books — Characters, Locations, World facts, Events &amp; threads. You declare canon or background; the scribe adds attributed notes with source turns. Everything here is off by default and only affects this story.</p><label>Protagonist name<input id="mem-protagonist" maxlength="60" /></label><p class="muted">Used for "Bond with …" notes and the scene line.</p><label class="checkbox-label"><input id="mem-scene" type="checkbox" /> Scene line</label><p class="muted">Narrative replies end with a hidden line — date · time · place · who's present. It keeps time and place straight and tells memory who to load.</p><div id="mem-scene-options"><details><summary>Starting scene and recovery</summary><p class="muted">Declare the opening scene before the first reply. Later valid scenes take priority. Use exact lorebook names for attendees.</p><div class="settings-grid"><label>Starting date<input id="mem-starting-date" maxlength="100" placeholder="unknown" /></label><label>Starting time<input id="mem-starting-time" maxlength="100" placeholder="unknown" /></label></div><label>Starting location<input id="mem-starting-place" maxlength="200" /></label><label>Starting attendees, separated by commas<input id="mem-starting-present" maxlength="1500" /></label><label class="checkbox-label"><input id="mem-sceneFallback" type="checkbox" /> Recover missing scene tags</label><p class="muted">Makes one extra structured call only when a narrative tag fails and the turn has no player-agency warning. Recovered state is marked inferred. Uses the turn's maintenance slot; summary or memory maintenance waits.</p><label>Recovery model ID (optional)<input id="mem-sceneFallbackModel" maxlength="200" placeholder="Use the selected chat model" /></label><label>Reply reminder (experimental)<select id="mem-replyContract"><option value="off">Off</option><option value="system">System message before current input</option><option value="user">Prefix to current input</option></select></label><p class="muted">The reminder reinforces player agency, unknown times and the active fixed plan. Its reliability depends on the model.</p></details></div><div id="mem-show-scene-row"><label class="checkbox-label"><input id="mem-showScene" type="checkbox" /> Show the scene under replies (this device)</label></div><label class="checkbox-label"><input id="mem-lorebooks" type="checkbox" /> Use lorebooks in replies</label><div class="memory-books-settings"><div class="memory-book-row"><strong>Characters</strong><label class="checkbox-label"><input id="mem-characters-on" type="checkbox" /> Use</label><label>Budget (tokens)<input id="mem-characters-budget" type="text" inputmode="numeric" data-min="0" data-max="100000" /></label><label>Max cards per turn<input id="mem-characters-maxCards" type="text" inputmode="numeric" data-min="1" data-max="50" /></label></div><div class="memory-book-row"><strong>Locations</strong><label class="checkbox-label"><input id="mem-locations-on" type="checkbox" /> Use</label><label>Budget (tokens)<input id="mem-locations-budget" type="text" inputmode="numeric" data-min="0" data-max="100000" /></label><label>Max cards per turn<input id="mem-locations-maxCards" type="text" inputmode="numeric" data-min="1" data-max="50" /></label></div><div class="memory-book-row"><strong>World facts</strong><label class="checkbox-label"><input id="mem-facts-on" type="checkbox" /> Use</label><label>Budget (tokens)<input id="mem-facts-budget" type="text" inputmode="numeric" data-min="0" data-max="100000" /></label></div><div class="memory-book-row"><strong>Events &amp; threads</strong><label class="checkbox-label"><input id="mem-events-on" type="checkbox" /> Use</label><label>Budget (tokens)<input id="mem-events-budget" type="text" inputmode="numeric" data-min="0" data-max="100000" /></label></div></div><p id="mem-budget-summary" class="muted"></p><button id="mem-open-lore" type="button" class="btn">Open lorebooks</button><label class="checkbox-label"><input id="mem-autoUpdate" type="checkbox" /> Automatic memory updates</label><p class="muted">Every N turns, one background call adds new notes to the books. It skips the newest turns, because you might still change them. At most one automatic maintenance job per turn.</p><div class="settings-grid"><label>Every N turns<input id="mem-batchTurns" type="text" inputmode="numeric" data-min="2" data-max="100" /></label><label>Skip newest turns<input id="mem-lagTurns" type="text" inputmode="numeric" data-min="0" data-max="50" /></label><label>Memory model profile<select id="mem-updateProfileId"><option value="">Use narrator profile</option></select><small>Uses your saved connection profiles for updates, catch up, rebuild, and reorganization. Save profile changes in Model settings first.</small></label><label>Max response tokens for updates<input id="mem-updateMaxTokens" type="text" inputmode="numeric" data-min="256" data-max="32000" /></label></div><p id="mem-update-status" class="muted"></p><div id="mem-update-actions"><button id="mem-reextract" class="btn hidden" type="button">Re-extract edited history</button><button id="mem-choose-start" class="btn hidden" type="button">Choose start</button><button id="mem-update-now" class="btn" type="button">Update now</button><button id="mem-catch-up" class="btn" type="button">Catch up…</button><button id="mem-retry" class="btn danger hidden" type="button">Retry</button></div><h3>Prompt layout</h3><label class="checkbox-label"><input id="mem-memoryBlock" type="checkbox" /> Memory block near the end</label><p class="muted">Puts a scene snapshot, plan reminder, loaded characters and place just before the last D messages, where the model pays most attention. The full fixed plan stays in the system instructions.</p><label>Before the last D messages<input id="mem-blockDepth" type="text" inputmode="numeric" data-min="1" data-max="20" /></label><label>Send as<select id="mem-blockRole"><option value="system">System message</option><option value="user">Part of my latest message</option></select></label><label class="checkbox-label"><input id="mem-blockWindow" type="checkbox" /> Cache-friendly window</label><p class="muted">Recent messages move forward in steps of N turns, so the provider can reuse its prompt cache. Costs less; keeps slightly fewer messages.</p><p id="mem-hints" class="muted"></p><details><summary>More</summary><label>Reorganize max response tokens<input id="mem-reorganizeMaxTokens" type="text" inputmode="numeric" data-min="256" data-max="32000" /></label></details></section>
               <section data-panel="transfer" class="settings-panel hidden">
                 <h2>Import &amp; export</h2>
-                <p class="muted">Bring your stories with you.</p>
+                <p class="muted">Bring your stories with you.</p><h3>Lorebooks</h3><button id="btn-lore-transfer" type="button" class="btn">Open lorebook import &amp; export</button>
                 <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button><button id="btn-export-full" class="btn">Export full backup (JSON)</button></div>
-                <p class="muted">Full backups include summaries, plans, private notes, and thinking. Restoring a JSON backup is not available yet.</p>
               </section>
               <section data-panel="account" class="settings-panel hidden">
-                <h2>Account</h2><p id="account-email" class="muted account-email"></p>
+                <p><span id="app-version" class="muted"></span> <button id="btn-copy-diagnostics" class="btn small" type="button">Copy diagnostics</button></p><h2>Account</h2><p id="account-email" class="muted account-email"></p>
                 <form id="change-password-form" class="account-form">
                   <div class="settings-grid"><label>Current password<input type="password" id="current-password" autocomplete="current-password" required /></label><label>New password<input type="password" id="new-password" autocomplete="new-password" minlength="6" required /></label><label>Confirm new password<input type="password" id="confirm-new-password" autocomplete="new-password" minlength="6" required /></label></div>
                   <p id="change-password-message" class="auth-message" role="status" hidden></p>
@@ -279,21 +280,8 @@
     </main>
   </div>
 
-  <dialog id="context-dialog" class="context-dialog" aria-labelledby="context-title">
-    <header class="context-dialog-header">
-      <h2 id="context-title">Context inspector</h2>
-      <button type="button" id="context-close" class="btn" aria-label="Close context inspector" autofocus>Close</button>
-    </header>
-    <label class="context-mode-label">Inspect
-      <select id="context-mode">
-        <option value="next">Next turn</option>
-        <option value="sent">Latest sent</option>
-      </select>
-    </label>
-    <p id="context-status" class="muted" role="status" aria-live="polite"></p>
-    <div id="context-body" class="context-dialog-body"></div>
-  </dialog>
-
-  <script type="module" src="js/app.js"></script>
+  <section id="lorebook-overlay" class="settings-overlay hidden" aria-hidden="true"></section>
+  <section id="context-viewer" class="settings-overlay hidden" aria-hidden="true"></section>
+  <script type="module" src="js/boot.js"></script>
 </body>
 </html>

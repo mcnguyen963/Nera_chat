@@ -11,6 +11,8 @@ test('Clearing device chat caches removes only the current account entries', asy
     transaction: () => {
       const transaction = {
         objectStore: () => ({
+          delete: key=>entries.delete(key),
+          getAllKeys:()=>{const request={};queueMicrotask(()=>{request.result=[...entries.keys()];request.onsuccess();transaction.oncomplete();});return request;},
           openCursor: () => {
             const request = {};
             const keys = [...entries.keys()];

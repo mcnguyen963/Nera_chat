@@ -1,0 +1,1 @@
+" If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears anywhere in the visible conversation history, even though a plan seems to have been set earlier, treat that plan as lost from context. Its exact contents cannot be reconstructed; proceed with no active plan until the user sets a new one."

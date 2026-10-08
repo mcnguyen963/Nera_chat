@@ -1,10 +1,17 @@
+import {initVersion} from './version.js';
+import {installErrorHandlers,friendlyError} from './errors.js';
+import {toast} from './ui/memory-ui.js';
+import {clearAccountCaches} from './device-caches.js';
+import { initViewport } from "./viewport.js";
+import { initLorebookView } from './ui/lorebook-view.js';
+import { initContextViewer } from './ui/context-viewer.js';
+import { stopAll } from './memory-updater.js';
 import { initAuth, login, register, resetPassword, changePassword, currentUserInfo } from "./auth.js";
 import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
-import { initChatView, setSession } from "./ui/chat-view.js";
+import { initChatView, setSession, prepareChatLogout } from "./ui/chat-view.js";
 import { initSettingsView, openSettingsPopup } from "./ui/settings-view.js";
-import { initViewport } from "./viewport.js";
 
 const el = {
   loginScreen: document.getElementById("login-screen"),
@@ -25,6 +32,8 @@ let appInitialized = false;
 // the whole page up when an input is focused; undo that push so the app
 // stays glued to the top of the keyboard instead of floating above it.
 initViewport();
+installErrorHandlers({show:toast});
+initVersion();
 
 // ---------- mobile sidebar drawer ----------
 function setSidebarOpen(open) {
@@ -66,7 +75,9 @@ el.topMenu?.addEventListener("click", (e) => {
     setSidebarOpen(true);
   } else if (item.dataset.action === "settings") {
     openSettingsPopup(el.topMenuBtn);
-  } else if (["summarize-full", "reset-summary", "sync-chat"].includes(item.dataset.action)) {
+  } else if (item.dataset.action === 'lorebooks' || item.dataset.action === 'context-details') {
+    document.dispatchEvent(new CustomEvent(item.dataset.action));
+  } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary" || item.dataset.action === "sync-chat") {
     document.dispatchEvent(new CustomEvent(item.dataset.action));
   } else {
     // Reuse the existing tab logic; the tab buttons are just CSS-hidden.
@@ -82,21 +93,28 @@ document.addEventListener("click", (e) => {
 });
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
-initAuth((user) => {
+let previousAuthUid=null;
+initAuth(async(user)=>{
+  const previous=previousAuthUid;previousAuthUid=user?.uid ?? null;
   // Tear down account-scoped listeners and in-flight work on auth transitions.
   if (appInitialized) {
+    stopAll();
+    await prepareChatLogout();
+    if(previous && previous!==user?.uid)await clearAccountCaches(previous);
     window.location.reload();
     return;
   }
   if (user) {
     el.loginScreen.classList.add("hidden");
     el.app.classList.remove("hidden");
-    enterApp();
+    enterApp().catch(showBootError);
   } else {
     el.app.classList.add("hidden");
     el.loginScreen.classList.remove("hidden");
   }
 });
+
+function showBootError(error){console.error(error);el.app.classList.add("hidden");el.loginScreen.classList.remove("hidden");setMessage("login-error","Could not start the app: "+friendlyError(error)+" Reload to try again.",true);}
 
 function showAuthView(view) {
   for (const name of ["login", "register", "reset"]) {
@@ -216,16 +234,16 @@ async function enterApp() {
   appInitialized = true;
   try {
     state.settings = await loadSettings();
-    state.settingsLoadFailed = false;
   } catch (e) {
-    state.settingsLoadFailed = true;
     console.error("Failed to load settings:", e);
     state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
-    alert("Could not load your saved settings. Using defaults for this page; check your connection and Firestore rules before saving.");
+    alert("Could not load your saved settings. Using defaults for this page. Reload before saving settings.");
   }
   initChatView();
   initSidebar();
   initSettingsView();
+  initLorebookView();
+  initContextViewer();
   watchSettings();
   document.getElementById("account-email").textContent = currentUserInfo()?.email ?? "";
   wireTabs();

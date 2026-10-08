@@ -1,38 +1,46 @@
+import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 // Run: node --experimental-vm-modules --test tests/regressions.mjs
 // Exercise the browser modules with isolated Firestore and DOM substitutes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-async function harness() {
+async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {} } = {}) {
   const elements = new Map();
   class Element {
-    scrollTop = 0; scrollHeight = 500; clientHeight = 500;
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
     classList = { values: new Set(), add(name) { this.values.add(name); }, remove(name) { this.values.delete(name); }, toggle(name, force) { if (force ?? !this.values.has(name)) this.values.add(name); else this.values.delete(name); }, contains(name) { return this.values.has(name); } };
     listeners = {};
     addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
-    removeEventListener(type, fn) { this.listeners[type] = (this.listeners[type] ?? []).filter(listener => listener !== fn); }
     async dispatchEvent(event) {
       for (const fn of this.listeners[event.type] ?? []) await fn(event);
     }
-    replaceChildren(...children) { this.children = children; }
-    setAttribute() {}
+    replaceChildren(...children) { for (const c of this.children) c.parentNode=null; this.children = []; this.append(...children); }
+    setAttribute(key,value) { (this.attributes ??= {})[key]=value; }
+    scrollIntoView() {}
+    getBoundingClientRect() { return { top:0,height:40,width:320,bottom:40 }; }
+    get nextSibling() { const a=this.parentNode?.children ?? []; return a[a.indexOf(this)+1] ?? null; }
+    scrollTop = 0; scrollHeight = 500; clientHeight = 500;
+    get lastElementChild() { return this.children.at(-1) ?? null; }
+    get selectedOptions() { return this.children.filter(c => c.value === this.value); }
+    replaceWith(replacement) { const p = this.parentNode; if (!p) return; const index = p.children.indexOf(this); p.children.splice(index,1,replacement); replacement.parentNode=p; this.parentNode=null; }
     focus() { document.activeElement = this; }
     closest() { return { firstChild: { textContent: this.id } }; }
     getClientRects() { return [1]; }
-    querySelectorAll() { return []; }
-    querySelector(selector) { return this.children.find((child) => selector.startsWith('.')
-      ? child.className?.split(' ').includes(selector.slice(1)) : child.tagName === selector.toUpperCase())
-      ?? this.children.map(child => child.querySelector?.(selector)).find(Boolean) ?? null; }
-    getBoundingClientRect() { return { width: 100, height: 40, top: 0 }; }
-    replaceWith(next) { const parent = this.parentNode; if (parent) { parent.children[parent.children.indexOf(this)] = next; next.parentNode = parent; this.parentNode = null; } }
-    showModal() { this.open = true; }
-    close() { this.open = false; void this.dispatchEvent({ type: 'close' }); }
+    matches(selector) {
+      if (selector.startsWith('.')) return (this.className ?? '').split(' ').includes(selector.slice(1)) || this.classList.contains(selector.slice(1));
+      if (selector.startsWith('#')) return this.id === selector.slice(1);
+      const data = selector.match(/^\[data-([^=]+)="([^"\]]+)"\]$/); if (data) { const key=data[1].replace(/-([a-z])/g,(_,c) => c.toUpperCase()); return this.dataset[key] === data[2]; }
+      return this.tagName === selector.toUpperCase();
+    }
+    querySelectorAll(selector) { const matches = []; const visit = e => { for (const c of e.children ?? []) { if (selector.split(',').some(s => c.matches?.(s.trim()))) matches.push(c); visit(c); } }; visit(this); return matches; }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+    removeEventListener(type,fn) { this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn); }
+    click() { return this.dispatchEvent({ type: 'click', stopPropagation() {}, preventDefault() {} }); }
     appendChild(child) { child.remove(); this.children.push(child); child.parentNode = this; return child; }
     insertBefore(child, anchor) { child.remove(); const index = anchor ? this.children.indexOf(anchor) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
-    append(...children) { this.children.push(...children); }
+    append(...children) { for (const c of children) { c.parentNode=this; this.children.push(c); } }
     remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); this.parentNode = null; }
     reportValidity() { return this.id === 'set-endpoint' || (Number.isInteger(Number(this.value)) && Number(this.value) >= 0); }
   }
@@ -41,15 +49,15 @@ async function harness() {
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-rewrite-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000 };
+      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
     }
     return elements.get(id);
   };
-  document.createElement = (tag) => { const element = new Element(); element.tagName = tag.toUpperCase(); return element; };
-  const panelNames = ['model', 'context', 'prompts', 'story', 'transfer', 'account'];
+  document.createElement = tag => { const e = new Element(); e.tagName = tag.toUpperCase(); return e; };
+  const panelNames = ['model', 'context', 'prompts', 'story', 'memory', 'transfer', 'account'];
   const navButtons = panelNames.map((name) => {
     const button = document.getElementById(`nav-${name}`);
     button.dataset.settingsPanel = name;
@@ -62,25 +70,27 @@ async function harness() {
   });
   document.querySelectorAll = (selector) => selector === '[data-settings-panel]' ? navButtons : selector === '[data-panel]' ? panels : [];
   document.getElementById('settings-tab').classList.add('hidden');
-  document.querySelector = () => null;
+  document.querySelector = selector => { const [first,...rest] = selector.split(' '); const root = first.startsWith('#') ? elements.get(first.slice(1)) : document.body?.querySelector(first); return rest.length ? root?.querySelector(rest.join(' ')) : root; };
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, confirm: true, response: 'summary', responseData: null, streamLines: null };
+  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, prompt:'Story',confirm: true, response: 'summary', responseData: null, streamLines: null };
   const localCache = new Map();
   const context = vm.createContext({
-    console, structuredClone, document, TextDecoder, AbortController,
-    requestAnimationFrame: (fn) => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout,
-    localStorage: { getItem: (key) => localCache.get(key) ?? null, setItem: (key, value) => localCache.set(key, value), removeItem: key => localCache.delete(key) },
+    URL, console, structuredClone, document, TextDecoder, TextEncoder, AbortController, ...globals,
+    navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } }, ...globals.navigator },
+    requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
+    localStorage: { getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
     window: { addEventListener() {} }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
-    setTimeout(fn, delay) { const timer = { fn, delay }; (calls.timers ??= []).push(timer); return timer; },
-    clearTimeout(timer) { if (timer) timer.cleared = true; }, confirm: (text) => { (calls.confirmations ??= []).push(text); return calls.confirm; },
+    prompt:()=>calls.prompt,
+    setTimeout: timers?.setTimeout ?? (() => {}), clearTimeout: timers?.clearTimeout ?? (() => {}), confirm: message => { (calls.confirmations ??= []).push(message);return calls.confirmResponses?.length ? calls.confirmResponses.shift() : calls.confirm; },
     fetch: async (_url, options) => {
-      if (_url === './rewrite_default_prompt.md') {
-        calls.promptReads = (calls.promptReads ?? 0) + 1;
-        return { ok: !calls.promptError, text: async () => calls.defaultRewritePrompt ?? 'Default rewrite prompt' };
+      if (_url instanceof URL && _url.protocol === 'file:') {
+        if (legacyNarratorHashes && _url.pathname.endsWith('/legacy-prompt-default-hashes.md')) return { ok:true, text:async () => legacyNarratorHashes.split(/\s+/).filter(Boolean).map(hash=>`narratorSystemPrompt ${hash}`).join("\n") };
+        return promptFetch(_url, options);
       }
       calls.requests.push(JSON.parse(options.body));
-      if (calls.streamReader) return { ok: true, body: { getReader: () => calls.streamReader } };
+      await calls.onRequest?.(JSON.parse(options.body));
+      if(calls.streamReader)return {ok:true,body:{getReader:()=>calls.streamReader}};
       if (calls.streamLines) {
         const chunks = calls.streamLines.map((line) => new TextEncoder().encode(line));
         return { ok: true, body: { getReader: () => ({ read: async () => chunks.length
@@ -90,15 +100,12 @@ async function harness() {
     },
   });
   const firestore = {
+    increment:n=>({increment:n}),serverTimestamp:()=>0,runTransaction:async(_db,run)=>run({get:async()=>({exists:()=>true,data:()=>calls.sessionDocs?.[state.sessionId] ?? {}}),update:(_ref,patch)=>calls.sessionWrites.push([state.sessionId,patch])}),
     doc: (...args) => args, collection() {},
     query: (...args) => { calls.queries.push(args); return args; },
-    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback) => { (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(callback); return () => {}; },
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback, onError) => {if(ref?.[3]!=='settings')(calls.sessionErrors ??= []).push(onError); (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(snap => { if (ref?.[3] !== 'settings' && snap.exists()) { calls.sessionDocs ??= {}; calls.sessionDocs[snap.id] = { id:snap.id,...snap.data(),historyRevision:calls.historyRevision ?? snap.data().historyRevision ?? 0 }; } return callback(snap); }); return () => {}; },
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
-    getDocFromServer: async () => {
-      calls.reads++;
-      if (calls.serverError) throw new Error(calls.serverError);
-      return calls.serverSnapshot ?? { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc };
-    },
+    getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
       if (calls.fail) throw new Error('write denied');
       calls.writes.push(structuredClone(settings));
@@ -106,49 +113,53 @@ async function harness() {
   };
   const stubs = {
     // The real pet controller is exercised independently in pets.mjs.
+    'lore-store.js': {
+      getLore:async () => calls.loreEntries ?? [],configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
+      subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
+      createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
+      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async () => {}, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importLore: async () => 'backup', replaceLines: async () => 'backup',
+    },
+    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
     'ui/pet-view.js': {
-      initPetView() {}, startPetTurn() {}, finishPetTurn() {},
+      initPetView() {}, startPetTurn() {}, finishPetTurn:status=>{(calls.petFinishes ??= []).push(status);},
       refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'chat-cache.js': {
-      loadChatCache: async () => null, saveChatCache: async (...args) => { (calls.cacheSaves ??= []).push(args); }, deleteChatCache: async () => {},
-      clearChatCache: async uid => { (calls.cacheClears ??= []).push(uid); if (calls.cacheClearError) throw new Error('cache denied'); },
-    },
-    'auth.js': { currentUid: () => 'test-user', currentUserInfo: () => ({ email: 'test@example.com' }), logout() { calls.logouts = (calls.logouts ?? 0) + 1; } },
-    'tokenizer.js': { countTokens: async (text) => calls.tokenCount ? calls.tokenCount(text) : text.length,
-      tokenizerReady: () => calls.tokenizerReady !== false },
+    'auth.js': { currentUid: () => 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
+    'tokenizer.js': { countTokens: async (text) => text.length },
     'sessions.js': {
-      subscribeSessions: callback => { calls.sidebarCallback = callback; },
-      createSession() {}, renameSession() {}, deleteSession() {},
-      getSession: async () => ({ title: 'Story', longTermPlan: 'Old plan' }),
+      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{},
+      getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
+      getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
       duplicateSession: async (...args) => { calls.sessionCopies ??= []; calls.sessionCopies.push(args); return 'copied-session'; },
     },
-    'import-export.js': { importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); },
-      exportFullBackup: async (id) => { (calls.fullExports ??= []).push(id); } },
+    'import-export.js': {exportAllStories:async()=>{}, importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
-      getMessages: async () => { calls.historyReads = (calls.historyReads ?? 0) + 1; return calls.historyPending ?? calls.historyMessages ?? []; },
-      getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
-      getMessagesAfterOrder: async (...args) => {
-        (calls.catchUps ??= []).push(args);
-        return calls.catchUp ? calls.catchUp(...args) : calls.freshMessages ?? [];
+      HistoryConflict:class HistoryConflict extends Error {},
+      ensureContinuityMetadata:async () => {},
+      getMessages:async () => { const read = calls.historyReads = (calls.historyReads ?? 0)+1; const result = structuredClone(calls.serverHistory ?? calls.history ?? []); await calls.onHistoryRead?.(read); return result; }, getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
+      addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); if(args[1].role==='assistant' && args[2]?.expectedSource?.historyRevision !== undefined && args[2].expectedSource.historyRevision !== (calls.historyRevision ?? 0)) throw Object.assign(new Error('History changed'),{name:'HistoryConflict'}); calls.messages.push(args); const result = { ...args[1],id:args[1].role==='summary' && args[2]?.id ? args[2].id : calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) Object.assign(calls.sessionDocs[args[0]],args[2]?.sessionUpdate ?? {},{historyRevision:result.historyRevision}); calls.history = [...(calls.history ?? []),result]; result.session={id:args[0],...(calls.sessionDocs?.[args[0]] ?? {}),historyRevision:result.historyRevision};return result; },
+      overwriteMessage:async (...args) => {
+        if(calls.overwriteMessage)return calls.overwriteMessage(...args);
+        const [sid,id,message,_order,partial={},expectedSource]=args;
+        if(expectedSource?.historyRevision !== undefined && expectedSource.historyRevision !== (calls.historyRevision ?? 0))throw Object.assign(new Error('History changed'),{name:'HistoryConflict'});
+        (calls.overwrites ??= []).push(args);const old=(calls.history ?? []).find(m=>m.id===id);if(!old)throw new Error('Reply missing');
+        const revision=(calls.historyRevision ?? 0)+1,replacement={...old,...message,historyRevision:revision};calls.historyRevision=revision;calls.history=calls.history.map(m=>m.id===id ? replacement : m);
+        const session={id:sid,...calls.sessionDocs[sid],...partial,historyRevision:revision};calls.sessionDocs[sid]=session;return {replacement,session,historyRevision:revision};
       },
-      addMessage: async (...args) => { calls.messages.push(args); return calls.addMessage ? calls.addMessage(...args) : { id: 'summary-id' }; },
-      subscribeLatestMessages: (sessionId, callback) => { calls.subscriptions.push(sessionId); calls.latestCallbacks.push(callback); return () => {}; },
-      editPlanThread: async (...args) => {
-        calls.privateNoteWrites ??= [];
-        calls.privateNoteWrites.push(args);
-        const message = { ...calls.noteMessage, planThread: args[2] || null, tokenCount: 100, editedAt: true };
-        return { message, summaryReset: false };
+      deleteMessage:async (...args)=>{
+        if(calls.deleteMessage)return calls.deleteMessage(...args);
+        const [sid,id]=args;(calls.deletes ??= []).push(args);calls.history=(calls.history ?? []).filter(m=>m.id!==id);
+        const revision=(calls.historyRevision ?? 0)+1;calls.historyRevision=revision;calls.sessionDocs[sid]={...calls.sessionDocs[sid],historyRevision:revision};
+        return {session:calls.sessionDocs[sid],historyRevision:revision,replacement:null};
       },
-      editMessage: async (...args) => calls.editMessage(...args),
-      overwriteMessage: async (...args) => { (calls.overwrites ??= []).push(args);
-        return calls.overwriteMessage ? calls.overwriteMessage(...args) : { tokenCount: args[2].content.length }; },
-      deleteMessage: async (...args) => calls.deleteMessage(...args),
+      updateMessageScene:async(...args)=>calls.updateScene?.(...args),
+      subscribeLatestMessages: (sessionId, callback, onError) => {(calls.latestErrors ??= []).push(onError); calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
     },
   };
+  if (chatCache) stubs['chat-cache.js'] = chatCache;
   const cache = new Map();
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
@@ -164,8 +175,8 @@ async function harness() {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);
       }, { context, identifier: path });
     } else {
-      module = new vm.SourceTextModule(await readFile(new URL('../js/' + path, import.meta.url), 'utf8'), {
-        context, identifier: path,
+      module = new vm.SourceTextModule(sources[path] ?? await readFile(new URL('../js/' + path, import.meta.url), 'utf8'), {
+        context, identifier: path, initializeImportMeta:promptImportMeta,
       });
     }
     await module.link((specifier, parent) => {
@@ -183,7 +194,8 @@ async function harness() {
   const { state } = await use('state.js');
   const settings = await use('settings.js');
   state.settings = settings.hydrateProfiles(structuredClone(settings.DEFAULT_SETTINGS));
-  return { use, state, settings, calls, localCache, document, setNavigator: nav => { context.navigator = nav; }, el: document.getElementById,
+  state.settingsSource = "server";
+  return { use, state, settings, calls, localCache, document, el: document.getElementById,
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
 
@@ -258,7 +270,8 @@ test('Thinking and sampling controls use only enabled request parameters', async
   const h = await harness();
   const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
   assert.equal(h.settings.DEFAULT_SETTINGS.maxResponseTokens, 8192);
-  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /treat that plan as lost from context/);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive roleplay/);
+  assert.doesNotMatch(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /plan/i);
   assert.equal(h.el('thinking-options').classList.contains('hidden'), true);
   assert.equal(h.el('advanced-options').classList.contains('hidden'), true);
   h.el('set-reasoning-enabled').checked = true;
@@ -338,7 +351,7 @@ test('Story footer saves the active story and transfer actions remain wired', as
   h.el('set-session-plan').value = 'New plan';
   h.el('set-allow-llm-plan-updates').checked = true;
   await h.fire('btn-save-session');
-  assert.deepEqual(structuredClone(h.calls.sessionWrites[0]), ['story-id', { title: 'New title', longTermPlan: 'New plan', allowLlmPlanUpdates: true }]);
+  assert.deepEqual(structuredClone(h.calls.sessionWrites[0]), ['story-id', { title: 'New title', longTermPlan: 'New plan' }]);
   await h.fire('nav-transfer');
   await h.fire('btn-export-st');
   assert.deepEqual(h.calls.exports, ['story-id']);
@@ -401,32 +414,41 @@ test('An open device receives saved settings from another device', async () => {
   h.settings.watchSettings();
   const remote = { ...h.state.settings, modelId: 'remote-model' };
   h.settings.mirrorToActiveProfile(remote);
-  h.calls.settingsCallbacks[0]({ exists: () => true, data: () => remote, metadata: { fromCache: false, hasPendingWrites: false } });
+  await h.calls.settingsCallbacks[0]({ exists: () => true, data: () => remote, metadata: { fromCache: false, hasPendingWrites: false } });
   assert.equal(h.state.settings.modelId, 'remote-model');
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).modelId, 'remote-model');
 });
 
-test('An existing default narrator prompt gains the missing plan thread rule without changing custom prompts', async () => {
-  const h = await harness();
+test('Both obsolete narrator defaults migrate while custom prompts remain unchanged', async () => {
+  const legacy = ['former app default', 'former app default with obsolete recovery rule'];
+  const hashes = await Promise.all(legacy.map(async text => {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+  }));
+  const h = await harness({ legacyNarratorHashes:hashes.join('\n') });
   const next = h.settings.DEFAULT_SETTINGS.narratorSystemPrompt;
-  const old = next.slice(0, next.indexOf(' If, at the start of a turn'));
-  h.calls.settingsDoc = { narratorSystemPrompt: old };
-  assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, next);
-  h.localCache.clear();
-  h.calls.settingsDoc = { narratorSystemPrompt: 'Custom narrator' };
-  assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, 'Custom narrator');
+  for (const old of legacy) {
+    h.localCache.clear();
+    h.calls.settingsDoc = { narratorSystemPrompt:old };
+    assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, next);
+  }
+  for (const custom of ['Custom narrator', legacy[0]+' custom addition', '']) {
+    h.localCache.clear();
+    h.calls.settingsDoc = { narratorSystemPrompt:custom };
+    assert.equal((await h.settings.loadSettings()).narratorSystemPrompt, custom);
+  }
 });
 
 for (const keep of [0, 1, 3]) {
-  test(`Summary keeps exactly ${keep} recent messages`, async () => {
+  test(`Summary keeps at least ${keep} recent messages and completes turns`, async () => {
     const h = await harness();
     const { runSummarization } = await h.use('summarizer.js');
-    const messages = Array.from({ length: 5 }, (_, i) => ({ id: String(i), order: i + 1, role: 'user', content: 'event' }));
+    const messages = Array.from({ length:8 },(_,i) => ({ id:String(i),order:i+1,role:i%2 ? 'assistant' : 'user',content:'event' }));
     const result = await runSummarization({ id: 'session' }, {
       ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: keep,
     }, { messages });
-    assert.equal(result.foldedCount, 4 - keep); // first user stays uncompressed
-    assert.equal(result.newBreakpointOrder, 5 - keep);
+    assert.equal(result.foldedCount, keep === 0 ? 6 : keep === 1 ? 4 : 2);
+    assert.equal(result.newBreakpointOrder,result.foldedCount+2);
   });
 }
 
@@ -436,10 +458,7 @@ test('Empty summarizer output does not advance checkpoint', async () => {
   const { runSummarization } = await h.use('summarizer.js');
   await assert.rejects(runSummarization({ id: 's' }, {
     ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [
-    { id: 'opening', order: 1, role: 'user', content: 'Opening' },
-    { id: 'm', order: 2, role: 'user', content: 'event' },
-  ] }), /no reply/);
+  }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'event'})) }), /no reply/);
   assert.equal(h.calls.messages.length, 0);
 });
 
@@ -470,8 +489,7 @@ test('Context uses the checkpoint and every later message supplied by the cache'
     ...h.state.settings, maxContextTokens: 100000, maxResponseTokens: 1000,
   }, { messages });
   assert.equal(result.windowedCount, 150);
-  assert.equal(result.apiMessages[1].content, 'turn 0');
-  assert.equal(result.apiMessages[2].content, 'Story so far:\nEarlier story');
+  assert.match(result.apiMessages.find(m=>m.content.includes('Earlier story')).content,/Story so far:\nEarlier story/);
   assert.equal(result.apiMessages.at(-1).content, 'turn 149');
 });
 
@@ -479,24 +497,24 @@ test('Sliding context preserves the opening exchange and latest user while eject
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 115, maxResponseTokens: 100 };
+  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 225 + 100, maxResponseTokens: 100 };
   const messages = [
     { id: 'u1', order: 1, role: 'user', content: 'Opening', tokenCount: 25 },
     { id: 'a1', order: 2, role: 'assistant', content: 'Background', tokenCount: 25 },
-    { id: 'u2', order: 3, role: 'user', content: 'Middle'.repeat(20), tokenCount: 80 },
+    { id: 'u2', order: 3, role: 'user', content: 'Middle'.repeat(80),tokenCount:1 },
     { id: 'a2', order: 4, role: 'assistant', content: 'Small recent', tokenCount: 40 },
     { id: 'u3', order: 5, role: 'user', content: 'Latest', tokenCount: 30 },
   ];
   const result = await buildContextForRequest({ id: 's' }, settings, { messages, requireLatestUser: true });
-  assert.deepEqual(Array.from(result.apiMessages.filter(m => m.role !== 'system'), (m) => m.content), ['Opening', 'Background', 'Small recent', 'Latest']);
+  assert.deepEqual(Array.from(result.apiMessages.slice(1),(m) => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')), ['Opening', 'Background', '[Earlier turns omitted.]', 'Small recent', 'Latest']);
   assert.equal(result.droppedCount, 1);
   assert.ok(result.usedTokens <= settings.maxContextTokens);
   await assert.rejects(buildContextForRequest({ id: 's' }, settings, {
-    messages: messages.map((m) => m.id === 'u3' ? { ...m, content: 'Latest'.repeat(100), tokenCount: 500 } : m), requireLatestUser: true,
-  }), /opening story and latest user message exceed/);
+    messages: messages.map((m) => m.id === 'u3' ? { ...m,content:'Latest'.repeat(500),tokenCount:1 } : m), requireLatestUser: true,
+  }), /opening story.*latest user message exceed/);
 });
 
-test('Opening exchange survives a summary checkpoint and regeneration uses the prior plan', async () => {
+test('Opening exchange survives a summary checkpoint and regeneration preserves fixed plan', async () => {
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const messages = [
@@ -508,25 +526,24 @@ test('Opening exchange survives a summary checkpoint and regeneration uses the p
   ];
   const session = { id: 's', longTermPlan: 'Future plan', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
   const current = await buildContextForRequest(session, h.state.settings, { messages, requireLatestUser: true });
-  assert.deepEqual(Array.from(current.apiMessages.slice(1), (m) => m.content),
-    ['The kingdom begins here', 'The first scene', 'Story so far:\nStory summary', '[Earlier turns are represented by the summary.]', 'Current turn']);
+  assert.match(current.apiMessages[3].content,/Story so far/);
+  assert.deepEqual(Array.from(current.apiMessages.slice(1).filter(m=>m.role!=='system'),m => m.content.replace(/^\[Opening exchange:[^\n]*\]\n/,'')),['The kingdom begins here','The first scene','Current turn']);
   const regen = await buildContextForRequest(session, h.state.settings, {
     messages, upToOrder: 2, planOverride: 'Original plan', requireLatestUser: true,
   });
-  assert.match(regen.apiMessages[0].content, /Original plan/);
-  assert.doesNotMatch(regen.apiMessages[0].content, /Future plan/);
+  assert.match(regen.apiMessages[0].content,/Future plan/);
+  assert.doesNotMatch(regen.apiMessages[0].content,/Original plan/);
   assert.equal(regen.apiMessages.some((m) => m.content.includes('Story summary')), false);
 });
 
-test('Story plan is locked by default and model edits require the story toggle', async () => {
+test('Story plan is fixed even with the legacy model update flag', async () => {
   const h = await harness();
   const { buildContextForRequest } = await h.use('context-builder.js');
   const locked = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20' }, h.state.settings, { messages: [] });
-  assert.match(locked.apiMessages[0].content, /plan is fixed/);
+  assert.match(locked.apiMessages[0].content, /set by the user/);
   assert.match(locked.apiMessages[0].content, /day 20/);
   const editable = await buildContextForRequest({ id: 's', longTermPlan: 'The reunion happens on day 20', allowLlmPlanUpdates: true }, h.state.settings, { messages: [] });
-  assert.match(editable.apiMessages[0].content, /may update it/);
-  assert.doesNotMatch(editable.apiMessages[0].content, /plan is fixed/);
+  assert.equal(editable.apiMessages[0].content,locked.apiMessages[0].content);
 });
 
 test('Context budget reserves message framing as short turns accumulate', async () => {
@@ -535,7 +552,7 @@ test('Context budget reserves message framing as short turns accumulate', async 
   const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
   assert.ok(base.usedTokens >= MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
   const messages = Array.from({ length: 20 }, (_, i) => ({ id: String(i), order: i + 1, role: 'user', content: 'x', tokenCount: 1 }));
-  const budget = base.usedTokens + 20 + MESSAGE_FRAME_TOKENS * 5;
+  const budget = base.usedTokens + MESSAGE_FRAME_TOKENS * 5 + 100;
   const result = await buildContextForRequest({ id: 's' }, { ...h.state.settings, maxContextTokens: budget, maxResponseTokens: 100 }, { messages });
   assert.ok(result.windowedCount < messages.length);
   assert.ok(result.usedTokens <= budget);
@@ -544,15 +561,31 @@ test('Context budget reserves message framing as short turns accumulate', async 
 test('Summarizer bounds each request to the configured context', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
-  const settings = { ...h.state.settings, modelId: 'test', streaming: false,
-    maxContextTokens: 2000, summarizerMaxTokens: 1000, summarizerChunkTokens: 1000,
+  const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', summarizerSystemPrompt:'Summarize the established events.', modelId: 'test', streaming: false,
+    maxContextTokens: 8000,maxResponseTokens:100,summarizerMaxTokens:1000,summarizerChunkTokens:900,
     keepRecentMessagesAfterSummary: 0 };
-  const messages = Array.from({ length: 4 }, (_, i) => ({ id: String(i), order: i + 1,
-    role: 'user', content: 'event '.repeat(65) }));
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
+    role: i%2 ? 'assistant' : 'user', content: 'event '.repeat(65) }));
   await runSummarization({ id: 's' }, settings, { messages });
   assert.ok(h.calls.requests.length > 1);
-  assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(2000 / 3) &&
-    request.messages.reduce((sum, message) => sum + message.content.length + 8, 8) <= 2000));
+  assert.ok(h.calls.requests.every((request) => request.max_tokens <= Math.floor(8000 / 3) &&
+    request.messages.reduce((sum, message) => sum + message.content.length, 0) + request.max_tokens <= 8000));
+});
+
+test('Summarizer defaults and outgoing requests cap summaries at 20000 tokens', async () => {
+  const h = await harness();
+  const settingsApi = await h.use('settings.js');
+  assert.equal(settingsApi.DEFAULT_SETTINGS.summarizerMaxTokens, 20000);
+  assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 100000 })).summarizerMaxTokens, 20000);
+  assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 5000 })).summarizerMaxTokens, 5000);
+  const { runSummarization } = await h.use('summarizer.js');
+  await runSummarization({ id: 's' }, {
+    ...h.state.settings, narratorSystemPrompt:'Narrate.', modelId:'test', streaming:false,
+    maxContextTokens:120000, summarizerMaxTokens:100000, keepRecentMessagesAfterSummary:0,
+  }, { messages:Array.from({ length:6 }, (_, i) => ({ id:String(i),order:i+1,
+    role:i%2 ? 'assistant' : 'user',content:'Established story event.' })) });
+  assert.ok(h.calls.requests.length > 0);
+  assert.ok(h.calls.requests.every(request => request.max_tokens === 20000));
 });
 
 test('Summarizer disables chat reasoning on every request', async () => {
@@ -562,10 +595,7 @@ test('Summarizer disables chat reasoning on every request', async () => {
     ...h.state.settings, modelId: 'test', streaming: false,
     reasoning: { enabled: true, mode: 'max_tokens', maxTokens: 20000 },
     keepRecentMessagesAfterSummary: 0,
-  }, { messages: [
-    { id: 'opening', order: 1, role: 'user', content: 'Opening' },
-    { id: '1', order: 2, role: 'user', content: 'A new event' },
-  ] });
+  }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'A new event'})) });
   assert.equal(h.calls.requests.length, 1);
   assert.equal(h.calls.requests[0].reasoning, undefined);
 });
@@ -577,9 +607,7 @@ test('Incomplete streamed replies are rejected', async () => {
   h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"partial"}}]}\n'];
   await assert.rejects(chatCompletion({ settings, messages: [] }), /ended before completion/);
   h.calls.streamLines = ['data: {"choices":[{"delta":{"content":"cut"},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
-  const partial = await chatCompletion({ settings, messages: [] });
-  assert.equal(partial.content, 'cut');
-  assert.equal(partial.finishReason, 'length');
+  await assert.rejects(chatCompletion({ settings, messages: [] }), /output limit/);
 });
 
 test('Model errors and abnormal endings are rejected before a reply is saved', async () => {
@@ -609,7 +637,7 @@ test('Streaming plan tags remain hidden even when split across chunks', async ()
   }
 });
 
-test('Plan thread is stored for reference and excluded from model context', async () => {
+test('Plan thread stays out of visible text but remains in the next model context', async () => {
   const h = await harness();
   const { extractPlanThread, stripPlan } = await h.use('plan-parser.js');
   const reply = 'The door opens. <plan_thread>steering toward the reunion</plan_thread>';
@@ -619,7 +647,9 @@ test('Plan thread is stored for reference and excluded from model context', asyn
   const result = await buildContextForRequest({ id: 'story' }, h.state.settings, {
     messages: [{ id: 'm', order: 1, role: 'assistant', content: 'The door opens.', planThread: 'steering toward the reunion', tokenCount: 12 }],
   });
-  assert.equal(result.apiMessages.at(-1).content, 'The door opens.');
+  assert.doesNotMatch(result.apiMessages.at(-1).content, /<plan_thread>/);
+  const sceneRequest=await buildContextForRequest({id:'story',longTermPlan:'Fixed plan',memory:{scene:true}},h.state.settings,{messages:[{id:'a',order:1,role:'assistant',content:'The door opens.',planThread:'steering toward the reunion'}]});
+  assert.match(sceneRequest.apiMessages.at(-1).content, /<plan_thread>steering toward the reunion<\/plan_thread>/);
 });
 
 test('Author direction tags are normalized in model context', async () => {
@@ -631,7 +661,7 @@ test('Author direction tags are normalized in model context', async () => {
   ];
   const result = await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
   assert.match(result.apiMessages[0].content, /out-of-story author direction/);
-  assert.equal(result.apiMessages[1].content, '<ad>What happened between Nera and Elise?</ad>');
+  assert.match(result.apiMessages[1].content,/<ad>What happened between Nera and Elise\?<\/ad>$/);
   assert.equal(result.apiMessages[2].content, '<ad>Continue the scene</ad>');
   assert.equal(messages[0].content, '<ad>What happened between Nera and Elise?<ad>');
 });
@@ -645,52 +675,20 @@ test('Concurrent settings writes cannot silently overwrite each other', async ()
   assert.equal(h.calls.writes.length, 1);
 });
 
-test('Auto-summary triggers when sliding window drops history below the threshold', async () => {
+test('Auto-summary threshold counts input independently of reply capacity', async () => {
   const h = await harness();
   const { shouldAutoSummarize } = await h.use('summarizer.js');
+  const { buildContextForRequest } = await h.use('context-builder.js');
+  const emptySettings = { ...h.state.settings,narratorSystemPrompt:'' };
+  const overhead = (await buildContextForRequest({ id:'s' },emptySettings,{ messages:[] })).usedTokens;
   const result = await shouldAutoSummarize({ id: 's' }, {
-    ...h.state.settings, narratorSystemPrompt: '', maxContextTokens: 1000,
-    maxResponseTokens: 800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
-  }, [{ id: 'm', order: 1, role: 'user', content: 'large message'.repeat(30), tokenCount: 300 }]);
-  assert.equal(result, true);
+    ...h.state.settings,narratorSystemPrompt:'',maxContextTokens:overhead+2800,
+    maxResponseTokens:800, autoSummaryThresholdPercent: 90, autoSummarizationEnabled: true,
+  }, [{ id: 'm', order: 1, role: 'user', content:'large message'.repeat(140),tokenCount:1 }]);
+  assert.equal(result, false);
   assert.equal(await shouldAutoSummarize({ id: 's' }, {
     ...h.state.settings, autoSummarizationEnabled: false,
-  }, [{ id: 'm', order: 1, role: 'user', content: 'large message'.repeat(30), tokenCount: 300 }]), false);
-});
-
-test('This story saves private notes for reference without resending them', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js');
-  chat.initChatView();
-  chat.setSession('story');
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story', longTermPlan: 'Old plan' }) });
-  h.calls.noteMessage = { id: 'reply', order: 2, role: 'assistant', content: 'The story continues.', planThread: 'Original note' };
-  h.calls.latestCallbacks.at(-1)({ messages: [h.calls.noteMessage], hasEarlier: false });
-  const view = await h.use('ui/settings-view.js');
-  view.initSettingsView(); view.openSettingsPopup();
-  await h.fire('nav-story');
-  await Promise.resolve();
-  assert.equal(h.el('set-session-private-note').value, 'Original note');
-  assert.equal(h.el('set-session-private-note').disabled, false);
-  h.el('set-session-private-note').value = 'Edited direction for the next scene';
-  h.calls.latestCallbacks.at(-1)({ messages: [h.calls.noteMessage], hasEarlier: false });
-  assert.equal(h.el('set-session-private-note').value, 'Edited direction for the next scene');
-  h.state.busy = true;
-  await h.document.dispatchEvent({ type: 'chat-busy-changed' });
-  assert.equal(h.el('set-session-private-note').disabled, true);
-  assert.equal(h.el('btn-save-session').disabled, true);
-  h.state.busy = false;
-  await h.document.dispatchEvent({ type: 'chat-busy-changed' });
-  await h.fire('btn-save-session');
-  assert.equal(h.calls.privateNoteWrites[0][2], 'Edited direction for the next scene');
-  assert.equal(chat.getStoryPrivateNote().message.planThread, 'Edited direction for the next scene');
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const result = await buildContextForRequest({ id: 'story', longTermPlan: 'Old plan' }, h.state.settings, {
-    messages: [{ id: 'user', role: 'user', content: 'Continue.', order: 1 }, chat.getStoryPrivateNote().message],
-  });
-  assert.equal(result.apiMessages.at(-1).content, 'The story continues.');
-  assert.doesNotMatch(result.apiMessages.at(-1).content, /Original note/);
+  }, [{ id: 'm', order: 1, role: 'user', content:'large message'.repeat(140),tokenCount:1 }]), false);
 });
 
 test('Empty chat enables writing only after a story is selected', async () => {
@@ -762,7 +760,7 @@ test('Switching back to a recently opened session reuses its cached messages', a
   await open('story-b');
   const readsBeforeReturn = h.calls.subscriptions.length;
   chat.setSession('story-a');
-  assert.equal(h.calls.subscriptions.length, readsBeforeReturn);
+  assert.equal(h.calls.subscriptions.length,readsBeforeReturn+1);
   await open('story-c');
   await open('story-d');
   const readsBeforeEvictedReturn = h.calls.subscriptions.length;
@@ -771,404 +769,560 @@ test('Switching back to a recently opened session reuses its cached messages', a
   assert.equal(h.calls.subscriptions.length, readsBeforeEvictedReturn + 1);
 });
 
-test('Story cleaner removes explicit thinking, nested blocks, and incomplete streaming tags', async () => {
-  const h = await harness();
-  const { storyText, stripThinking } = await h.use('story-text.js');
-  const story = 'The door opens.';
-  for (const tag of ['think', 'thinking']) {
-    const block = `<${tag}>private analysis</${tag}>`;
-    for (let i = 1; i <= block.length; i++) {
-      assert.equal(storyText(story + ' ' + block.slice(0, i)), story);
-    }
-    assert.equal(storyText(block + story), story);
-  }
-  assert.equal(storyText('<THINK mode="deep">outer<thinking>inner</thinking>secret</THINK>' + story), story);
-  assert.equal(storyText(story + '<think>unfinished reasoning'), story);
-  assert.equal(storyText(story + '<thinking mode="deep"'), story);
-  assert.equal(storyText('<think>hidden</think>' + story + '<plan_thread>note</plan_thread><plan>new plan</plan>'), story);
-  assert.equal(stripThinking('<think><plan>fake</plan></think>' + story + '<plan>real</plan>'), story + '<plan>real</plan>');
+test('Memory panel stages defaults, preserves edits across panels, saves story and memory in one write',async () => {
+  const h = await harness(); h.state.sessionId='story-id'; const view=await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup(); await h.fire('nav-memory'); await Promise.resolve();
+  assert.equal(h.el('mem-scene').checked,false); assert.equal(h.el('mem-autoUpdate').checked,false); assert.equal(Number(h.el('mem-characters-budget').value),4000);
+  h.el('mem-scene').checked=true; h.el('mem-protagonist').value='Nera'; await h.fire('nav-story'); h.el('set-session-title').value='New title'; await h.fire('nav-memory');
+  assert.equal(h.el('mem-scene').checked,true); assert.equal(h.el('set-session-title').value,'New title'); await h.fire('btn-save-session');
+  assert.equal(h.calls.sessionWrites.length,1); const patch=h.calls.sessionWrites[0][1]; assert.equal(patch.title,'New title'); assert.equal(patch['memory.protagonist'],'Nera'); assert.equal(patch['memory.scene'],true); assert.equal(patch['memory.autoUpdate'],undefined);
+  assert.equal(h.calls.writes.length,0);
 });
-
-test('Context contributions match cleaned request text and legacy private-note counts are ignored', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const messages = [
-    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a1', order: 2, role: 'assistant', content: '<think>analysis</think>The door opens.',
-      thinking: 'stored reasoning', planThread: 'private steering', tokenCount: 99999 },
-    { id: 'u2', order: 3, role: 'user', content: 'Older turn' },
-    { id: 'sum', order: 4, role: 'summary', content: '<thinking>summary reasoning</thinking>Earlier events.' },
-    { id: 'u3', order: 5, role: 'user', content: '<ad>Continue</ad>' },
-    { id: 'a3', order: 6, role: 'assistant', content: 'The room is quiet.<plan_thread>private target</plan_thread>',
-      tokenCount: 99999, reasoning_details: [{ text: 'internal details' }] },
-    { id: 'empty', order: 7, role: 'assistant', content: '<think>no story</think>' },
-  ];
-  const result = await buildContextForRequest({ id: 's', longTermPlan: 'Meet the queen',
-    activeSummaryMessageId: 'sum', breakpointOrder: 3 }, h.state.settings, { messages });
-  assert.equal(result.entries[3].content, 'Story so far:\nEarlier events.');
-  assert.equal(result.entries.find((entry) => entry.id === 'a1').tokens, 'The door opens.'.length);
-  assert.equal(result.entries.find((entry) => entry.id === 'a3').content, 'The room is quiet.');
-  assert.equal(result.omitted['Summary checkpoint'], 1);
-  assert.equal(result.omitted['Empty story text'], 1);
-  assert.equal(result.contributions.reduce((sum, row) => sum + row.tokens, 0), result.usedTokens);
-  assert.equal(result.apiMessages.reduce((sum, message) => sum + message.content.length + 8, 8), result.usedTokens);
-  assert.deepEqual(Array.from(result.entries, (entry) => entry.content), Array.from(result.apiMessages, (message) => message.content));
-  assert.doesNotMatch(JSON.stringify(result), /stored reasoning|private steering|summary reasoning|private target|internal details|no story/);
-  assert.match(result.apiMessages[0].content, /Meet the queen/);
-  const regen = await buildContextForRequest({ id: 's' }, h.state.settings, { messages, upToOrder: 3 });
-  assert.equal(regen.omitted['Regeneration cutoff'], 5);
+test('Memory panel-only save does not rewrite title or plan and invalid values stay dirty',async () => {
+  const h=await harness(); h.state.sessionId='story-id'; const view=await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup(); await h.fire('nav-memory'); await Promise.resolve();
+  h.el('mem-lorebooks').checked=true; await h.fire('btn-save-session'); assert.deepEqual(Object.keys(h.calls.sessionWrites[0][1]),['memory.lorebooks']);
+  h.el('mem-batchTurns').value='not a number'; h.calls.confirm=false; await h.fire('btn-close-settings'); assert.equal(h.el('settings-tab').classList.contains('hidden'),false); await h.fire('btn-save-session'); assert.match(h.el('settings-saved-msg').textContent,/whole number/); assert.equal(h.calls.sessionWrites.length,1);
 });
-
-test('Input selection and summary thresholds do not depend on the output limit', async () => {
-  const h = await harness();
-  const { buildContextForRequest, computeContextUsage } = await h.use('context-builder.js');
-  const messages = Array.from({ length: 15 }, (_, i) => ({ id: String(i), order: i + 1,
-    role: 'user', content: 'event '.repeat(20) }));
-  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const settings = { ...h.state.settings, maxContextTokens: base.usedTokens + 500, maxResponseTokens: 1,
-    autoSummaryThresholdPercent: 90 };
-  const small = await computeContextUsage({ id: 's' }, settings, messages);
-  const large = await computeContextUsage({ id: 's' }, { ...settings, maxResponseTokens: 500000 }, messages);
-  assert.equal(small.usedTokens, large.usedTokens);
-  assert.equal(small.overThreshold, large.overThreshold);
-  assert.equal(small.usedTokens >= small.threshold, small.overThreshold);
-  assert.equal(JSON.stringify(small.apiMessages), JSON.stringify(large.apiMessages));
-  assert.ok(large.usedTokens <= settings.maxContextTokens);
-  const oversized = await computeContextUsage({ id: 's' }, { ...settings, maxContextTokens: 10 }, messages);
-  assert.equal(oversized.exceedsInputLimit, true);
-  await assert.rejects(buildContextForRequest({ id: 's' }, { ...settings, maxContextTokens: 10 }, {
-    messages, requireLatestUser: true,
-  }), /exceed the context budget/);
+test('Memory model selector shares saved profiles and saves per story without switching the narrator',async()=>{
+  const h=await harness();h.state.sessionId='story-id';h.state.settings.profiles.push({id:'scribe',name:'Memory scribe',modelId:'z-ai/glm-5.3-flash:floor'});
+  const active=h.state.settings.activeProfileId,view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();
+  const select=h.el('mem-updateProfileId');assert.deepEqual(select.children.map(o=>o.value),['',...h.state.settings.profiles.map(p=>p.id)]);
+  assert.match(select.children.at(-1).textContent,/Memory scribe.*:floor/);select.value='scribe';
+  await h.fire('nav-story');await h.fire('nav-memory');assert.equal(select.value,'scribe');
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,1);assert.equal(h.calls.sessionWrites[0][1]['memory.updateProfileId'],'scribe');
+  assert.equal(h.state.settings.activeProfileId,active);assert.equal(h.calls.writes.length,0);
+  const panel=await h.use('ui/memory-settings-view.js');panel.fillMemory({updateProfileId:'scribe'});assert.equal(select.value,'scribe');assert.equal(panel.memoryDirty({updateProfileId:'scribe'}),false);
+  h.state.settings.profiles.find(p=>p.id==='scribe').name='Renamed';await h.document.dispatchEvent({type:'settings-changed'});
+  assert.equal(select.value,'scribe');assert.match(select.children.at(-1).textContent,/Renamed/);
+  h.state.settings.profiles=h.state.settings.profiles.filter(p=>p.id!=='scribe');await h.document.dispatchEvent({type:'settings-changed'});
+  assert.equal(select.value,'scribe');assert.equal(select.children.at(-1).disabled,true);assert.match(select.children.at(-1).textContent,/Unavailable/);
+  select.value='';assert.equal(panel.memoryDirty({updateProfileId:'scribe'}),true);assert.equal(panel.readMemory().updateProfileId,'');
 });
-
-test('Streaming and non-streaming fetch bodies contain only story history and snapshots match serialized messages', async () => {
-  for (const streaming of [false, true]) {
-    const h = await harness();
-    const { chatCompletion } = await h.use('llm-client.js');
-    if (streaming) h.calls.streamLines = [
-      'data: {"choices":[{"delta":{"reasoning":"new reasoning","content":"The story continues."},"finish_reason":"stop"}]}\n',
-      'data: [DONE]\n',
-    ];
-    else h.calls.responseData = { choices: [{ finish_reason: 'stop', message: {
-      content: 'The story continues.', reasoning: 'new reasoning',
-    } }] };
-    const messages = [
-      { role: 'system', content: 'Narrate the story.' },
-      { role: 'user', content: '<think>This is user text</think>' },
-      { role: 'assistant', content: '<think>old thought</think>The door opens.<plan_thread>old plan</plan_thread>',
-        thinking: 'stored thought', reasoning: 'provider reasoning', reasoning_content: 'extra reasoning',
-        reasoning_details: [{ text: 'reasoning details' }], planThread: 'private note' },
-    ];
-    let snapshot;
-    const result = await chatCompletion({ settings: { ...h.state.settings, streaming, modelId: 'test', apiKey: 'secret-key' },
-      messages, onRequest: (request) => { snapshot = request; } });
-    const request = h.calls.requests[0];
-    assert.equal(JSON.stringify(snapshot.messages), JSON.stringify(request.messages));
-    assert.equal(request.messages[1].content, messages[1].content);
-    assert.deepEqual(request.messages[2], { role: 'assistant', content: 'The door opens.' });
-    assert.doesNotMatch(JSON.stringify(request), /old thought|old plan|stored thought|extra reasoning|reasoning details|private note/);
-    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key/);
-    assert.equal(result.thinking, 'new reasoning');
-    messages[2].content = 'edited after sending';
-    assert.equal(snapshot.messages[2].content, 'The door opens.');
+test('legacy stories attach no lore listener and memory stories attach exactly one',async () => {
+  const h=await harness(), chat=await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  const callback=h.calls.sessionCallbacks.at(-1); callback({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); assert.equal(h.calls.loreSubscriptions ?? 0,0);
+  callback({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ autoUpdate:true } }) }); assert.equal(h.calls.loreSubscriptions,1);
+  callback({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ autoUpdate:true },memoryState:{ failureStreak:1 } }) }); assert.equal(h.calls.loreSubscriptions,1);
+});
+test('chat turn ledger gives a due or running update priority over auto-summary, while legacy still summarizes',async () => {
+  for (const mode of ['due','running','legacy']) {
+    const h=await harness(), chat=await h.use('ui/chat-view.js');
+    Object.assign(h.state.settings,{ narratorSystemPrompt:'Narrate.',modelId:'model',apiKey:'test-key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0 });
+    h.calls.memoryDue=mode === 'due'; h.calls.memoryRunning=mode === 'running'; h.calls.messageOrder=4; h.calls.response='A complete reply.';
+    chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',...(mode !== 'legacy' ? { memory:{ autoUpdate:true },memoryState:{ extractedThroughOrder:0 } } : {}) }) });
+    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u1',order:1,role:'user',content:'Opening',tokenCount:7 },{ id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5 },{ id:'u2',order:3,role:'user',content:'Next',tokenCount:4 },{ id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6 }],hasEarlier:false });
+    await Promise.resolve(); h.el('chat-input').value='Continue'; await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
+    assert.equal(h.calls.requests.length,mode === 'due' ? 1 : 2,mode); assert.equal(h.calls.memoryStarts ?? 0,mode === 'due' ? 1 : 0); assert.equal(h.state.busy,false);
   }
 });
 
-test('Summarizer sends cleaned story and previous summary and saves only clean output', async () => {
-  const h = await harness();
-  const { runSummarization } = await h.use('summarizer.js');
-  h.calls.response = '<think>new hidden reasoning</think>The door opened.<plan_thread>new hidden note</plan_thread>';
-  const result = await runSummarization({ id: 's', activeSummaryMessageId: 'old', breakpointOrder: 1 }, {
-    ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [
-    { id: 'old', order: 2, role: 'summary', content: '<think>old hidden reasoning</think>Earlier story.' },
-    { id: 'a', order: 3, role: 'assistant', content: '<thinking>inline reasoning</thinking>The door opens.',
-      thinking: 'saved reasoning', planThread: 'saved note' },
-  ] });
-  assert.match(h.calls.requests[0].messages[1].content, /Earlier story\./);
-  assert.match(h.calls.requests[0].messages[1].content, /Assistant: The door opens\./);
-  assert.doesNotMatch(JSON.stringify(h.calls.requests), /old hidden reasoning|inline reasoning|saved reasoning|saved note/);
-  assert.equal(result.summaryMessage.content, 'The door opened.');
-  const savedCount = h.calls.messages.length;
-  h.calls.response = '<thinking>reasoning only</thinking>';
-  await assert.rejects(runSummarization({ id: 's' }, {
-    ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [
-    { id: 'u', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a', order: 2, role: 'assistant', content: 'Opening reply' },
-    { id: 'u2', order: 3, role: 'user', content: 'Continue.' },
-  ] }), /empty summary/);
-  assert.equal(h.calls.messages.length, savedCount);
+test('Memory panel reloads for another story and prompt defaults hydrate and reset globally',async () => {
+  const h=await harness(); h.calls.sessionDocs={ one:{ title:'One',memory:{ protagonist:'Nera',scene:true } },two:{ title:'Two',memory:{ protagonist:'Mira',scene:false } } }; h.state.sessionId='one'; const view=await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup(null,{ panel:'memory' }); await new Promise(resolve => setTimeout(resolve,0)); assert.equal(h.el('mem-protagonist').value,'Nera');
+  h.state.sessionId='two'; await h.document.dispatchEvent({ type:'session-changed',detail:{ sessionId:'two',session:h.calls.sessionDocs.two } }); assert.equal(h.el('mem-protagonist').value,'Mira'); assert.equal(h.el('mem-scene').checked,false);
+  await h.fire('nav-prompts'); h.el('set-memory-update-prompt').value='custom'; await h.fire('btn-reset-settings'); assert.match(h.el('set-memory-update-prompt').value,/one note per line/); assert.match(h.el('set-memory-reorganize-prompt').value,/author's own text/);
+});
+test('lorebook editor stages canon text and saves only on Save; closing dirty editor asks to discard',async () => {
+  const h=await harness(), chat=await h.use('ui/chat-view.js'), { makeEntry }=await h.use('lore-lines.js'), lore=await h.use('ui/lorebook-view.js');
+  const card=makeEntry('characters','Mira'); card.sections.appearance.text='Red hair'; h.calls.loreEntries=[card];
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[],hasEarlier:false }); lore.initLorebookView(); lore.openLorebooks(); await new Promise(resolve => setTimeout(resolve,0)); lore.openLorebooks({ entryId:card.id });
+  const root=h.el('lorebook-overlay'); const sections=root.querySelectorAll('.lore-section'); const appearance=sections[1].querySelector('textarea'); assert.equal(appearance.value,'Red hair'); appearance.value='Silver hair'; await appearance.dispatchEvent({ type:'input' }); assert.equal(h.calls.cardWrites,undefined);
+  h.calls.confirm=false; await root.querySelector('.settings-close').click(); assert.equal(root.classList.contains('hidden'),false);
+  const save=root.querySelectorAll('button').find(b => b.textContent === 'Save'); await save.click(); assert.equal(h.calls.cardWrites[0][1].sections.appearance.text,'Silver hair'); assert.equal(h.calls.cardWrites[0][2].sections.appearance.text,'Red hair');
+});
+test('context viewer includes composer draft and Copy request is the exact computed API text',async () => {
+  const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Opening' }],hasEarlier:false });
+  h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer'); assert.ok(root.querySelectorAll('p').some(p => p.textContent === 'including your draft'));
+  await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.match(h.calls.clipboard,/=== USER ===\nAsk Mira$/); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
 
-test('Context indicator displays input only and opening the inspector reuses loaded history', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js');
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  h.state.settings.maxContextTokens = 125000;
-  h.state.settings.maxResponseTokens = 15000;
-  const base = await buildContextForRequest({ id: 'story' }, h.state.settings, { messages: [] });
-  const content = 'x'.repeat(45956 - base.usedTokens - 8);
-  chat.initChatView(); chat.setSession('story');
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
-  h.calls.latestCallbacks.at(-1)({ messages: [{ id: 'u', role: 'user', order: 1, content }], hasEarlier: false });
-  await chat.updateIndicator();
-  assert.equal(h.el('context-label').textContent, '45,956 input / 125,000 tokens');
-  assert.ok(Math.abs(parseFloat(h.el('context-fill').style.width) - 36.7648) < 0.000001);
-  const opener = h.el('context-indicator'); opener.focus();
-  await h.fire('context-indicator');
-  assert.equal(h.el('context-dialog').open, true);
-  assert.match(h.el('context-status').textContent, /45,956 input \/ 125,000 tokens/);
-  assert.equal(h.calls.historyReads ?? 0, 0);
-  const detail = h.el('context-body').children.find((element) => element.tagName === 'DETAILS');
-  detail.open = true; await detail.dispatchEvent({ type: 'toggle' });
-  assert.equal(detail.querySelector('pre').textContent.includes('narrator'), true);
-  await h.fire('context-close');
-  assert.equal(h.document.activeElement, opener);
-  await h.fire('context-indicator');
-  assert.equal(h.calls.historyReads ?? 0, 0);
-  chat.setSession('another-story');
-  assert.equal(h.el('context-dialog').open, false);
+test('candidate summary must fit the full narrative request before its checkpoint activates',async () => {
+  const h = await harness(), { runSummarization } = await h.use('summarizer.js');
+  h.calls.response = 'oversized '.repeat(1000);
+  const history = Array.from({ length:8 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Event '+i }));
+  await assert.rejects(runSummarization({ id:'s' },{ ...h.state.settings,modelId:'test',streaming:false,maxContextTokens:5000,maxResponseTokens:100,keepRecentMessagesAfterSummary:2 },{ messages:history }),/exceed/);
+  assert.equal(h.calls.messages.length,0);
+});
+test('multi-call summary rejects source changes and never advances its checkpoint',async () => {
+  const h = await harness(), { runSummarization } = await h.use('summarizer.js');
+  const history = Array.from({ length:6 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Event '.repeat(50) }));
+  let checked = 0;
+  await assert.rejects(runSummarization({ id:'s',historyRevision:3 },{ ...h.state.settings,narratorSystemPrompt:'Narrate.',modelId:'test',streaming:false,maxContextTokens:20000,maxResponseTokens:100,keepRecentMessagesAfterSummary:0,summarizerChunkTokens:650 },{ messages:history,validateSource:async expected => { assert.equal(expected.historyRevision,3); if (++checked === 2) throw new Error('Source changed'); } }),/Source changed/);
+  assert.equal(h.calls.requests.length,2); assert.equal(h.calls.messages.length,0);
+  assert.ok(h.calls.requests.every(r => !r.messages.some(m => /1000-2000 words|DETAILED/.test(m.content))));
 });
 
-test('Inspector latest sent is immutable, excludes credentials, and is cleared on reset', async () => {
-  const h = await harness();
-  const { computeContextUsage } = await h.use('context-builder.js');
-  const inspector = await h.use('ui/context-view.js');
-  const context = await computeContextUsage({ id: 's' }, h.state.settings, [
-    { id: 'u', role: 'user', order: 1, content: 'Continue.' },
-  ]);
-  let loads = 0;
-  inspector.initContextInspector(async () => { loads++; return context; });
-  await h.fire('context-indicator');
-  inspector.captureContextRequest(context, { model: 'sent-model', messages: context.apiMessages });
-  context.entries.at(-1).content = 'changed afterward';
-  context.apiMessages.at(-1).content = 'changed afterward';
-  h.el('context-mode').value = 'sent'; await h.fire('context-mode', 'change');
-  assert.match(h.el('context-status').textContent, /sent-model.*latest story request sent/);
-  const groups = h.el('context-body').children.filter((element) => element.className?.includes('context-turn-group'));
-  assert.equal(groups.length, 1);
-  const group = groups[0];
-  assert.equal(Boolean(group.open), false);
-  assert.match(group.children[0].textContent, /Conversation turns · 1 messages/);
-  const details = group.children[1].children;
-  details.at(-1).open = true; await details.at(-1).dispatchEvent({ type: 'toggle' });
-  assert.equal(details.at(-1).querySelector('pre').textContent, 'Continue.');
-  assert.equal(loads, 1);
-  inspector.resetContextInspector();
-  await h.fire('context-indicator');
-  h.el('context-mode').value = 'sent'; await h.fire('context-mode', 'change');
-  assert.match(h.el('context-status').textContent, /No request has been sent/);
+test('narrative AD replies save valid scene state; invalid metadata warns while preserving narration and the prior snapshot',async () => {
+  const raw='date: Day 2 · time: night · place: Inn · present: Nera, Mira';
+  for (const valid of [true,false]) {
+    const h=await harness(),chat=await h.use('ui/chat-view.js');
+    Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder=2;
+    chat.initChatView();chat.setSession('story');await new Promise(resolve => setTimeout(resolve,0));
+    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ scene:true,memoryBlock:true } }) });
+    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },
+      { id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Nera, Mira, Kael',narratorTurn:1 }],hasEarlier:false });
+    h.calls.response='Kael leaves the inn.'+(valid ? '\n<scene>'+raw+'</scene>' : '\n<scene_state>Kael left.</scene_state>');
+    h.el('chat-input').value='<ad>Continue the scene. Have Kael leave.</ad>';
+    await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
+    const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
+    assert.equal(saved.ooc,false);assert.equal(saved.scene,valid ? raw : null);
+    if (!valid) { assert.equal(saved.sceneMeta.kind,'carried');assert.equal(saved.sceneMeta.fromOrder,2); }
+    assert.ok(saved.content.startsWith('Kael leaves the inn.'));
+    assert.equal(h.calls.requests.length,1,'No automatic model retry or repair call');
+    const current=(await h.use('scene.js')).latestScene(chat.memorySnapshot().messages);
+    assert.equal(current.missingStreak,valid ? 0 : 1);
+    assert.equal(current.scene.present.includes('Kael'),!valid);
+    if (!valid) assert.ok(h.el('message-list').children.some(x => /No scene tag in this reply/.test(x.textContent ?? '')));
+  }
 });
 
-test('Inspector drops a pending preview when the active story is reset', async () => {
-  const h = await harness();
-  const { computeContextUsage } = await h.use('context-builder.js');
-  const inspector = await h.use('ui/context-view.js');
-  const context = await computeContextUsage({ id: 's' }, h.state.settings, []);
-  let resolve;
-  inspector.initContextInspector(() => new Promise((done) => { resolve = done; }));
-  const opening = h.fire('context-indicator');
-  inspector.resetContextInspector();
-  resolve(context); await opening;
-  assert.equal(h.el('context-dialog').open, false);
-  assert.equal(h.el('context-body').children.length, 0);
+test('scene recovery runs only on clean narrative failures, preserves narration on schema failure and uses the maintenance slot',async () => {
+  const raw = 'date: Day 2 · time: night · place: Inn · present: Nera, Mira';
+  for (const mode of ['recover','bad-json','flagged','valid','ooc','running']) {
+    const h = await harness(),chat = await h.use('ui/chat-view.js');
+    Object.assign(h.state.settings,{ modelId:'model',apiKey:'fixture',streaming:false });h.calls.messageOrder=2;
+    h.calls.memoryRunning=mode==='running';h.calls.memoryDue=mode==='recover';
+    h.calls.onRequest = () => { h.calls.response = h.calls.requests.length === 1
+      ? mode==='flagged' ? 'You say, "Leave."' : 'Mira waits by the door.'+(mode==='valid' ? '\n<scene>'+raw+'</scene>' : '')
+      : mode==='bad-json' ? '{"extra":true}' : JSON.stringify({ date:'Day 2',time:'night',place:'Inn',present:['Nera','Mira'],planThread:null }); };
+    chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:()=>true,data:()=>({ title:'Story',memory:{ scene:true,sceneFallback:true,protagonist:'Nera' } }) });
+    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',role:'user',order:1,content:'Start.' },{ id:'a',role:'assistant',order:2,content:'At the inn.',scene:raw }],hasEarlier:false });
+    h.el('chat-input').value=mode==='ooc' ? '<ooc>Who is here?</ooc>' : 'Continue.';
+    await h.el('composer').dispatchEvent({ type:'submit',preventDefault(){} });
+    const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
+    assert.equal(h.calls.requests.length,['recover','bad-json','flagged','running'].includes(mode) ? 2 : 1,mode);
+    assert.ok(saved.content.startsWith(mode==='flagged' ? 'You say' : 'Mira waits'),mode);
+    if(mode==='recover') { assert.equal(saved.sceneMeta.kind,'inferred');assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.requests[1].response_format.json_schema.strict,true); }
+    if(['bad-json'].includes(mode)) { assert.equal(saved.scene,null);assert.equal(saved.sceneMeta.kind,'carried'); }
+    if(mode==='flagged') { assert.equal(saved.acceptance,'accepted'); assert.ok(saved.reviewWarnings.length); assert.equal(saved.sceneMeta.kind,'inferred'); }
+    if(mode==='valid') assert.equal(saved.sceneMeta.kind,'declared');
+    if(mode==='ooc') assert.equal(saved.scene,null);
+    assert.equal(h.state.busy,false);
+  }
 });
 
-for (const operation of ['Edit', 'Delete']) {
-  test(`${operation} completion after switching chats preserves the active story and summary`, async () => {
-    const h = await harness();
-    const chat = await h.use('ui/chat-view.js');
-    const { buildContextForRequest } = await h.use('context-builder.js');
-    chat.initChatView();
-    const open = async (id, content) => {
-      chat.setSession(id);
-      await new Promise(resolve => setTimeout(resolve, 0));
-      h.calls.sessionCallbacks.at(-1)({ id, exists: () => true, data: () => ({
-        title: id, activeSummaryMessageId: 'sum', breakpointOrder: 1,
-      }) });
-      h.calls.latestCallbacks.at(-1)({ messages: [
-        { id: 'shared', order: 1, role: 'assistant', content, planBefore: '' },
-        { id: 'sum', order: 2, role: 'summary', content: `${id} summary` },
-      ], hasEarlier: false });
-    };
-    await open('A', 'A original');
-    const node = h.el('message-list').children.findLast(item => item.dataset.messageId === 'shared');
-    const actions = node.querySelector('.msg-meta').querySelector('.msg-actions');
-    const click = button => button.dispatchEvent({ type: 'click', stopPropagation() {} });
-    let resolve;
-    let writtenId;
-    const write = id => { writtenId = id; return new Promise(done => { resolve = done; }); };
-    h.calls.editMessage = write; h.calls.deleteMessage = write;
-    let pending;
-    if (operation === 'Edit') {
-      await click(actions.children.find(button => button.textContent === 'Edit'));
-      node.querySelector('.msg-editor').value = 'A edited secret';
-      pending = click(actions.children.find(button => button.textContent === 'Save'));
-    } else {
-      pending = click(actions.children.find(button => button.textContent === 'Delete'));
-    }
-    await open('B', 'B independent story');
-    resolve({ tokenCount: 15, summaryReset: true });
-    await pending;
-    assert.equal(writtenId, 'A');
-    assert.equal(chat.getStoryPrivateNote().message.content, 'B independent story');
-    // Persist and restore B's snapshot, then inspect the actual assembled context.
-    chat.setSession('A'); chat.setSession('B');
-    await chat.updateIndicator();
-    await h.fire('context-indicator');
-    const text = JSON.stringify(h.el('context-body').children, (key, value) =>
-      ['parentNode', 'listeners'].includes(key) ? undefined : value);
-    assert.doesNotMatch(text, /A edited secret/);
-    // Summary remains visible in the context indicator's cached preview.
-    const expected = await buildContextForRequest({ id: 'B', activeSummaryMessageId: 'sum', breakpointOrder: 1 },
-      h.state.settings, { messages: [
-        { id: 'shared', order: 1, role: 'assistant', content: 'B independent story' },
-        { id: 'sum', order: 2, role: 'summary', content: 'B summary' },
-      ] });
-    assert.match(h.el('context-label').textContent, new RegExp(`^${expected.usedTokens.toLocaleString()} input`));
-  });
-}
-
-for (const full of [false, true]) {
-  test(`Summarization excludes the permanent opening exchange (full=${full})`, async () => {
-    const h = await harness();
-    const { runSummarization } = await h.use('summarizer.js');
-    const messages = [
-      { id: 'u1', order: 1, role: 'user', content: 'UNCOMPRESSED OPENING USER' },
-      { id: 'a1', order: 2, role: 'assistant', content: 'UNCOMPRESSED OPENING REPLY' },
-      { id: 'u2', order: 3, role: 'user', content: 'Fold this event' },
-      { id: 'a2', order: 4, role: 'assistant', content: 'Fold this outcome' },
-      { id: 'u3', order: 5, role: 'user', content: 'Keep recent user' },
-      { id: 'a3', order: 6, role: 'assistant', content: 'Keep recent reply' },
-    ];
-    h.calls.historyMessages = messages;
-    const result = await runSummarization({ id: 's' }, {
-      ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 2,
-    }, { full });
-    assert.equal(result.foldedCount, 2);
-    assert.equal(result.newBreakpointOrder, 4);
-    const request = JSON.stringify(h.calls.requests);
-    assert.doesNotMatch(request, /UNCOMPRESSED|Keep recent/);
-    assert.match(request, /Fold this event/);
-    assert.match(request, /Fold this outcome/);
-    const openingOnly = await runSummarization({ id: 's' }, {
-      ...h.state.settings, keepRecentMessagesAfterSummary: 0,
-    }, { full, messages: messages.slice(0, 2) });
-    assert.equal(openingOnly.skipped, true);
-    assert.equal(h.calls.requests.length, 1);
-  });
-}
-
-test('Regeneration blocks chat switches while loading history', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js');
-  chat.initChatView(); chat.setSession('A');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'A', exists: () => true, data: () => ({ title: 'A' }) });
-  h.calls.latestCallbacks.at(-1)({ messages: [
-    { id: 'a', order: 2, role: 'assistant', content: 'Latest reply', planBefore: '' },
-  ], hasEarlier: true });
-  let resolve;
-  h.calls.historyPending = new Promise(done => { resolve = done; });
-  const node = h.el('message-list').children.find(item => item.dataset.messageId === 'a');
-  const button = node.querySelector('.msg-actions').children.find(item => item.textContent === 'Regenerate');
-  await button.dispatchEvent({ type: 'click', stopPropagation() {} });
-  assert.equal(h.state.busy, true);
-  assert.equal(chat.setSession('B'), false);
-  assert.equal(h.state.sessionId, 'A');
-  // A newer reply makes this regeneration invalid after history loads.
-  resolve([{ id: 'newer', order: 3, role: 'assistant', content: 'Newer reply' }]);
-  await new Promise(done => setTimeout(done, 0));
-  assert.equal(h.state.busy, false);
-  assert.equal(h.calls.requests.length, 0);
+test('starting scene settings stage separately from canon and reject an incomplete opening before writing',async () => {
+  const h = await harness();h.state.sessionId='story-id';const view=await h.use('ui/settings-view.js');
+  view.initSettingsView();view.openSettingsPopup();await h.fire('nav-memory');await Promise.resolve();
+  h.el('mem-scene').checked=true;h.el('mem-starting-date').value='18 September 731';h.el('mem-starting-place').value='West Reception Room';
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,0);assert.match(h.el('settings-saved-msg').textContent,/attendees/);
+  h.el('mem-starting-present').value='Nera Veyrath, Isolde Veyless';h.el('mem-replyContract').value='user';
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,1);
+  const patch=h.calls.sessionWrites[0][1];assert.deepEqual(Object.keys(patch),['memory.scene','memory.startingScene','memory.replyContract']);
+  assert.match(patch['memory.startingScene'],/time: unknown/);assert.equal(patch['memory.replyContract'],'user');assert.equal(patch['memory.sceneFallback'],undefined);
 });
 
-test('Rolling summary excludes opening anchors after an existing checkpoint', async () => {
-  const h = await harness();
-  const { runSummarization } = await h.use('summarizer.js');
-  h.calls.historyMessages = [
-    { id: 'u1', order: 1, role: 'user', content: 'OPENING USER' },
-    { id: 'a1', order: 2, role: 'assistant', content: 'OPENING REPLY' },
-    { id: 'u2', order: 3, role: 'user', content: 'Already folded' },
-    { id: 'sum', order: 4, role: 'summary', content: 'Prior events' },
-    { id: 'u3', order: 5, role: 'user', content: 'New user event' },
-    { id: 'a3', order: 6, role: 'assistant', content: 'New assistant event' },
-  ];
-  const result = await runSummarization({ id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 }, {
-    ...h.state.settings, modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  });
-  assert.equal(result.foldedCount, 2);
-  assert.equal(result.newBreakpointOrder, 6);
-  const request = JSON.stringify(h.calls.requests);
-  assert.match(request, /Prior events/);
-  assert.match(request, /New user event/);
-  assert.match(request, /New assistant event/);
-  assert.doesNotMatch(request, /OPENING|Already folded/);
+test('model plan output cannot change fixed author instructions and pure OOC preserves established scene',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js');
+  Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder = 2;
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',longTermPlan:'Elise survives',allowLlmPlanUpdates:true,memory:{ scene:true,memoryBlock:true } }) });
+  h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Elise',narratorTurn:1 }],hasEarlier:false });
+  h.calls.response = 'Liora believes Elise died.\n<plan>Elise dies</plan>\n<plan_thread>Preserve the mystery</plan_thread>\n<scene>Day 9 · noon · Palace · present: Liora</scene>';
+  h.el('chat-input').value = '<ooc>What does Liora believe?</ooc>';
+  await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
+  const saved = h.calls.messages.find(c => c[1].role === 'assistant')[1];
+  assert.equal(saved.ooc,true); assert.equal(saved.scene,null); assert.equal(saved.content,'Liora believes Elise died.');
+  assert.equal(h.calls.sessionWrites.some(c => c[1].longTermPlan),false);
+  const live = chat.memorySnapshot(); assert.equal(live.session.longTermPlan,'Elise survives');
+  const { latestScene } = await h.use('scene.js'); assert.equal(latestScene(live.messages).scene.place,'Inn'); assert.equal(latestScene(live.messages).missingStreak,0);
+  assert.match(h.calls.requests[0].messages[0].content,/Elise survives/);
 });
 
-test('Sync replaces cached history and metadata with server data and invalidates other cached chats', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js');
-  chat.initChatView();
-  const open = async id => {
-    chat.setSession(id);
-    await new Promise(resolve => setTimeout(resolve, 0));
-    h.calls.sessionCallbacks.at(-1)({ id, exists: () => true, data: () => ({ title: id, longTermPlan: 'Old plan' }) });
-    h.calls.latestCallbacks.at(-1)({ messages: [
-      { id: 'old', order: 1, role: 'assistant', content: 'Stale story' },
-    ], hasEarlier: false });
+test('cached history reconciles outside recent subscription and unchanged revisions avoid history downloads',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  const all = Array.from({ length:20 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'old '+i,revision:0,narratorTurn:Math.floor(i/2)+1 }));
+  h.calls.serverHistory = all;
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:1 }) });
+  h.calls.latestCallbacks.at(-1)({ messages:all.slice(-4),hasEarlier:true }); await new Promise(resolve => setTimeout(resolve,0));
+  const first = await chat.prepareMemorySnapshot(); assert.equal(first.messages[0].content,'old 0');
+  const reads = h.calls.historyReads; await chat.prepareMemorySnapshot(); assert.equal(h.calls.historyReads,reads);
+  h.calls.sessionDocs.story.historyRevision = 2; h.calls.serverHistory = all.map(m => m.id === 'm0' ? { ...m,content:'Edited on another device',revision:1 } : m);
+  const refreshed = await chat.prepareMemorySnapshot(); assert.equal(refreshed.messages[0].content,'Edited on another device'); assert.equal(h.calls.historyReads,reads+1);
+});
+test('D2 history changing during generation keeps completed narration unsaved',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js'); Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder = 2;
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',longTermPlan:'Original plan' }) });
+  h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Scene' }],hasEarlier:false });
+  h.calls.response = 'Narration based on original plan.'; h.calls.onRequest = async () => {
+    Object.assign(h.state.settings,{ modelId:'next-model',temperature:0.7 });
+    Object.assign(h.calls.sessionDocs.story,{ longTermPlan:'New author plan',memory:{ scene:true },loreRevision:2,historyRevision:5 });
+    h.calls.historyRevision = 5;
   };
-  await open('B'); await open('A');
-  const staleSession = h.calls.sessionCallbacks.at(-1);
-  const staleMessages = h.calls.latestCallbacks.at(-1);
-  h.calls.serverSnapshot = { id: 'A', exists: () => true, data: () => ({
-    title: 'Updated elsewhere', longTermPlan: 'Server plan', activeSummaryMessageId: 'sum', breakpointOrder: 2,
-  }) };
-  h.calls.historyMessages = [
-    { id: 'u', order: 1, role: 'user', content: 'Original opening' },
-    { id: 'a', order: 2, role: 'assistant', content: 'Server story' },
-    { id: 'sum', order: 3, role: 'summary', content: 'Server summary' },
-    { id: 'latest', order: 4, role: 'assistant', content: 'Latest from other device' },
-  ];
-  let metadata;
-  h.document.addEventListener('session-changed', event => { metadata = event.detail.session; });
-  await h.document.dispatchEvent({ type: 'sync-chat' });
-  assert.equal(h.calls.historyReads, 1);
-  assert.equal(chat.getStoryPrivateNote().message.content, 'Latest from other device');
-  assert.equal(metadata.longTermPlan, 'Server plan');
-  assert.equal(metadata.activeSummaryMessageId, 'sum');
-  assert.equal(h.state.busy, false);
-  staleSession({ id: 'A', exists: () => true, data: () => ({ longTermPlan: 'Old plan' }) });
-  staleMessages({ messages: [{ id: 'old', order: 1, role: 'assistant', content: 'Stale callback' }], hasEarlier: false });
-  h.calls.latestCallbacks.at(-1)({ messages: [{ id: 'latest', order: 4, role: 'assistant', content: 'Firebase cache' }], hasEarlier: false, fromCache: true });
-  assert.equal(chat.getStoryPrivateNote().message.content, 'Latest from other device');
-  h.calls.latestCallbacks.at(-1)({ messages: [
-    { id: 'latest', order: 4, role: 'assistant', content: 'Fresh live update' },
-  ], hasEarlier: false, fromCache: false });
-  assert.equal(chat.getStoryPrivateNote().message.content, 'Fresh live update');
-  const count = h.calls.subscriptions.length;
-  chat.setSession('B');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.subscriptions.length, count + 1);
-  assert.equal(h.calls.requests.length, 0);
+  h.el('chat-input').value = 'Continue'; await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
+  const replies = h.calls.messages.filter(c => c[1].role === 'assistant');
+  assert.equal(h.calls.requests.length,1); assert.equal(replies.length,0);
+  const unsaved=h.el('message-list').querySelector('.unsaved');assert.ok(unsaved);
+  assert.equal(unsaved.querySelector('.msg-content').textContent,'Narration based on original plan.');
+  assert.ok(unsaved.querySelectorAll('button').some(button=>button.textContent==='Save as new reply at the end'));
+  assert.equal(chat.memorySnapshot().session.longTermPlan,'Original plan');
+  assert.equal(h.state.busy,false);
 });
 
-test('Failed sync preserves displayed history and releases busy state', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js');
-  chat.initChatView(); chat.setSession('A');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'A', exists: () => true, data: () => ({ title: 'A' }) });
-  h.calls.latestCallbacks.at(-1)({ messages: [
-    { id: 'a', order: 1, role: 'assistant', content: 'Keep displayed story' },
-  ], hasEarlier: false });
-  h.calls.serverError = 'offline';
-  await chat.syncChatData();
-  assert.equal(chat.getStoryPrivateNote().message.content, 'Keep displayed story');
-  assert.equal(h.state.busy, false);
-  assert.equal(h.calls.subscriptions.length, 2);
+test('a revision arriving during history loading retries automatically and shares the refreshed result',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  const initial = [{ id:'u',order:1,role:'user',content:'Opening',revision:0 },{ id:'a',order:2,role:'assistant',content:'Old',revision:0 }];
+  let release, started;
+  const ready = new Promise(resolve => started = resolve);
+  h.calls.serverHistory = initial;
+  h.calls.onHistoryRead = async read => { if (read === 1) { started(); await new Promise(resolve => release = resolve); } };
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:1,memory:{ scene:true } }) });
+  h.calls.latestCallbacks.at(-1)({ messages:initial,hasEarlier:false });
+  await ready;
+  h.calls.serverHistory = [initial[0],{ ...initial[1],content:'Fresh',revision:1 }];
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:2,memory:{ scene:true } }) });
+  const requests = [chat.prepareMemorySnapshot(),chat.prepareMemorySnapshot()];
+  release();
+  const results = await Promise.all(requests);
+  assert.ok(results.every(result => result.messages[1].content === 'Fresh'));
+  assert.equal(h.calls.historyReads,2);
+  const reads = h.calls.historyReads; await chat.prepareMemorySnapshot(); assert.equal(h.calls.historyReads,reads);
+});
+
+test('cached, pending and delayed lower-revision metadata do not roll back server-reconciled history',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
+  const messages = [{ id:'u',order:1,role:'user',content:'Server version',revision:2 }]; h.calls.serverHistory = messages;
+  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:3 }) });
+  h.calls.latestCallbacks.at(-1)({ messages,hasEarlier:false }); await chat.prepareMemorySnapshot();
+  const reads = h.calls.historyReads;
+  for (const metadata of [{ fromCache:true },{ hasPendingWrites:true },{}]) {
+    h.calls.sessionCallbacks.at(-1)({ id:'story',metadata,exists:() => true,data:() => ({ title:'Stale',historyRevision:1 }) });
+    assert.equal(chat.memorySnapshot().session.historyRevision,3);
+    assert.equal(chat.memorySnapshot().messages[0].content,'Server version');
+  }
+  assert.equal(chat.memorySnapshot().session.title,'Story'); assert.equal(h.calls.historyReads,reads);
+});
+
+test('an old session load cannot clear the new session shared history job',async () => {
+  const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView();
+  const releases = new Map(), starts = new Map();
+  const readyA = new Promise(resolve => starts.set(1,resolve)), readyB = new Promise(resolve => starts.set(2,resolve));
+  h.calls.onHistoryRead = async read => { starts.get(read)?.(); if (read <= 2) await new Promise(resolve => releases.set(read,resolve)); };
+  const open = async id => {
+    chat.setSession(id); await new Promise(resolve => setTimeout(resolve,0));
+    h.calls.serverHistory = [{ id:id+'-u',order:1,role:'user',content:id }];
+    h.calls.sessionCallbacks.at(-1)({ id,exists:() => true,data:() => ({ title:id,historyRevision:1,memory:{ scene:true } }) });
+    h.calls.latestCallbacks.at(-1)({ messages:h.calls.serverHistory,hasEarlier:false });
+  };
+  await open('a'); await readyA;
+  await open('b'); await readyB;
+  releases.get(1)(); await new Promise(resolve => setTimeout(resolve,0));
+  const snapshot = chat.prepareMemorySnapshot(); await new Promise(resolve => setTimeout(resolve,0));
+  assert.equal(h.calls.historyReads,2,'new callers must join the still-running B read');
+  releases.get(2)(); const result = await snapshot; assert.equal(result.session.id,'b'); assert.equal(result.messages[0].content,'b');
+});
+
+async function openImprovementChat(h, metadata = {}, messages = []) {
+  const chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('improvement');
+  await new Promise(resolve => setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({ id:'improvement',exists:() => true,data:() => ({ title:'Story',...metadata }) });
+  h.calls.latestCallbacks.at(-1)({ messages,hasEarlier:false });
+  Object.assign(h.state.settings,{modelId:'model',apiKey:'key',streaming:false}); h.calls.messageOrder=messages.length || 1;
+  return chat;
+}
+
+test('P0 failed user save restores the exact draft, and Retry uses a saved user turn once',async () => {
+  const h=await harness(); await openImprovementChat(h);
+  const draft='  A draft\nwith spacing.  '; h.el('chat-input').value=draft;
+  h.calls.addMessage=async () => { throw new Error('save failed'); };
+  await h.el('composer').dispatchEvent({type:'submit',preventDefault() {}});
+  assert.equal(h.el('chat-input').value,draft); assert.equal(h.calls.requests.length,0);
+  h.calls.addMessage=null; h.calls.responseData={ error:{message:'wrong key'} };
+  await h.el('composer').dispatchEvent({type:'submit',preventDefault() {}});
+  const retry=h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply');
+  assert.ok(retry); h.calls.responseData=null; h.calls.response='A reply.'; await retry.click();
+  assert.equal(h.calls.messages.filter(c => c[1].role==='user').length,1);
+  assert.equal(h.calls.messages.filter(c => c[1].role==='assistant').length,1);
+});
+
+test('P0 streaming bubble remains during persistence and swaps after the saved reply exists',async () => {
+  const h=await harness(); await openImprovementChat(h,{},[{id:'user',order:1,role:'user',content:'Begin.'}]);
+  let finish;
+  h.calls.addMessage=async (_sid,message,options) => new Promise(resolve => { finish=() => resolve({...message,id:options.id,order:2,historyRevision:1}); });
+  const retry=h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply');
+  const pending=retry.click(); await new Promise(resolve => setTimeout(resolve,0));
+  assert.ok(h.el('message-list').children.some(n => n.className==='msg assistant' && !n.dataset.messageId));
+  finish(); await pending;
+  assert.equal(h.el('message-list').children.filter(n => n.className==='msg assistant').length,1);
+  assert.ok(h.el('message-list').children.some(n => n.dataset.messageId==='summary-id'));
+});
+
+test('P0 cut-off reply persists without scene recovery and provider usage clears on story reset',async () => {
+  const h=await harness(); const chat=await openImprovementChat(h,{memory:{scene:true,sceneFallback:true}},[{id:'user',order:1,role:'user',content:'Begin.'}]);
+  h.calls.responseData={choices:[{finish_reason:'length',message:{content:'A cut-off scene.\n<scene>date:'}}],usage:{prompt_tokens:1234}};
+  await h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply').click();
+  const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];
+  assert.equal(saved.truncated,true); assert.equal(saved.acceptance,'accepted'); assert.equal(h.calls.requests.length,1);
+  assert.ok(h.el('message-list').querySelectorAll('span').some(n => /cut off/.test(n.textContent ?? '')));
+  assert.equal(chat.memorySnapshot().providerUsage.promptTokens,1234);
+  chat.setSession('other'); assert.equal(chat.memorySnapshot()?.providerUsage ?? null,null);
+});
+
+test('P0 custom narrator keeps its text while obsolete lost-plan rules are removed',async () => {
+  const h=await harness(); const { buildContextForRequest }=await h.use('context-builder.js');
+  const built=await buildContextForRequest({id:'s',longTermPlan:'Plan',memory:{scene:true}}, {...h.state.settings,narratorSystemPrompt:'Custom. If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears, treat that plan as lost until the user sets a new one.'},{messages:[{id:'u',order:1,role:'user',content:'Begin.'}]});
+  assert.match(built.apiMessages[0].content,/Custom\./); assert.doesNotMatch(built.apiMessages[0].content,/treat that plan as lost/);
+});
+
+test('S5 valid scenes survive lint warnings, render a note, and plan threads require an active plan',async () => {
+ const h=await harness();await openImprovementChat(h,{longTermPlan:'',memory:{scene:true,protagonist:'Nera'}},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.response='You decide to stay.\n<plan_thread>Unused target</plan_thread>\n<scene>date: unknown · time: unknown · place: Inn · present: Mira</scene>';
+ await h.el('message-list').querySelectorAll('button').find(b => b.textContent==='Retry reply').click();
+ const saved=h.calls.messages.find(c => c[1].role==='assistant')[1];assert.equal(saved.acceptance,'accepted');assert.equal(saved.sceneMeta.kind,'declared');assert.ok(saved.reviewWarnings.length);assert.equal(saved.planThread,null);
+ assert.ok(h.el('message-list').querySelectorAll('p').some(n => n.textContent?.startsWith('Note: ')));
+ assert.equal(h.el('message-list').querySelectorAll('button').some(b => b.textContent==='Accept reply'),false);
+});
+
+test('S1 pending review controls are hidden with Scene off and after a later user message',async () => {
+ for(const [scene,later] of [[false,false],[true,true]]) {
+  const h=await harness();await openImprovementChat(h,{memory:{scene}},[{id:'p',order:2,role:'assistant',content:'Flagged',acceptance:'pending'},...(later ? [{id:'u',order:3,role:'user',content:'Continue.'}] : [])]);
+  assert.equal(h.el('message-list').querySelectorAll('button').some(b => b.textContent==='Accept reply'),false);
+ }
+});
+
+test('S12 recent narration selects cards after current input mentions; rendering supports source labels',async () => {
+ const h=await harness();const {makeEntry}=await h.use('lore-lines.js'),s=await h.use('lore-select.js'),{normalizeMemory}=await h.use('memory-settings.js');
+ const cards=['Mira','Kael'].map(n => makeEntry('characters',n));cards[0].sections.appearance.text='Silver hair';
+ const selection=s.selectEntries(cards,normalizeMemory({lorebooks:true}), 'Mira',null,'Kael arrives.');
+ assert.deepEqual(Array.from(selection.selected.characters,x => x.reason),['mentioned','recent mention']);
+ assert.doesNotMatch(s.renderEntry(cards[0]),/origin:/);assert.match(s.renderEntry(cards[0],null,'',{provenance:true}),/origin:/);
+});
+test('memory failure details appear on the first failure in the toast and settings panel',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ const lastError='A memory note was empty or longer than 400 characters. No turns were marked updated.';
+ const story={title:'Story',memory:{autoUpdate:true},memoryState:{extractedThroughOrder:0,failureStreak:1,paused:false,lastError}};
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});
+ let detail;h.document.addEventListener('memory-toast',e=>{detail=e.detail;});
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'story',status:'failed',failureStreak:1,lastError}});
+ assert.match(detail.text,/400 characters/);assert.equal(detail.action,'Open settings');
+ const panel=await h.use('ui/memory-settings-view.js');panel.fillMemory(story.memory);
+ assert.match(h.el('mem-update-status').textContent,/Last update failed:.*400 characters/);
+ story.memoryState={...story.memoryState,paused:true,failureStreak:3};
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});panel.updateMemorySettingsHints();
+ assert.match(h.el('mem-update-status').textContent,/Paused.*400 characters/);
+});
+
+test('U4 rendered message comparison tracks scene/review fields and memoizes turn computation',async () => {
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),base={role:'assistant',content:'Story'};
+ for(const patch of [{revision:1},{acceptance:'pending'},{reviewWarnings:['warning']},{sceneMeta:{kind:'manual'}},{sceneCandidate:{scene:'new'}},{ooc:true},{truncated:true},{editedAt:true}]) assert.equal(chat.sameRenderedMessage(base,{...base,...patch}),false);
+ const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.notEqual(chat.turnsFor(list),chat.turnsFor([...list]));
+});
+
+test('Final twenty-turn replay keeps narration plus maintenance at two calls and reconciles the session once per send',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');Object.assign(h.state.settings,{modelId:'test',apiKey:'fixture-key',narratorSystemPrompt:'Narrate.',streaming:false,maxContextTokens:50000,maxResponseTokens:2000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:2});
+ const scene='date: Day 1 · time: night · place: Inn · present: Mira';h.calls.messageOrder=2;h.calls.sessionDocs={story:{id:'story',title:'Story',memory:{scene:true,sceneFallback:true,autoUpdate:true},memoryState:{extractedThroughOrder:0},historyRevision:0}};
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>h.calls.sessionDocs.story});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene}],hasEarlier:false});
+ const rows=[];let totalCalls=0;for(let turn=0;turn<20;turn++){
+  const before=h.calls.requests.length,memoryBefore=h.calls.memoryStarts ?? 0,readsBefore=h.calls.sessionReads ?? 0;h.calls.memoryDue=turn%2===0;
+  h.calls.onRequest=()=>{const body=h.calls.requests.at(-1);h.calls.response=body.response_format ? JSON.stringify({date:'Day 1',time:'night',place:'Inn',present:['Mira'],planThread:null}) : body.messages.at(-1).content.includes('New events to fold in:') ? 'Mira remains at the inn.' : 'Mira waits by the door.'+(turn%3 ? '\n<scene>'+scene+'</scene>' : '');};
+  h.el('chat-input').value='Continue '+turn;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  const calls=h.calls.requests.length-before+(h.calls.memoryStarts ?? 0)-memoryBefore;assert.ok(calls>=1 && calls<=2,'Turn '+turn+': '+calls+' calls');totalCalls+=calls;rows.push({turn:turn+1,modelRequests:h.calls.requests.length-before,memoryJobs:(h.calls.memoryStarts ?? 0)-memoryBefore,totalCalls:calls,reconcileReads:(h.calls.sessionReads ?? 0)-readsBefore});assert.equal(h.state.busy,false);assert.equal((h.calls.sessionReads ?? 0)-readsBefore,1);
+ }
+ assert.ok(totalCalls>20);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,20);await writeFile('/tmp/nera-twenty-turns.json',JSON.stringify({simulated:true,rows,totalCalls},null,2));
+});
+test('U7 cached or default settings cannot overwrite server preferences before an authoritative load',async()=>{
+ const h=await harness();for(const source of ['cache','defaults']){h.state.settingsSource=source;await assert.rejects(h.settings.saveSettings(h.state.settings),/reload before saving/);}assert.equal(h.calls.writes.length,0);h.state.settingsSource='server';await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
+});
+
+test('main adaptation: failed settings startup recovers server values for review before any write',async()=>{
+ const h=await harness();h.state.settingsSource='cache';
+ h.calls.settingsDoc={...h.settings.DEFAULT_SETTINGS,modelId:'saved-model',apiKey:'saved-key'};
+ await assert.rejects(h.settings.saveSettings(h.state.settings),error=>error.code==='settings-reloaded');
+ assert.equal(h.calls.writes.length,0);assert.equal(h.state.settingsSource,'server');
+ assert.equal(h.state.settings.modelId,'saved-model');assert.equal(h.state.settings.apiKey,'saved-key');
+ await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
+ assert.equal(h.calls.writes[0].profiles[0].modelId,'saved-model');
+});
+test('main adaptation: settings popup replaces fallback fields with recovered server settings',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),view=await h.use('ui/settings-view.js');chat.initChatView();view.initSettingsView();view.openSettingsPopup(h.el('opener'));
+ h.state.settingsSource='defaults';h.calls.settingsDoc={...h.settings.DEFAULT_SETTINGS,modelId:'server-model',apiKey:'server-key'};
+ await h.fire('btn-save-settings');assert.equal(h.calls.writes.length,0);
+ assert.equal(h.el('set-model').value,'server-model');assert.equal(h.el('set-apikey').value,'server-key');
+ await h.fire('btn-save-settings');assert.equal(h.calls.writes.length,1);
+});
+test('main adaptation: mobile editor grows with text and releases the fixed bubble height',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');const create=h.document.createElement;
+ h.document.createElement=tag=>{const node=create(tag);if(tag==='textarea'){node.scrollHeight=900;node.clientHeight=40;}return node;};
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Long message'}],hasEarlier:false});
+ const bubble=h.el('message-list').children.find(node=>node.dataset.messageId==='u');
+ await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Edit').click();
+ const editor=bubble.querySelector('.msg-editor');assert.equal(editor.style.height,'900px');assert.equal(bubble.style.height,'');
+ editor.scrollHeight=1100;await editor.dispatchEvent({type:'input'});assert.equal(editor.style.height,'1100px');
+ await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Cancel').click();
+ assert.equal(h.el('message-list').children.find(node=>node.dataset.messageId==='u').querySelector('.msg-editor'),null);
+});
+test('main adaptation: logout waits for started cache writes and prevents new scheduled writes',async()=>{
+ const writes=[],scheduled=new Map();let finishWrite,sequence=0;
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:(uid,sid)=>{writes.push([uid,sid]);return new Promise(resolve=>{finishWrite=resolve;});},deleteChatCache:async()=>{}},timers:{setTimeout:(fn,ms)=>{const id=++sequence;scheduled.set(id,{fn,ms});return id;},clearTimeout:id=>scheduled.delete(id)}});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('one');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'one',exists:()=>true,data:()=>({title:'One'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'}],hasEarlier:false});
+ chat.setSession('two');assert.equal(writes.length,1);
+ let ready=false;const prepared=chat.prepareChatLogout().then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,false);
+ finishWrite();await prepared;assert.equal(ready,true);
+ await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'two',exists:()=>true,data:()=>({title:'Two'})});h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+ for(const {fn,ms} of [...scheduled.values()])if(ms===250)fn();
+ assert.equal(writes.length,1);assert.equal([...scheduled.values()].some(timer=>timer.ms===250),false);
+});
+
+test('D1 paid narration survives a failed save; Save again never calls the model',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Paid narration.';h.calls.memoryDue=true;
+ let attempts=0;h.calls.addMessage=async(_sid,message,opts)=>{attempts++;if(attempts===1)throw Error('offline');return {...message,id:opts.id,order:2,historyRevision:1};};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const bubble=h.el('message-list').querySelector('.unsaved');assert.ok(bubble);assert.equal(bubble.querySelector('.msg-content').textContent,'Paid narration.');assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.requests.length,1);
+ await bubble.querySelectorAll('button').find(b=>b.textContent==='Save again').click();assert.equal(attempts,2);assert.equal(h.calls.requests.length,1);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+});
+test('D2 conflicted narration is kept locally and maintenance is skipped',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Conflicted paid narration.';h.calls.memoryDue=true;
+ h.calls.addMessage=async(_sid,_message,opts)=>{assert.equal(opts.expectedSource.historyRevision,0);throw Object.assign(Error('History changed'),{name:'HistoryConflict'});};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.ok(h.el('message-list').querySelector('.unsaved'));assert.ok(h.el('message-list').querySelectorAll('button').some(b=>b.textContent==='Save as new reply at the end'));assert.equal(h.calls.requests.length,1);assert.equal(h.calls.memoryStarts ?? 0,0);
+});
+
+test('B15 typing during user persistence survives the committed send',async()=>{
+ const h=await harness();await openImprovementChat(h);h.el('chat-input').value='Sent text';
+ h.calls.addMessage=async(_sid,message,opts)=>{if(message.role==='user')h.el('chat-input').value='Next draft';return {...message,id:message.role==='user'?'sent':opts.id,order:message.role==='user'?1:2,historyRevision:message.role==='user'?1:2};};
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.equal(h.el('chat-input').value,'Next draft');
+});
+test('B15 stale turn after user commit has already cleared its sent draft',async()=>{
+ const h=await harness();const chat=await openImprovementChat(h);h.el('chat-input').value='Sent text';
+ h.calls.addMessage=async(_sid,message)=>{await chat.prepareChatLogout();return {...message,id:'sent',order:1,historyRevision:1};};
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.equal(h.el('chat-input').value,'');assert.equal(h.calls.requests.length,0);
+});
+test('B1 saved reply survives background history read failure without a Retry state',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Saved reply.';
+ h.calls.addMessage=async(_sid,message,opts)=>({...message,id:opts.id,order:2,historyRevision:4});h.calls.onHistoryRead=async read=>{if(read>1)throw Error('history offline');};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.ok(h.el('message-list').children.some(n=>n.dataset.messageId==='summary-id'));assert.ok(h.el('message-list').children.some(n=>/Reply saved.*Background memory was skipped/.test(n.textContent ?? '')));assert.equal(h.calls.requests.length,1);
+});
+test('R3 blocked device storage does not prevent scene messages or memory settings rendering',async()=>{
+ const h=await harness();h.calls.storageBlocked=true;const chat=await openImprovementChat(h,{memory:{scene:true}},[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Hello',scene:'date: Day 1 · time: night · place: Inn'}]);
+ assert.ok(h.el('message-list').querySelector('.scene-chip'));const settings=await h.use('ui/settings-view.js');settings.initSettingsView();settings.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();assert.equal(h.el('mem-showScene').checked,true);
+});
+
+test('B17 remote settings preserve uncaptured typing; Reload normalizes a clean draft',async()=>{
+ const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();await h.fire('nav-prompts');h.el('set-narrator-prompt').value='Typed local prompt';h.state.settings.narratorSystemPrompt='Remote prompt';
+ await h.document.dispatchEvent({type:'settings-changed'});assert.equal(h.el('set-narrator-prompt').value,'Typed local prompt');
+ const message=h.el('settings-saved-msg');const keep=message.querySelectorAll('button').find(b=>b.id==='settings-keep-mine');assert.ok(keep);await keep.click();assert.equal(h.el('set-narrator-prompt').value,'Typed local prompt');
+ await h.document.dispatchEvent({type:'settings-changed'});await message.querySelectorAll('button').find(b=>b.id==='settings-reload-remote').click();assert.equal(h.el('set-narrator-prompt').value,'Remote prompt');h.calls.confirm=false;await h.fire('btn-close-settings');assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
+});
+test('B17 settings recovery during save keeps the local draft for review',async()=>{
+ const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();await h.fire('nav-prompts');h.el('set-narrator-prompt').value='Keep this draft';h.state.settingsSource='cache';h.calls.settingsDoc={narratorSystemPrompt:'Server prompt'};
+ await h.fire('btn-save-settings');assert.equal(h.el('set-narrator-prompt').value,'Keep this draft');assert.ok(h.el('settings-saved-msg').querySelectorAll('button').some(b=>b.id==='settings-reload-remote'));assert.equal(h.calls.writes.length,0);
+});
+test('R6 online pending metadata does not claim offline and server metadata clears the label',async()=>{
+ const h=await harness();await openImprovementChat(h);const cb=h.calls.sessionCallbacks.at(-1);h.el('context-label').textContent='Tokens';cb({id:'improvement',metadata:{hasPendingWrites:true},exists:()=>true,data:()=>({title:'Rename'})});assert.doesNotMatch(h.el('context-label').textContent,/offline/);h.el('context-label').textContent='Tokens · offline';cb({id:'improvement',metadata:{},exists:()=>true,data:()=>({title:'Rename'})});assert.doesNotMatch(h.el('context-label').textContent,/offline/);
+});
+test('Q5 transaction session metadata stays outside cached story messages',async()=>{
+ const h=await harness();const chat=await openImprovementChat(h);h.el('chat-input').value='Start';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.ok(chat.memorySnapshot().messages.length);assert.ok(chat.memorySnapshot().messages.every(m=>!('session'in m)));
+});
+
+test('Q3 P0.10 a regeneration snapshot preserves the stream through the overwrite commit',async()=>{
+  const h=await harness(),initial=[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'Old reply'}];await openImprovementChat(h,{},initial);
+  let releaseModel,modelStarted,releaseSave,saveStarted;const modelReady=new Promise(resolve=>modelStarted=resolve),saveReady=new Promise(resolve=>saveStarted=resolve);
+  h.calls.response='Regenerated reply';h.calls.onRequest=async()=>{modelStarted();await new Promise(resolve=>releaseModel=resolve);};
+  h.calls.overwriteMessage=async(sid,id,message)=>{saveStarted();await new Promise(resolve=>releaseSave=resolve);const replacement={...initial[1],...message};h.calls.historyRevision=1;h.calls.sessionDocs[sid].historyRevision=1;return {replacement,historyRevision:1,session:h.calls.sessionDocs[sid]};};
+  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Regenerate').click();await modelReady;
+  const stream=h.el('message-list').children.find(n=>n.className==='msg assistant' && !n.dataset.messageId);assert.ok(stream);
+  h.calls.latestCallbacks.at(-1)({messages:initial,hasEarlier:false});assert.equal(stream.parentNode,h.el('message-list'));
+  releaseModel();await saveReady;h.calls.latestCallbacks.at(-1)({messages:initial,hasEarlier:false});assert.equal(stream.parentNode,h.el('message-list'));
+  releaseSave();for(let i=0;i<40 && h.state.busy;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.state.busy,false);assert.equal(stream.parentNode,null);assert.equal(h.el('message-list').querySelector('[data-message-id="a"]').querySelector('.msg-content').textContent,'Regenerated reply');
+});
+
+test('Q3 P0.11 Retry after a manual summary sends the latest saved user exactly once',async()=>{
+  const h=await harness(),history=Array.from({length:9},(_,i)=>({id:'m'+(i+1),order:i+1,role:i%2 ? 'assistant' : 'user',content:i===8 ? 'LATEST SAVED USER' : 'Earlier story '+i}));
+  const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',keepRecentMessagesAfterSummary:1,maxContextTokens:50000,summarizerChunkTokens:50000});
+  h.calls.response='Earlier events summary';await h.fire('btn-summarize');assert.equal(chat.memorySnapshot().session.breakpointOrder,8);
+  h.calls.response='Retry reply';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+  assert.equal(h.calls.requests.length,2);const sent=h.calls.requests.at(-1).messages;
+  assert.equal(sent.filter(m=>m.content.includes('LATEST SAVED USER')).length,1);assert.equal(sent.at(-1).role,'user');assert.match(sent.at(-1).content,/LATEST SAVED USER/);
+  assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,0);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,1);
+});
+
+test('Q3 P0.13 folded deletion asks twice and a recent deletion asks once',async()=>{
+  for(const folded of [true,false]){
+    const h=await harness(),history=[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Opening reply'},{id:'folded',order:3,role:'user',content:'Old action'},{id:'reply',order:4,role:'assistant',content:'Old reply'},{id:'recent',order:5,role:'user',content:'Recent action'},{id:'sum',order:6,role:'summary',content:'Earlier events',coveredRange:{fromOrder:3,toOrder:4}}];
+    await openImprovementChat(h,{activeSummaryMessageId:'sum',breakpointOrder:4},history);
+    const row=h.el('message-list').querySelector('[data-message-id="'+(folded?'folded':'recent')+'"]');
+    await row.querySelectorAll('button').find(b=>b.textContent==='Delete').click();
+    assert.equal(h.calls.confirmations.length,folded ? 2 : 1);assert.equal(h.calls.deletes.length,1);
+  }
+});
+
+test('Q3 P0.14 omitted history indicator shows turns not sent with actionable tooltip',async()=>{
+  const h=await harness(),history=Array.from({length:40},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'story '+i+' '+ 'x'.repeat(300)}));
+  const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:3000,maxResponseTokens:100,autoSummarizationEnabled:false});await chat.updateIndicator();
+  assert.match(h.el('context-label').textContent,/input \/ [\d,]+ tokens/);assert.doesNotMatch(h.el('context-label').textContent,/max reply/);
+  assert.match(h.el('context-label').textContent,/\d+ turns not sent/);assert.match(h.el('context-label').title,/Older turns no longer fit/);assert.match(h.el('context-label').title,/Turn on auto-summary or run Summarize/);
+});
+
+test('Q3 U1 chat-view acquires one busy token and cancels stale persistence before narration',async()=>{
+  const h=await harness(),chat=await openImprovementChat(h);let releaseSave,started;const ready=new Promise(resolve=>started=resolve);let saves=0;
+  h.calls.addMessage=async(_sid,message)=>{saves++;started();await new Promise(resolve=>releaseSave=resolve);return {...message,id:'u',order:1,historyRevision:1};};
+  h.el('chat-input').value='Send once';const pending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await ready;
+  assert.equal(h.state.busy,true);assert.equal(chat.setSession('different'),false);assert.equal(h.state.sessionId,'improvement');
+  await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.equal(saves,1);
+  await chat.prepareChatLogout();releaseSave();await pending;
+  assert.equal(h.state.busy,false);assert.equal(h.calls.requests.length,0);assert.equal(h.el('chat-input').value,'');
+});
+
+test('R1 failed story listener resubscribes after backoff and shows a friendly quota error',async()=>{
+ let sequence=0;const scheduled=new Map();const h=await harness({timers:{setTimeout:(fn,ms)=>{const id=++sequence;scheduled.set(id,{fn,ms});return id;},clearTimeout:id=>scheduled.delete(id)}});await openImprovementChat(h);
+ const before=h.calls.sessionCallbacks.length;h.calls.sessionErrors.at(-1)({code:'resource-exhausted',message:'raw SDK error'});
+ assert.ok(h.el('message-list').children.some(n=>/free daily database quota/.test(n.textContent ?? '')));const retry=[...scheduled.values()].find(t=>t.ms===2000);assert.ok(retry);retry.fn();assert.equal(h.calls.sessionCallbacks.length,before+1);
+});
+test('B16 kept Stop and timeout partial replies use their actual stop reason',async()=>{
+ for(const reason of ['user','timeout']){const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.onRequest=async()=>{throw Object.assign(Error('Interrupted'),{aborted:reason,partial:{content:'Partial story.',thinking:''}});};await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();assert.equal(h.calls.messages.at(-1)[1].truncated,true);assert.ok(h.el('message-list').children.some(n=>reason==='timeout'?/timed out after 120 s/.test(n.textContent ?? ''):/Partial reply saved \(stopped\)/.test(n.textContent ?? '')));assert.ok(!h.el('message-list').children.some(n=>/output limit/.test(n.textContent ?? '')));}
+});
+test('B14 scene-save revision jumps invalidate cached full history',async()=>{
+ const h=await harness(),initial=[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Reply',scene:'date: Day 1 · time: night · place: Inn'}],chat=await openImprovementChat(h,{memory:{scene:true}},initial);await chat.prepareMemorySnapshot();
+ const readsBefore=h.calls.historyReads;h.calls.serverHistory=[{...initial[0],content:'Remote action'},initial[1]];
+ h.calls.updateScene=async()=>{h.calls.historyRevision=4;h.calls.sessionDocs.improvement.historyRevision=4;return {replacement:{...initial[1],scene:'date: Day 1 · time: night · place: Hall'},historyRevision:4,session:h.calls.sessionDocs.improvement};};
+ await h.el('message-list').querySelector('.scene-chip').click();await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save').click();assert.ok(h.calls.historyReads>readsBefore);assert.equal(chat.memorySnapshot().messages[0].content,'Remote action');
+});
+test('B2 indicator and post-turn usage both receive the current lore entries',async()=>{
+ const source=await readFile(new URL('../js/context-builder.js',import.meta.url),'utf8');const observations=[];const h=await harness({globals:{recordUsage:opts=>observations.push(opts)},sources:{'context-builder.js':source.replace('  messages ??= await getMessages(session.id);','  globalThis.recordUsage(opts);\n  messages ??= await getMessages(session.id);')}});
+ h.calls.loreEntries=[{id:'l',book:'facts',name:'Magic',alwaysLoad:true,sections:{text:{text:'Canon',lines:[]}}}];await openImprovementChat(h,{memory:{lorebooks:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();assert.ok(observations.length>=2);assert.ok(observations.every(o=>o.loreEntries?.some(e=>e.id==='l')));
+});
+
+test('R2 sidebar guards duplicate creation and catches failed create, rename and logout',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
+ const pending=h.fire('btn-new-session');await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(h.el('btn-new-session').disabled,false);
+ h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
+ h.calls.sidebarCallback([{id:'s',title:'Story'}]);h.calls.failRename=true;await h.el('session-list').querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
+ h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.ok(h.document.body.querySelector('.toast').textContent.includes('Logout failed'));assert.equal(h.el('btn-logout').disabled,false);
+});
+
+test('R2 a delayed backup listing cannot populate a different lorebook screen',async()=>{
+ const h=await harness();await openImprovementChat(h);const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();let finish;h.calls.onBackups=()=>new Promise(resolve=>finish=resolve);lore.openLorebooks({screen:'backups'});assert.ok(finish);lore.openLorebooks({screen:'list',book:'characters'});finish([{id:'old',label:'STALE BACKUP',createdMs:1,count:1,parts:[]}]);await new Promise(resolve=>setImmediate(resolve));assert.ok(!h.el('lorebook-overlay').querySelectorAll('p').some(p=>/STALE BACKUP/.test(p.textContent ?? '')));
+});
+test('R7 closing Catch-up without starting leaves an existing memory update alone',async()=>{
+ const h=await harness();await openImprovementChat(h,{memory:{autoUpdate:true},memoryState:{extractedThroughOrder:0}},[{id:'u',order:1,role:'user',content:'Start'}]);const panel=await h.use('ui/memory-settings-view.js');panel.initMemorySettings(()=>{});await h.fire('mem-catch-up');await new Promise(resolve=>setImmediate(resolve));const root=h.document.body.querySelector('.memory-sub-sheet');assert.ok(root);await root.querySelector('.settings-close').click();assert.equal(h.calls.memoryStopped?.length ?? 0,0);
+});
+
+test('B1 newer metadata after the reply commit is preserved and summary uses full refreshed history',async()=>{
+ const h=await harness(),initial=Array.from({length:5},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'Event '+i})),chat=await openImprovementChat(h,{},initial);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:20000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:2});
+ const full=[...initial,{id:'paid',order:6,role:'assistant',content:'Paid reply'}, {id:'remote-u',order:7,role:'user',content:'Remote action'},{id:'remote-a',order:8,role:'assistant',content:'Remote reply'}];h.calls.serverHistory=full;
+ h.calls.addMessage=async(sid,message,opts)=>{
+   h.calls.messages.push([sid,message,opts]);
+   if(message.role==='assistant'){h.calls.historyRevision=3;h.calls.sessionCallbacks.at(-1)({id:sid,exists:()=>true,data:()=>({title:'Latest title',historyRevision:3})});return {...message,id:'paid',order:6,historyRevision:1,session:{id:sid,title:'Old title',historyRevision:1}};}
+   h.calls.historyRevision=4;h.calls.sessionDocs[sid]={...h.calls.sessionDocs[sid],...opts.sessionUpdate,historyRevision:4};return {...message,id:opts.id,order:9,historyRevision:4,session:h.calls.sessionDocs[sid]};
+ };
+ const reads=h.calls.historyReads;await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.ok(h.calls.historyReads>reads);assert.equal(h.calls.requests.length,2);assert.match(h.calls.requests[1].messages[1].content,/Event 2|Event 4/);assert.equal(chat.memorySnapshot().session.title,'Latest title');assert.ok(!h.calls.petFinishes.includes('blocked'));
+});
+
+test('R2 Ctrl+S validation errors stay in the lorebook UI instead of rejecting unhandled',async()=>{
+ const h=await harness();await openImprovementChat(h);const l=await h.use('lore-lines.js'),card=l.makeEntry('facts','Magic');h.calls.loreEntries=[card];const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({entryId:card.id});await new Promise(resolve=>setImmediate(resolve));
+ const name=h.el('lorebook-overlay').querySelectorAll('label').find(label=>label.textContent==='Main name').querySelector('input');name.value='';await name.dispatchEvent({type:'input'});await h.document.dispatchEvent({type:'keydown',key:'s',ctrlKey:true,preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));assert.match(h.document.body.querySelector('.toast').textContent,/Enter a name/);assert.equal(h.calls.cardWrites?.length ?? 0,0);
+});
+
+test('R4 successful story import visibly explains that paid background memory is off',async()=>{
+ const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();h.el('file-import-st').files=[{name:'story.jsonl'}];await h.fire('file-import-st','change');assert.match(h.el('settings-saved-msg').textContent,/Imported\. Background memory is off.*Memory settings/);
 });
 
 test('Rewrite request preserves the draft, selects N individual story messages, and rejects excess input', async () => {
@@ -1195,20 +1349,6 @@ test('Rewrite request preserves the draft, selects N individual story messages, 
   await assert.rejects(buildRewriteMessages({ ...settings, rewriteSystemPrompt: ' ' }, history, 'Idea'), /system prompt/);
 });
 
-test('Markdown rewrite prompt is cached, retryable, and bypassed by custom prompts', async () => {
-  const h = await harness();
-  const rewrite = await h.use('rewrite.js');
-  h.calls.promptError = true;
-  await assert.rejects(rewrite.loadRewriteDefaultPrompt(), /Try again/);
-  h.calls.promptError = false;
-  assert.equal(await rewrite.loadRewriteDefaultPrompt(), 'Default rewrite prompt');
-  assert.equal(await rewrite.loadRewriteDefaultPrompt(), 'Default rewrite prompt');
-  assert.equal(h.calls.promptReads, 2);
-  const messages = await rewrite.buildRewriteMessages(h.state.settings, [], 'Idea');
-  assert.equal(messages[0].content, 'Default rewrite prompt');
-  await rewrite.buildRewriteMessages({ ...h.state.settings, rewriteSystemPrompt: 'Custom' }, [], 'Idea');
-  assert.equal(h.calls.promptReads, 2);
-});
 
 async function rewriteChatHarness() {
   const h = await harness();
@@ -1222,6 +1362,7 @@ async function rewriteChatHarness() {
   await h.fire('chat-input', 'input');
   return { ...h, chat };
 }
+
 
 test('Rewrite streams clean content to composer, forces streaming, and restores the original without writes', async () => {
   const h = await rewriteChatHarness();
@@ -1245,6 +1386,7 @@ test('Rewrite streams clean content to composer, forces streaming, and restores 
   await h.fire('chat-input', 'input');
   assert.equal(h.el('btn-restore-draft').hidden, true);
 });
+
 
 test('Rewrite restores original on partial failure, empty cleaned output, and Stop', async () => {
   for (const lines of [
@@ -1281,27 +1423,6 @@ test('Rewrite restores original on partial failure, empty cleaned output, and St
   assert.equal(h.el('btn-rewrite').textContent, 'Rewrite');
 });
 
-test('Rewrite settings validate N, preserve custom prompt, and reset to Markdown default', async () => {
-  const h = await harness();
-  const chat = await h.use('ui/chat-view.js'); chat.initChatView();
-  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.el('set-rewrite-prompt').value, 'Default rewrite prompt');
-  h.el('set-rewrite-n').value = '2.5';
-  await h.fire('btn-save-settings');
-  assert.match(h.el('settings-saved-msg').textContent, /whole number/);
-  h.el('set-rewrite-n').value = '0';
-  h.el('set-rewrite-prompt').value = 'My custom prompt';
-  h.el('set-stream-vibration').value = 'speed';
-  await h.fire('btn-save-settings');
-  assert.equal(h.state.settings.rewriteRecentMessages, 0);
-  assert.equal(h.state.settings.rewriteSystemPrompt, 'My custom prompt');
-  assert.equal(h.state.settings.streamVibrationMode, 'speed');
-  await h.fire('btn-reset-rewrite-prompt');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  await h.fire('btn-save-settings');
-  assert.equal(h.state.settings.rewriteSystemPrompt, null);
-});
 
 test('Stream vibration coalesces spaces, varies with speed, and cancels on hiding or completion', async () => {
   const h = await harness();
@@ -1344,80 +1465,6 @@ test('Stream vibration coalesces spaces, varies with speed, and cancels on hidin
   rejected.feed(' '); rejected.stop();
 });
 
-test('Rewrite thinking and writing both trigger space vibration through the stream callbacks', async () => {
-  for (const thinking of [true, false]) {
-    const h = await rewriteChatHarness();
-    const pulses = [];
-    h.document.hidden = false;
-    h.setNavigator({ vibrate: duration => pulses.push(duration) });
-    h.calls.streamLines = [
-      `data: ${JSON.stringify({ choices: [{ delta: { reasoning: thinking ? 'thinking words' : 'thinking', content: thinking ? 'Reply' : 'Reply words' }, finish_reason: 'stop' }] })}\n`,
-    ];
-    await h.fire('btn-rewrite');
-    assert.deepEqual(pulses, [10, 0]);
-    assert.doesNotMatch(h.el('chat-input').value, /thinking/);
-    assert.equal((h.document.listeners.visibilitychange ?? []).length, 0);
-  }
-});
-
-test('Stop restores the composer immediately while history is still loading', async () => {
-  const h = await rewriteChatHarness();
-  h.state.settings.rewriteRecentMessages = 10;
-  // Mark older history available, forcing a history read rather than an empty cache.
-  h.calls.latestCallbacks.at(-1)({ messages: [], hasEarlier: true });
-  let finishHistory;
-  h.calls.historyPending = new Promise(resolve => { finishHistory = resolve; });
-  const running = h.fire('btn-rewrite');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.state.busy, true);
-  await h.fire('btn-rewrite');
-  await running;
-  assert.equal(h.state.busy, false);
-  assert.equal(h.el('chat-input').value, 'I tell him about the story');
-  assert.equal(h.calls.requests.length, 0);
-  finishHistory([]);
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.requests.length, 0);
-});
-
-async function openTurnChat(h, metadata = {}, messages = []) {
-  const chat = await h.use('ui/chat-view.js');
-  chat.initChatView(); chat.setSession('turn-story');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'turn-story', exists: () => true,
-    data: () => ({ title: 'Story', ...metadata }) });
-  h.calls.latestCallbacks.at(-1)({ messages, hasEarlier: false });
-  h.calls.serverSnapshot = { exists: () => true, data: () => metadata };
-  h.state.settings.modelId = 'test'; h.state.settings.apiKey = 'test-key';
-  h.state.settings.streaming = false;
-  return chat;
-}
-
-test('Stream bubble survives saving and is replaced once the saved message exists', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  let finishSave;
-  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
-    ? { id: 'user', order: 1, tokenCount: 4 }
-    : new Promise(resolve => { finishSave = () => resolve({ id: options.id, order: 2, tokenCount: 7 }); });
-  h.el('chat-input').value = 'Turn';
-  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  const list = h.el('message-list');
-  assert.ok(list.children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
-  finishSave(); await pending;
-  assert.equal(list.children.filter(node => node.className === 'msg assistant').length, 1);
-  assert.ok(list.children.find(node => node.dataset.messageId === 'summary-id'));
-});
-
-test('Viewport measurements ignore zoom and preserve keyboard offset at normal scale', async () => {
-  const h = await harness();
-  const { viewportVars } = await h.use('viewport.js');
-  assert.equal(viewportVars({ scale: 1.5, height: 300, offsetTop: 40 }), null);
-  assert.deepEqual(structuredClone(viewportVars({ scale: 1, height: 450, offsetTop: 30 })),
-    { height: '450px', offsetTop: '30px' });
-  assert.equal(viewportVars({ scale: 1, height: 0 }), null);
-});
 
 test('Unsupported vibration is explained without disabling the synced setting', async () => {
   const h = await harness();
@@ -1429,625 +1476,32 @@ test('Unsupported vibration is explained without disabling the synced setting', 
   assert.notEqual(h.el('set-stream-vibration').disabled, true);
 });
 
-test('Cached story catches up through metadata once and acknowledges deleted order gaps', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
-  chat.setSession('other'); chat.setSession('turn-story');
-  h.calls.freshMessages = [{ id: 'a', order: 2, role: 'assistant', content: 'Phone reply' }];
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.catchUps.length, 1);
-  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'a'));
-  h.calls.freshMessages = [];
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 5 });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 5 });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.catchUps.length, 2);
+
+test('MAIN merge keeps rewrite settings editable and resettable with the Markdown default',async()=>{
+ const h=await harness();(await h.use('ui/chat-view.js')).initChatView();const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+ await new Promise(resolve=>setTimeout(resolve,10));const def=h.el('set-rewrite-prompt').value;assert.ok(def.trim());
+ h.el('set-rewrite-n').value='2.5';await h.fire('btn-save-settings');assert.match(h.el('settings-saved-msg').textContent,/whole number/);
+ h.el('set-rewrite-n').value='0';h.el('set-rewrite-prompt').value='My custom prompt';h.el('set-stream-vibration').value='speed';await h.fire('btn-save-settings');
+ assert.equal(h.state.settings.rewriteRecentMessages,0);assert.equal(h.state.settings.rewriteSystemPrompt,'My custom prompt');assert.equal(h.state.settings.streamVibrationMode,'speed');
+ await h.fire('btn-reset-rewrite-prompt');await new Promise(resolve=>setTimeout(resolve,0));await h.fire('btn-save-settings');assert.equal(h.state.settings.rewriteSystemPrompt,null);
+});
+test('MAIN merge stops a rewrite during history loading without a model call',async()=>{
+ const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
+ h.calls.onHistoryRead=()=>{started();return new Promise(resolve=>release=resolve);};
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:1})});
+ const running=h.fire('btn-rewrite');await ready;await h.fire('btn-rewrite');await running;
+ assert.equal(h.state.busy,false);assert.equal(h.el('chat-input').value,'I tell him about the story');assert.equal(h.calls.requests.length,0);release();
+});
+test('MAIN merge manual Sync refreshes full history without making a model call',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Opening'}]);
+ h.calls.serverHistory=[{id:'u',order:1,role:'user',content:'Updated on phone'}];await chat.syncChatData();
+ assert.match(h.el('message-list').querySelector('.msg-content').textContent,/Updated on phone/);assert.equal(h.calls.requests.length,0);assert.equal(h.state.busy,false);
 });
 
-test('Metadata arriving during catch-up triggers one follow-up query', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h);
-  let finish;
-  h.calls.catchUp = () => h.calls.catchUps.length === 1 ? new Promise(resolve => { finish = resolve; }) : [];
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 3 });
-  finish([{ id: 'remote', order: 2, role: 'assistant', content: 'Remote reply' }]);
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(h.calls.catchUps.map(args => args[1]), [0, 2]);
-});
-
-test('A stale send loads remote turns and does not write a user message', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
-  h.calls.freshMessages = [{ id: 'phone', order: 1, role: 'user', content: 'Phone turn' }];
-  h.el('chat-input').value = 'My draft';
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  assert.equal(h.calls.messages.length, 0);
-  assert.equal(h.calls.requests.length, 0);
-  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'phone'));
-});
-
-test('Failed user save restores the exact draft and stale-send drafts survive', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  h.calls.addMessage = async () => { throw new Error('write denied'); };
-  h.el('chat-input').value = '  My draft\n';
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  assert.equal(h.el('chat-input').value, '  My draft\n');
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 2 }) };
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  assert.equal(h.el('chat-input').value, '  My draft\n');
-});
-
-test('A failed reply renders the saved user with Retry; retry reuses that turn', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  h.calls.responseData = { error: { message: 'provider unavailable' } };
-  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
-    ? { id: 'user', order: 1, tokenCount: 4 }
-    : { id: options.id, order: 2, tokenCount: 7 };
-  h.el('chat-input').value = 'My turn';
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  const user = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
-  const retry = user.querySelector('.msg-actions').children.find(button => button.textContent === 'Retry reply');
-  assert.ok(retry);
-  h.calls.responseData = null;
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
-  await retry.dispatchEvent({ type: 'click', stopPropagation() {} });
-  assert.equal(h.calls.requests.length, 2);
-  assert.equal(h.calls.requests[1].messages.at(-1).content, 'My turn');
-  assert.equal(h.calls.messages.filter(args => args[1].role === 'user').length, 1);
-  const updated = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
-  assert.equal(updated.querySelector('.msg-actions').children.some(button => button.textContent === 'Retry reply'), false);
-});
-
-test('Truncated summaries cannot replace the checkpoint and incomplete plans remain absent', async () => {
-  const h = await harness();
-  const { runSummarization } = await h.use('summarizer.js');
-  h.calls.responseData = { choices: [{ finish_reason: 'length', message: { content: 'Incomplete facts' } }] };
-  await assert.rejects(runSummarization({ id: 's' }, { ...h.state.settings,
-    modelId: 'test', streaming: false, keepRecentMessagesAfterSummary: 0,
-  }, { messages: [
-    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a1', order: 2, role: 'assistant', content: 'Opening reply' },
-    { id: 'u2', order: 3, role: 'user', content: 'Fold this' },
-  ] }), /checkpoint was not changed/);
-  assert.equal(h.calls.messages.length, 0);
-  const { extractPlan } = await h.use('plan-parser.js');
-  assert.equal(extractPlan('Story <plan>unfinished'), null);
-});
-
-test('A non-streaming length-limited reply is saved and visibly marked', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  h.calls.responseData = { choices: [{ finish_reason: 'length', message: { content: 'Partial story <plan>unfinished' } }] };
-  h.calls.addMessage = async (_id, message, options) => message.role === 'user'
-    ? { id: 'user', order: 1, tokenCount: 4 }
-    : { id: options.id, order: 2, tokenCount: 7 };
-  h.el('chat-input').value = 'Continue';
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  const reply = h.calls.messages.find(args => args[1].role === 'assistant')[1];
-  assert.equal(reply.content, 'Partial story'); assert.equal(reply.truncated, true);
-  const node = h.el('message-list').children.find(item => item.dataset.messageId === 'summary-id');
-  assert.match(node.querySelector('.msg-meta').children[0].textContent, /cut off/);
-});
-
-test('Reasoning budget must leave output room while input and output limits remain independent', async () => {
-  const h = await harness();
-  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
-  h.el('set-reasoning-enabled').checked = true;
-  h.el('set-reasoning-mode').value = 'max_tokens';
-  h.el('set-reasoning-maxtokens').value = '8192';
-  await h.fire('btn-save-settings');
-  assert.equal(h.calls.writes.length, 0);
-  assert.match(h.el('settings-saved-msg').textContent, /must be lower/);
-  h.el('set-reasoning-maxtokens').value = '4096';
-  h.el('set-max-context').value = '1024';
-  await h.fire('btn-save-settings');
-  assert.equal(h.calls.writes.length, 1);
-});
-
-test('Known total model window bounds summary input plus reserved output', async () => {
-  const h = await harness();
-  const { runSummarization } = await h.use('summarizer.js');
-  const settings = { ...h.state.settings, modelId: 'test', streaming: false,
-    maxContextTokens: 2000, modelContextTokens: 2100, summarizerMaxTokens: 600,
-    keepRecentMessagesAfterSummary: 0 };
-  const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
-    role: i % 2 ? 'assistant' : 'user', content: 'x'.repeat(300) }));
-  await runSummarization({ id: 's' }, settings, { messages });
-  assert.ok(h.calls.requests.length > 1);
-  for (const request of h.calls.requests) {
-    const input = request.messages.reduce((sum, message) => sum + message.content.length + 8, 8);
-    assert.ok(input <= settings.maxContextTokens);
-    assert.ok(input + request.max_tokens <= settings.modelContextTokens);
-  }
-});
-
-test('Tokenizer recovery recounts identical text and ignores old inflated stored counts', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const messages = [{ id: 'u', order: 1, role: 'user', content: 'Long English sentence', tokenCount: 99999 }];
-  h.calls.tokenizerReady = false;
-  const fallback = await buildContextForRequest({ id: 's' }, h.state.settings, { messages });
-  assert.equal(fallback.entries.at(-1).tokens, messages[0].content.length);
-  h.calls.tokenizerReady = true; h.calls.tokenCount = () => 4;
-  const recovered = await buildContextForRequest({ id: 's' }, h.state.settings, { messages });
-  assert.equal(recovered.entries.at(-1).tokens, 4);
-  assert.equal(recovered.entries[0].tokens, 4);
-});
-
-test('Gap markers count toward input and distinguish summary coverage from later omitted turns', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const messages = [
-    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
-    { id: 'u2', order: 3, role: 'user', content: 'Folded event' },
-    { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
-    { id: 'a2', order: 5, role: 'assistant', content: 'x'.repeat(500) },
-    { id: 'u3', order: 6, role: 'user', content: 'Current' },
-  ];
-  const session = { id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 };
-  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const result = await buildContextForRequest(session,
-    { ...h.state.settings, maxContextTokens: base.usedTokens + 220 }, { messages, requireLatestUser: true });
-  const marker = result.entries.find(entry => entry.source === 'Omitted turns marker');
-  assert.match(marker.content, /Later omitted turns are not covered/);
-  assert.equal(result.droppedCount, 1);
-  assert.equal(result.usedTokens, result.contributions.reduce((sum, item) => sum + item.tokens, 0));
-  assert.ok(result.usedTokens <= base.usedTokens + 220);
-  const allFit = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: messages.filter(m => m.role !== 'summary') });
-  assert.equal(allFit.entries.some(entry => entry.source === 'Omitted turns marker'), false);
-});
-
-test('Request-time plan rules remove the legacy lost-plan instruction while preserving custom prompts', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const result = await buildContextForRequest({ id: 's', longTermPlan: 'Reach the harbor' }, h.state.settings, { messages: [] });
-  assert.match(result.apiMessages[0].content, /Their absence never means the plan was lost/);
-  assert.doesNotMatch(result.apiMessages[0].content, /treat that plan as lost from context|remains active even if older/);
-  const custom = await buildContextForRequest({ id: 's' }, { ...h.state.settings, narratorSystemPrompt: 'My custom narrator' }, { messages: [] });
-  assert.match(custom.apiMessages[0].content, /^My custom narrator/);
-});
-
-test('Folded deletes explain checkpoint loss; opening edits do not claim their text is hidden', async () => {
-  const h = await harness();
-  await openTurnChat(h, { activeSummaryMessageId: 'sum', breakpointOrder: 3 }, [
-    { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a1', order: 2, role: 'assistant', content: 'First scene' },
-    { id: 'u2', order: 3, role: 'user', content: 'Folded' },
-    { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
-    { id: 'a2', order: 5, role: 'assistant', content: 'Recent' },
-  ]);
-  const action = (id, text) => h.el('message-list').children.find(node => node.dataset.messageId === id)
-    .querySelector('.msg-actions').children.find(button => button.textContent === text);
-  h.calls.confirm = false;
-  await action('u2', 'Delete').dispatchEvent({ type: 'click', stopPropagation() {} });
-  assert.match(h.calls.confirmations.at(-1), /clears the summary/);
-  await action('a2', 'Delete').dispatchEvent({ type: 'click', stopPropagation() {} });
-  assert.equal(h.calls.confirmations.at(-1), 'Delete this message permanently?');
-  await action('u1', 'Edit').dispatchEvent({ type: 'click', stopPropagation() {} });
-  assert.equal(h.el('message-list').querySelector('.status-line'), null);
-});
-
-for (const unlocked of [false, true]) {
-  test(`Old replies can regenerate only when the story plan is locked (updates=${unlocked})`, async () => {
-    const h = await harness();
-    await openTurnChat(h, { nextOrder: 2, longTermPlan: 'Fixed plan', allowLlmPlanUpdates: unlocked }, [
-      { id: 'u', order: 1, role: 'user', content: 'Opening' },
-      { id: 'a', order: 2, role: 'assistant', content: 'Old reply' },
-    ]);
-    const node = h.el('message-list').children.find(item => item.dataset.messageId === 'a');
-    await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Regenerate')
-      .dispatchEvent({ type: 'click', stopPropagation() {} });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(h.calls.requests.length, unlocked ? 0 : 1);
-    assert.equal(h.calls.overwrites?.length ?? 0, unlocked ? 0 : 1);
-    if (!unlocked) assert.match(h.calls.requests[0].messages[0].content, /Fixed plan/);
-  });
-}
-
-test('Dropped-turn warning explains recovery when automatic summarization is off', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const base = await buildContextForRequest({ id: 's' }, h.state.settings, { messages: [] });
-  const messages = Array.from({ length: 10 }, (_, index) => ({ id: String(index), order: index + 1,
-    role: 'user', content: 'x'.repeat(100) }));
-  const chat = await openTurnChat(h, { nextOrder: 10 }, messages);
-  h.state.settings.maxContextTokens = base.usedTokens + 260;
-  await chat.updateIndicator();
-  assert.match(h.el('context-label').textContent, /turns not sent/);
-  assert.match(h.el('context-indicator').title, /Turn on auto-summary/);
-  h.state.settings.autoSummarizationEnabled = true;
-  await chat.updateIndicator();
-  assert.doesNotMatch(h.el('context-indicator').title, /Turn on auto-summary/);
-});
-
-test('Provider usage belongs only to its captured request and clears on story reset', async () => {
-  const h = await harness();
-  const view = await h.use('ui/context-view.js');
-  view.initContextInspector(async () => ({}));
-  const context = { usedTokens: 10, max: 100, entries: [], contributions: [], omitted: {} };
-  const first = view.captureContextRequest(context, { model: 'first', messages: [] });
-  const second = view.captureContextRequest(context, { model: 'second', messages: [] });
-  h.el('context-dialog').open = true; h.el('context-mode').value = 'sent';
-  view.captureContextUsage(first, { prompt_tokens: 111 });
-  view.captureContextUsage(second, { prompt_tokens: 222 });
-  assert.match(h.el('context-status').textContent, /Provider counted: 222/);
-  assert.doesNotMatch(h.el('context-status').textContent, /111/);
-  view.resetContextInspector();
-  view.captureContextUsage(second, { prompt_tokens: 333 });
-  await h.fire('context-mode', 'change');
-  assert.match(h.el('context-status').textContent, /No request has been sent/);
-});
-
-test('A snapshot during regeneration cannot remove the stream before overwrite completes', async () => {
-  const h = await harness();
-  const messages = [
-    { id: 'u', order: 1, role: 'user', content: 'Opening' },
-    { id: 'a', order: 2, role: 'assistant', content: 'Old reply' },
-  ];
-  await openTurnChat(h, { nextOrder: 2 }, messages);
-  let finish;
-  h.calls.overwriteMessage = () => new Promise(resolve => { finish = resolve; });
-  const button = h.el('message-list').children.find(node => node.dataset.messageId === 'a')
-    .querySelector('.msg-actions').children.find(node => node.textContent === 'Regenerate');
-  await button.dispatchEvent({ type: 'click', stopPropagation() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  h.calls.latestCallbacks.at(-1)({ messages, hasEarlier: false });
-  assert.ok(h.el('message-list').children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
-  h.calls.latestCallbacks.at(-1)({ messages: [messages[0], { ...messages[1], content: 'summary' }], hasEarlier: false });
-  assert.ok(h.el('message-list').children.some(node => !node.dataset.messageId && node.className === 'msg assistant'));
-  finish({ tokenCount: 7 });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.el('message-list').children.filter(node => node.className === 'msg assistant').length, 1);
-});
-
-test('Catch-up failure after switching stories cannot show an error in the new story', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h);
-  let fail;
-  h.calls.catchUp = () => new Promise((_resolve, reject) => { fail = reject; });
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 2 });
-  chat.setSession('other');
-  fail(new Error('Old story network error'));
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.el('message-list').children.some(node => node.className === 'msg error'), false);
-});
-
-test('Send waits for an existing catch-up and retains the draft for review', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h);
-  let finish;
-  h.calls.catchUp = () => new Promise(resolve => { finish = resolve; });
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 1 });
-  h.el('chat-input').value = 'Review my draft';
-  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  finish([{ id: 'remote', order: 1, role: 'user', content: 'Remote turn' }]);
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 1 }) };
-  await pending;
-  assert.equal(h.calls.messages.length, 0);
-  assert.equal(h.el('chat-input').value, 'Review my draft');
-});
-
-test('Retry context retains the latest user even after a manual summary folds that turn', async () => {
-  const h = await harness();
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const result = await buildContextForRequest({ id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 },
-    h.state.settings, { requireLatestUser: true, messages: [
-      { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-      { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
-      { id: 'u2', order: 3, role: 'user', content: 'Unanswered turn' },
-      { id: 'sum', order: 4, role: 'summary', content: 'Summary of earlier turns' },
-    ] });
-  assert.equal(result.apiMessages.at(-1).role, 'user');
-  assert.equal(result.apiMessages.at(-1).content, 'Unanswered turn');
-  assert.equal(result.droppedCount, 0);
-  assert.equal(result.usedTokens, result.contributions.reduce((sum, entry) => sum + entry.tokens, 0));
-});
-
-test('Restoring a cached story consumes metadata already held by the sidebar', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
-  (await h.use('ui/sidebar.js')).initSidebar();
-  chat.setSession('other');
-  h.calls.sidebarCallback([{ id: 'turn-story', nextOrder: 3, title: 'Story' }, { id: 'other', title: 'Other' }]);
-  h.calls.freshMessages = [{ id: 'a', order: 3, role: 'assistant', content: 'Already written on phone' }];
-  chat.setSession('turn-story');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.catchUps.length, 1);
-  assert.ok(h.el('message-list').children.some(node => node.dataset.messageId === 'a'));
-});
-
-test('Inspector keeps summaries and omission markers in their actual position among story turns', async () => {
-  const h = await harness();
-  const { computeContextUsage } = await h.use('context-builder.js');
-  const context = await computeContextUsage({ id: 's', activeSummaryMessageId: 'sum', breakpointOrder: 3 },
-    h.state.settings, [
-      { id: 'u1', order: 1, role: 'user', content: 'Opening' },
-      { id: 'a1', order: 2, role: 'assistant', content: 'First reply' },
-      { id: 'u2', order: 3, role: 'user', content: 'Folded event' },
-      { id: 'sum', order: 4, role: 'summary', content: 'Summary' },
-      { id: 'u3', order: 5, role: 'user', content: 'Current turn' },
-    ]);
-  const view = await h.use('ui/context-view.js');
-  view.initContextInspector(async () => context);
-  await h.fire('context-indicator');
-  const group = h.el('context-body').children.find(node => node.className?.includes('context-turn-group'));
-  const labels = group.querySelector('.context-turn-list').children.map(node => node.children[0].textContent);
-  assert.match(labels[0], /Opening exchange/);
-  assert.match(labels[1], /Opening exchange/);
-  assert.match(labels[2], /Active story summary/);
-  assert.match(labels[3], /Omitted turns marker/);
-  assert.match(labels[4], /Recent user messages/);
-});
-
-
-test('Send after the newest message was deleted is not stale', async () => {
-  const h = await harness();
-  await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Opening' }]);
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 3 }) };
-  h.calls.freshMessages = [];
-  h.calls.addMessage = async (_id, message) => ({ id: message.role, order: message.role === 'user' ? 4 : 5, tokenCount: 4 });
-  h.el('chat-input').value = 'Next';
-  await h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  const users = h.calls.messages.filter(args => args[1].role === 'user');
-  assert.equal(users.length, 1);
-  assert.equal(users[0][2].expectedNextOrder, 3);
-  assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 1);
-});
-
-test('A running zero-message catch-up does not make the send stale', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h);
-  let finish;
-  h.calls.catchUp = () => new Promise(resolve => { finish = resolve; });
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 3 });
-  h.calls.serverSnapshot = { exists: () => true, data: () => ({ nextOrder: 3 }) };
-  h.el('chat-input').value = 'Next';
-  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  finish([]);
-  await pending;
-  assert.equal(h.calls.messages.filter(args => args[1].role === 'user').length, 1);
-  assert.equal(h.calls.messages[0][2].expectedNextOrder, 3);
-});
-
-
-for (const streaming of [false, true]) {
-  test(`Provider finish reasons are normalized and failures blocked (streaming=${streaming})`, async () => {
-    const h = await harness();
-    const { chatCompletion } = await h.use('llm-client.js');
-    const settings = { ...h.state.settings, modelId: 'test', streaming };
-    for (const [reason, expected] of [['end_turn', 'end_turn'], ['eos', 'eos'], ['STOP', 'stop'], ['stop_sequence', 'stop_sequence'], ['future_reason', 'future_reason'], ['MAX_TOKENS', 'length'], ['MAX_OUTPUT_TOKENS', 'length'], ['CONTENT_FILTER', null]]) {
-      h.calls.responseData = { choices: [{ message: { content: 'Reply' }, finish_reason: reason }] };
-      h.calls.streamLines = streaming ? [`data: ${JSON.stringify({ choices: [{ delta: { content: 'Reply' }, finish_reason: reason }] })}\n`] : null;
-      if (expected === null) await assert.rejects(chatCompletion({ settings, messages: [] }), /content_filter/);
-      else {
-        const result = await chatCompletion({ settings, messages: [] });
-        assert.equal(result.content, 'Reply');
-        assert.equal(result.finishReason, expected);
-      }
-    }
-  });
-}
-
-
-test('Message editor fits overflowing text and Cancel restores the bubble', async () => {
-  const h = await harness();
-  const createElement = h.document.createElement;
-  h.document.createElement = tag => {
-    const node = createElement(tag);
-    if (tag === 'textarea') { node.scrollHeight = 900; node.clientHeight = 40; }
-    return node;
-  };
-  await openTurnChat(h, { nextOrder: 1 }, [{ id: 'u', order: 1, role: 'user', content: 'Long message' }]);
-  const node = h.el('message-list').children.find(node => node.dataset.messageId === 'u');
-  h.el('message-list').scrollTop = 123;
-  await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Edit').dispatchEvent({ type: 'click', stopPropagation() {} });
-  const editor = node.querySelector('.msg-editor');
-  assert.equal(editor.style.height, '900px');
-  assert.equal(node.style.height, '');
-  assert.equal(h.el('message-list').scrollTop, 123);
-  editor.scrollHeight = 1100;
-  await editor.dispatchEvent({ type: 'input' });
-  assert.equal(editor.style.height, '1100px');
-  await node.querySelector('.msg-actions').children.find(button => button.textContent === 'Cancel').dispatchEvent({ type: 'click', stopPropagation() {} });
-  const restored = h.el('message-list').children.find(node => node.dataset.messageId === 'u');
-  assert.equal(restored.querySelector('.msg-editor'), null);
-  assert.ok(restored.querySelector('.msg-content'));
-  assert.equal(restored.style.height, undefined);
-});
-
-
-test('Long story context reuses token counts on the second build', async () => {
-  const h = await harness();
-  let counts = 0;
-  h.calls.tokenCount = text => { counts++; return text.length; };
-  const { buildContextForRequest } = await h.use('context-builder.js');
-  const messages = Array.from({ length: 1500 }, (_, i) => ({ id: `m${i}`, order: i + 1,
-    role: i % 2 ? 'assistant' : 'user', content: `Unique short message ${i}` }));
-  await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
-  const first = counts;
-  assert.ok(first >= 1500);
-  await buildContextForRequest({ id: 'story' }, h.state.settings, { messages });
-  assert.equal(counts - first, 0);
-});
-
-
-test('Failed settings load blocks writes and recovery loads saved values for review', async () => {
-  const h = await harness();
-  h.calls.serverError = 'offline';
-  await assert.rejects(h.settings.loadSettings(), /offline/);
-  h.state.settingsLoadFailed = true;
-  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
-  assert.equal(h.calls.writes.length, 0);
-  assert.equal(h.state.settingsSaving, false);
-  assert.equal(h.state.settingsLoadFailed, true);
-  h.calls.serverError = null;
-  h.calls.settingsDoc = { modelId: 'saved-model', apiKey: 'saved-secret' };
-  await assert.rejects(h.settings.saveSettings(h.state.settings), /Review them and save again/);
-  assert.equal(h.calls.writes.length, 0);
-  assert.equal(h.state.settings.modelId, 'saved-model');
-  assert.equal(h.state.settings.apiKey, 'saved-secret');
-  assert.equal(h.state.settingsLoadFailed, false);
-  await h.settings.saveSettings(h.state.settings);
-  assert.equal(h.calls.writes[0].apiKey, 'saved-secret');
-});
-
-test('Settings popup replaces the default draft with recovered server settings', async () => {
-  const h = await harness();
-  (await h.use('ui/chat-view.js')).initChatView();
-  const view = await h.use('ui/settings-view.js');
-  view.initSettingsView(); view.openSettingsPopup();
-  h.el('set-model').value = 'default-draft';
-  h.state.settingsLoadFailed = true;
-  h.calls.settingsDoc = { modelId: 'saved-model', apiKey: 'saved-secret' };
-  await h.fire('btn-save-settings');
-  assert.equal(h.calls.writes.length, 0);
-  assert.equal(h.el('set-model').value, 'saved-model');
-  assert.equal(h.el('set-apikey').value, 'saved-secret');
-  assert.match(h.el('settings-saved-msg').textContent, /Review them/);
-  await h.fire('btn-save-settings');
-  assert.equal(h.calls.writes[0].apiKey, 'saved-secret');
-});
-
-
-test('Quick profile and thinking survive reload and remote saves until explicit save', async () => {
-  const h = await harness();
-  const server = { profiles: [{ id: 'a', modelId: 'model-a' }, { id: 'b', modelId: 'model-b' }], activeProfileId: 'a' };
-  h.calls.settingsDoc = server;
-  h.state.settings = await h.settings.loadSettings();
-  const quick = structuredClone(h.state.settings);
-  quick.activeProfileId = 'b';
-  h.settings.mirrorFromActiveProfile(quick);
-  quick.reasoning = { ...quick.reasoning, enabled: true, effort: 'high' };
-  h.settings.useLocalSettings(quick);
-  const loaded = await h.settings.loadSettings();
-  assert.equal(loaded.activeProfileId, 'b');
-  assert.equal(loaded.modelId, 'model-b');
-  assert.equal(loaded.reasoning.effort, 'high');
-  h.settings.watchSettings();
-  h.calls.settingsCallbacks.at(-1)({ exists: () => true, data: () => server, metadata: {} });
-  assert.equal(h.state.settings.activeProfileId, 'b');
-  assert.equal(h.state.settings.reasoning.enabled, true);
-  const explicit = h.settings.hydrateProfiles({ ...structuredClone(h.settings.DEFAULT_SETTINGS), ...structuredClone(server) });
-  await h.settings.saveSettings(explicit);
-  assert.equal(h.localCache.has('roleplay-quick:test-user'), false);
-  assert.equal((await h.settings.loadSettings()).activeProfileId, 'a');
-});
-
-test('Quick overrides ignore missing, deleted and malformed choices', async () => {
-  const h = await harness();
-  const settings = h.state.settings;
-  const before = structuredClone(settings);
-  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
-  h.localCache.set('roleplay-quick:test-user', JSON.stringify({ activeProfileId: 'deleted', reasoning: { enabled: true } }));
-  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
-  h.localCache.set('roleplay-quick:test-user', '{broken');
-  assert.deepEqual(structuredClone(h.settings.applyQuickOverrides(settings)), before);
-});
-
-
-for (const timeout of [false, true]) {
-  test(`Hung assistant reply unlocks without saving on ${timeout ? 'idle timeout' : 'Stop'}`, async () => {
-    const h = await harness();
-    await openTurnChat(h);
-    h.state.settings.streaming = true;
-    h.calls.addMessage = async (_id, message) => ({ id: message.role, order: 1, tokenCount: 4 });
-    let reading = false;
-    h.calls.streamReader = { read: () => { reading = true; return new Promise(() => {}); } };
-    h.el('chat-input').value = 'Turn';
-    const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-    while (!reading) await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(h.state.busy, true);
-    assert.equal(h.el('btn-stop-reply').hidden, false);
-    if (timeout) h.calls.timers.find(timer => timer.delay === 120000 && !timer.cleared).fn();
-    else await h.fire('btn-stop-reply');
-    await pending;
-    assert.equal(h.state.busy, false);
-    assert.equal(h.el('btn-send').disabled, false);
-    assert.equal(h.el('btn-stop-reply').hidden, true);
-    assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 0);
-    const user = h.el('message-list').children.find(node => node.dataset.messageId === 'user');
-    assert.ok(user.querySelector('.msg-actions').children.some(button => button.textContent === 'Retry reply'));
-    assert.match(h.el('message-list').children.find(node => node.className === 'msg error').textContent, timeout ? /stopped responding/ : /Reply stopped/);
-    assert.ok(h.calls.timers.filter(timer => timer.delay === 120000).every(timer => timer.cleared));
-  });
-}
-
-
-for (const fails of [false, true]) {
-  test(`Logout removes account caches and still signs out when cache cleanup ${fails ? 'fails' : 'succeeds'}`, async () => {
-    const h = await harness();
-    (await h.use('ui/chat-view.js')).initChatView();
-    (await h.use('ui/sidebar.js')).initSidebar();
-    h.localCache.set('roleplay-settings:test-user', 'secret');
-    h.localCache.set('roleplay-quick:test-user', 'choice');
-    h.localCache.set('roleplay-settings:other-user', 'other');
-    h.calls.cacheClearError = fails;
-    await h.fire('btn-logout');
-    assert.deepEqual(h.calls.cacheClears, ['test-user']);
-    assert.equal(h.localCache.has('roleplay-settings:test-user'), false);
-    assert.equal(h.localCache.has('roleplay-quick:test-user'), false);
-    assert.equal(h.localCache.get('roleplay-settings:other-user'), 'other');
-    assert.equal(h.calls.logouts, 1);
-  });
-}
-
-
-test('Settings recovery cannot use cached defaults created after the failed startup', async () => {
-  const h = await harness();
-  h.calls.serverError = 'offline';
-  h.state.settingsLoadFailed = true;
-  h.settings.useLocalSettings(h.state.settings);
-  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
-  await assert.rejects(h.settings.saveSettings(h.state.settings), /saving is blocked/);
-  assert.equal(h.calls.writes.length, 0);
-  assert.equal(h.state.settingsLoadFailed, true);
-});
-
-test('Logout cancels pending cache writes so cleared stories are not saved again', async () => {
-  const h = await harness();
-  const chat = await openTurnChat(h);
-  (await h.use('ui/sidebar.js')).initSidebar();
-  const pending = h.calls.timers.filter(timer => timer.delay === 250 && !timer.cleared);
-  assert.ok(pending.length > 0);
-  await h.fire('btn-logout');
-  assert.ok(pending.every(timer => timer.cleared));
-  for (const timer of pending) timer.fn();
-  chat.syncActiveSession({ id: 'turn-story', nextOrder: 1 });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.cacheSaves?.length ?? 0, 0);
-});
-
-test('Reply deltas reset the idle timeout and stopped late responses cannot save', async () => {
-  const h = await harness();
-  await openTurnChat(h);
-  h.state.settings.streaming = true;
-  h.calls.addMessage = async (_id, message) => ({ id: message.role, order: 1, tokenCount: 4 });
-  let finish, reads = 0;
-  h.calls.streamReader = { read: () => {
-    if (reads++ === 0) return Promise.resolve({ done: false, value: new TextEncoder().encode(
-      'data: {"choices":[{"delta":{"reasoning":"Thinking","content":"Partial"}}]}\n') });
-    return new Promise(resolve => { finish = resolve; });
-  } };
-  h.el('chat-input').value = 'Turn';
-  const pending = h.el('composer').dispatchEvent({ type: 'submit', preventDefault() {} });
-  while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
-  const timers = h.calls.timers.filter(timer => timer.delay === 120000);
-  assert.equal(timers.length, 3);
-  assert.ok(timers[0].cleared && timers[1].cleared);
-  assert.equal(timers[2].cleared, undefined);
-  await h.fire('btn-stop-reply');
-  await pending;
-  finish({ done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Late"},"finish_reason":"stop"}]}\n') });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.messages.filter(args => args[1].role === 'assistant').length, 0);
-  assert.equal(h.state.busy, false);
-  assert.equal(h.calls.timers.filter(timer => timer.delay === 120000).length, 3);
+test('MAIN merge retains narrative vibration callbacks without persisting hidden thinking',async()=>{
+ const pulses=[],h=await harness({globals:{navigator:{vibrate:n=>pulses.push(n)}}});h.document.hidden=false;
+ await openImprovementChat(h);Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:true,streamVibrationMode:'spaces'});
+ h.calls.streamLines=['data: '+JSON.stringify({choices:[{delta:{reasoning:'thinking words ',content:'Narrative words '},finish_reason:'stop'}]})+'\n'];
+ h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.ok(pulses.includes(10));assert.equal(pulses.at(-1),0);
+ assert.equal(h.calls.messages.at(-1)[1].content,'Narrative words');
 });

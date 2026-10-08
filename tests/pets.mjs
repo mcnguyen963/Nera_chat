@@ -60,9 +60,9 @@ test('request callbacks require both the current turn and current session', () =
 
 // A deterministic DOM/clock fixture exercises the real controller without network,
 // Firebase, or browser credentials. Geometry helpers above cover route correctness.
-async function harness({ mobile = false, reduced = false } = {}) {
+async function harness({ mobile = false, reduced = false, intersection = true } = {}) {
   let now = 100000, nextId = 0;
-  const frames = new Map(), timers = new Map(), ids = new Map(), assets = [], observers = [];
+  const frames = new Map(), timers = new Map(), ids = new Map(), assets = [], observers = [], textNodes = [], intersections = [];
   const state = { settings: { petCharacterIds: [], petMovement: 'roam' }, sessionId: 'story', busy: false };
   class Element {
     constructor() {
@@ -90,6 +90,7 @@ async function harness({ mobile = false, reduced = false } = {}) {
     closest() { if (this.hidden || this.classList.contains('hidden')) return this; return this.parentNode?.closest() ?? null; }
     getClientRects() { return this.closest() ? [] : [this.getBoundingClientRect()]; }
     getBoundingClientRect() {
+      this.rectReads = (this.rectReads ?? 0) + 1;
       let x = 40, y = 100, width = 64, height = 64;
       if (this.classList.contains('pet-home-slot')) {
         const welcome = this.classList.contains('pet-welcome-slot');
@@ -119,7 +120,7 @@ async function harness({ mobile = false, reduced = false } = {}) {
   document.getElementById = (id) => ids.get(id) ?? null;
   document.createElement = () => new Element();
   document.querySelector = (selector) => selector === '.main' ? main : selector.includes('welcome-mark') ? welcomeMark : selector.includes('welcome-default') ? logo : null;
-  document.querySelectorAll = (selector) => selector.includes('span:first-child') ? (welcome.hidden ? [label] : []) : [];
+  document.querySelectorAll = (selector) => selector.includes('span:first-child') ? (welcome.hidden ? [label] : []) : selector.includes('.msg-content') ? textNodes : [];
   const window = new Element(); window.innerWidth = mobile ? 390 : 1000; window.innerHeight = 750;
   window.matchMedia = (query) => ({ matches: query.includes('reduced') ? reduced : mobile, addEventListener() {} });
   window.setTimeout = (cb, ms) => { const id = ++nextId; timers.set(id, { cb, due: now + ms }); return id; };
@@ -131,6 +132,11 @@ async function harness({ mobile = false, reduced = false } = {}) {
   const context = vm.createContext({ state, window, document, Image, URL, Date: Clock, Math,
     performance: { now: () => now },
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
+    ...(intersection ? {IntersectionObserver: class {
+      constructor(callback) { this.callback=callback; this.targets=new Set(); intersections.push(this); }
+      observe(node) { this.targets.add(node); this.callback([{target:node,isIntersecting:node.rect.y>=0 && node.rect.y<600}]); }
+      unobserve(node) { this.targets.delete(node); }
+    }} : {}),
     MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} },
     requestAnimationFrame(cb) { const id = ++nextId; frames.set(id, cb); return id; },
     cancelAnimationFrame(id) { frames.delete(id); },
@@ -148,7 +154,9 @@ async function harness({ mobile = false, reduced = false } = {}) {
     for (const [id, timer] of [...timers]) if (timer.due <= now) { timers.delete(id); timer.cb(); }
     const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((cb) => cb(now));
   }
-  return { pet, state, assets, ids, frames, timers, document, window, welcome, observers, advance, settle,
+  return { pet, state, assets, ids, frames, timers, document, window, welcome, observers, intersections, advance, settle,
+    addText(y) { const el=new Element();el.className='msg-content';el.rect={x:100,y,width:300,height:40};textNodes.push(el);list.append(el);observers.forEach(cb=>cb());return el; },
+    removeText(el) { textNodes.splice(textNodes.indexOf(el),1);el.remove();observers.forEach(cb=>cb()); },
     async select(ids) { state.settings.petCharacterIds = ids; document.dispatchEvent({ type: 'settings-changed' }); await settle(); },
     suspend(value) { document.body.classList.toggle('settings-open', value); observers.forEach((cb) => cb()); },
   };
@@ -261,4 +269,29 @@ test('a newly loaded welcome pet greets once without repeated greetings on reren
   assert.equal(root.style.getPropertyValue('--pet-size'), '192px');
   h.advance(1000); assert.equal(root.dataset.activity, 'idle');
   h.pet.refreshPetPlacement(); assert.equal(root.dataset.activity, 'idle');
+});
+
+test('Q6 streaming measures visible message obstacles at most once per 150 ms including pointer placement',async()=>{
+  const h=await harness();await h.select(['violet']);
+  const visible=h.addText(200),offscreen=h.addText(-3000);
+  h.state.busy=true;const turn=h.pet.startPetTurn();h.pet.updatePetPhase('writing',turn);
+  h.advance(16);assert.equal(visible.rectReads,1);assert.equal(offscreen.rectReads ?? 0,0);
+  for(let i=0;i<8;i++){h.document.dispatchEvent({type:'scroll'});h.advance(16);}
+  assert.equal(visible.rectReads,1,'per-frame validation must respect the central throttle');
+  const root=h.ids.get('chat-pet'),pointer={pointerId:5,pointerType:'mouse',button:0,clientX:50,clientY:110};
+  root.dispatchEvent({type:'pointerdown',...pointer});
+  h.window.dispatchEvent({type:'pointermove',...pointer,clientX:180,preventDefault(){}});
+  assert.equal(visible.rectReads,1,'direct drag placement must also respect the throttle');
+  h.pet.invalidatePetLayout();h.advance(22);assert.equal(visible.rectReads,2);
+  h.removeText(visible);assert.equal(h.intersections[0].targets.has(visible),false);
+  assert.equal(offscreen.rectReads ?? 0,0);
+});
+test('Q6 without IntersectionObserver viewport filtering preserves placement and throttles repeated layout scans',async()=>{
+  const h=await harness({intersection:false});await h.select(['violet']);
+  const visible=h.addText(200),offscreen=h.addText(-3000);
+  h.state.busy=true;h.pet.startPetTurn();h.advance(16);
+  assert.equal(visible.rectReads,1);assert.equal(offscreen.rectReads,1);
+  for(let i=0;i<8;i++){h.pet.invalidatePetLayout();h.advance(16);}
+  assert.equal(visible.rectReads,1);assert.equal(offscreen.rectReads,1);
+  h.advance(22);assert.equal(visible.rectReads,2);assert.equal(offscreen.rectReads,2);
 });
