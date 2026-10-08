@@ -13,7 +13,20 @@ let reactionUntil = 0, nextTrip = 0, lastInput = Date.now(), lastTyping = 0, las
 let point = null, journey = null, pointer = null, holdTimer = 0, hiddenAt = 0;
 let turn = null, turnSerial = 0, observedSession = null, loadSerial = 0;
 let suspended = true, welcomeSession;
-let layoutDirty = true, geometry = null;
+let layoutDirty = true, geometry = null, geometryAt = -Infinity;
+const TEXT_OBSTACLES = ".msg-content, .msg-meta, .thinking, .msg-editor, .welcome h1, .welcome p, .msg.summary, .msg.error";
+const visibleText = new Set(), observedText = new Set();
+let textObserver = null;
+function syncTextObstacles() {
+  if (!textObserver) return;
+  const nodes = new Set(document.querySelectorAll(TEXT_OBSTACLES));
+  for (const node of observedText) if (!nodes.has(node)) {
+    textObserver.unobserve(node); observedText.delete(node); visibleText.delete(node);
+  }
+  for (const node of nodes) if (!observedText.has(node)) {
+    observedText.add(node); textObserver.observe(node);
+  }
+}
 
 function petFromFile(file) {
   if (!PET_FILE.test(file)) return null;
@@ -129,7 +142,6 @@ export function initPetView() {
     if (!menu.hidden && !menu.contains(event.target) && !root.contains(event.target)) closeMenu();
   });
   document.addEventListener("settings-changed", syncPetSettings);
-  document.addEventListener("settings-visibility-changed", updateVisibility);
   document.addEventListener("pet-restore", () => { hiddenForVisit = false; refreshPetPlacement(); updateVisibility(); });
   document.addEventListener("session-changed", (event) => {
     const id = event.detail?.sessionId ?? state.sessionId;
@@ -167,6 +179,24 @@ export function initPetView() {
     cancelPointer(true); journey = null; point = null; pinned = false;
     refreshPetPlacement(); updateVisibility();
   });
+  if (typeof IntersectionObserver !== "undefined") {
+    textObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!observedText.has(entry.target)) continue;
+        if (entry.isIntersecting) visibleText.add(entry.target);
+        else visibleText.delete(entry.target);
+      }
+      layoutDirty = true;
+    });
+    syncTextObstacles();
+    const textChanges = typeof MutationObserver === "undefined" ? null : new MutationObserver((records) => {
+      // Streaming text-node updates do not change the obstacle elements.
+      if (!records || records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1))) syncTextObstacles();
+      layoutDirty = true;
+    });
+    const list = document.getElementById("message-list");
+    if (list) textChanges?.observe(list, { childList: true, subtree: true });
+  }
   observedSession = state.sessionId;
   const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
     const blocked = isSuspended();
@@ -351,6 +381,8 @@ function syncPetSettings() {
 
 function rectBox(rect) { return { x: rect.left, y: rect.top, width: rect.width, height: rect.height }; }
 function measureGeometry() {
+  const now = performance.now();
+  if (geometry && (state.busy || phase !== "idle") && now - geometryAt < 150) return false;
   const viewport = window.visualViewport;
   const inset = window.getComputedStyle?.(layer);
   const safeTop = Number.parseFloat(inset?.paddingTop) || 0;
@@ -367,10 +399,18 @@ function measureGeometry() {
     .filter((node) => !layer.contains(node) && !node.closest("[hidden], .hidden") && node.getClientRects().length)
     .map((node) => rectBox(node.getBoundingClientRect()));
   const controls = collect(".main button, .main input, .main select, .main textarea, .main a, .main summary, #top-menu:not([hidden]), #composer-popover:not([hidden]), .top-bar-title, .context-indicator");
-  const text = collect(".msg-content, .msg-meta, .thinking, .msg-editor, .welcome h1, .welcome p, .msg.summary, .msg.error");
+  const text = [];
+  const candidatesText = textObserver ? visibleText : document.querySelectorAll(TEXT_OBSTACLES);
+  for (const node of candidatesText) {
+    if (layer.contains(node) || node.closest("[hidden], .hidden")) continue;
+    const rect = node.getBoundingClientRect();
+    // The observer skips offscreen nodes; viewport filtering also covers old browsers.
+    if (!rect.width || !rect.height || rect.bottom <= top || rect.top >= bottom || rect.right <= left || rect.left >= right) continue;
+    text.push(rectBox(rect));
+  }
   const candidates = [];
   for (let y = top; y + floatingBox() <= bottom; y += 24) for (let x = left; x + floatingBox() <= right; x += 24) candidates.push({ x, y });
-  geometry = { bounds, controls, text, candidates }; layoutDirty = false;
+  geometry = { bounds, controls, text, candidates }; layoutDirty = false; geometryAt = now; return true;
 }
 function safeRest(position) {
   if (layoutDirty || !geometry) measureGeometry();
@@ -396,8 +436,8 @@ function explore(now) {
   setActivity(to.x < from.x ? "left" : "right");
 }
 function validatePosition() {
-  measureGeometry();
-  if (!point || pointer?.dragging) return;
+  if (!measureGeometry()) return false;
+  if (!point || pointer?.dragging) return true;
   if (journey && !clearPath(point, journey.to, geometry.bounds, floatingBox(), geometry.controls)) journey = null;
   if (!fits(point, geometry.bounds, floatingBox(), geometry.controls) || (!journey && !fits(point, geometry.bounds, floatingBox(), geometry.text))) {
     const safe = safeRest(point);
@@ -405,6 +445,7 @@ function validatePosition() {
     else { pinned = false; placeHome(); }
     journey = null;
   }
+  return true;
 }
 function drawFrame() {
   if (!loaded || root.hidden) return;
@@ -422,7 +463,7 @@ function tick(now) {
   raf = 0;
   if (!loaded || root.hidden || isSuspended() || REDUCED_MOTION.matches) return;
   const clock = Date.now();
-  if (layoutDirty) { validatePosition(); updateVisibility(); if (root.hidden) return; }
+  if (layoutDirty && validatePosition()) { updateVisibility(); if (root.hidden) return; }
   if (!point) placeHome();
   if (journey) {
     const t = Math.min(1, (now - journey.at) / journey.duration);

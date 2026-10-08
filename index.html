@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src *; frame-src 'self' https://*.firebaseapp.com; object-src 'none'; base-uri 'self'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -66,6 +67,7 @@
       <ul id="session-list" class="session-list"></ul>
       <div class="sidebar-footer">
         <div class="account-row"><span class="account-avatar" aria-hidden="true">You</span><div class="account-info"><span class="account-label">Your workspace</span><div id="current-user" class="muted"></div></div></div>
+        <button id="btn-export-all" class="btn small" type="button">Download all my stories</button>
         <button id="btn-logout" class="btn small">Log out</button>
       </div>
     </aside>
@@ -253,7 +255,7 @@
                 <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button></div>
               </section>
               <section data-panel="account" class="settings-panel hidden">
-                <h2>Account</h2><p id="account-email" class="muted account-email"></p>
+                <p><span id="app-version" class="muted"></span> <button id="btn-copy-diagnostics" class="btn small" type="button">Copy diagnostics</button></p><h2>Account</h2><p id="account-email" class="muted account-email"></p>
                 <form id="change-password-form" class="account-form">
                   <div class="settings-grid"><label>Current password<input type="password" id="current-password" autocomplete="current-password" required /></label><label>New password<input type="password" id="new-password" autocomplete="new-password" minlength="6" required /></label><label>Confirm new password<input type="password" id="confirm-new-password" autocomplete="new-password" minlength="6" required /></label></div>
                   <p id="change-password-message" class="auth-message" role="status" hidden></p>

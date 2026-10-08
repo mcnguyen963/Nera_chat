@@ -1,10 +1,12 @@
 import {requestInputLimit} from '../request-budget.js';
+import { diffMemorySettings } from '../session-memory.js';
 import { fillMemory, readMemory, memoryDirty, initMemorySettings, chooseMemoryStart } from './memory-settings-view.js';
 import { normalizeMemory } from '../memory-settings.js';
 import { state } from "../state.js";
 import { DEFAULT_SETTINGS, saveSettings, activeProfile, mirrorToActiveProfile, mirrorFromActiveProfile } from "../settings.js";
 import { getSession, updateSession } from "../sessions.js";
-import { importSillyTavern, exportSillyTavern } from "../import-export.js";
+import * as storyTransfer from "../import-export.js";
+const {importSillyTavern,exportSillyTavern}=storyTransfer;
 import { refreshContextIndicator } from "./chat-view.js";
 
 import { loadPetCatalog } from "./pet-view.js";
@@ -108,25 +110,38 @@ export function initSettingsView() {
   });
   document.addEventListener("settings-changed", () => {
     if (el.overlay.classList.contains("hidden")) return;
-    // Chat quick controls may change saved settings while the popup is open.
-    if (!globalDirty()) { original = structuredClone(state.settings); draft = structuredClone(state.settings); renderAll(); }
+    if (saving) return;
+    receiveSettingsChange();
   });
 }
 
 export function openSettingsPopup(trigger = document.activeElement, options = {}) {
   if (!el.overlay.classList.contains("hidden")) { if (options.panel) showPanel(options.panel); return; }
   opener = trigger;
-  original = structuredClone(state.settings);
-  draft = structuredClone(state.settings);
   petChoicesReady = false;
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  renderAll();
-  capture();
-  original = structuredClone(draft);
+  reloadGlobalSettings();
   showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");
   input("btn-close-settings").focus();
+}
+
+function reloadGlobalSettings() {
+  draft = structuredClone(state.settings);
+  renderAll(); capture();
+  original = structuredClone(draft);
+  clearMessage();
+}
+function receiveSettingsChange() {
+  // Textareas are captured on navigation/save, so inspect the live fields first.
+  capture();
+  if (!globalDirty()) { reloadGlobalSettings(); return; }
+  feedback('Settings changed on another device — ');
+  const choice = (id,label,action) => {
+    const button=document.createElement('button');button.id=id;button.type='button';button.className='btn small';button.textContent=label;button.addEventListener('click',action);return button;
+  };
+  el.message.append(choice('settings-reload-remote','Reload',reloadGlobalSettings),choice('settings-keep-mine','Keep mine',()=>feedback('Your unsaved settings were kept.')));
 }
 
 function closeSettingsPopup() {
@@ -337,6 +352,11 @@ function integerField(value, id) {
     throw new Error(`${field.closest("label").firstChild.textContent.trim()}: enter a whole number from ${min}${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ""}.`);
   return Number(text);
 }
+export function normalizeReasoningBudget(value,responseLimit) {
+  const text=String(value ?? '').trim(),parsed=text ? Number(text) : NaN;
+  const budget=Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_SETTINGS.reasoning.maxTokens;
+  return Math.max(1,Math.min(budget,Math.max(1,responseLimit-1)));
+}
 function validatedDraft() {
   const result = structuredClone(draft);
   for (const profile of result.profiles) {
@@ -349,8 +369,9 @@ function validatedDraft() {
       }
     }
     profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
+    profile.reasoning={...DEFAULT_SETTINGS.reasoning,...profile.reasoning};
+    profile.reasoning.maxTokens=normalizeReasoningBudget(profile.reasoning.maxTokens,profile.maxResponseTokens);
     if (profile.reasoning.enabled && profile.reasoning.mode === "max_tokens") {
-      profile.reasoning.maxTokens = integerField(profile.reasoning.maxTokens, "set-reasoning-maxtokens");
       if (profile.reasoning.maxTokens >= profile.maxResponseTokens) {
         throw new Error("Reasoning max tokens must be lower than Max response tokens (reasoning counts toward the response limit).");
       }
@@ -360,7 +381,10 @@ function validatedDraft() {
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
   result.modelContextTokens=String(result.modelContextTokens ?? '').trim() ? integerField(result.modelContextTokens,'set-model-context') : null;
   mirrorFromActiveProfile(result);
-  requestInputLimit(result);
+  for (const profile of result.profiles) {
+    try { requestInputLimit({...result,maxResponseTokens:profile.maxResponseTokens}); }
+    catch(error) {throw new Error('Profile "'+profile.name+'": '+error.message);}
+  }
 
   return result;
 }
@@ -382,7 +406,8 @@ async function handleSaveSettings() {
     refreshContextIndicator();
   } catch (error) {
     if (error.code==='settings-reloaded') {
-      original=structuredClone(state.settings); draft=structuredClone(state.settings); renderAll();
+      receiveSettingsChange();
+      if (globalDirty()) return;
     }
     feedback("Save failed: " + error.message, true);
   }
@@ -430,24 +455,26 @@ async function handleSaveSession() {
   try {
     const title = raw("set-session-title").trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
-    const allowLlmPlanUpdates = false;
     const partial = {};
-    if (title !== sessionOriginal.title || longTermPlan !== sessionOriginal.longTermPlan || allowLlmPlanUpdates !== sessionOriginal.allowLlmPlanUpdates || panel === 'story') Object.assign(partial, { title, longTermPlan, allowLlmPlanUpdates });
+    if (title !== sessionOriginal.title) partial.title=title;
+    if (longTermPlan !== sessionOriginal.longTermPlan) partial.longTermPlan=longTermPlan;
+    let nextMemory=null;
     if (panel === 'memory' || memoryDirty(sessionOriginal.memory)) {
-      partial.memory = readMemory(true, integerField);
-      const budget = partial.memory.lorebooks ? Object.values(partial.memory.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
+      nextMemory = readMemory(true, integerField);
+      const budget = nextMemory.lorebooks ? Object.values(nextMemory.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
       if (budget > .9*(requestInputLimit(state.settings))) throw new Error('Book budgets are larger than the space available. Lower them or raise Max context tokens (Context & summaries).');
-      const start = await chooseMemoryStart(partial.memory, normalizeMemory(sessionOriginal.memory), sessionOriginal);
+      const start = await chooseMemoryStart(nextMemory, normalizeMemory(sessionOriginal.memory), sessionOriginal);
       if (start === 'cancel') return;
-      if (start != null) partial['memoryState.extractedThroughOrder'] = start;
+      Object.assign(partial,diffMemorySettings(normalizeMemory(sessionOriginal.memory),nextMemory));
+      if (start != null && start !== sessionOriginal.memoryState?.extractedThroughOrder) partial['memoryState.extractedThroughOrder'] = start;
     }
     const requestedId = state.sessionId;
     if (requestedId !== sessionId) throw new Error('Story changed. Reopen settings.');
-    await updateSession(requestedId, partial);
-    sessionOriginal = { ...sessionOriginal, title, longTermPlan, allowLlmPlanUpdates, ...(partial.memory ? { memory: partial.memory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
+    if (Object.keys(partial).length) await updateSession(requestedId, partial);
+    sessionOriginal = { ...sessionOriginal, title, longTermPlan, ...(nextMemory ? { memory: nextMemory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
     document.dispatchEvent(new CustomEvent('memory-session-saved', { detail: { sessionId: requestedId, partial } }));
     set("set-session-title", title);
-    if(partial.memory)fillMemory(normalizeMemory(sessionOriginal.memory));
+    if(nextMemory)fillMemory(normalizeMemory(sessionOriginal.memory));
     feedback("Session saved ✓");
     refreshContextIndicator();
   } catch (error) { feedback("Save failed: " + error.message, true); }
@@ -462,7 +489,7 @@ async function handleImport() {
     const id = await importSillyTavern(file);
     document.dispatchEvent(new CustomEvent("session-imported", { detail: id }));
     showPanel("story");
-    feedback("Imported ✓");
+    feedback(storyTransfer.importReport?.(id)?.message ?? 'Imported. Background memory is off — turn it on in Memory settings.');
     input("set-session-title").focus();
   } catch (error) { feedback("Import failed: " + error.message, true); }
 }

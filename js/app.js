@@ -1,3 +1,6 @@
+import {initVersion} from './version.js';
+import {installErrorHandlers,friendlyError} from './errors.js';
+import {toast} from './ui/memory-ui.js';
 import {clearAccountCaches} from './device-caches.js';
 import { initViewport } from "./viewport.js";
 import { initLorebookView } from './ui/lorebook-view.js';
@@ -29,6 +32,8 @@ let appInitialized = false;
 // the whole page up when an input is focused; undo that push so the app
 // stays glued to the top of the keyboard instead of floating above it.
 initViewport();
+installErrorHandlers({show:toast});
+initVersion();
 
 // ---------- mobile sidebar drawer ----------
 function setSidebarOpen(open) {
@@ -102,12 +107,14 @@ initAuth(async(user)=>{
   if (user) {
     el.loginScreen.classList.add("hidden");
     el.app.classList.remove("hidden");
-    enterApp();
+    enterApp().catch(showBootError);
   } else {
     el.app.classList.add("hidden");
     el.loginScreen.classList.remove("hidden");
   }
 });
+
+function showBootError(error){console.error(error);el.app.classList.add("hidden");el.loginScreen.classList.remove("hidden");setMessage("login-error","Could not start the app: "+friendlyError(error)+" Reload to try again.",true);}
 
 function showAuthView(view) {
   for (const name of ["login", "register", "reset"]) {

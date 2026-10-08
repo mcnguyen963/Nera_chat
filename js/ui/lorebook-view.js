@@ -1,3 +1,4 @@
+import {getPref,setPref} from '../local-pref.js';
 import { noteNeedsReview, snapshotNeedsReview, sectionMeta, cutoffLabel } from '../continuity.js';
 import { rebuild, rebuildFrom } from '../memory-updater.js';
 import { state } from '../state.js';
@@ -14,7 +15,7 @@ import { planReorganize, runReorganizeBatch } from '../memory-reorganize.js';
 import { countTokens } from '../tokenizer.js';
 import { node, button, field, sheet, subSheet, toast, copy, download } from './memory-ui.js';
 let opened = false, sid = null, book = 'characters', screen = 'books', filter = 'all', selected = null, base = null, staged = null, editor = null, list = null, rail = null, view = null, search = '', threadFilter = 'open', newPrefill = null;
-let focusRestore = null, editorVersion = 0;
+let focusRestore = null, editorVersion = 0, deletedHistoryReady = false, historyLoadToken = 0;
 const reorganizing = new Set(), sizes = new Map();
 let pendingEntryId = null, navigationId = null, navigationDepth = 0, navigationKey = null, fromHistory = false;
 const live = () => memorySnapshot(sid);
@@ -24,21 +25,21 @@ const linesOf = e => Object.values(e.sections).flatMap(s => s.lines);
 const dirty = () => staged && JSON.stringify(staged) !== JSON.stringify(base);
 const canLeave = () => !dirty() || confirm('Discard changes?');
 const seenKey = () => 'nera.lore.seen.'+sid;
-function seen() { try { return JSON.parse(localStorage.getItem(seenKey()) ?? '{}'); } catch { return {}; } }
+function seen() { try { return JSON.parse(getPref(seenKey()) ?? '{}'); } catch { return {}; } }
 let lineMemo={src:null,value:null};
 function lineContext() {
   const all=live()?.messages ?? [];
   if (lineMemo.src===all) return lineMemo.value;
-  const turns=computeTurns(all),orders=new Set(),turnByOrder=new Map(),editedAtByTurn=new Map();
-  for (const a of turns.assistants) { orders.add(a.order);turnByOrder.set(a.order,a.turn); }
+  const turns=computeTurns(all),orders=new Set(all.map(m=>Number(m.order)).filter(Number.isFinite)),maxOrder=Math.max(0,...orders),turnByOrder=new Map(),editedAtByTurn=new Map();
+  for (const a of turns.assistants) { turnByOrder.set(a.order,a.turn); }
   for (const m of all) {
     const t=turns.turnById.get(m.id),at=m.editedAt?.toMillis?.() ?? (m.editedAt?.seconds!=null ? m.editedAt.seconds*1000+(m.editedAt.nanoseconds ?? 0)/1e6 : m.editedAt ? new Date(m.editedAt).getTime() : 0);
     editedAtByTurn.set(t,Math.max(at,editedAtByTurn.get(t) ?? 0));
   }
-  lineMemo={src:all,value:{orders,turnByOrder,editedAtByTurn}};return lineMemo.value;
+  lineMemo={src:all,value:{orders,maxOrder,turnByOrder,editedAtByTurn}};return lineMemo.value;
 }
 function deletedOrders() {return lineContext().orders;}
-function deletedLine(l) {return l.src!=null && !lineContext().orders.has(l.src);}
+function deletedLine(l) {const ctx=lineContext();return deletedHistoryReady && live()?.historyComplete === true && l.src!=null && Number(l.src)<=ctx.maxOrder && !ctx.orders.has(Number(l.src));}
 function editedSource(l) {const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
 const newCount = e => linesOf(e).filter(l => l.at > (seen()[e.id] ?? 0)).length;
 export function initLorebookView() {
@@ -55,7 +56,7 @@ export function initLorebookView() {
       renderShell();
     } finally { fromHistory = false; }
   });
-  document.addEventListener('memory-rebuild-review',async e=>{const d=e.detail;if(d.sessionId!==state.sessionId || !confirm(`${d.count} old notes were not reproduced by the rebuild. Remove them? A backup will be made.`))return;try{const snapshot=memorySnapshot(d.sessionId);if(!snapshot)return;const backup=await store.removeReviewedLines(d.sessionId,snapshot.entries,d.fromOrder,d.throughOrder);if(backup)toast('Unreproduced notes removed.','Undo',()=>store.restoreBackup(d.sessionId,backup,memorySnapshot(d.sessionId)?.entries ?? []));}catch(error){toast(error.message);}});
+  document.addEventListener('memory-rebuild-review',async e=>{if(state.busy || reorganizing.size){toast('Wait for the current reply or reorganize preview.');return;}const d=e.detail;if(d.sessionId!==state.sessionId || !confirm(`${d.count} old notes were not reproduced by the rebuild. Remove them? A backup will be made.`))return;try{const snapshot=memorySnapshot(d.sessionId);if(!snapshot)return;const backup=await store.removeReviewedLines(d.sessionId,snapshot.entries,d.fromOrder,d.throughOrder);if(backup)toast('Unreproduced notes removed.','Undo',()=>store.restoreBackup(d.sessionId,backup,memorySnapshot(d.sessionId)?.entries ?? []));}catch(error){toast(error.message);}});
   document.addEventListener('lorebooks',e => openLorebooks(e.detail ?? {}));
   document.addEventListener('lore-changed',e => {
     if (!opened || e.detail.sessionId !== sid) return;
@@ -72,25 +73,33 @@ export function initLorebookView() {
   });
   document.addEventListener('session-changed',e => { if (opened && e.detail.sessionId !== sid) closeManager(true); });
   document.addEventListener('memory-toast',e => toast(e.detail.text,e.detail.action,() => document.dispatchEvent(new CustomEvent(e.detail.event,{ detail:e.detail.options }))));
-  document.addEventListener('keydown',e => { if (!opened) return; if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (staged) void saveCard(); } if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); list?.querySelector('input')?.focus(); } });
+  document.addEventListener('keydown',e => { if (!opened) return; if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if(staged)void saveCard().catch(error=>toast(error)); } if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); list?.querySelector('input')?.focus(); } });
+}
+function prepareDeletedHistory() {
+  deletedHistoryReady = false;
+  const token = ++historyLoadToken, sourceSid = sid;
+  void prepareMemorySnapshot().then(() => {
+    if (!opened || sid !== sourceSid || sid !== state.sessionId || token !== historyLoadToken) return;
+    deletedHistoryReady = live()?.historyComplete === true; renderRail(); renderList();
+  }).catch(e => { if (opened && sid === sourceSid && token === historyLoadToken) toast(e.message); });
 }
 export function openLorebooks(options = {}) {
   if (opened) {
     if (!canLeave()) return;
     if (sid === state.sessionId) {
       staged = base = null; selected = null; book = options.book ?? book; filter = options.filter ?? 'all'; screen = options.screen ?? 'list';
-      renderShell();
+      prepareDeletedHistory(); renderShell();
       const entry = options.entryId && entries().find(e => e.id === options.entryId); if (entry) openCard(entry);
       if (options.newName) void newCard(options.newName);
       return;
     }
-    fromHistory = true; view.hide(); fromHistory = false;
+    if(window.history?.state?.neraLore?.id===navigationId && navigationDepth && window.history?.go){window.addEventListener('popstate',()=>openLorebooks(options),{once:true});view.hide();return;}
+    view.hide();
   }
   opened = true; navigationId = newLoreId('nav'); navigationDepth = 0; navigationKey = null; sid = state.sessionId; book = options.book ?? 'characters'; filter = options.filter ?? 'all'; selected = null; staged = base = null; search = ''; screen = options.screen ?? 'books'; newPrefill = options.newName; pendingEntryId = options.entryId ?? null;
-  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
+  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go && window.history.state?.neraLore?.id===navigationId) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
   document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:true } }));
-  renderShell();
-  void prepareMemorySnapshot().then(() => { if (opened && sid === state.sessionId) { renderRail(); renderList(); } }).catch(e => toast(e.message));
+  prepareDeletedHistory(); renderShell();
   if (options.entryId) { const e = entries().find(e => e.id === options.entryId); if (e) { book = e.book; openCard(e); } }
   if (options.newName) void newCard(options.newName);
 }
@@ -105,7 +114,7 @@ function renderShell() {
   rail = node('nav',null,'lore-rail'); rail.setAttribute('aria-label','Lorebooks');
   const columns = node('div',null,'lore-columns');columns.id='lorebook-columns'; list = node('div',null,'lore-list'); editor = node('div',null,'lore-editor');
   columns.append(rail,list,editor); body.append(columns); renderRail();
-  if (screen === 'transfer') renderTransfer(); else if (screen === 'backups') void renderBackups(); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
+  if (screen === 'transfer') renderTransfer(); else if (screen === 'backups') void renderBackups().catch(error=>toast(error)); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
 }
 function renderRail() {
   if (!rail) return; rail.replaceChildren();
@@ -138,7 +147,7 @@ function renderList() {
   const edited=live()?.session.memoryState?.rebuildFromOrder;if(live()?.session.memoryState?.needsRebuild && edited!=null){const t=computeTurns(live().messages).turnById.get(live().messages.find(m=>m.order===edited)?.id) ?? '?';list.append(button('History edited at T'+t+' · Re-extract from there',async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}));}
   list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
   list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small'));
-  if (filter === 'deleted') { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,async () => { if (!confirm('Remove all '+count+' notes from deleted turns?')) return; await undoAction(await store.removeDeletedLines(sid,affected,deletedOrders()),'Removed '+count+' notes.'); },'btn danger')); }
+  if (filter === 'deleted' && deletedHistoryReady && live()?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
   const missing = books.filter(e => !sizes.has(e.id));
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
 }
@@ -172,7 +181,7 @@ function openCard(e) {
   if (!canLeave()) return;
   book = e.book;
   if (screen !== 'list' && screen !== 'editor') { screen = 'list'; renderShell(); }
-  selected = e.id; screen = 'editor'; base = structuredClone(e); staged = structuredClone(e); const read = seen(); read[e.id] = Date.now(); try { localStorage.setItem(seenKey(),JSON.stringify(read)); } catch { /* Read state is optional on private devices. */ } renderShell();
+  selected = e.id; screen = 'editor'; base = structuredClone(e); staged = structuredClone(e); const read = seen(); read[e.id] = Date.now(); try { setPref(seenKey(),JSON.stringify(read)); } catch { /* Read state is optional on private devices. */ } renderShell();
   if (e.kind === 'timeline') editor.scrollTop = editor.scrollHeight;
 }
 function renderEditor() {
@@ -250,6 +259,24 @@ async function saveCard() {
   if (state.busy) throw new Error('Wait for the current reply or summary.');
   await store.saveEntry(sid,saved,original); base = structuredClone(saved); staged = structuredClone(saved); sizes.delete(saved.id); toast('Saved'); renderEditor();
 }
+async function removeDeletedNotes(affected,shownCount) {
+  if (state.busy || reorganizing.size) throw new Error('Wait for the current reply or memory action.');
+  const sourceSid = sid;
+  if (!confirm('Remove all '+shownCount+' notes from deleted turns?')) return;
+  while (opened && sid === sourceSid && state.sessionId === sourceSid) {
+    try {
+      const backup = await store.removeDeletedLines(sourceSid,affected,deletedOrders(),shownCount);
+      if (backup) await undoAction(backup,'Removed '+shownCount+' notes.');
+      else toast('There are no notes from deleted turns to remove.');
+      prepareDeletedHistory(); return;
+    } catch (error) {
+      if (error.name !== 'DeletedNotesChanged') throw error;
+      shownCount = error.count;
+      if (!shownCount) { toast('There are no notes from deleted turns to remove.'); prepareDeletedHistory(); return; }
+      if (!confirm('The count changed. Remove all '+shownCount+' notes from deleted turns?')) { prepareDeletedHistory(); return; }
+    }
+  }
+}
 async function undoAction(id,text) { toast(text,'Undo',async () => { await store.restoreBackup(sid,id,entries()); toast('Restored'); }); }
 async function deleteCard() { if (state.busy) throw new Error('Wait for the current reply or summary.'); const e = entries().find(e => e.id === selected) ?? staged; if (!confirm(`Delete the card '${e.name}' and its ${linesOf(e).length} notes?`)) return; const backup = await store.deleteEntry(sid,e); staged = base = null; selected = null; screen = 'list'; renderShell(); await undoAction(backup,'Deleted '+e.name+'.'); }
 async function mergeCard() {
@@ -260,9 +287,9 @@ async function mergeCard() {
 }
 function renderTransfer() {
   list.replaceChildren(); editor.replaceChildren(); list.append(button('‹ Books',() => { screen = 'books'; renderShell(); },'btn mobile-back'),node('h2','Import & export'));
-  let format = localStorage.getItem('nera.lore.format') === 'json' ? 'json' : 'md';
+  let format = getPref('nera.lore.format') === 'json' ? 'json' : 'md';
   const segmented = node('div',null,'segmented'), md = button('Markdown',() => changeFormat('md')), json = button('JSON',() => changeFormat('json')); segmented.append(md,json); list.append(segmented);
-  function changeFormat(value) { format = value; localStorage.setItem('nera.lore.format',value); md.classList.toggle('selected',value === 'md'); json.classList.toggle('selected',value === 'json'); picker.accept = value === 'md' ? '.md,.markdown,.txt' : '.json'; }
+  function changeFormat(value) { format = value; setPref('nera.lore.format',value); md.classList.toggle('selected',value === 'md'); json.classList.toggle('selected',value === 'json'); picker.accept = value === 'md' ? '.md,.markdown,.txt' : '.json'; }
   const checks = {};
   editor.append(node('h3','Export'));
   for (const [key,label] of Object.entries(BOOK_LABELS)) { const f = field(label,'',{ type:'checkbox' }); f.input.checked = true; checks[key] = f.input; editor.append(f.wrap); }
@@ -300,13 +327,15 @@ function renderTransfer() {
   editor.append(button('Copy prompt for an AI',async () => { await copy(prompt()); toast('Prompt copied'); })); const disclosure = node('details'); disclosure.append(node('summary','Show prompt'),node('pre',prompt())); editor.append(disclosure,node('p','1. Export this story (Settings → Import & export → Export current story), or export the transcript above.\n2. Paste the prompt and the file into an AI chat.\n3. Save its answer as a .md (or .json) file and import it here.','muted'));
 }
 async function renderBackups() {
+  const sourceSid=sid,sourceNavigation=navigationId,sourceList=list,sourceEditor=editor;
   list.replaceChildren(); editor.replaceChildren(); list.append(node('h2','Backups')); const groups = await store.listBackups(sid);
+  if(!opened || sid!==sourceSid || navigationId!==sourceNavigation || list!==sourceList || editor!==sourceEditor || screen!=='backups')return;
   for (const b of groups) {
-    const row = node('div',null,'lore-list-item'); row.append(node('p',b.label+' · '+new Date(b.createdMs).toLocaleString()+' · '+b.count+' cards'),button('Restore',async () => {
+    const row = node('div',null,'lore-list-item'); row.append(node('p',b.label+' · '+new Date(b.createdMs).toLocaleString()+' · '+b.count+' cards'),button('Restore',async () => {if(state.busy || reorganizing.size)throw new Error('Wait for the current reply or memory action.');
       const all=await store.loadBackupGroup(sid,b.id),saved=all.flatMap(x=>x.entries),createdIds=all.flatMap(x=>x.createdIds ?? []);
       const ids = new Set(saved.flatMap(e => linesOf({ sections:e.data.sections }).map(l => l.id))), count = entries().filter(e => saved.some(s => s.id === e.id) || createdIds.includes(e.id)).reduce((n,e) => n+linesOf(e).filter(l => !ids.has(l.id)).length,0);
       if (!confirm(`Restore ${saved.length} card(s) to how they were on ${new Date(b.createdMs).toLocaleString()}? Notes added since then to these cards will be removed (${count} notes).`)) return;
-      await store.restoreBackup(sid,b.partOf ?? b.id,entries()); toast('Restored'); void renderBackups();
+      await store.restoreBackup(sid,b.partOf ?? b.id,entries()); toast('Restored'); void renderBackups().catch(error=>toast(error));
     })); list.append(row);
   }
   if (!groups.length) list.append(node('p','No backups yet. Backups are made before destructive changes.','muted'));
@@ -315,7 +344,8 @@ async function reorganize(cards) {
   if (!cards.length) return;
   if (dirty()) { toast('Save or cancel your changes before reorganizing.'); return; }
   const snapshot = await prepareMemorySnapshot(), mem = normalizeMemory(snapshot.session.memory), snapshotAt = Date.now(), controller = new AbortController();
-  const locked = cards.map(e => e.id), s = subSheet(cards.length === 1 ? 'Reorganize '+cards[0].name : 'Reorganize book',{ close:() => { controller.abort(); for (const id of locked) reorganizing.delete(id); return true; } });
+  let holdingPreview=false;const releaseLocked=()=>{for(const id of locked)reorganizing.delete(id);if(staged)renderEditor();};
+  const locked = cards.map(e => e.id), s = subSheet(cards.length === 1 ? 'Reorganize '+cards[0].name : 'Reorganize book',{ close:() => { controller.abort();holdingPreview=false;releaseLocked();return true; } });
   const body = node('div',null,'memory-content'); s.dialog.append(body);
   body.append(node('p',`The model will merge ${cards.length === 1 ? cards[0].name+"'s" : 'these cards’'} update lines into fewer, up-to-date lines. Your own text is never changed. Lower lines win when notes disagree. You'll see a preview before anything is saved.`,'muted'));
   const selectedCards = {}, selectedSections = {};
@@ -356,18 +386,19 @@ async function reorganize(cards) {
         } catch (e) { if (controller.signal.aborted && previews.length) break; throw e; }
       }
       if (!previews.length) throw new Error('Stopped. Nothing was changed.');
-      preview(previews,warnings);
+      holdingPreview=true;await preview(previews,warnings);
     } catch (e) {
+      holdingPreview=false;
       body.replaceChildren(node('p','Reorganize failed: '+e.message+' Nothing was changed.','memory-warning'));
       if (e.raw) { const d = node('details'); d.append(node('summary','Show raw answer'),node('pre',e.raw)); body.append(d); }
       body.append(button('Try again',() => { s.hide(); return reorganize(cards); }),button('Discard',s.hide));
-    } finally { for (const id of locked) reorganizing.delete(id); if (staged) renderEditor(); }
+    } finally {if(!holdingPreview)releaseLocked();}
   },'btn primary'));
   async function preview(previews,warnings) {
     body.replaceChildren(); const beforeTokens = (await Promise.all(previews.map(p => countTokens(renderEntry(p.entry))))).reduce((a,b) => a+b,0);
     const afterTokens = (await Promise.all(previews.map(p => countTokens(renderEntry({ ...p.entry,sections:Object.fromEntries(Object.entries(p.entry.sections).map(([k,v]) => [k,{ ...v,lines:p.sections[k] ?? v.lines }])) }))))).reduce((a,b) => a+b,0);
-    const beforeCount = previews.reduce((n,p) => n+Object.keys(p.sections).reduce((n,k) => n+p.entry.sections[k].lines.length,0),0), afterCount = previews.reduce((n,p) => n+Object.values(p.sections).reduce((n,ls) => n+ls.length,0),0);
-    body.append(node('p',`${beforeTokens.toLocaleString()} → ${afterTokens.toLocaleString()} tokens · ${beforeCount} → ${afterCount} lines`));
+    const beforeCount = previews.reduce((n,p) => n+Object.keys(p.sections).reduce((n,k) => n+p.entry.sections[k].lines.filter(l=>l.by!=='user').length,0),0), afterCount = previews.reduce((n,p) => n+Object.values(p.sections).reduce((n,ls) => n+ls.filter(l=>l.by!=='user').length,0),0),userCount=previews.reduce((n,p)=>n+Object.keys(p.sections).reduce((n,k)=>n+p.entry.sections[k].lines.filter(l=>l.by==='user').length,0),0);
+    body.append(node('p',`${beforeTokens.toLocaleString()} → ${afterTokens.toLocaleString()} tokens · ${beforeCount} → ${afterCount} lines${userCount ? ` + ${userCount} of your notes kept` : ''}`));
     if (afterTokens >= beforeTokens) warnings.push('No savings: the result is longer than before.');
     for (const warning of warnings) body.append(node('p',warning,'memory-warning'));
     for (const p of previews) {
@@ -387,7 +418,7 @@ async function reorganize(cards) {
     body.append(button('Discard',s.hide),button(previews.length>1 ? 'Save selected' : 'Save',async b => {
       if (state.busy) { toast('Wait for the current reply or summary.'); return; } const chosen = previews.filter(p => p.include); if (!chosen.length) return;
       if (chosen.some(p => Object.values(p.sections).some(ls => ls.some(l => !l.text.trim())))) { toast('Finish or delete empty lines.'); return; }
-      b.disabled = true; const backup = await store.replaceLines(sid,chosen,snapshotAt); s.hide(); staged = base = null; screen = 'list'; renderShell(); await undoAction(backup,`${chosen.length === 1 ? chosen[0].entry.name : 'Books'} reorganized: ${beforeCount} → ${afterCount} lines.`);
+      b.disabled=true;try{const backup=await store.replaceLines(sid,chosen,snapshotAt);s.hide();staged=base=null;screen='list';renderShell();await undoAction(backup,`${chosen.length === 1 ? chosen[0].entry.name : 'Books'} reorganized: ${beforeCount} → ${afterCount} lines${userCount ? ` + ${userCount} of your notes kept` : ''}.`);}finally{holdingPreview=false;releaseLocked();}
     },'btn primary'));
   }
 }
