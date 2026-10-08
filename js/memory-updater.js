@@ -7,6 +7,8 @@ import { chatCompletion } from './llm-client.js';
 import { countTokens } from './tokenizer.js';
 import { commitExtraction, markGeneratedForReview } from './lore-store.js';
 import { updateSession } from './sessions.js';
+import { clearMemoryInvalidations, recordMemoryFailure } from './session-memory.js';
+import { limitSkippedNotes } from './memory-skipped.js';
 import { currentUid } from './auth.js';
 const inFlight = new Map(), rawAnswers = new Map();
 let runtime = null;
@@ -40,10 +42,12 @@ export async function updateNow(sid,{ retry = false } = {}) {
 export async function rebuild(sid, options = {}) {
   if (isRunning(sid) || runtime?.busy()) return false;
   await runtime?.prepare?.(sid);
+  const live=runtime?.get(sid);if(!live)return false;
+  const seenRevision=live.session.historyRevision ?? 0;
   const changed=await markGeneratedForReview(sid);
-  runtime.patch(sid,{},changed);
-  await updateSession(sid,{ 'memoryState.extractedThroughOrder':0,'memoryState.paused':false,'memoryState.needsRebuild':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':null,memoryInvalidations:[] });
-  runtime.patch(sid,{ extractedThroughOrder:0,paused:false,needsRebuild:false,failureStreak:0 });
+  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder:0,pointer:0});
+  const latest=runtime?.get(sid);if(latest)latest.session.memoryInvalidations=cleared.memoryInvalidations;
+  runtime.patch(sid,cleared.memoryState,changed);
   const finished=await catchUp(sid,options);
   offerRebuildCleanup(sid,0,options);
   return finished;
@@ -79,8 +83,6 @@ async function start(sid,range,manual) {
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
     if (!parsed.valid) throw new Error("The model's answer wasn't in the note format."+(parsed.skipped[0] ? ' Line '+parsed.skipped[0].line+': '+parsed.skipped[0].reason+'.' : ''));
-    // Never checkpoint past a note that was dropped for exceeding storage limits.
-    if (parsed.skipped.some(s => s.reason === 'empty or oversized note')) throw new Error('A memory note was empty or longer than 400 characters. No turns were marked updated.');
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || currentUid() !== owner) return false;
     const latest = runtime.get(sid);
@@ -90,11 +92,11 @@ async function start(sid,range,manual) {
     const latestMem=normalizeMemory(latest.session.memory);
     if(!manual && !latestMem.autoUpdate)return false;
     const changes=applyOps(latest.entries,parsed.ops,{mem:latestMem,protagonist:mem.protagonist,sourceRevision:guard.startRevision,messages:latest.messages,session:latest.session});
-    if (changes.skipped.some(s => s.reason === 'card storage full')) throw new Error('A memory card is full. Reorganize it, then retry; no turns were marked updated.');
-    if(!changes.appends.length && !changes.creates.length && !changes.aliases.length && !changes.statusChanges.length && !parsed.sawNone && changes.skipped.length===parsed.ops.length)throw new Error('No usable notes in the model response.');
-    const committed=await commitExtraction(sid,changes,{...range,guard});
+    const skipped=[...parsed.skipped,...changes.skipped].map(note=>({...note,card:note.card ?? note.name ?? latest.entries.find(e=>e.id===note.entryId)?.name ?? ''}));
+    const committed=await commitExtraction(sid,changes,{...range,guard,skipped});
+    const lastSkipped=committed?.lastSkipped ?? limitSkippedNotes([...skipped,...(committed?.skipped ?? [])]);
     const nextEntries=committed?.entries ? latest.entries.filter(e=>!committed.entries.some(w=>w.id===e.id)).concat(committed.entries) : changes.entries;
-    runtime.patch(sid,{extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false},nextEntries,committed?.loreRevision);
+    runtime.patch(sid,{extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false,lastSkipped},nextEntries,committed?.loreRevision);
     const notes = committed?.notes ?? changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
     emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
   } catch (error) {
@@ -103,10 +105,9 @@ async function start(sid,range,manual) {
     if (error.partial?.content || streamedAnswer) rawAnswers.set(sid,error.partial?.content || streamedAnswer);
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || !runtime.get(sid)) return false;
-    const failureStreak = (runtime.get(sid).session.memoryState?.failureStreak ?? 0)+1;
     const lastError = /output limit|cut off/i.test(error.message) ? "The update was cut off. Raise 'Max response tokens for updates' in Memory settings." : /card storage full/i.test(error.message) ? 'A memory card is full. Reorganize it, then retry; no turns were marked updated.' : String(error.message).slice(0,240);
-    await updateSession(sid,{ 'memoryState.failureStreak':failureStreak,'memoryState.lastError':lastError,'memoryState.paused':failureStreak>=3 });
-    runtime.patch(sid,{ failureStreak,lastError,paused:failureStreak>=3 }); emit({ sessionId:sid,status:'failed',failureStreak,lastError,manual }); return false;
+    const failure=await recordMemoryFailure(sid,lastError);
+    runtime.patch(sid,failure); emit({ sessionId:sid,status:'failed',...failure,manual }); return false;
   } finally { inFlight.delete(sid); emit({ sessionId:sid,status:'idle' }); }
 }
 
@@ -118,12 +119,13 @@ export function dueRangeFor(sid) {
 export async function rebuildFrom(sid,fromOrder,options={}) {
   if(isRunning(sid) || runtime?.busy())return false;
   await runtime?.prepare?.(sid);
-  const changed=await markGeneratedForReview(sid,fromOrder);
   const live=runtime?.get(sid);if(!live)return false;
+  const seenRevision=live.session.historyRevision ?? 0;
   const previous=live.messages.filter(m=>m.role==='assistant' && m.order<fromOrder).at(-1)?.order ?? 0;
-  const remaining=(live.session.memoryInvalidations ?? []).filter(i=>i.fromOrder<fromOrder),rebuildFromOrder=remaining.length ? Math.min(...remaining.map(i=>i.fromOrder)) : null;
-  await updateSession(sid,{memoryInvalidations:remaining,'memoryState.extractedThroughOrder':previous,'memoryState.needsRebuild':remaining.length>0,'memoryState.paused':false,'memoryState.failureStreak':0,'memoryState.rebuildFromOrder':rebuildFromOrder});live.session.memoryInvalidations=remaining;
-  runtime.patch(sid,{extractedThroughOrder:previous,needsRebuild:remaining.length>0,paused:false,failureStreak:0,rebuildFromOrder},changed);
+  const changed=await markGeneratedForReview(sid,fromOrder);
+  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder,pointer:previous});
+  const latest=runtime?.get(sid);if(latest)latest.session.memoryInvalidations=cleared.memoryInvalidations;
+  runtime.patch(sid,cleared.memoryState,changed);
   const finished=await catchUp(sid,options);offerRebuildCleanup(sid,fromOrder,options);return finished;
 }
 

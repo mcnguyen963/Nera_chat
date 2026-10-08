@@ -1,3 +1,4 @@
+import { assertStory } from './errors.js';
 import { computeTurns } from './turns.js';
 import { canonicalScene } from './scene.js';
 import { assertSource, revisionOf, trimInvalidations } from './continuity.js';
@@ -13,6 +14,16 @@ import {
   TARGET_CHUNK_BYTES, MAX_MESSAGES_PER_CHUNK, messageBytes, packMessages,
   chunkBytes, chunkId, chunkRecord,
 } from "./message-chunks.js";
+
+export class HistoryConflict extends Error {
+  constructor(message = 'Story history changed while the reply was generated. Copy the reply or save it at the end.') {
+    super(message); this.name = 'HistoryConflict';
+  }
+}
+function assertReplySource(session, expected) {
+  if (expected && 'historyRevision' in expected && (session?.historyRevision ?? 0) !== expected.historyRevision) throw new HistoryConflict();
+  assertSource(session, expected);
+}
 
 function sessionRef(sessionId, owner = currentUid()) {
   return doc(db, "users", owner, "sessions", sessionId);
@@ -48,11 +59,10 @@ const migrations = new Map();
 async function writePackedChunks(sessionId, groups, owner = currentUid()) {
   // Six worst-case oversized chunks stay below Firestore's 10 MiB request cap.
   for (let i = 0; i < groups.length; i += 6) {
-    const batch = writeBatch(db);
-    for (const group of groups.slice(i, i + 6)) {
-      batch.set(chunkRef(sessionId, chunkId(group[0].order), owner), chunkRecord(group));
-    }
-    await batch.commit();
+    await runTransaction(db,async tx => {
+      assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+      for (const group of groups.slice(i, i + 6)) tx.set(chunkRef(sessionId, chunkId(group[0].order), owner), chunkRecord(group));
+    });
   }
 }
 
@@ -64,19 +74,22 @@ export function ensureChunked(sessionId) {
   if (migrations.has(key)) return migrations.get(key);
   const pending = (async () => {
     const sessionSnap = await getDocFromServer(sessionRef(sessionId, owner));
-    if (!sessionSnap.exists()) throw new Error("Session not found.");
+    assertStory(sessionSnap.data());
     if (sessionSnap.data().storageVersion !== 2) {
       const old = await getDocsFromServer(query(legacyMessagesCol(sessionId, owner), orderBy("order", "asc")));
       const messages = old.docs.map((d) => ({ id: d.id, ...d.data() }));
       const groups = packMessages(messages);
       await writePackedChunks(sessionId, groups, owner);
       const last = groups.at(-1);
-      await updateDoc(sessionRef(sessionId, owner), {
+      await runTransaction(db,async tx => {
+        assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+        tx.update(sessionRef(sessionId, owner), {
         storageVersion: 2,
         nextOrder: Math.max(sessionSnap.data().nextOrder ?? 0, messages.at(-1)?.order ?? 0),
         activeChunkId: last ? chunkId(last[0].order) : null,
         activeChunkBytes: last ? chunkBytes(last) : 0,
         activeChunkCount: last?.length ?? 0,
+        });
       });
     }
     readySessions.add(key);
@@ -92,18 +105,37 @@ export async function ensureContinuityMetadata(sessionId) {
   const key = owner+':'+sessionId;
   if (metadataReady.has(key)) return;
   const target = sessionRef(sessionId, owner), snap = await getDocFromServer(target);
+  assertStory(snap.data());
   if (snap.data().continuityVersion === 2) { metadataReady.add(key); return; }
   const chunks = await getDocsFromServer(query(chunksCol(sessionId, owner),orderBy('firstOrder','asc')));
-  const source = flatten(chunks), turns = computeTurns(source), ids = chunks.docs.map(d => d.id);
+  const source = flatten(chunks), turns = computeTurns(source);
+  const sourceRevision = snap.data().historyRevision ?? 0, sourceOrder = snap.data().nextOrder;
+  const assertMigrationSource = session => {
+    assertStory(session);
+    if (!session || (session.historyRevision ?? 0) !== sourceRevision || session.nextOrder !== sourceOrder) throw new Error('History changed during migration; try again.');
+  };
+  const migrateMessages = messages => messages.map(m => ({ ...m,revision:m.revision ?? 0,...(m.role !== 'summary' ? { narratorTurn:m.narratorTurn ?? turns.turnById.get(m.id) } : {}) }));
+  // A resumable per-chunk marker bounds each request even for very long stories.
+  // Metadata-only writes do not advance historyRevision.
+  for (const chunk of chunks.docs) {
+    if (chunk.data().continuityVersion === 2) continue;
+    await runTransaction(db,async tx => {
+      const sessionSnap = await tx.get(target);
+      assertMigrationSource(sessionSnap.data());
+      const fresh = await tx.get(chunkRef(sessionId,chunk.id,owner));
+      if (!fresh.exists()) throw new Error('History changed during migration; try again.');
+      if (fresh.data().continuityVersion === 2) return;
+      const messages = migrateMessages(fresh.data().messages ?? []);
+      tx.update(chunkRef(sessionId,chunk.id,owner),{ messages,byteSize:chunkBytes(messages),continuityVersion:2 });
+    });
+  }
   await runTransaction(db,async tx => {
     const sessionSnap = await tx.get(target);
-    const fresh = []; for (const id of ids) fresh.push(await tx.get(chunkRef(sessionId,id, owner)));
-    if ((sessionSnap.data().historyRevision ?? 0) !== (snap.data().historyRevision ?? 0) || sessionSnap.data().nextOrder !== snap.data().nextOrder) throw new Error('History changed during migration; try again.');
-    for (const chunk of fresh) {
-      const data = chunk.data(), messages = data.messages.map(m => ({ ...m,revision:m.revision ?? 0,...(m.role !== 'summary' ? { narratorTurn:m.narratorTurn ?? turns.turnById.get(m.id) } : {}) }));
-      tx.update(chunkRef(sessionId,chunk.id, owner),{ messages,byteSize:chunkBytes(messages) });
-    }
-    tx.update(target,{ continuityVersion:2,historyRevision:sessionSnap.data().historyRevision ?? 0,nextNarratorTurn:Math.max(0,...source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(sessionSnap.data().activeChunkId ? { activeChunkBytes:chunkBytes((fresh.find(d => d.id === sessionSnap.data().activeChunkId)?.data().messages ?? []).map(m => ({ ...m,revision:m.revision ?? 0,...(m.role !== 'summary' ? { narratorTurn:m.narratorTurn ?? turns.turnById.get(m.id) } : {}) }))) } : {}) });
+    const session = sessionSnap.data();
+    assertMigrationSource(session);
+    const active = chunks.docs.find(chunk => chunk.id === session.activeChunkId);
+    if (session.activeChunkId && !active) throw new Error('Active history chunk is missing; migration was not completed.');
+    tx.update(target,{ continuityVersion:2,historyRevision:sourceRevision,nextNarratorTurn:Math.max(0,...source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(active ? { activeChunkBytes:chunkBytes(migrateMessages(active.data().messages ?? [])) } : {}) });
   });
   metadataReady.add(key);
 }
@@ -118,9 +150,10 @@ export async function addMessage(sessionId, message, opts = {}) {
   const id = opts.id ?? newMsgId();
   return runTransaction(db, async (tx) => {
     const snap = await tx.get(sessionRef(sessionId, owner));
-    if (!snap.exists()) throw new Error("Session not found.");
-    const data = snap.data();
-    assertSource(data,opts.expectedSource);
+    assertStory(snap.data());
+    const data = assertStory(snap.data());
+    if (message.role === 'assistant') assertReplySource(data,opts.expectedSource);
+    else assertSource(data,opts.expectedSource);
     const order = (data.nextOrder ?? 0) + 1;
     const item = makeMessage(id, order, { ...message,...(message.role !== "summary" ? { narratorTurn:data.nextNarratorTurn ?? 1 } : {}) }, tokenCount);
     const size = messageBytes(item);
@@ -130,6 +163,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     const activeId = append ? data.activeChunkId : chunkId(order);
     const bytes = append ? data.activeChunkBytes + size : chunkBytes([item]);
     const count = append ? data.activeChunkCount + 1 : 1;
+    if(!append && (await tx.get(chunkRef(sessionId,activeId,owner))).exists())throw new Error('The next message chunk already exists. Refresh the story before sending.');
     tx.update(sessionRef(sessionId, owner), {
       nextOrder: order,
       historyRevision:(data.historyRevision ?? 0)+1,
@@ -147,7 +181,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     } else {
       tx.set(chunkRef(sessionId, activeId, owner), chunkRecord([item]));
     }
-    return {...item,historyRevision:(data.historyRevision ?? 0)+1,session:{id:sessionId,...data,nextOrder:order,historyRevision:(data.historyRevision ?? 0)+1,nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role==='assistant' ? 1 : 0),activeChunkId:activeId,activeChunkBytes:bytes,activeChunkCount:count,...(opts.sessionUpdate ?? {})}};
+    return {message:{...item,historyRevision:(data.historyRevision ?? 0)+1},...item,historyRevision:(data.historyRevision ?? 0)+1,session:{id:sessionId,...data,nextOrder:order,historyRevision:(data.historyRevision ?? 0)+1,nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role==='assistant' ? 1 : 0),activeChunkId:activeId,activeChunkBytes:bytes,activeChunkCount:count,...(opts.sessionUpdate ?? {})}};
   });
 }
 
@@ -157,7 +191,7 @@ export async function addMessagesBulk(sessionId, items) {
   if (!items.length) return [];
   await ensureChunked(sessionId);
   const snap = await getDocFromServer(sessionRef(sessionId));
-  if (!snap.exists()) throw new Error("Session not found.");
+  assertStory(snap.data());
   if (snap.data().nextOrder) {
     const results = [];
     for (const item of items) results.push(await addMessage(sessionId, item));
@@ -171,7 +205,9 @@ export async function addMessagesBulk(sessionId, items) {
   const groups = packMessages(messages);
   await writePackedChunks(sessionId, groups);
   const last = groups.at(-1);
-  await updateDoc(sessionRef(sessionId), {
+  await runTransaction(db,async tx=>{
+    assertStory((await tx.get(sessionRef(sessionId))).data());
+    tx.update(sessionRef(sessionId), {
     nextOrder: messages.at(-1).order,
     historyRevision:(snap.data().historyRevision ?? 0)+1,continuityVersion:2,
     nextNarratorTurn:Math.max(0,...messages.map(m => m.narratorTurn ?? 0))+(messages.at(-1)?.role === "user" ? 0 : 1),
@@ -179,6 +215,7 @@ export async function addMessagesBulk(sessionId, items) {
     activeChunkId: chunkId(last[0].order),
     activeChunkBytes: chunkBytes(last),
     activeChunkCount: last.length,
+    });
   });
   return messages.map(({ id, order, tokenCount }) => ({ id, order, tokenCount }));
 }
@@ -258,25 +295,79 @@ async function findChunk(sessionId, messageId, order) {
   return chunk;
 }
 
-async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}, expectedSource = null) {
+async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}, expectedSource = null, requireLatestReply = false, deletingMessage = false) {
   const owner = currentUid();
   await ensureContinuityMetadata(sessionId);
-  const old = await findChunk(sessionId,messageId,order), target = sessionRef(sessionId,owner);
+  const target = sessionRef(sessionId,owner);
+  // Older direct callers omit expectedSource. Capture a revision before the
+  // discovery query so the transaction cannot trust a stale chunk list.
+  if (requireLatestReply && !expectedSource) {
+    const source = await getDocFromServer(target);
+    assertStory(source.data());
+    expectedSource = { historyRevision:source.data().historyRevision ?? 0 };
+  }
+  let old;
+  try { old = await findChunk(sessionId,messageId,order); }
+  catch (error) {
+    if (requireLatestReply && error.message === 'Message not found.') throw new HistoryConflict('This reply was deleted. Copy the generated text or save it at the end.');
+    throw error;
+  }
+  const deletingAssistant = deletingMessage && old.data().messages.find(m => m.id === messageId)?.role === 'assistant';
+  let summaryChunks = null;
+  if (deletingMessage) {
+    const source = await getDocFromServer(target),session = assertStory(source.data());
+    expectedSource = { historyRevision:session.historyRevision ?? 0,activeSummaryMessageId:session.activeSummaryMessageId ?? null,breakpointOrder:session.breakpointOrder ?? 0 };
+    const current = old.data().messages.find(m => m.id === messageId);
+    if (session.activeSummaryMessageId && (current.id === session.activeSummaryMessageId || current.role !== 'summary' && order <= (session.breakpointOrder ?? 0))) {
+      // Discover documents before the transaction, then guard the revision and
+      // reread every candidate chunk inside it before selecting a fallback.
+      const all = await getDocsFromServer(query(chunksCol(sessionId,owner),orderBy('firstOrder','asc')));
+      summaryChunks = all.docs.filter(chunk => (chunk.data().messages ?? []).some(m => m.role === 'summary' && m.id !== messageId));
+    }
+  }
+  const later = requireLatestReply || deletingAssistant ? await getDocsFromServer(query(chunksCol(sessionId,owner), where('lastOrder','>',order), orderBy('lastOrder','asc'))) : null;
   if (owner !== currentUid()) throw new Error("Account changed; edit was cancelled.");
   return runTransaction(db,async tx => {
     const sessionSnap = await tx.get(target), chunkSnap = await tx.get(chunkRef(sessionId,old.id,owner));
-    const data = sessionSnap.data(), previous = chunkSnap.data();
-    assertSource(data,expectedSource);
-    const current = previous.messages.find(m => m.id === messageId);
-    if (!current) throw new Error('Message not found.');
+    const data = assertStory(sessionSnap.data()), previous = chunkSnap.data();
+    const freshChunks = new Map([[old.id,previous]]);
+    if (summaryChunks && (data.historyRevision ?? 0) !== expectedSource.historyRevision) throw new HistoryConflict('Story changed while finding earlier summaries. Try deleting again.');
+    if (requireLatestReply) assertReplySource(data,expectedSource);
+    else assertSource(data,expectedSource);
+    const current = previous?.messages?.find(m => m.id === messageId);
+    if (!current) throw requireLatestReply ? new HistoryConflict('This reply was deleted.') : new Error('Message not found.');
+    let resetNarratorTurn = false;
+    if (requireLatestReply || deletingAssistant) {
+      const chunks = [previous];
+      for (const candidate of later.docs) if (candidate.id !== old.id) {
+        const fresh = await tx.get(chunkRef(sessionId,candidate.id,owner));
+        if (fresh.exists()) { chunks.push(fresh.data()); freshChunks.set(candidate.id,fresh.data()); }
+      }
+      if (requireLatestReply && (current.role !== 'assistant' || chunks.some(chunk => (chunk.messages ?? []).some(m => m.role !== 'summary' && m.order > current.order)))) throw new HistoryConflict('Newer story messages exist. Copy this reply or save it at the end.');
+      resetNarratorTurn = deletingAssistant && current.role === 'assistant' && !chunks.some(chunk => (chunk.messages ?? []).some(m => ['assistant','user'].includes(m.role) && m.order > current.order));
+    }
     const changed=await change(current),contentChanged=!changed || changed.content!==current.content;
     const replacement=changed ? {...changed,revision:revisionOf(current)+(contentChanged ? 1 : 0)} : null;
     const updated = previous.messages.flatMap(m => m.id === messageId ? (replacement ? [replacement] : []) : [m]);
     const groups = packMessages(updated);
     const records = groups.length ? groups.map((group,index) => ({ id:index === 0 ? old.id : chunkId(group[0].order),data:chunkRecord(group,index === 0 ? previous.firstOrder : group[0].order,index === groups.length-1 ? previous.lastOrder : group.at(-1).order) })) : [{ id:old.id,data:{ ...previous,messages:[],count:0,byteSize:chunkBytes([]) } }];
     const summaryReset=!!data.activeSummaryMessageId && !replacement && (current.role!=='summary' && order<=(data.breakpointOrder ?? 0) || current.id===data.activeSummaryMessageId);
+    let fallback = null;
+    if (summaryReset) {
+      if (!summaryChunks) throw new HistoryConflict('The summary checkpoint changed. Try deleting again.');
+      for (const candidate of summaryChunks) if (!freshChunks.has(candidate.id)) {
+        const fresh = await tx.get(chunkRef(sessionId,candidate.id,owner));
+        if (fresh.exists()) freshChunks.set(candidate.id,fresh.data());
+      }
+      const candidates = [...freshChunks.values()].flatMap(chunk => chunk?.messages ?? []).filter(m => {
+        const cutoff = m.coveredRange?.toOrder ?? m.coveredRange?.to;
+        const start = m.coveredRange?.fromOrder ?? m.coveredRange?.from;
+        return m.role === 'summary' && m.id !== messageId && m.content?.trim() && Number.isSafeInteger(cutoff) && cutoff > 0 && cutoff < order && cutoff < m.order && (start == null || Number.isSafeInteger(start) && start >= 0 && start <= cutoff);
+      });
+      fallback = candidates.sort((a,b) => b.order-a.order)[0] ?? null;
+    }
     const historyRevision = (data.historyRevision ?? 0)+1;
-    const patch = { historyRevision,updatedAt:serverTimestamp(),...(summaryReset ? { activeSummaryMessageId:null,breakpointOrder:0 } : {}),...sessionUpdate };
+    const patch = { historyRevision,updatedAt:serverTimestamp(),...(resetNarratorTurn ? {nextNarratorTurn:current.narratorTurn} : {}),...(summaryReset ? { activeSummaryMessageId:fallback?.id ?? null,breakpointOrder:fallback?.coveredRange?.toOrder ?? fallback?.coveredRange?.to ?? 0 } : {}),...sessionUpdate };
     const pointer=data.memoryState?.extractedThroughOrder;
     if(contentChanged && current.role!=='summary' && pointer!=null) {
       const edits=[...(data.contentEdits ?? []),{order,revision:historyRevision}];
@@ -309,13 +400,13 @@ export async function overwriteMessage(sessionId, messageId, { content, thinking
   const result = await changeMessage(sessionId,messageId,order,message => {
     const {editedAt,acceptance:oldAcceptance,reviewWarnings:oldWarnings,sceneCandidate:oldCandidate,truncated:oldTruncated,...rest}=message;
     return {...rest,content,thinking:thinking ?? null,planThread,planBefore,scene,ooc,tokenCount,sceneMeta,
-      ...(acceptance!==undefined ? {acceptance,reviewWarnings,sceneCandidate} : {}),truncated};
-  },sessionUpdate,expectedSource);
+      ...(acceptance!==undefined ? {acceptance,reviewWarnings,sceneCandidate} : {}),...(truncated || oldTruncated ? {truncated} : {})};
+  },sessionUpdate,expectedSource,true);
   return { tokenCount,...result };
 }
 
 export async function deleteMessage(sessionId, messageId, order) {
-  return changeMessage(sessionId, messageId, order, () => null);
+  return changeMessage(sessionId, messageId, order, () => null, {}, null, false, true);
 }
 
 export async function updateMessageScene(sessionId, messageId, order, scene, prior = null) {

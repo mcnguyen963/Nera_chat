@@ -52,3 +52,7 @@ export async function deleteChatCache(uid, sessionId) {
     transaction.onabort = resolve;
   });
 }
+
+export async function cachedSessionIds(uid){
+  try{const db=await database();if(!db || !uid)return [];return await new Promise(resolve=>{const r=db.transaction(STORE,'readonly').objectStore(STORE).get('meta:'+uid);r.onsuccess=()=>resolve(r.result?.order ?? []);r.onerror=()=>resolve([]);});}catch{return [];}
+}

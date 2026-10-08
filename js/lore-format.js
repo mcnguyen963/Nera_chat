@@ -18,20 +18,22 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
   }
   return JSON.stringify(out,null,2);
 }
+export function normalizeLoreEntry(e){
+      if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
+      const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
+      normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
+        const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
+        if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');
+        return [key,{...section,text:String(section.text ?? ''),...sectionMeta({...section,kind:section.kind ?? 'background',origin:section.origin ?? 'import'},normalized),lines:(section.lines ?? []).map(l=>typeof l==='string' ? importedLine(l) : {...importedLine(l),...l})}];
+      }));return normalized;
+}
+
 export function fromJson(text) {
   validateInput(text); const source = unfence(text); let data;
   try { data = JSON.parse(source); } catch (e) { const p = Number(e.message.match(/position (\d+)/)?.[1]); if (Number.isFinite(p)) { const before = source.slice(0,p), line = before.split('\n').length, column = before.length-(before.lastIndexOf('\n')+1)+1; throw new Error(`JSON error at line ${line}, column ${column}: ${e.message}`); } throw new Error('JSON error: '+e.message); }
   if (!data || typeof data !== 'object' || !['characters','locations','facts','events'].some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
   if(data.version===2 && Array.isArray(data.entries)) {
-    const entries=data.entries.map(e=>{
-      if(!SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.sections)throw new Error('Invalid version 2 lorebook entry.');
-      const normalized={...makeEntry(e.book,e.name),...e,aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
-      normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
-        const raw=e.sections[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
-        if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');
-        return [key,{...section,text:String(section.text ?? ''),...sectionMeta({...section,kind:section.kind ?? 'background',origin:section.origin ?? 'import'},normalized),lines:(section.lines ?? []).map(l=>typeof l==='string' ? importedLine(l) : {...importedLine(l),...l})}];
-      }));return normalized;
-    });
+    const entries=data.entries.map(normalizeLoreEntry);
     return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>k in data || entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};
   }
   const entries = [], warnings = [], books = Object.keys(BOOK_LABELS).filter(k => k in data);

@@ -8,6 +8,7 @@ import vm from 'node:vm';
 async function setup(legacyCount = 0) {
   const documents = new Map();
   const reads = { documents: 0, legacy: 0 };
+  const transactions = [], fault = { failAt:null, failBatchAt:null, batchCount:0, beforeCommit:null };
   const sessionPath = 'users/u/sessions/s';
   documents.set(sessionPath, { nextOrder: legacyCount, breakpointOrder: 0 });
   for (let order = 1; order <= legacyCount; order++) {
@@ -98,7 +99,7 @@ async function setup(legacyCount = 0) {
         set: (target, value) => changes.push(['set', target, value]),
         update: (target, value) => changes.push(['update', target, value]),
         delete: (target) => changes.push(['delete', target]),
-        commit: async () => { for (const change of changes) apply(...change); },
+        commit: async () => { if(++fault.batchCount===fault.failBatchAt){fault.failBatchAt=null;throw new Error('Injected sweep failure');}for (const change of changes) apply(...change); },
       };
     },
     runTransaction:async (_db,callback) => {
@@ -111,7 +112,10 @@ async function setup(legacyCount = 0) {
           delete:target => { wrote = true; changes.push(['delete',target]); },
         };
         const result = await callback(tx);
+        await fault.beforeCommit?.(changes);
         if ([...versions].some(([path,version]) => JSON.stringify(documents.get(path)) !== version)) continue;
+        transactions.push(changes.map(([type,target])=>({type,path:target.path})));
+        if (fault.failAt === transactions.length) { fault.failAt=null; throw new Error('Injected transaction failure'); }
         for (const change of changes) apply(...change);
         return result;
       }
@@ -150,7 +154,7 @@ async function setup(legacyCount = 0) {
   const sessions = await load('sessions.js'); await link(sessions);
   await sessions.evaluate();
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
-  return { lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath };
+  return { lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
 
 test('migration packs existing messages once and checkpoint reads use chunks', async () => {
@@ -380,21 +384,22 @@ test('extraction commits dotted append fields and pointer together, preserving u
   await h.lore.commitExtraction('s',{ creates:[],appends:[{ entryId:'mira',section:'appearance',line:ln }],aliases:[],statusChanges:[] },{ fromTurn:1,toTurn:2,endOrder:4 });
   assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.text,'canon'); assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,2); assert.equal(h.documents.get(h.sessionPath).memoryState.extractedThroughOrder,4);
 });
-test('extraction transaction rolls back all cards and its checkpoint when a current card is full',async()=>{
+test('B3 extraction commits other cards and its checkpoint when a current card is full',async()=>{
   const h=await setup();await h.lore.createEntry('s',loreEntry('first'));await h.lore.createEntry('s',loreEntry('full'));
   // Simulate a card enlarged by another client after the extraction planner ran.
   h.documents.get(h.sessionPath+'/lore/full').sections.appearance.text='x'.repeat(900000);
   const before=JSON.stringify([...h.documents]);
   const appends=['first','full'].map(entryId=>({entryId,section:'appearance',line:{id:'new-'+entryId,text:'scar',turn:2,src:4,by:'auto',at:2}}));
-  await assert.rejects(h.lore.commitExtraction('s',{creates:[],appends,aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4}),/card storage full/);
-  assert.equal(JSON.stringify([...h.documents]),before);
+  const fullBefore=JSON.stringify(h.documents.get(h.sessionPath+'/lore/full'));
+  const result=await h.lore.commitExtraction('s',{creates:[],appends,aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4});
+  assert.equal(result.skipped[0].reason,'card full');assert.equal(JSON.stringify(h.documents.get(h.sessionPath+'/lore/full')),fullBefore);assert.equal(h.documents.get(h.sessionPath+'/lore/first').sections.appearance.lines.length,2);assert.equal(h.documents.get(h.sessionPath).memoryState.extractedThroughOrder,4);
 });
-test('oversized new cards cannot advance the extraction checkpoint or partially save earlier cards',async()=>{
+test('B3 oversized new cards are skipped while valid cards and checkpoint commit',async()=>{
   const h=await setup();await h.lore.createEntry('s',loreEntry('first'));
   const full=loreEntry('new-full');full.sections.appearance.text='x'.repeat(900000);
   const before=JSON.stringify([...h.documents]);
-  await assert.rejects(h.lore.commitExtraction('s',{creates:[full],appends:[{entryId:'first',section:'appearance',line:{id:'new',text:'scar',turn:2,src:4,by:'auto',at:2}}],aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4}),/card storage full/);
-  assert.equal(JSON.stringify([...h.documents]),before);
+  const result=await h.lore.commitExtraction('s',{creates:[full],appends:[{entryId:'first',section:'appearance',line:{id:'new',text:'scar',turn:2,src:4,by:'auto',at:2}}],aliases:[],statusChanges:[]},{fromTurn:1,toTurn:2,endOrder:4});
+  assert.equal(result.skipped[0].reason,'card full');assert.equal(h.documents.has(h.sessionPath+'/lore/new-full'),false);assert.equal(h.documents.get(h.sessionPath+'/lore/first').sections.appearance.lines.length,2);assert.equal(h.documents.get(h.sessionPath).memoryState.extractedThroughOrder,4);
 });
 test('delete and restore preserve cards, remove createdIds and backup pruning keeps twenty groups',async () => {
   const h = await setup(), e = loreEntry(); await h.lore.createEntry('s',e);
@@ -425,7 +430,7 @@ test('lore writes wait for the narrator and expose a barrier before another turn
 });
 
 test('bulk deleted-turn removal is backed up and Undo restores all source-linked notes',async () => {
-  const h=await setup(), e=loreEntry(); e.sections.appearance.lines.push({ id:'later',text:'later',turn:2,src:4,by:'auto',at:2 }); await h.lore.createEntry('s',e);
+  const h=await setup(), e=loreEntry(); for(let i=0;i<6;i++) await h.api.addMessage('s',{role:i%2 ? 'assistant' : 'user',content:'story '+i}); const deleted=(await h.api.getMessages('s')).find(m=>m.order===4); await h.api.deleteMessage('s',deleted.id,deleted.order); e.sections.appearance.lines.push({ id:'later',text:'later',turn:2,src:4,by:'auto',at:2 }); await h.lore.createEntry('s',e);
   const backup=await h.lore.removeDeletedLines('s',[e],new Set([2])); const after=h.documents.get(h.sessionPath+'/lore/mira'); assert.deepEqual(after.sections.appearance.lines.map(l => l.id),['old']); await h.lore.restoreBackup('s',backup,[{ id:'mira',...after }]); assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l => l.id),['old','later']);
 });
 
@@ -454,7 +459,7 @@ test('atomic reply, summary and extraction commits reject source changes without
   const session = h.documents.get(h.sessionPath), expectedSource = { historyRevision:session.historyRevision,longTermPlan:session.longTermPlan ?? '',memory:JSON.stringify(session.memory ?? null),loreRevision:session.loreRevision ?? 0,activeSummaryMessageId:null,breakpointOrder:0 };
   await h.api.editMessage('s',user.id,'Changed',user.order);
   const before = JSON.stringify([...h.documents]);
-  await assert.rejects(h.api.addMessage('s',{ role:'assistant',content:'Stale reply' },{ expectedSource }),/discarded/);
+  await assert.rejects(h.api.addMessage('s',{ role:'assistant',content:'Stale reply' },{ expectedSource }),e=>e.name==='HistoryConflict');
   await assert.rejects(h.api.addMessage('s',{ role:'summary',content:'Stale summary' },{ expectedSource,sessionUpdate:{ activeSummaryMessageId:'new',breakpointOrder:1 } }),/discarded/);
   await assert.rejects(h.lore.commitExtraction('s',{ creates:[loreEntry()],appends:[],aliases:[],statusChanges:[] },{ expectedSource,endOrder:1,fromTurn:1,toTurn:1 }),/discarded/);
   assert.equal(JSON.stringify([...h.documents]),before);
@@ -512,11 +517,11 @@ test('P0 and U4 regeneration clears edited and cut-off fields and omits review m
  const h=await setup();const a=await h.api.addMessage('s',{role:'assistant',content:'Partial',truncated:true,acceptance:'pending',reviewWarnings:['warning'],sceneCandidate:{scene:'candidate'}});
  await h.api.editMessage('s',a.id,'Edited',a.order);
  const result=await h.api.overwriteMessage('s',a.id,{content:'Complete'},a.order);
- assert.equal(result.replacement.truncated,false);assert.equal('editedAt' in result.replacement,false);assert.equal('acceptance' in result.replacement,false);assert.equal('reviewWarnings' in result.replacement,false);assert.equal('sceneCandidate' in result.replacement,false);
+ assert.equal(Boolean(result.replacement.truncated),false);assert.equal('truncated' in result.replacement,false);assert.equal('editedAt' in result.replacement,false);assert.equal('acceptance' in result.replacement,false);assert.equal('reviewWarnings' in result.replacement,false);assert.equal('sceneCandidate' in result.replacement,false);
 });
 
-test('U3 backup index writes prune with one read after initialization and listing fetches only metadata',async()=>{
- const h=await setup(),e=loreEntry();await h.lore.writeBackup('s','test','First',[e]);const before=h.reads.documents;await h.lore.writeBackup('s','test','Second',[e]);assert.equal(h.reads.documents-before,1);const start=h.reads.documents,groups=await h.lore.listBackups('s');assert.equal(h.reads.documents-start,1);assert.equal(groups.length,2);assert.equal(groups[0].count,1);assert.equal('entries' in groups[0],false);const fetched=await h.lore.loadBackupGroup('s',groups[0].id);assert.equal(fetched[0].entries[0].id,e.id);
+test('U3 backup parts and index write atomically and listing scans for orphan parts',async()=>{
+ const h=await setup(),e=loreEntry();await h.lore.writeBackup('s','test','First',[e]);const before=h.reads.documents;await h.lore.writeBackup('s','test','Second',[e]);assert.equal(h.reads.documents-before,2);const start=h.reads.documents,groups=await h.lore.listBackups('s');assert.equal(h.reads.documents-start,3);assert.equal(groups.length,2);assert.equal(groups[0].count,1);assert.equal('entries' in groups[0],false);const fetched=await h.lore.loadBackupGroup('s',groups[0].id);assert.equal(fetched[0].entries[0].id,e.id);
 });
 test('U3 pre-index backups remain restorable and build a metadata index once',async()=>{
  const h=await setup(),e=loreEntry();h.documents.set(h.sessionPath+'/loreBackups/old',{partOf:'old',part:1,label:'Old',reason:'delete',createdMs:1,entries:[{id:e.id,data:e}],createdIds:[]});const groups=await h.lore.listBackups('s');assert.equal(groups[0].id,'old');assert.ok(h.documents.has(h.sessionPath+'/loreMeta/backups'));await h.lore.restoreBackup('s','old',[]);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').name,'Mira');
@@ -535,4 +540,273 @@ test('L1 content edits cap the edit log without pausing and metadata corrections
 });
 test('L2 rebuild cleanup backs up unreproduced notes and preserves refreshed, imported, user and out-of-range notes',async()=>{
  const h=await setup(),e=loreEntry();e.sections.appearance.lines=[{id:'remove',by:'auto',text:'old',needsReview:true,src:4,at:1},{id:'updated',by:'auto',text:'reproduced',needsReview:false,src:4,at:2},{id:'later',by:'auto',text:'outside',needsReview:true,src:8,at:1},{id:'mine',by:'user',text:'mine',needsReview:true,src:4,at:1},{id:'import',by:'import',text:'canon',needsReview:true,src:4,at:1}];await h.lore.createEntry('s',e);const backup=await h.lore.removeReviewedLines('s',[e],3,6);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['updated','later','mine','import']);await h.lore.restoreBackup('s',backup,[]);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,5);
+});
+
+
+test('D2 reply saves reject a concurrent history revision without writes',async()=>{
+ const h=await setup(),u=await h.api.addMessage('s',{role:'user',content:'Action'});
+ await h.api.addMessage('s',{role:'user',content:'Another device action'});
+ const before=JSON.stringify([...h.documents]);
+ await assert.rejects(h.api.addMessage('s',{role:'assistant',content:'Paid reply'},{expectedSource:{historyRevision:u.historyRevision}}),e=>e.name==='HistoryConflict');
+ assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('D2 normal narrator save adds no transaction reads for its history guard',async()=>{
+ const h=await setup(),u=await h.api.addMessage('s',{role:'user',content:'Action'}),before=h.reads.documents;
+ const reply=await h.api.addMessage('s',{role:'assistant',content:'Reply'},{expectedSource:{historyRevision:u.historyRevision}});
+ assert.equal(h.reads.documents-before,1);assert.equal(reply.historyRevision,u.historyRevision+1);
+});
+test('D2 overwrite rejects newer story messages across chunks but permits trailing summaries',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Old reply'});
+ await h.api.addMessage('s',{role:'summary',content:'Summary'});
+ let revision=h.documents.get(h.sessionPath).historyRevision;
+ await h.api.overwriteMessage('s',a.id,{content:'Regenerated'},a.order,{}, {historyRevision:revision});
+ // Force a new chunk so the newer user action is outside the target chunk.
+ h.documents.get(h.sessionPath).activeChunkCount=100;
+ await h.api.addMessage('s',{role:'user',content:'Newer action'});
+ revision=h.documents.get(h.sessionPath).historyRevision;const before=JSON.stringify([...h.documents]);
+ await assert.rejects(h.api.overwriteMessage('s',a.id,{content:'Stale replacement'},a.order,{}, {historyRevision:revision}),e=>e.name==='HistoryConflict');
+ assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('D2 overwrite of a deleted reply reports a typed conflict',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Old reply'});
+ await h.api.deleteMessage('s',a.id,a.order);
+ await assert.rejects(h.api.overwriteMessage('s',a.id,{content:'Paid replacement'},a.order,{}, {historyRevision:h.documents.get(h.sessionPath).historyRevision}),e=>e.name==='HistoryConflict');
+});
+
+
+function legacyContinuityChunks(h,count=60) {
+ const base=h.documents.get(h.sessionPath);Object.assign(base,{storageVersion:2,nextOrder:count,historyRevision:7,activeChunkId:'legacy'+count,activeChunkCount:1});
+ for(let i=1;i<=count;i++)h.documents.set(h.sessionPath+'/messageChunks/legacy'+i,{firstOrder:i,lastOrder:i,count:1,byteSize:100,messages:[{id:'old'+i,order:i,role:i%2 ? 'user':'assistant',content:'old '+i}]});
+}
+test('D6 large continuity migration writes at most one chunk per transaction',async()=>{
+ const h=await setup();legacyContinuityChunks(h);await h.api.ensureContinuityMetadata('s');
+ assert.ok(h.transactions.every(tx=>tx.filter(w=>w.path.includes('/messageChunks/')).length<=1));
+ assert.ok(h.transactions.length>=61);
+ assert.equal(h.documents.get(h.sessionPath).continuityVersion,2);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,31);
+ for(let i=1;i<=60;i++){const c=h.documents.get(h.sessionPath+'/messageChunks/legacy'+i);assert.equal(c.continuityVersion,2);assert.equal(c.messages[0].revision,0);assert.equal(c.messages[0].narratorTurn,Math.ceil(i/2));}
+});
+test('D6 interrupted continuity migration resumes without rewriting completed chunks',async()=>{
+ const h=await setup();legacyContinuityChunks(h);h.fault.failAt=4;
+ await assert.rejects(h.api.ensureContinuityMetadata('s'),/Injected transaction failure/);
+ assert.notEqual(h.documents.get(h.sessionPath).continuityVersion,2);
+ assert.equal(h.documents.get(h.sessionPath+'/messageChunks/legacy1').continuityVersion,2);
+ const completed=JSON.stringify(h.documents.get(h.sessionPath+'/messageChunks/legacy1')),start=h.transactions.length;
+ await h.api.ensureContinuityMetadata('s');
+ assert.equal(JSON.stringify(h.documents.get(h.sessionPath+'/messageChunks/legacy1')),completed);
+ assert.ok(h.transactions.slice(start).every(tx=>!tx.some(w=>w.path.endsWith('/legacy1'))));
+ assert.equal(h.documents.get(h.sessionPath).continuityVersion,2);
+});
+
+
+test('D9 delete newest reply then Retry keeps the user action in the same extraction turn',async()=>{
+ const h=await setup(),u=await h.api.addMessage('s',{role:'user',content:'I act.'}),a=await h.api.addMessage('s',{role:'assistant',content:'First reply'});
+ await h.api.addMessage('s',{role:'summary',content:'Summary after reply'});
+ await h.api.deleteMessage('s',a.id,a.order);
+ const retried=await h.api.addMessage('s',{role:'assistant',content:'Retried reply'});
+ assert.equal(retried.narratorTurn,u.narratorTurn);
+ const history=await h.api.getMessages('s'),turns=h.turns.computeTurns(history);
+ assert.equal(turns.turnById.get(u.id),turns.turnById.get(retried.id));
+ const range=h.turns.dueRange(history,{extractedThroughOrder:0},{lagTurns:0,batchTurns:1},{manual:true});
+ assert.ok(range.messages.some(m=>m.id===u.id));assert.ok(range.messages.some(m=>m.id===retried.id));
+});
+test('D9 deleting an older assistant does not rewind the narrator turn counter',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Old reply'});
+ h.documents.get(h.sessionPath).activeChunkCount=100;
+ const b=await h.api.addMessage('s',{role:'assistant',content:'New reply'}),counter=h.documents.get(h.sessionPath).nextNarratorTurn;
+ await h.api.deleteMessage('s',a.id,a.order);
+ assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,counter);assert.equal(b.narratorTurn,2);
+});
+
+
+test('D4 a tombstone blocks replies, extraction and card creation before the sweep',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'user',content:'Start'});
+ Object.assign(h.documents.get(h.sessionPath),{deleting:true});const before=JSON.stringify([...h.documents]);
+ await assert.rejects(h.api.addMessage('s',{role:'assistant',content:'Paid reply'}),e=>e.name==='StoryDeleted');
+ await assert.rejects(h.lore.commitExtraction('s',{creates:[loreEntry()],appends:[],aliases:[],statusChanges:[]},{endOrder:1,fromTurn:1,toTurn:1}),e=>e.name==='StoryDeleted');
+ await assert.rejects(h.lore.createEntry('s',loreEntry()),e=>e.name==='StoryDeleted');
+ await assert.rejects(h.lore.writeBackup('s','test','Late backup',[loreEntry()]),e=>e.name==='StoryDeleted');
+ assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('D4 interrupted deletion stays hidden and a resumed sweep removes every subtree',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Reply'});await h.lore.createEntry('s',loreEntry());
+ h.documents.set(h.sessionPath+'/messages/legacy',{order:1,content:'Legacy'});
+ h.documents.set(h.sessionPath+'/loreBackups/old',{entries:[]});
+ const revision=h.documents.get(h.sessionPath).historyRevision;
+ h.fault.failBatchAt=h.fault.batchCount+2;
+ await assert.rejects(h.sessions.deleteSession('s'),/Injected sweep failure/);
+ assert.equal(h.documents.get(h.sessionPath).deleting,true);assert.equal(h.documents.get(h.sessionPath).historyRevision,revision+1);
+ assert.ok(![...h.documents.keys()].some(p=>p.startsWith(h.sessionPath+'/messageChunks/')));
+ const visible=await new Promise(resolve=>h.sessions.subscribeSessions(resolve));assert.equal(visible.length,0);
+ await h.sessions.resumeSessionDeletion('s');
+ assert.ok(![...h.documents.keys()].some(p=>p===h.sessionPath || p.startsWith(h.sessionPath+'/')));
+ await h.sessions.resumeSessionDeletion('s');
+});
+test('D4 a missing story cannot recreate orphan memory or message documents',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Reply'});h.documents.delete(h.sessionPath);
+ await assert.rejects(h.api.addMessage('s',{role:'assistant',content:'Late reply'}),e=>e.name==='StoryDeleted');
+ await assert.rejects(h.lore.createEntry('s',loreEntry()),e=>e.name==='StoryDeleted');
+ assert.equal(h.documents.has(h.sessionPath+'/lore/mira'),false);
+});
+
+test('D4 sidebar omits unpublished importing stories without sweeping them',async()=>{
+ const h=await setup(),id=await h.sessions.createSession('Pending import',{importing:true});
+ const visible=await new Promise(resolve=>h.sessions.subscribeSessions(resolve));
+ assert.ok(!visible.some(s=>s.id===id));assert.equal(h.documents.get('users/u/sessions/'+id).importing,true);
+});
+
+test('D5 appending never replaces an existing next chunk after an interrupted import',async()=>{
+ const h=await setup();await h.api.ensureContinuityMetadata('s');const path=h.sessionPath+'/messageChunks/chunk_000000000001',existing={firstOrder:1,lastOrder:100,messages:[{id:'imported',order:1,role:'user',content:'Imported story'}]};h.documents.set(path,existing);
+ await assert.rejects(h.api.addMessage('s',{role:'user',content:'New send'}),/chunk already exists/);assert.deepEqual(h.documents.get(path),existing);assert.equal(h.documents.get(h.sessionPath).nextOrder,0);
+});
+test('B19 prefix copies keep only invalidations and edits they contain',async()=>{
+ const h=await setup(),u=await h.api.addMessage('s',{role:'user',content:'First'});await h.api.addMessage('s',{role:'assistant',content:'Reply'});
+ Object.assign(h.documents.get(h.sessionPath),{memoryInvalidations:[{fromOrder:9,revision:10}],contentEdits:[{order:9,revision:10}],memoryState:{needsRebuild:true,rebuildFromOrder:9}});
+ const id=await h.sessions.duplicateSession('s',null,u.id),copy=h.documents.get('users/u/sessions/'+id);assert.deepEqual(copy.memoryInvalidations,[]);assert.deepEqual(copy.contentEdits,[]);assert.equal(copy.memoryState.needsRebuild,false);assert.equal(copy.memoryState.rebuildFromOrder,null);
+});
+
+test('B20 deleting the active summary falls back to the newest remaining known coverage',async()=>{
+  const h=await setup();
+  await h.api.addMessage('s',{role:'user',content:'Start'});await h.api.addMessage('s',{role:'assistant',content:'First'});
+  const earlier=await h.api.addMessage('s',{role:'summary',content:'Earlier events',coveredRange:{fromOrder:1,toOrder:2}},{id:'earlier',sessionUpdate:{activeSummaryMessageId:'earlier',breakpointOrder:2}});
+  await h.api.addMessage('s',{role:'user',content:'Continue'});await h.api.addMessage('s',{role:'assistant',content:'Later'});
+  const active=await h.api.addMessage('s',{role:'summary',content:'All earlier events',coveredRange:{fromOrder:1,toOrder:5}},{id:'active',sessionUpdate:{activeSummaryMessageId:'active',breakpointOrder:5}});
+  const result=await h.api.deleteMessage('s',active.id,active.order);
+  assert.equal(result.summaryReset,true);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId,earlier.id);
+  assert.equal(h.documents.get(h.sessionPath).breakpointOrder,2);
+  assert.equal(result.session.activeSummaryMessageId,earlier.id);
+});
+
+test('B20 deleting a folded turn can fall back only to a summary before that source',async()=>{
+  for(const earlierCutoff of [2,4]) {
+    const h=await setup();
+    await h.api.addMessage('s',{role:'user',content:'Start'});await h.api.addMessage('s',{role:'assistant',content:'First'});
+    await h.api.addMessage('s',{role:'summary',content:'Earlier events',coveredRange:{fromOrder:1,toOrder:earlierCutoff}},{id:'earlier'});
+    const user=await h.api.addMessage('s',{role:'user',content:'Remove this folded turn'});await h.api.addMessage('s',{role:'assistant',content:'Later'});
+    await h.api.addMessage('s',{role:'summary',content:'All earlier events',coveredRange:{fromOrder:1,toOrder:5}},{id:'active',sessionUpdate:{activeSummaryMessageId:'active',breakpointOrder:5}});
+    await h.api.deleteMessage('s',user.id,user.order);
+    assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId,earlierCutoff===2 ? 'earlier' : null);
+    assert.equal(h.documents.get(h.sessionPath).breakpointOrder,earlierCutoff===2 ? 2 : 0);
+  }
+});
+
+test('B20 an older summary with unknown coverage is not a safe fallback',async()=>{
+  const h=await setup();await h.api.addMessage('s',{role:'user',content:'Start'});
+  await h.api.addMessage('s',{role:'summary',content:'Old legacy summary'},{id:'legacy'});
+  const active=await h.api.addMessage('s',{role:'summary',content:'Known coverage',coveredRange:{fromOrder:1,toOrder:1}},{id:'active',sessionUpdate:{activeSummaryMessageId:'active',breakpointOrder:1}});
+  await h.api.deleteMessage('s',active.id,active.order);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId,null);assert.equal(h.documents.get(h.sessionPath).breakpointOrder,0);
+});
+
+test('B20 failed fallback deletion leaves the active checkpoint and messages unchanged',async()=>{
+  const h=await setup();await h.api.addMessage('s',{role:'user',content:'Start'});
+  await h.api.addMessage('s',{role:'summary',content:'Earlier events',coveredRange:{fromOrder:1,toOrder:1}},{id:'earlier'});
+  const active=await h.api.addMessage('s',{role:'summary',content:'Latest summary',coveredRange:{fromOrder:1,toOrder:1}},{id:'active',sessionUpdate:{activeSummaryMessageId:'active',breakpointOrder:1}});
+  const before=JSON.stringify([...h.documents]);h.fault.failAt=h.transactions.length+1;
+  await assert.rejects(h.api.deleteMessage('s',active.id,active.order),/Injected transaction failure/);
+  assert.equal(JSON.stringify([...h.documents]),before);
+});
+
+
+test('D7 stale UI delete backs up the server-only note and restore recovers it',async()=>{
+ const h=await setup(),e=loreEntry();await h.lore.createEntry('s',e);
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'server-only',text:'New note from another device',src:4,by:'auto',at:2});
+ const backup=await h.lore.deleteEntry('s',e);await h.lore.restoreBackup('s',backup,[]);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.some(l=>l.id==='server-only'));
+});
+test('D7 import backs up current cards and identifies new cards from the server',async()=>{
+ const h=await setup(),e=loreEntry();await h.lore.createEntry('s',e);
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'server-only',text:'Concurrent',src:4,by:'auto',at:2});
+ const replacement=loreEntry();replacement.sections.appearance.text='Imported canon';
+ const backup=await h.lore.importLore('s',{writes:[{id:'mira',data:replacement},{id:'new',data:loreEntry('new')}]},[]);
+ await h.lore.restoreBackup('s',backup,[]);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.some(l=>l.id==='server-only'));
+ assert.equal(h.documents.has(h.sessionPath+'/lore/new'),false);
+});
+test('D7 restore backs up current server data and marks older memory for rebuilding',async()=>{
+ const h=await setup(),old=loreEntry();old.updatedAt=new Date(1000);await h.lore.createEntry('s',old);
+ const backup=await h.lore.writeBackup('s','test','Old snapshot',[old]);
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'newer',text:'Fresh extraction',src:50,by:'auto',at:2});
+ h.documents.get(h.sessionPath).memoryState={lastUpdateAt:new Date(3000),extractedThroughOrder:50};
+ await h.lore.restoreBackup('s',backup,[]);
+ const session=h.documents.get(h.sessionPath);assert.equal(session.memoryState.needsRebuild,true);assert.equal(session.memoryState.rebuildFromOrder,2);
+ const undo=(await h.lore.listBackups('s')).find(g=>g.reason==='restore');const parts=await h.lore.loadBackupGroup('s',undo.id);
+ assert.ok(parts.flatMap(p=>p.entries).some(e=>e.data.sections.appearance.lines.some(l=>l.id==='newer')));
+ await h.lore.restoreBackup('s',undo.id,[]);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.some(l=>l.id==='newer'));
+});
+test('D7 backup parts and index share one transaction and failure publishes neither',async()=>{
+ const h=await setup();await h.lore.listBackups('s');const start=h.transactions.length;
+ const id=await h.lore.writeBackup('s','test','Atomic',[loreEntry()]);
+ assert.ok(h.transactions.slice(start).some(tx=>tx.some(w=>w.path.endsWith('/loreBackups/'+id)) && tx.some(w=>w.path.endsWith('/loreMeta/backups'))));
+ const before=JSON.stringify([...h.documents]);h.fault.failAt=h.transactions.length+1;
+ await assert.rejects(h.lore.writeBackup('s','test','Failure',[loreEntry()]),/Injected transaction failure/);
+ assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('D7 backup listing sweeps orphan parts but preserves indexed and active staged parts',async()=>{
+ const h=await setup(),id=await h.lore.writeBackup('s','test','Kept',[loreEntry()]);
+ h.documents.set(h.sessionPath+'/loreBackups/orphan',{partOf:'absent',entries:[]});
+ h.documents.set(h.sessionPath+'/loreBackups/staged',{partOf:'pending',entries:[]});
+ h.documents.get(h.sessionPath+'/loreMeta/backups').pending=[{id:'pending',createdMs:Date.now(),parts:['staged']}];
+ await h.lore.listBackups('s');
+ assert.equal(h.documents.has(h.sessionPath+'/loreBackups/orphan'),false);
+ assert.equal(h.documents.has(h.sessionPath+'/loreBackups/'+id),true);assert.equal(h.documents.has(h.sessionPath+'/loreBackups/staged'),true);
+ h.documents.get(h.sessionPath+'/loreMeta/backups').pending[0].createdMs=0;await h.lore.listBackups('s');
+ assert.equal(h.documents.has(h.sessionPath+'/loreBackups/staged'),false);
+});
+test('D7 failed per-card restore retains a backup for each card it already changed',async()=>{
+ const h=await setup(),a=loreEntry('a'),b=loreEntry('b');await h.lore.createEntry('s',a);await h.lore.createEntry('s',b);
+ const backup=await h.lore.writeBackup('s','test','Old pair',[a,b]);
+ h.documents.get(h.sessionPath+'/lore/a').sections.appearance.text='New A';h.documents.get(h.sessionPath+'/lore/b').sections.appearance.text='New B';
+ h.fault.failAt=h.transactions.length+3;
+ await assert.rejects(h.lore.restoreBackup('s',backup,[]),/Injected transaction failure/);
+ assert.equal(h.documents.get(h.sessionPath+'/lore/a').sections.appearance.text,'canon');assert.equal(h.documents.get(h.sessionPath+'/lore/b').sections.appearance.text,'New B');
+ const undo=(await h.lore.listBackups('s')).find(g=>g.reason==='restore'),parts=await h.lore.loadBackupGroup('s',undo.id);
+ assert.equal(parts.flatMap(p=>p.entries).find(e=>e.id==='a').data.sections.appearance.text,'New A');
+});
+
+test('D7 merge backup preserves notes absent from both UI cards',async()=>{
+ const h=await setup(),a=loreEntry('a'),b=loreEntry('b');await h.lore.createEntry('s',a);await h.lore.createEntry('s',b);
+ h.documents.get(h.sessionPath+'/lore/b').sections.appearance.lines.push({id:'fresh',text:'Fresh on target',src:4,by:'auto',at:2});
+ const backup=await h.lore.mergeEntries('s',a,b);await h.lore.restoreBackup('s',backup,[]);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/b').sections.appearance.lines.some(l=>l.id==='fresh'));
+});
+test('D7 deleted-note removal retries its atomic backup when a server note races the write',async()=>{
+ const h=await setup(),e=loreEntry();await h.api.addMessagesBulk('s',[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:4,role:'assistant',content:'Reply'}]);await h.lore.createEntry('s',e);
+ let raced=false;h.fault.beforeCommit=changes=>{
+  if(!raced && changes.some(([type,target])=>type==='update' && target.path===h.sessionPath+'/lore/mira')){
+   raced=true;h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'racing',text:'New concurrent note',src:4,by:'auto',at:2});
+  }
+ };
+ const backup=await h.lore.removeDeletedLines('s',[e],new Set(),1);h.fault.beforeCommit=null;
+ await h.lore.restoreBackup('s',backup,[]);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.some(l=>l.id==='racing'));
+});
+
+test('D7 oversized backup failure keeps staged parts unpublished until the orphan lease expires',async()=>{
+ const h=await setup();await h.lore.listBackups('s');
+ const entries=Array.from({length:12},(_,i)=>{const e=loreEntry('big'+i);e.sections.appearance.text='x'.repeat(740000);return e;});
+ h.fault.failAt=h.transactions.length+3;
+ await assert.rejects(h.lore.writeBackup('s','test','Oversized',entries),/Injected transaction failure/);
+ const index=h.documents.get(h.sessionPath+'/loreMeta/backups');assert.equal(index.groups.length,0);assert.equal(index.pending.length,1);
+ assert.equal([...h.documents.keys()].filter(p=>p.includes('/loreBackups/')).length,1);
+ assert.equal((await h.lore.listBackups('s')).length,0);
+ index.pending[0].createdMs=0;await h.lore.listBackups('s');
+ assert.equal([...h.documents.keys()].filter(p=>p.includes('/loreBackups/')).length,0);
+});
+
+test('B13 reorganize never resurrects an unsent line deleted after preview',async()=>{
+ const h=await setup(),e=loreEntry();e.sections.appearance.lines.push({id:'unsent',text:'Needs review',by:'auto',needsReview:true,src:2,at:1});await h.lore.createEntry('s',e);
+ h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines=h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.filter(l=>l.id!=='unsent');
+ await h.lore.replaceLines('s',[{entry:e,sections:{appearance:[e.sections.appearance.lines[1],{id:'clean',text:'Clean',by:'reorganize',src:2,at:2}]},sent:{appearance:[e.sections.appearance.lines[0]]},snapshot:{appearance:e.sections.appearance.lines.map(l=>l.id)}}],2);
+ assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.every(l=>l.id!=='unsent'));
+});
+
+test('D5 cleanup whose tombstone initially fails is queued and resumes on reconnect',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'user',content:'Imported partial'});h.fault.failAt=h.transactions.length+1;
+ await assert.rejects(h.sessions.deleteSession('s'),e=>e.deletionPending===true);assert.ok(h.documents.has(h.sessionPath));await h.sessions.resumeQueuedDeletions();assert.ok(![...h.documents.keys()].some(k=>k===h.sessionPath || k.startsWith(h.sessionPath+'/')));
+});
+
+test('D9 deleting a reply before a later pending user preserves that user turn for Retry',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'user',content:'First'});const old=await h.api.addMessage('s',{role:'assistant',content:'Old reply'}),user=await h.api.addMessage('s',{role:'user',content:'Pending next action'});await h.api.deleteMessage('s',old.id,old.order);const reply=await h.api.addMessage('s',{role:'assistant',content:'Pending reply'});assert.equal(reply.narratorTurn,user.narratorTurn);
 });
