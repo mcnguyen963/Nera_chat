@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {webcrypto} from 'node:crypto';
 import {appHarness} from './app-harness.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
@@ -61,7 +61,7 @@ test('L4 pure summary plans preserve opening and complete turns even when one tu
 });
 test('L4 automatic summary commits one complete chunk with order coverage and no growing evidence list',async()=>{
  let calls=0,saved;
- const u=appHarness({stubs:{'messages.js':{getMessages:async()=>history,getCheckpointMessages:async()=>history,newMessageId:()=> 'sum',addMessage:async(_sid,msg)=>{saved=msg;return {...msg,historyRevision:1};}},'tokenizer.js':{countTokens:async s=>s.length},'context-builder.js':{buildContextForRequest:async()=>({usedTokens:100,report:{warnings:[]}}),computeContextUsage:async()=>({}),MESSAGE_FRAME_TOKENS:8,REQUEST_FRAME_TOKENS:8},'llm-client.js':{chatCompletion:async opts=>{calls++;assert.equal(opts.allowTruncated,false);return {content:'Summary',finishReason:'stop'};}}}});
+ const u=appHarness({stubs:{'messages.js':{getMessages:async()=>history,getCheckpointMessages:async()=>history,newMessageId:()=> 'sum',addMessage:async(_sid,msg)=>{saved=msg;return {...msg,historyRevision:1};}},'tokenizer.js':{countTokens:async s=>s.length},'context-builder.js':{buildContextForRequest:async()=>({usedTokens:100,report:{warnings:[]}}),computeContextUsage:async()=>({}),MESSAGE_FRAME_TOKENS:8,REQUEST_FRAME_TOKENS:8},'llm-client.js':{chatCompletion:async opts=>{calls++;assert.equal(opts.allowTruncated,true);return {content:'Summary',finishReason:'stop'};}}}});
  const r=await(await u('summarizer.js')).runSummarization({id:'s'},settings,{messages:history,maxChunks:1});assert.equal(calls,1);assert.equal(r.foldedCount,2);assert.deepEqual(plain(saved.coveredRange),{fromOrder:3,toOrder:4});assert.equal('evidence' in saved,false);
 });
 test('L7 idle range status distinguishes unset start, pending replies and waiting lag',async()=>{
@@ -96,7 +96,8 @@ test('U1 busy ownership rejects stale releases and history bridges only from the
 test('C1 all four outgoing defaults migrate by exact hash; customized and omitted settings stay distinct',async()=>{
  const fields=[['narratorSystemPrompt','narrator.md'],['summarizerSystemPrompt','summarizer.md'],['memoryExtractionPrompt','memory-extraction.md'],['memoryReorganizePrompt','memory-reorganize.md']];
  const u=appHarness({globals:{crypto:webcrypto},stubs:{'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'},'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:()=>({}),getDocFromServer:async()=>({exists:()=>true,data:()=>({})}),onSnapshot:()=>()=>{},setDoc:async()=>{}}}}),s=await u('settings.js');
- for(const [key,file]of fields){const old=execFileSync('git',['show','03b7a9d:system prompts/'+file],{encoding:'utf8'}).trim();assert.equal((await s.mergeDefaults({[key]:old}))[key],s.DEFAULT_SETTINGS[key]);assert.equal((await s.mergeDefaults({[key]:old+' custom'}))[key],old+' custom');assert.equal((await s.mergeDefaults({}))[key],s.DEFAULT_SETTINGS[key]);assert.equal(key in s.storedSettings(s.DEFAULT_SETTINGS),false);}
+ const hashLines=await readFile(new URL('../system prompts/legacy-prompt-default-hashes.md',import.meta.url),'utf8');
+ for(const [key,file]of fields){const old=(await readFile(new URL('./fixtures/outgoing-prompts/'+file,import.meta.url),'utf8')).trim();assert.ok(hashLines.split('\n').includes(key+' '+createHash('sha256').update(old).digest('hex')),file+' outgoing fixture hash');assert.equal((await s.mergeDefaults({[key]:old}))[key],s.DEFAULT_SETTINGS[key]);assert.equal((await s.mergeDefaults({[key]:old+' custom'}))[key],old+' custom');assert.equal((await s.mergeDefaults({}))[key],s.DEFAULT_SETTINGS[key]);assert.equal(key in s.storedSettings(s.DEFAULT_SETTINGS),false);}
  const hashes=await readFile(new URL('../system prompts/legacy-prompt-default-hashes.md',import.meta.url),'utf8');for(const line of hashes.trim().split('\n'))assert.match(line,/^(narratorSystemPrompt|summarizerSystemPrompt|memoryExtractionPrompt|memoryReorganizePrompt) [0-9a-f]{64}$/);
 });
 test('U5 silent stream times out at the owner-selected 120 seconds, cancels the reader and preserves partial content',async()=>{

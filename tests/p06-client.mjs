@@ -1,3 +1,4 @@
+import {promptFetch} from './prompt-files.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appHarness } from './app-harness.mjs';
@@ -66,10 +67,10 @@ test('P0.6 truncated summaries cannot replace the checkpoint', async () => {
     'messages.js': { getMessages: async () => all, getCheckpointMessages: async () => all, newMessageId: () => 'summary', addMessage: async () => { saves++; } },
     'tokenizer.js': { countTokens: async text => Math.ceil(String(text).length / 4) },
     'context-builder.js': { buildContextForRequest: async () => ({ usedTokens: 100, report: { warnings: [] } }), computeContextUsage: async () => ({}), MESSAGE_FRAME_TOKENS: 8, REQUEST_FRAME_TOKENS: 8 },
-    'llm-client.js': { chatCompletion: async opts => { calls++; assert.equal(opts.allowTruncated, false); return { content: 'Partial summary', finishReason: 'length' }; } },
-  } });
+
+  },globals:{fetch:async(url,init)=>{if(url instanceof URL && url.protocol==='file:')return promptFetch(url,init);calls++;const bytes=new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:'Partial summary'},finish_reason:'length'}]})+'\ndata: [DONE]\n');let sent=false;return {ok:true,body:{getReader:()=>({read:async()=>sent?{done:true}:(sent=true,{done:false,value:bytes})})}};}} });
   const api = await use('summarizer.js');
-  await assert.rejects(api.runSummarization({ id: 'story', breakpointOrder: 0 }, { maxContextTokens: 20000, maxResponseTokens: 2000, keepRecentMessagesAfterSummary: 2 }, { messages: all }), /summary hit the output limit; the checkpoint was not changed/);
+  await assert.rejects(api.runSummarization({ id: 'story', breakpointOrder: 0 }, { endpoint:"https://test.example",modelId:"test",streaming:true,maxContextTokens: 20000, maxResponseTokens: 2000, keepRecentMessagesAfterSummary: 2 }, { messages: all }), /summary hit the output limit; the checkpoint was not changed/);
   assert.equal(calls, 1);
   assert.equal(saves, 0);
 });
