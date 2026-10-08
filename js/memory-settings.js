@@ -45,10 +45,10 @@ export function memoryTaskSettings(settings, mem, outputTokens = mem.updateMaxTo
     if (!profile) throw new Error('The memory model profile no longer exists. Choose another profile in Memory settings.');
     // Flat fields include the current profile's device-local overrides.
     if (profile.id !== settings.activeProfileId) {
-      task = { ...task,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',streaming:profile.streaming ?? true,
+      task = { ...task,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',streaming:profile.streaming ?? true,reasoning:profile.reasoning ?? {},
         advancedParametersEnabled:profile.advancedParametersEnabled ?? ['temperature','topP','frequencyPenalty','presencePenalty'].some(key => profile[key] != null && profile[key] !== '') };
       for (const key of ['temperature','topP','frequencyPenalty','presencePenalty']) task[key] = profile[key] ?? null;
     }
   }
-  return { ...task,maxResponseTokens:outputTokens,reasoning:{enabled:false,explicitDisable:true} };
+  return { ...task,maxResponseTokens:outputTokens,reasoning:structuredClone(task.reasoning ?? {}) };
 }
