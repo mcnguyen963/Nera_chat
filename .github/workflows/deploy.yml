@@ -2,23 +2,35 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [feature/story-memory]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Regression suite
+        run: node --experimental-vm-modules --test tests/*.mjs
+
+  build:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       # Generate js/firebase-config.js before publishing to GitHub Pages.
       - name: Write firebase-config.js
@@ -47,6 +59,7 @@ jobs:
           rm -f _site/js/firebase-config.example.js
           find _site \( -name '*:Zone.Identifier' -o -name '.DS_Store' \) -type f -delete
           test -s _site/js/firebase-config.js
+          test -s _site/js/vendor/gpt-tokenizer-2.9.0.js
           test -s _site/resources/pets/manifest.json
           for f in $(grep -o '"[A-Za-z0-9-]*\.md"' js/system-prompts.js | tr -d '"'); do
             test -s "_site/system prompts/$f"
@@ -55,12 +68,19 @@ jobs:
             test ! -e "_site/$p"
           done
 
+      - name: Stamp every module and stylesheet with the release version
+        run: node scripts/stamp-version.mjs _site "$GITHUB_SHA"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
+    permissions:
+      pages: write
+      id-token: write
     runs-on: ubuntu-latest
     environment:
       name: github-pages
