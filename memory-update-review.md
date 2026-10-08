@@ -4,7 +4,7 @@ Implemented locally on `feature/story-memory`. No LLM calls were made, and no st
 
 ## What changed
 
-- Memory extraction and reorganization explicitly request reasoning off on OpenRouter. The selected model, including `:floor`, and saved token budgets remain unchanged.
+- Memory extraction and reorganization use the chosen profile's thinking settings without forcing reasoning off. The selected model, including `:floor`, and memory task output budgets remain unchanged.
 - The first failure shows its actual error in the toast, Memory settings, and context inspector. A failed manual update no longer produces a misleading “nothing to update” message.
 - Catch up and Rebuild report when they stop after a failure instead of claiming completion. Previously saved batches remain saved.
 - An oversized note or full card stops the batch without advancing its checkpoint. A full card discovered during the Firestore transaction rolls back every write in that batch.

@@ -179,26 +179,27 @@ test('ledger starts one update, rejects duplicate starts and skips auto-summary 
   for (let i=0;i<30 && !finish;i++) await new Promise(resolve => setImmediate(resolve)); finish({ content:'NONE' });
   for (let i=0;i<30 && h.updater.isRunning('s');i++) await new Promise(resolve => setImmediate(resolve)); assert.equal(h.commits.length,1); assert.equal(h.live.session.memoryState.extractedThroughOrder,4);
 });
-test('memory updates explicitly disable OpenRouter reasoning without changing the floor model or output budget',async () => {
+test('memory updates preserve profile thinking settings without changing the floor model or output budget',async () => {
   let request;
   const h=await updaterHarness(async options => { request=options; return {content:'NONE'}; });
-  h.live.settings={...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,mode:'max_tokens',maxTokens:20000}};
+  h.live.settings={...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,mode:'effort',effort:'high'}};
   assert.equal(await h.updater.updateNow('s'),true);
   const use=await setup(),client=await use('llm-client.js');
   const body=client.buildRequestBody(request.settings,request.messages);
-  assert.deepEqual(plain(body.reasoning),{enabled:false});
+  assert.deepEqual(plain(body.reasoning),{effort:'high'});
   assert.equal(body.max_tokens,256);assert.equal(body.model,'z-ai/glm-5.3-flash:floor');
   assert.match(body.messages[0].content,/under 400 characters/);
   assert.match(body.messages[0].content,/exact thread title/);
-  assert.equal(client.buildRequestBody({...request.settings,endpoint:'https://example.test'},request.messages).reasoning,undefined);
+  assert.deepEqual(plain(client.buildRequestBody({...request.settings,endpoint:'https://example.test'},request.messages).reasoning),{effort:'high'});
+  assert.deepEqual(plain(request.settings.reasoning),plain(h.live.settings.reasoning));
 });
 test('memory profile resolves its own connection and sampling without switching narration or sharing its credentials',async()=>{
   const use=await setup(),m=await use('memory-settings.js'),client=await use('llm-client.js');
-  const narrator={...settings,activeProfileId:'narrator',modelId:'narrator-model',endpoint:'https://narrator.test',apiKey:'narrator-key',temperature:1,advancedParametersEnabled:true,reasoning:{enabled:true,effort:'high'},profiles:[{id:'narrator',modelId:'old-mirrored-model'},{id:'scribe',name:'Scribe',endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:'scribe-key',modelId:'z-ai/glm-5.3-flash:floor',streaming:false,temperature:0.2,advancedParametersEnabled:true,maxResponseTokens:9000,reasoning:{enabled:true,effort:'high'}}]};
+  const narrator={...settings,activeProfileId:'narrator',modelId:'narrator-model',endpoint:'https://narrator.test',apiKey:'narrator-key',temperature:1,advancedParametersEnabled:true,reasoning:{enabled:true,mode:'effort',effort:'high'},profiles:[{id:'narrator',modelId:'old-mirrored-model'},{id:'scribe',name:'Scribe',endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:'scribe-key',modelId:'z-ai/glm-5.3-flash:floor',streaming:false,temperature:0.2,advancedParametersEnabled:true,maxResponseTokens:9000,reasoning:{enabled:true,mode:'effort',effort:'high'}}]};
   const before=JSON.stringify(narrator),mem=m.normalizeMemory({updateProfileId:'scribe',updateMaxTokens:3000});
   const task=m.memoryTaskSettings(narrator,mem),body=client.buildRequestBody(task,[]);
   assert.equal(task.endpoint,narrator.profiles[1].endpoint);assert.equal(task.apiKey,'scribe-key');assert.equal(task.streaming,false);
-  assert.equal(body.model,'z-ai/glm-5.3-flash:floor');assert.equal(body.temperature,0.2);assert.equal(body.max_tokens,3000);assert.deepEqual(plain(body.reasoning),{enabled:false});
+  assert.equal(body.model,'z-ai/glm-5.3-flash:floor');assert.equal(body.temperature,0.2);assert.equal(body.max_tokens,3000);assert.deepEqual(plain(body.reasoning),{effort:'high'});
   assert.equal(JSON.stringify(narrator),before);
   const following=m.memoryTaskSettings(narrator,m.normalizeMemory());assert.equal(following.modelId,'narrator-model');
   const pinnedActive=m.memoryTaskSettings(narrator,m.normalizeMemory({updateProfileId:'narrator'}));assert.equal(pinnedActive.modelId,'narrator-model');
@@ -223,14 +224,25 @@ test('deleted memory profiles fail without a model call or checkpoint movement',
   assert.match(h.live.session.memoryState.lastError,/profile no longer exists/);
   h.live.session.memory.updateProfileId='';assert.equal(await h.updater.updateNow('s'),true);assert.equal(calls,1);
 });
-test('reorganize explicitly disables reasoning in its serialized request',async () => {
+test('memory thinking follows the chosen profile across effort, token-budget and off modes without mutation',async()=>{
+  const use=await setup(),m=await use('memory-settings.js'),client=await use('llm-client.js');
+  for(const reasoning of [{enabled:true,mode:'effort',effort:'max'},{enabled:true,mode:'effort',effort:'low'},{enabled:true,mode:'max_tokens',maxTokens:1000},{enabled:false,mode:'effort',effort:'high'}]){
+    const source={...settings,activeProfileId:'narrator',reasoning:{enabled:true,mode:'effort',effort:'medium'},profiles:[{id:'scribe',modelId:'scribe',endpoint:'https://openrouter.ai/api/v1/chat/completions',reasoning}]};
+    const before=JSON.stringify(source),task=m.memoryTaskSettings(source,m.normalizeMemory({updateProfileId:'scribe'}));
+    assert.deepEqual(plain(task.reasoning),reasoning);
+    const body=client.buildRequestBody(task,[]);
+    assert.deepEqual(body.reasoning ? plain(body.reasoning) : undefined,reasoning.enabled ? reasoning.mode==='effort' ? {effort:reasoning.effort} : {max_tokens:1000} : undefined);
+    task.reasoning.effort='changed';assert.equal(JSON.stringify(source),before);
+  }
+});
+test('reorganize preserves profile thinking effort in its serialized request',async () => {
   const use=await setup(),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),m=await use('memory-settings.js'),client=await use('llm-client.js');
   const entry=l.makeEntry('characters','Mira');entry.sections.appearance.lines=[line('a','scar',2)];
   let request;
-  const live={settings:{...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,effort:'high'}},mem:m.normalizeMemory(),messages};
+  const live={settings:{...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'z-ai/glm-5.3-flash:floor',reasoning:{enabled:true,mode:'effort',effort:'high'}},mem:m.normalizeMemory(),messages};
   await r.runReorganizeBatch(live,[entry],{[entry.id]:['appearance']},'',{complete:async options=>{request=options;return {content:'T2 [char] Mira | appearance: scar'};}});
   const body=client.buildRequestBody(request.settings,request.messages);
-  assert.deepEqual(plain(body.reasoning),{enabled:false});assert.equal(body.max_tokens,live.mem.reorganizeMaxTokens);
+  assert.deepEqual(plain(body.reasoning),{effort:'high'});assert.equal(body.max_tokens,live.mem.reorganizeMaxTokens);
 });
 test('reorganization uses the selected memory connection and its own task output budget',async()=>{
   const use=await setup(),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),m=await use('memory-settings.js');
@@ -238,7 +250,7 @@ test('reorganization uses the selected memory connection and its own task output
   const live={settings:{...settings,activeProfileId:'narrator',modelId:'narrator-model',profiles:[{id:'scribe',endpoint:'https://scribe.test',apiKey:'scribe-key',modelId:'scribe-model'}]},mem:m.normalizeMemory({updateProfileId:'scribe',reorganizeMaxTokens:7000}),messages};
   const sections={[card.id]:['appearance']},plan=await r.planReorganize(live,[card],sections);
   let request;await r.runReorganizeBatch(live,plan.batches[0],sections,'',{complete:async options=>{request=options;return {content:'T2 [char] Mira | appearance: scar'};}});
-  assert.equal(request.settings.modelId,'scribe-model');assert.equal(request.settings.endpoint,'https://scribe.test');assert.equal(request.settings.maxResponseTokens,7000);assert.equal(request.settings.reasoning.enabled,false);
+  assert.equal(request.settings.modelId,'scribe-model');assert.equal(request.settings.endpoint,'https://scribe.test');assert.equal(request.settings.maxResponseTokens,7000);assert.deepEqual(plain(request.settings.reasoning),{});
   assert.equal(live.settings.modelId,'narrator-model');
 });
 test('mixed valid and oversized notes never advance extraction past a dropped note',async () => {
