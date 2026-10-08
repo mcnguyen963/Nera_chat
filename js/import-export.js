@@ -1,13 +1,16 @@
+import {normalizeLoreEntry} from './lore-format.js';
+import {download} from './ui/memory-ui.js';
 import { getLore, importLore } from './lore-store.js';
-import { formatTurnsTranscript, computeTurns } from './turns.js';
 import { normalizeMemory } from './memory-settings.js';
 // SillyTavern JSONL import/export (spec §10). Chat log only, no character cards.
 // Line 1 is a metadata header ({user_name, character_name, create_date}); every
 // subsequent line is one message {name, is_user, send_date, mes}.
 
-import { createSession, getSession, updateSession } from "./sessions.js";
+import { createSession, getSession, updateSession, deleteSession, listSessions } from "./sessions.js";
 import { getMessages, addMessagesBulk } from "./messages.js";
 
+const importReports=new Map();
+export const importReport=sid=>importReports.get(sid) ?? null;
 export function parseSillyTavernJsonl(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) throw new Error("File is empty.");
@@ -22,6 +25,8 @@ export function parseSillyTavernJsonl(text) {
     } catch {
       continue; // skip malformed lines
     }
+    if(!obj || typeof obj!=='object' || Array.isArray(obj))continue;
+    if(obj.neraStorySeparator || obj.neraAccount)throw new Error('This is an account backup. Split it at neraStorySeparator records and import each story separately.');
     if (obj.mes === undefined) {
       // Metadata header line
       if (i === 0 && obj.character_name) title = obj.character_name;
@@ -39,22 +44,33 @@ export function parseSillyTavernJsonl(text) {
 }
 
 export async function importSillyTavern(file) {
-  const text = await file.text();
-  const { title,messages,metadata } = parseSillyTavernJsonl(text);
-  const sessionId = await createSession(title || file.name.replace(/\.jsonl$/i, "") || "Imported chat");
-  // Store the imported log in bounded chunks instead of one document per turn.
-  await addMessagesBulk(sessionId,messages);
-  if (metadata?.session) {
-    const allowed = ['longTermPlan','memory','memoryState','activeSummaryMessageId','breakpointOrder','memoryInvalidations','historyRevision','nextNarratorTurn'];
-    const patch=Object.fromEntries(allowed.filter(k=>k in metadata.session).map(k=>[k,metadata.session[k]]));
-    if(patch.memory?.autoUpdate && patch.memoryState?.extractedThroughOrder==null){patch.memoryState={...patch.memoryState,extractedThroughOrder:Array.isArray(metadata.lore) && metadata.lore.length ? messages.filter(m=>m.role==='assistant').at(-1)?.order ?? messages.reduce((last,m,i)=>m.role==='assistant'?i+1:last,0) : 0};}
+  if(file.size>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
+  const text=await file.text();if(new TextEncoder().encode(text).length>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
+  const {title,messages,metadata}=parseSillyTavernJsonl(text);
+  const lore=[];let droppedLore=0;
+  for(const e of Array.isArray(metadata?.lore) ? metadata.lore : []){try{lore.push(normalizeLoreEntry(e));}catch{droppedLore++;}}
+  const sessionId=await createSession(title || file.name.replace(/\.jsonl$/i,'') || 'Imported chat',{importing:true});
+  try {
+    await addMessagesBulk(sessionId,messages);
+    if(lore.length)await importLore(sessionId,{writes:lore.map(e=>({id:e.id,data:e}))},[]);
+    const source=metadata?.session ?? {},memory=normalizeMemory(source.memory);
+    memory.autoUpdate=false;memory.sceneFallback=false;memory.updateMaxTokens=normalizeMemory().updateMaxTokens;
+    const maxOrder=Math.max(0,...messages.map((m,i)=>m.order ?? i+1));
+    const summary=messages.find(m=>m.id===source.activeSummaryMessageId && m.role==='summary');
+    const pointer=source.memoryState?.extractedThroughOrder;
+    const patch={longTermPlan:typeof source.longTermPlan==='string'?source.longTermPlan:'',memory,
+      memoryState:{extractedThroughOrder:Number.isSafeInteger(pointer)?Math.max(0,Math.min(maxOrder,pointer)):null,failureStreak:0,paused:false,lastError:null},
+      activeSummaryMessageId:summary?.id ?? null,breakpointOrder:summary ? Math.max(0,Math.min(maxOrder,Number(source.breakpointOrder)||0)) : 0,
+      importing:false};
     await updateSession(sessionId,patch);
-    if (Array.isArray(metadata.lore)) await importLore(sessionId,{ writes:metadata.lore.map(e => ({ id:e.id,data:e })) },[]);
-  }
-  return sessionId;
+    const report={sessionId,droppedLore,message:'Imported. Background memory is off — turn it on in Memory settings.'+(droppedLore ? ' '+droppedLore+' invalid lore cards were skipped.' : '')};
+    importReports.set(sessionId,report);if(importReports.size>3)importReports.delete(importReports.keys().next().value);
+    if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('import-report',{detail:report}));
+    return sessionId;
+  }catch(error){try{await deleteSession(sessionId);}catch(cleanup){console.error('Incomplete import cleanup will resume:',cleanup);}throw error;}
 }
 
-export async function exportSillyTavern(sessionId) {
+export async function serializeStory(sessionId) {
   const session = await getSession(sessionId);
   if (!session) throw new Error("No active session to export.");
   const msgs = await getMessages(sessionId);
@@ -81,21 +97,12 @@ export async function exportSillyTavern(sessionId) {
     );
   }
 
-  const blob = new Blob([lines.join("\n") + "\n"], { type: "application/x-ndjson" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const safeTitle = (session.title || "session").replace(/[^\w\- ]+/g, "").trim() || "session";
-  a.href = url;
-  a.download = safeTitle + ".jsonl";
-  a.click();
-  URL.revokeObjectURL(url);
+  return {text:lines.join('\n')+'\n',title:session.title};
 }
-
-export async function exportTranscriptForLorebooks(sessionId) {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error('No active session to export.');
-  const messages = await getMessages(sessionId);
-  const text = formatTurnsTranscript(messages, computeTurns(messages), { title: session.title, protagonist: normalizeMemory(session.memory).protagonist });
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-  const link = document.createElement('a'); link.href = url; link.download = (session.title || 'story')+'-transcript.txt'; link.click(); URL.revokeObjectURL(url);
+export async function exportSillyTavern(sessionId){const {text,title}=await serializeStory(sessionId);download(text,(title || 'session').replace(/[^\w\- ]+/g,'').trim()+'.jsonl','application/x-ndjson');}
+export async function exportAllStories({signal,onProgress=()=>{},save=download}={}){
+ const sessions=(await listSessions()).filter(s=>!s.deleting && !s.importing),blocks=[JSON.stringify({neraAccount:{version:1,exportedAt:new Date().toISOString(),stories:sessions.length}})];
+ const check=()=>{if(signal?.aborted)throw Object.assign(new Error('Export cancelled.'),{name:'AbortError'});};
+ for(const [i,s] of sessions.entries()){check();onProgress({done:i,total:sessions.length,title:s.title});const story=await serializeStory(s.id);check();blocks.push(JSON.stringify({neraStorySeparator:{index:i+1,id:s.id,title:story.title}}),story.text.trimEnd());}
+ check();onProgress({done:sessions.length,total:sessions.length});const text=blocks.join('\n')+'\n';save(text,'nera-all-stories-'+new Date().toISOString().slice(0,10)+'.jsonl','application/x-ndjson');return sessions.length;
 }

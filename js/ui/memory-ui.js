@@ -1,8 +1,9 @@
+import {friendlyError} from '../errors.js';
 import {copyText} from './clipboard.js';
 export function node(tag, text, className) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; }
-export function button(text, action, className = 'btn') { const b = node('button',text,className); b.type = 'button'; b.addEventListener('click',async () => { try { await action(b); } catch (e) { toast(e.message); b.disabled=false; } }); return b; }
+export function button(text, action, className = 'btn') { const b = node('button',text,className); b.type = 'button'; b.addEventListener('click',async () => { if(b.disabled)return;b.disabled=true;try { await action(b); } catch (e) { toast(e); } finally {b.disabled=false;} }); return b; }
 export function field(label, value = '', { textarea = false, type = 'text' } = {}) { const wrap = node('label',label), input = node(textarea ? 'textarea' : 'input'); if (!textarea) input.type = type; else input.rows = 3; input.value = value ?? ''; wrap.append(input); if (textarea) input.addEventListener('input',() => { input.style.height = 'auto'; input.style.height = input.scrollHeight+'px'; }); input.addEventListener('focus',() => requestAnimationFrame(() => input.scrollIntoView({ block:'nearest' }))); return { wrap,input }; }
-export function toast(text, action, callback) { document.querySelector('.toast')?.remove(); const t = node('div',text,'toast action'); if (action) t.append(button(action,() => { t.remove(); return callback?.(); },'toast-link')); document.body.append(t); setTimeout(() => t.remove(),6000); }
+export function toast(text, action, callback) { text=friendlyError(text); document.querySelector('.toast')?.remove(); const t = node('div',text,'toast action'); if (action) t.append(button(action,() => { t.remove(); return callback?.(); },'toast-link')); document.body.append(t); setTimeout(() => t.remove(),6000); }
 export function sheet(root,title,{ close = () => true, className = '', back } = {}) {
   root._sheetCleanup?.();
   const opener = document.activeElement;
