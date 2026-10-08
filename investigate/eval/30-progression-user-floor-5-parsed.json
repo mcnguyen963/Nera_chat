@@ -1,0 +1,53 @@
+{
+  "content": "The pen lies on the desk between you and the order, its nib trimmed and dark with fresh ink. Krail does not push it closer. He simply leaves it where a hand might naturally reach, the way a man sets a tool at the edge of a workbench and lets the work argue for itself.\n\n\"I will note the hour of your decision, my lord, whichever way it falls,\" he says. His voice stays level, administrative, as though the paper before you were a supply requisition and nothing more. \"Delay has its own costs. The girl's hand will worsen if the physician is called, and a called physician writes a report. An unsigned order holds matters exactly where they are—no worse, but no better either. The Duke returns from the eastern ride at dusk. He will ask what was done in his absence.\"\n\nHe straightens the corners of the punishment order a final time, aligning it with the desk edge until the sheet sits perfectly square. Then he smooths his cuffs, takes up his keys and his watch, and bows—precise, shallow, correct.\n\n\"I will be in the counting room should you require the forms completed properly.\"\n\nHe turns and walks to the door. His shoes make no sound on the carpet until he reaches the boards beyond it, and then his steps recede down the passage with the measured regularity of a clock pendulum. Somewhere out there, a fabric shifts—a listener withdrawing from the door, or merely settling. The corridor gives you nothing certain.\n\nThe room settles around his absence.\n\nElise Fen exhales slowly through her nose. Her left forearm rests against her apron, the cloth bandage brown-stained at its center, and she does not move it. Her hands stay clasped where Krail can no longer see them, knuckles pale. She watches you with the fixed, careful attention of someone measuring whether the space that just opened is a door or a trap.\n\nLiora is not so still. She shifts her weight from foot to foot, soot streaking one cheek, her dark hair with its buried red falling loose over her blistered palm. Her mouth opens once—beginning, perhaps, to explain about the nightingale again, about the jammed mechanism, about how the lamp only tipped—and closes again when her mother's shoulder angles very slightly toward her. But her eyes stay on your face, wide and reddish-brown and waiting, and there is something in them older than eleven years: the look of a child who has already learned which adults decide things and which adults are decided about.\n\nIsolde stands at your right hand exactly where she has stood throughout, white hair neat, yellow eyes tracking the door after Krail leaves it, then returning to the room. She does not offer a smile. When she speaks at all it will be when spoken to, or when the bond's charge requires otherwise.\n\nAgainst the wall, the remains of your mother's last portrait lean at a careless angle, its varnish blistered, one corner of Ilyra's painted face consumed to bare canvas. The room still smells of lamp oil and wet ash. Water has pooled faintly where someone threw it.\n\nThe unsigned order sits on the desk. The pen sits beside it. The physician remains available in the east wing, unsummoned. Outside, dusk is some hours away, and your father will ride home expecting an account.\n\nThe room is quiet enough now to hear the fire's last crackle somewhere far below, or perhaps only the wind in the west windows.\n\n<plan_thread>Immediate pending target: Nera's unsigned decision on the punishment order, including whether to summon the physician before Krail returns.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The author directive: continue the hearing, have Krail leave the room, don't move Nera or others, no player speech/thoughts/decisions. So I narrate Krail finishing his presentation and departing. Nera doesn't act. Present at end: Nera, Isolde, Elise, Liora — Krail has left. The scene tag present list should exclude Krail since he leaves.\n\nWait — the \"ad\" is embedded in the memory block? The directive says \"Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people.\" So Krail leaves the room; Elise, Liora, Isolde, Nera remain.\n\nEnd on open beat before player's choice. 500-700 words. Include <plan_thread> before scene tag, one line naming immediate pending target: Nera's decision on the unsigned punishment order / whether to summon the physician, etc.\n\nWrite the narration: Krail presses for decision, pen beside order, then departs perhaps noting the window of authority. Maybe he checks watch, mentions the order remains on the desk, bows precisely, leaves. Outside, faint sounds — Magerrett still listening, Taigar down the corridor — but they stay outside. Elise and Liora react subtly; Liora maybe shifts, Elise steadying hand. Isolde remains still. No dialogue from Nera.\n\nScene tag: date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath Estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen.\n\nPlan thread: pending target — Nera's unsigned decision on the punishment order (and unanswered physician question).",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1181,
+    "total_tokens": 16117,
+    "cost": 0.00111326,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14488,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00111326,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.0005905
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 369,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 585,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

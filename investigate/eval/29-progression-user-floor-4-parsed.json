@@ -1,0 +1,53 @@
+{
+  "content": " The pen lies where Krail set it down, beside the unsigned punishment order, its nib aimed at the approval space as though it expects to be filled.\n\nKrail waits. He is good at waiting; you can see the practice in it. His hands stay folded over the ledger at his side, his chin level, his grey eyes resting on you with the same patient attention a clerk gives a column that will eventually sum correctly. The silence stretches. Behind him, the wet-ash smell of the ruined portrait drifts from the corner of the room, and the tall west windows throw pale afternoon light across the floor between you and the two detained women.\n\n\"Lord Nera,\" he says at last, dry as ledger paper. \"The household requires a resolution before evening muster. The damage to your lady mother's rooms must be entered in the estate register, and the register entry requires an authorized account of fault. The girl has admitted unauthorized entry and the fire. The mother held the keys. The missing folio remains unaccounted for.\" He recites it without emphasis, each item set down like a coin on a counting board. \"The order before you is measured. It authorizes a formal whipping of the girl, a fine of one season's wages against the mother, and dismissal of both from the household wing. No torture is specified. The document is, if I may say, restrained by the standards of this house.\"\n\nElise's bandaged forearm is pressed against her apron. She has not looked away from you since she finished her oath that the fire was accidental — that she never gave Liora the keys, never knew they were gone until the smoke started. Her jaw is set. Fear sits around her mouth, but she holds her posture the way someone holds a door against wind.\n\nLiora is not holding anything. She stands with her blistered palm curled against her skirt, soot streaking one cheek, her black-and-crimson hair still wild from the fire. Her reddish-brown eyes keep moving — from the pen, to your face, to the burned portrait leaning against the wall, to her mother's bandage. When Krail mentions whipping, her breath goes quick and shallow, and her shoulder bumps her mother's. Elise's unbandaged hand moves a fraction, steadying her without a word.\n\nIsolde stands at your shoulder, still as furniture. Her yellow eyes track Krail's hands, then the door, then the corridor beyond it through the gap of the half-closed panel. When she glances at you, her face offers nothing — only that cold, doll-like composure, and the faint readiness in her stance of someone waiting for an instruction she is bound to carry out.\n\nKrail straightens his cuffs. \"There is also the matter of the folio,\" he continues, and here his voice gains a hair of weight, the only change in him. \"A shipping folio of House Veyrath, twenty-three entries, missing from the record room adjacent to the fire. Elise Fen was assigned to those rooms. The household will want to know where it went.\" His eyes move to Elise as he says it, flat and unhurried, like a man laying a second document beside the first.\n\n\"I don't know anything about any folio,\" Elise says. Her voice is steady but thinner than before. \"I cleaned those rooms. I don't read shipping records. I never touched them.\"\n\n\"The register will note your denial,\" Krail says, without looking at her again.\n\nThen he gathers himself — a small, precise motion, squaring the order on the table, recovering his pen, returning it to its case as though the transaction were merely deferred. \"You may wish to consider the matter privately, my lord, or consult the household. I will withdraw and attend the estate accounts. The order remains here, with the approval space blank.\" He inclines his head, exact to the degree, and turns.\n\nHis footsteps cross the boards, unhurried, and the door closes behind him with a soft, deliberate click. Through it, faintly, comes the sound of someone moving quickly away down the passage — and, nearer, the much quieter sound of someone who had been standing close to the door stepping back, then holding still.\n\nThe room is left to the four of you: the unsigned order on the table, the burned portrait against the wall, and the mother and daughter waiting to learn what you are.\n\n<plan_thread>Immediate pending target: Nera's decision on the unsigned punishment order and the accusations against Elise and Liora.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate wing · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "Krail leaves the room, everyone else stays. Nera doesn't act. I narrate Krail's exit behavior, maybe pressure, then an open beat. Include plan_thread naming immediate pending target (Nera's decision on the punishment order / hearing). Scene tag: present would be Nera, Isolde, Elise, Liora after Krail exits. Time unknown. Place West Reception Room.\n\nWrite 500-700 words.",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1095,
+    "total_tokens": 16031,
+    "cost": 0.00107026,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14787,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00107026,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.0005475
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 91,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 727,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate wing · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate wing",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

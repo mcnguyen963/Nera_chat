@@ -1,0 +1,26 @@
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" ","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"O","reasoning_details":[{"type":"reasoning.text","text":"O","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"OC question, brief answer, no tags.","reasoning_details":[{"type":"reasoning.text","text":"OC question, brief answer, no tags.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"Physically present in the West Reception Room are N","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"era Veyrath, Isolde V","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"eyless, Elise Fen, Liora","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" Fen, and Bastian Krail (he is","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" waiting there with the unsigned punishment order). Mager","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":"rett is outside the door listening, and Taigar","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","choices":[{"index":0,"delta":{"content":" is farther down the corridor.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1791005535-5cSPaPkC651dY7w9Ikxr","object":"chat.completion.chunk","created":1791005535,"model":"z-ai/glm-5.3-flash","provider":"OpenInference","system_fingerprint":"vllm-dev-16e2b1ba","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":14641,"completion_tokens":78,"total_tokens":14719,"cost":0.000551435,"is_byok":false,"prompt_tokens_details":{"cached_tokens":12445,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.000551435,"upstream_inference_prompt_cost":0.000512435,"upstream_inference_completions_cost":0.000039},"completion_tokens_details":{"reasoning_tokens":10,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

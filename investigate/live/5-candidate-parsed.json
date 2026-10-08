@@ -1,0 +1,41 @@
+{
+  "content": " The west reception room still holds the fire's memory. The tall windows are open to the afternoon, and a wet-gray light falls across the scorched curtains, the blackened edge of a rug, the smell of lamp oil and ash that no open pane has managed to lift. A servant has cleared the worst of it, but a smear of soot still marks the wall where the portrait hung — most of Ilyra's face gone, only the curve of a shoulder and a few strands of painted black hair surviving above the burn line.\n\nLiora Fen stands with her hands bound loosely in front of her, a linen wrap over her burned palm that she keeps turning toward herself as if she could read the damage in it. Her reddish-brown eyes are fixed somewhere near your boots. She has not looked up since they brought her in. Her mother is beside her — Elise, hollow-eyed, her forearm bandaged in the same household linen, the wrapping gray at the edges where the blood seeped and dried. It has not been changed since it was tied this morning. You know that because Isolde told you, standing close and quiet, perhaps ten minutes ago: *Neither has been examined, my lord. The bandage is unchanged. I can summon the physician if you wish.*\n\nShe stands at your shoulder now, very still, hands neatly placed, her yellow eyes moving between the prisoners and the door with the same clean economy she gives everything.\n\nBastian Krail stands opposite, at the side of the writing table, and he has made himself the picture of diligent service. He is a dry, precise man with a ledger-keeper's stoop and a clerk's ink-stained cuffs, and he has arranged the document on the table with its top edge squared to the wood. The punishment order. You can read the headings from where you stand: *unauthorized entry into the chambers of the late Lady Ilyra, destruction of estate property, theft of a household key, negligence resulting in fire.* The line beneath lists punishments in descending severity — service remanded to the workhouses, public discipline, dismissal without reference — and below that, the approval space. It is blank.\n\nThe pen lies beside it, laid crosswise, its nib pointed at you.\n\nKrail's voice is smooth and tired, the voice of a man who has already decided the outcome and is merely waiting for the seal.\n\n\"My lord. The facts are not in dispute.\" He taps the paper once with a knuckle. \"The girl took the key without leave. She entered the Lady's private rooms. She brought a lamp in and destroyed a portrait of irreplaceable value, along with a portion of the household register — the shipping folio for the autumn consignment, which was kept there and which is now missing entirely.\" A small, practiced pause. \"The mother is responsible for the key and for the child's conduct. The order provides for both. I would note for the record that the household has been lenient thus far — no discipline, no confinement beyond this room — and that your father's steward will expect the matter to be closed properly before he returns this evening.\"\n\nHe slides the pen a half-inch further toward the table's edge, toward you, and his easy, uneven smile makes a brief appearance — the smile of an uncle, almost.\n\n\"It need not be severe, my lord. Dismissal with a mark against their names is the customary floor in cases like this. But it must be signed. An unresolved incident reflects on the house.\"\n\nLiora's bound hands stop turning the bandage. \"I did it,\" she says, too loud, the words cracking in the middle. \"Not my mam. Nobody told me to — she didn't even know I took the key, I swear it, I *swear* — I only wanted to fix the bird. It was broken and the young lord used to like it, I thought —\" Her voice folds. Elise's good hand comes down on her daughter's shoulder, and the girl goes quiet, shaking, staring hard at the floor as if she can burn a hole through it and escape that way.\n\nIsolde does not move. But her head has turned a fraction toward you, and when she speaks it is low, pitched for you alone, level as still water.\n\n\"The physician has not seen either of them, my lord. The burns are untreated. That is within your authority to change regardless of the order.\"\n\nDown the corridor, a floorboard settles — someone shifting their weight, someone who has been waiting there a while. Magerrett is nearer; you can almost feel her attention through the wall, patient, cataloguing. Taigar is farther off, and his silence says nothing either way.\n\nKrail waits. The pen waits. The blank approval space waits, white as a wound.\n\nWhat do you do?",
+  "thinking": "We need to continue the scene. The last state: Krail placed the pen beside the unsigned order and asked for Nera's decision. We need to write as narrator in second person, present tense. The user will play Nera — but here the final user message is just the memory block? The user message contains only the <memory> tag content and no actual action. Wait — \"The user's own words begin after the closing </memory> tag.\" In this case, there's nothing after? Actually the memory was sent as a system message format here — the human turn contains only the memory block. Hmm, actually the message shown is a human turn containing the memory wrapper. There's no user action after it. But we must respond. Perhaps this is the opening — the first user message was the character intro, and this is the scene start. Actually the conversation shows only one user message containing the memory. We should begin the scene — the hearing moment, Krail asking for decision, awaiting Nera's response. So we write the opening narration setting the scene and ending with Krail's question, giving Nera agency. Second person, present tense, English.\n\nWrite an immersive scene: west reception room, fire smell, Elise and Liora, Krail with order, Isolde nearby, Magerrett outside listening, Taigar down corridor. End on the pen and the decision point. Keep it a reasonable length — moderately detailed but not enormous. Include distinct NPC voices: Krail's oily bureaucratic tone, Elise's fear, Liora's defiance/guilt, Isolde's flat precision. Note Elise's bandage not changed, neither medically examined (Isolde told Nera that earlier). Leave the choice open.",
+  "usage": {
+    "prompt_tokens": 15254,
+    "completion_tokens": 1355,
+    "total_tokens": 16609,
+    "cost": 0.001450642395,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13882,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001450642395,
+      "upstream_inference_prompt_cost": 0.0001921875,
+      "upstream_inference_completions_cost": 0.001258454895
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 357,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "scene": null,
+  "appClassifiesOoc": false,
+  "appSavedScene": null,
+  "sceneContractWarning": "The model omitted the scene tag.",
+  "planThread": null,
+  "visibleWords": 806,
+  "sceneTagCount": 0,
+  "legacyHiddenReport": false,
+  "requiresHumanReview": [
+    "player agency",
+    "source knowledge",
+    "attendance consistent with visible events",
+    "location/time evidence"
+  ]
+}

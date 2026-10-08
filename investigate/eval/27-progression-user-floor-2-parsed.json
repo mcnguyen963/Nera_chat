@@ -1,0 +1,53 @@
+{
+  "content": "Krail waits with the patience of a man who has presented a hundred such orders and never once been refused. The pen lies parallel to the document, its nib pointed toward the blank approval line.\n\n\"Your signature completes the matter,\" he says. \"The customary form for negligence in the young is a day's confinement and a wage reduction. Given the fire's damage to your mother's effects, I have added a public correction—ten strokes of the strap, administered by the guardmaster, for the girl. The mother's negligence permits the keys, so the household record should reflect her responsibility as well.\" He taps a line lower on the page. \"Dismissal follows the third entry, with the standard forfeiture of references. The order requires no further witnesses. The girl's confession is already recorded here.\"\n\nLiora's chin comes up at that. \"I said I took the keys and I said the fire was my fault. I didn't say I meant it. Nobody wrote down that I meant it.\"\n\n\"Liora.\" Elise's voice is low but firm, and her wrapped forearm comes up slightly between her daughter and the steward, an old reflex. She smooths her apron with the other hand before speaking to Nera directly, her eyes level despite the tiredness around them. \"My lord. The girl has told you true. The keys were mine and she took them without my knowing. I put out the fire. I'll take what punishment belongs to me for the keys, and I won't argue it. But I'll not sign my name to a thing I didn't do, and I won't let her be strapped for an accident.\" Her jaw sets. \"Whatever your decision, it's yours to make. That's all I'll say.\"\n\nKrail's expression does not change. \"The record will note the mother's refusal to acknowledge negligence.\" He aligns the document's edge with the table's edge, a small precise movement, and then straightens. \"I have the fire inventory to complete, my lord, and the register damage to assess. The order stands ready when you are ready. I will return within the hour for your signature—signed, or refused with your reasons stated for the household record.\"\n\nHe does not ask which. He gathers his writing case, tucks the watch chain back into his coat with one finger, and pauses at the door only long enough to say, \"The portrait and the wing are your mother's legacy, my lord. The household expects it to be dealt with accordingly.\" Then the door closes behind him, and his footsteps diminish down the passage, unhurried, exactly as they arrived.\n\nThe room is quieter without him. Smoke hangs faintly over everything, and against the west wall the burned portrait rests where it was set—Ilyra's face gone to char along one side, the silver of her dress still catching the window light. Water has pooled and dried in gray streaks across the boards beneath it.\n\nLiora shifts her weight the moment the door shuts, her blistered palm pressed against her skirt. \"He's going to strap me,\" she says, not loudly, more to the room than to anyone. \"He already wrote it down. He wrote it down before you decided.\"\n\n\"Liora, hush.\" Elise's hand finds her daughter's shoulder. \"Hush now.\"\n\nIsolde has not moved from her place at Nera's side, her white hair and black dress motionless in the window light. Her yellow eyes rest on the closed door, then on the unsigned order left on the table, pen beside it. \"He left it,\" she says, in her flat, even voice. \"The order and the record of confessions. Both pages.\" Her gaze comes up to Nera, empty of anything readable. \"You may do what you wish with them, my lord.\"\n\nDown the corridor, faintly, a floorboard creaks—someone shifting their weight outside the door, then stillness again.\n\nThe pen lies where Krail set it, nib toward the blank line.\n\n<plan_thread>Krail has withdrawn pending Nera's decision on the unsigned punishment order within the hour.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath Estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "Continue the hearing, have Krail leave the room, keep Nera and others present, no player actions/speech/thoughts. End on an open beat. 500-700 words. Include plan_thread and scene tag.\n\nThe directive: \"Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people.\" So I narrate Krail finishing his presentation, perhaps pressing once for the signature, then withdrawing—maybe leaving the order on the table. Then the room is left with Nera, Isolde, Elise, Liora. End on an open beat before Nera's choice.\n\nKrail's dialogue should be dry, administrative. He shouldn't act for Nera. Elise and Liora can speak. Isolde can observe. Magerrett outside the door—she stays outside; maybe a sound through the door, but she remains outside. Keep \"present\" only those in the room: Nera, Isolde, Elise, Liora. Krail leaves, so excluded.\n\nTime: unknown per instructions—\"time: unknown\" since not established. Date: 18 September 731. Place: West Reception Room, Veyrath Estate.",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1165,
+    "total_tokens": 16101,
+    "cost": 0.00110526,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13144,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00110526,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.0005825
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 254,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 641,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath Estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath Estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

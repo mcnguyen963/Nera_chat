@@ -1,0 +1,56 @@
+{
+  "content": " The pen lies on the table between you, its nib catching the grey light from the tall west windows. Bastian Krail aligns the punishment order beside it with two careful fingers, squaring the corners until the sheet sits perfectly parallel to the table's edge.\n\n\"Your decision, young lord,\" he says again, in the same dry tone he might use to request a confirmation of grain requisitions. \"The household requires clarity. The girl's admission is on the record. The damage to your mother's wing is on the record. The missing folio—\" a small pause, measured like a clerk counting coins, \"—is a separate matter, but one that her negligence makes impossible to resolve. Discipline now prevents worse confusion later.\"\n\nHe does not glance at the women. He watches you, chin level, grey eyes moving over your face the way they move over a ledger, waiting to see which entry you will approve.\n\nElise Fen kneels where the guards left her, back straight despite the hours. The bandage on her left forearm has darkened to a stiff brown at its center, and beneath the cloth, you know from the smell of it, the burn has not been cleaned or salved. Her hands are clasped in her lap, knuckles white, and she keeps her shoulders turned slightly, a shield placed between you and her daughter.\n\n\"Lord Nera.\" Her voice is steady, though a tremor lives at the edge of it. \"I've served in Lady Ilyra's rooms for six years. I locked them myself the night before. I don't know how Liora got the keys, and I would never have permitted—\" She stops, catches herself, smooths her apron with her bound arm as if the gesture alone can restore order. \"I don't ask you to believe me because I say so. I ask that a physician be allowed to see my daughter's hand before any judgment. Whatever you decide after, I'll accept it.\"\n\n\"Mama, I already *said* it was me—\"\n\n\"Quiet, love.\"\n\nLiora subsides, but not entirely. She is a small storm barely folded shut—soot streaked across one cheek, her black hair loose around the vivid red hidden in its layers, her blistered palm cradled against her skirt. Her reddish-brown eyes fix on you, and there is something in them that is not the obedient downcast gaze a household hearing is supposed to produce. It is the look of a girl who used to build mud fortresses with you in the garden and is now trying to find that person under your collar and crest.\n\n\"I didn't burn it on purpose,\" she says, quieter, to the floor rather than to you. \"The nightingale was jammed. I was only trying to fix it. I know I wasn't supposed to be there.\" Her jaw sets. \"I'm not sorry I tried to fix it. I'm sorry about the fire.\"\n\nIsolde stands at your shoulder, precisely placed, hands folded, white hair catching the light. She has said her piece—neither prisoner has been examined, Elise's bandage is stale—and now she waits as the bond requires her to wait, her calm face a learned arrangement of reassurance that reaches no further than the surface. Her yellow eyes rest on Krail's pen hand more than on his face.\n\nThrough the door, faintly, comes the creak of a floorboard and then stillness. Magerrett is close. She has not knocked. Somewhere further down the passage, a second set of footsteps retreated and did not return.\n\nKrail lifts the pen, offers it across the table to you handle-first, and sets it down again when you do not immediately reach.\n\n\"I'll note for the record that the order permits ten lashes for the girl or dismissal without wages for the mother,\" he says. \"The household has used both before. There's nothing unusual in it.\" His tone makes cruelty sound like arithmetic. \"Or, if the young lord prefers a softer mark on the ledger, I can draft alternatives. The wing will still need repairing. Someone will still be responsible.\"\n\nThe paper waits. The burned portrait of your mother leans against the far wall, one side of her face gone to char, the other still wearing the half-smile you remember.\n\nYour hand is still. The room waits to see what it will do.\n\n<plan_thread>Immediate: Nera's decision on Krail's unsigned punishment order—lashings, dismissal, alternatives, or refusal—before any physician is sent.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "The opening user message sets the scene. I need to write the first narrative reply: Krail has placed the pen beside the unsigned order and asked for Nera's decision. I must end on an open beat before Nera's choice, not write Nera's actions. Show NPC actions and external observations. 500-700 words. Include plan_thread naming immediate pending target, then scene tag.\n\nScene: 18 September 731, time unknown, West Reception Room, present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail. Magerrett and Taigar are outside — not present.\n\nWrite the scene: Krail's dry pressure, Elise's bandage, Liora's state, Isolde's stillness, maybe Magerrett's faint presence beyond door. End before Nera speaks his decision.",
+  "usage": {
+    "prompt_tokens": 15375,
+    "completion_tokens": 1185,
+    "total_tokens": 16560,
+    "cost": 0.001130625,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 15222,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001130625,
+      "upstream_inference_prompt_cost": 0.000538125,
+      "upstream_inference_completions_cost": 0.0005925
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 185,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 706,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [
+    "Possible player speech, thoughts or decision written by the narrator."
+  ],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": false,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": false,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

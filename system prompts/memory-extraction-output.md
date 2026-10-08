@@ -1,0 +1,2 @@
+Prefer T<number> from NEW TURNS on every note, identifying its source turn. If there are no notes, output NONE alone.
+Keep each note under 400 characters. Use the exact line formats above; do not include reasoning or story prose. When NEW TURNS complete a goal listed in CURRENT NOTES, output a [closed] note with its exact thread title. Preserve the event in the timeline if it matters later; do not leave the completed goal waiting to happen.

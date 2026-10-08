@@ -1,6 +1,9 @@
+import { readSceneOutput } from './scene-parser.js';
+import { prompts, renderPrompt } from './system-prompts.js';
+export const LEGACY_PLAN_LOSS_RULE = /\s*If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears[\s\S]*?until the user sets a new one\./g;
 // <plan>...</plan> tag handling (spec §11).
 // The tag is emitted by the model anywhere in its reply; the app extracts it,
-// saves it as the session's long-term plan only when allowed, and strips it from visible content.
+// strips it from visible content. Model output never changes the fixed author plan.
 
 export function extractPlan(text) {
   if (!text) return null;
@@ -22,23 +25,21 @@ export function stripPlanThread(text) {
     .trim();
 }
 
-export function stripPlan(text) {
+const hiddenPrefixes = new RegExp('<(?:' + [...new Set(['plan', 'plan_thread', 'scene'].flatMap(tag => Array.from({ length: tag.length }, (_, i) => tag.slice(0, i+1))))].join('|') + ')?$', 'i');
+
+export function stripPlan(text, { final = false } = {}) {
+  if (final) return readSceneOutput(text).clean;
   if (!text) return "";
   return stripPlanThread(
     text
-      .replace(/<(plan|plan_thread)>[\s\S]*?<\/\1>\s*/gi, "")
-      .replace(/<(plan|plan_thread)>[\s\S]*$/gi, "")
-      .replace(/<(?:p|pl|pla|plan|plan_|plan_t|plan_th|plan_thr|plan_thre|plan_threa|plan_thread)?$/i, "")
+      .replace(/<(plan|plan_thread|scene)>[\s\S]*?<\/\1>\s*/gi, "")
+      .replace(/<(plan|plan_thread|scene)>[\s\S]*$/gi, "")
+      .replace(hiddenPrefixes, "")
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
 }
 
-export function planInjectionBlock(plan, allowUpdates = false) {
-  return (
-    (allowUpdates
-      ? "Current long-term plan (you may update it by including a new <plan>...</plan> block in your reply; omit the tag to leave it unchanged):\n"
-      : "Current long-term plan (set by the user; follow its planned events and timing. Do not revise it or emit a <plan> block):\n") +
-    (plan && plan.trim() ? plan : "(no plan yet)")
-  );
+export function planInjectionBlock(plan) {
+  return plan?.trim() ? renderPrompt(prompts.plan,{PLAN:plan}) : prompts.noPlan;
 }

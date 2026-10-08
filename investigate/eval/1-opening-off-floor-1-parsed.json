@@ -1,0 +1,54 @@
+{
+  "content": " The west reception room still smells of what happened in it. Burned cloth, lamp oil, wet ash. The tall west windows let in pale afternoon light that falls across the ruined portrait propped against the wall — your mother's face, half consumed, one silver eye and the curve of her jaw still visible beneath the char. Someone has set the portrait there carefully, frame intact, as if it might still be saved. No one has tried.\n\nBastian Krail stands at the near end of the low table, precisely arranged between you and the two detainees. His grey coat is immaculate despite the smoke in the air. He has smoothed the punishment order flat on the table, squared its corners against the wood, and set the pen beside it with the nib angled toward your hand — a small courtesy of administration, the way a man sets a tool where the work is meant to happen.\n\n\"Young lord.\" His voice is dry, level, unhurried. \"The household requires a resolution before your father returns. The order is prepared. Corporal discipline and dismissal for the mother, a documented confession from the girl, and the loss logged against the estate register. Two marks against the record, and the matter closes.\" He folds his hands. \"I would only note that the missing folio was in that room's keeping. With the keys involved, the record can attach the loss where it belongs.\"\n\nAcross the room, Elise Fen stands where the guards left her, one hand resting near her daughter's shoulder without gripping it. Her left forearm is wrapped in a stained bandage that has clearly not been changed since the fire. Soot streaks her apron. When she speaks, her voice is tired but even, and she smooths her apron first, an old habit before addressing someone formally.\n\n\"My lord. I was on duty in the north gallery when my daughter took my keys. I did not give them to her, and I did not know she had them. What she did, she did alone.\" Her hands clasp together to keep from shaking. \"I put out the fire. I will swear before any priest you like that it was an accident — hers, yes, but an accident. We did not take anything from that room. Not the nightingale's absence, not the register, not anything else that's being counted against us.\"\n\n\"Nothing's missing because of *us*—\" Liora starts, loud, and Elise's hand finally closes on her shoulder. The girl subsides, but only halfway. Her reddish-brown eyes are fixed on you, wide and burning, and her injured palm is curled against her skirt, the blisters along it red and raw. \"The nightingale was *broken*, my lord. I was fixing it. It used to make you laugh. I was going to give it back working.\" Her voice cracks on the last word, more angry than tearful. \"I'm sorry about the fire. I am. But nobody lost anything because I went in there.\"\n\nIsolde stands at your right shoulder, exactly where she always stands. Her yellow eyes move once over Elise's bandage, once over Liora's hand, and return to the table. She says nothing, but her stillness has a particular quality when she is waiting for a word from you — she does not look at Krail at all.\n\nKrail lifts his chin a fraction, the smallest motion of a man conceding the floor has been held long enough.\n\n\"The girl's account and the mother's align with one another, which is common enough among the disciplined and the frightened alike, my lord.\" He taps the order once with one long finger. \"The physician is available in the east wing, should you wish to spend the estate's time on bandages before judgment. Your father is expected after sunset.\" A pause, exactly measured. \"The order remains unsigned. What is your decision?\"\n\nThe pen lies on the table, angled toward your hand.\n\n<scene>date: 18 september 731 · time: unknown · place: west reception room, veyrath estate · present: nera veyrath, isolde veyless, elise fen, liora fen, bastian krail</scene>",
+  "thinking": "The user has given the opening scene setup. The last user message is the intro; I need to narrate the scene where Krail waits for Nera's decision. Nera's decision is pending — I cannot act for Nera. So I should present the scene in second person, present tense, ending with Krail asking for the decision, leaving Nera to respond. Actually the summary says Krail already placed the pen beside the unsigned order and asked for Nera's decision. The user's message is the intro (which itself recounts the situation). So my reply should be the opening narration of the hearing room — the scene as it stands, the NPCs present, Krail waiting — and end with the scene tag. I must not decide for Nera.\n\nWrite in second person present tense, natural English, distinct NPC voices. Include Krail's dry administrative demeanor, Elise composed, Liora shifting, Isolde still. End at a point where Nera can act — Krail waiting, pen beside the order. Add the scene tag.\n\nScene tag: date: 18 September 731 · time: unknown (time of day not established — snapshot says unknown; morning? Fire happened, hearing same day; not established, so \"unknown\") · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail.\n\nWrite the scene richly but not too long.",
+  "usage": {
+    "prompt_tokens": 15020,
+    "completion_tokens": 1183,
+    "total_tokens": 16203,
+    "cost": 0.0011172,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14870,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.0011172,
+      "upstream_inference_prompt_cost": 0.0005257,
+      "upstream_inference_completions_cost": 0.0005915
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 309,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 648,
+  "scene": {
+    "raw": "date: 18 september 731 · time: unknown · place: west reception room, veyrath estate · present: nera veyrath, isolde veyless, elise fen, liora fen, bastian krail",
+    "when": "18 september 731",
+    "time": null,
+    "place": "west reception room, veyrath estate",
+    "present": [
+      "nera veyrath",
+      "isolde veyless",
+      "elise fen",
+      "liora fen",
+      "bastian krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": false,
+    "correctPlace": true,
+    "correctAttendance": false,
+    "wordLimit": true,
+    "planBreadcrumb": false
+  },
+  "automaticPass": false,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

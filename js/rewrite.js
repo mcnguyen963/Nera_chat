@@ -6,7 +6,7 @@ let defaultPromptPromise;
 export function loadRewriteDefaultPrompt() {
   if (!defaultPromptPromise) {
     defaultPromptPromise = (async () => {
-      const response = await fetch("./rewrite_default_prompt.md", { cache: "no-cache" });
+      const response = await fetch(new URL("../system prompts/rewrite.md",import.meta.url), { cache: "no-cache" });
       if (!response.ok) throw new Error("Could not load the default rewrite prompt. Try again.");
       const prompt = (await response.text()).trim();
       if (!prompt) throw new Error("The default rewrite prompt is empty.");

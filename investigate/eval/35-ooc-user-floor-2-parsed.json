@@ -1,0 +1,37 @@
+{
+  "content": " Physically present in the West Reception Room: Nera Veyrath, Isolde Veyless, Elise Fen, and Liora Fen. Bastian Krail was also there at last scene snapshot, waiting for Nera's signature on the unsigned punishment order — Magerrett and Taigar remain outside in the corridor, not in the room.",
+  "thinking": "OOC question: answer briefly, no tags.",
+  "usage": {
+    "prompt_tokens": 14641,
+    "completion_tokens": 86,
+    "total_tokens": 14727,
+    "cost": 0.000555435,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14495,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000555435,
+      "upstream_inference_prompt_cost": 0.000512435,
+      "upstream_inference_completions_cost": 0.000043
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 10,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 47,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

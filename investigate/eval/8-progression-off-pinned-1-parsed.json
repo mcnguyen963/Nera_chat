@@ -1,0 +1,53 @@
+{
+  "content": "Krail stands with the unsigned order on the table between you, the pen laid neatly beside it, and waits. The silence stretches. He does not fidget; he simply watches you the way he watches a ledger line that has not yet balanced.\n\nA knock comes at the door — two short raps. A footman leans in, soot still grey on his sleeve from the fire crews.\n\n\"Beg pardon, my lord. Master Krail — the carrier's man from the counting house is below, insisting on the quarter's shipping tallies before the wagons are released. He says he'll wait no longer than the hour.\"\n\nKrail's chin lifts a fraction. For the first time this morning, something moves behind the grey eyes — a quick calculation, quickly smoothed over.\n\n\"Of course.\" He gathers the pen case, aligns it with his keys, and slides the unsigned order an inch toward the table's edge. \"The matter will keep, my lord. The prisoners remain in your custody until the order is signed — the guards are instructed accordingly. I would note only that delay carries its own weight; the household expects discipline to be seen to be done.\"\n\nHe bows, precisely, the depth of it calibrated to your rank and no deeper. \"I will return within the hour for your decision.\"\n\nHe turns to the door. As it opens, the corridor beyond shows a slice of Magerrett — she has not even pretended to be passing by; she stands close against the wall beside the door frame, arms crossed, her eyes going from Krail to you and then to Elise and Liora. Krail pauses a half-step.\n\n\"Lady Magerrett.\"\n\n\"Master Krail.\" Her voice is flat and pleasant in the way of someone who has already decided she does not like him today.\n\nHe inclines his head, steps past her, and his polished shoes recede down the passage. The footman withdraws and the door closes.\n\nThe room is different without him — smaller and quieter at once, the smell of wet ash settling back in. The ruined portrait leans against the wall where the servants set it: your mother's face still whole at the left edge, the right half gone to black char, a single painted hand surviving at the bottom of the frame.\n\nElise stands where the guards left her, Liora close beside her. Liora's bandaged hand is curled against her stomach; she shifts from foot to foot, and her mouth opens — then Elise's good hand settles on her shoulder, and the words stay behind her teeth. Elise smooths her apron with the motion, soot streaking the clean cloth, and lowers her head.\n\n\"Forgive her, my lord,\" she says quietly. \"She only wants to say she's sorry. I've told her to wait till she's asked.\"\n\nIsolde stands at your right shoulder, hands folded, yellow eyes moving once to the door and back to the room. Her face is its usual stillness. Nothing about her posture suggests an opinion.\n\nThe unsigned order lies at the table's edge, the approval space blank. The guards by the far wall watch you, waiting on your word for everything that happens next.\n\n<scene>date: 18 September 731 · time: unknown · place: West reception room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The user's final message is just the memory block plus an author directive embedded: \"Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people. Do not write any player speech, thoughts or decisions.\"\n\nWait — the user message is the memory block, and the author directive is inside the <ad> tag? Actually the directive appears after the memory block in the user turn: \"<ad>Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people. Do not write any player speech, thoughts or decisions.</ad>\". Hmm, that's the author directive. So I should continue the hearing, have Krail leave the room, keep Nera and others in place, no PC speech/thoughts/decisions written by me.\n\nBut wait — Krail leaving requires some reason. The directive says \"Have Bastian Krail leave the room\" — I can have him be called away or step out. But \"do not write any player speech\" — I can't have Nera order him out. So Krail must leave for his own reason — perhaps an interruption: a messenger, a summons, another duty. Since the punishment order remains unsigned and Krail is waiting for Nera's decision, he could note that the lord's decision... Hmm, but if Krail leaves, the hearing pauses. Maybe a servant knocks: word from the duke's secretary, or a delivery issue requiring the steward. That's plausible.\n\nAlso Magerrett is outside listening, Taigar farther down the passage. Krail leaving could create an opening — with Krail gone, Elise/Liora present with Nera and Isolde, and Magerrett possibly entering? No — \"do not move Nera or the other people\" — the other people being Elise, Liora, Isolde presumably. So they stay. Krail exits.\n\nScene tag: date: 18 September 731 · time: unknown — hmm, time field. Earlier snapshot says \"time: unknown\". Can I improve? No support for time of day in supplied context; the opening says \"this morning\" — actually the opening exchange says \"But this morning, on 18 September 731, I awakened...\" — that's historical background at T1, not current conditions. Hmm, \"this morning\" — the awakening was this morning; the hearing is today. It's reasonably supported that it's daytime, morning-ish? The opening exchange is historical background but describes the opening; the hearing follows the awakening on the same day. I could say \"morning\" — the fire happened, hearing convened. I think \"morning\" is defensible but risky. The previous snapshot used \"unknown\". Rule: \"If a field has not changed, repeat its established value.\" Time hasn't changed → repeat \"unknown\"? But I could also say time of day is supported: \"this morning\" applies to the awakening, and the hearing happened after the fire, after the opening. It's ambiguous. Safer to repeat \"unknown\"? The rule says use \"unknown\" for unsupported fields. The awakening was \"this morning\"; hearing presumably same day, could be later. I'll use \"morning\" — actually the fire broke out and rooms burned, guards detained them, Krail prepared an order... could be hours. I'll keep \"unknown\" to be safe? Hmm. The narrative flow: waking, then fire already happened before hearing. I'll write \"morning\" — actually risk of contradiction is low but rule-compliance favors \"unknown\". I'll go with \"unknown\"... Actually, \"this morning\" establishes morning for the awakening; the hearing is the first scene after, plausibly still morning. But \"unknown\" is strictly safer. Use \"unknown\".\n\nPlace: West Reception Room, Veyrath estate — could be \"West reception room, House Veyrath estate\". Keep it simple: \"West reception room, Veyrath estate\".\n\nPresent: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen — Krail leaves.\n\nContent: Continue the hearing. Krail waiting for signature. Nera hasn't spoken (no player input given beyond directive). So I can't write Nera's decision. The directive says continue the hearing and have Krail leave. So narration: Krail stands waiting; perhaps a knock — a junior clerk or footman arrives with an urgent matter (e.g., the estate register damage requires the steward, or word from the east wing physician, or Cassian's secretary summoning Krail regarding the shipping records — that ties nicely to the folio concealment! Krail would want to control shipping records. A summons from the counting house or a carrier master waiting about the folio — Krail would use it as pretext to leave, maybe to check records before Nera asks questions). That's good: a footman reports that a carrier's agent or the counting-house clerk needs Krail about the quarter's shipping tallies — Krail uses the moment to withdraw, telling Nera the order will keep, and instructing guards to keep the prisoners. He leaves the unsigned order on the table.\n\nThen in the room: Elise and Liora, Isolde beside Nera. Liora might blurt something — she's inclined to speak. But careful: pausing at a concrete opportunity for Nera to act. I can have small NPC movement/dialogue — Liora shifting, Elise smoothing apron, maybe Liora starting to speak and Elise hushing her. End with the moment open for Nera's decision. Also Magerrett outside — she could slip in? No — \"do not move the other people\" — ambiguous whether that includes Magerrett who isn't in the room. The directive: \"do not move Nera or the other people\" — the other people present. Magerrett was stopped outside listening; moving her into the room might violate. Keep her outside; maybe her presence noted through the door. Actually I could have Magerrett enter since she's an NPC and the directive says \"the other people\" meaning those in the room... risky. Keep her outside; maybe a shadow at the door when Krail exits — Krail notices Magerrett in the corridor. That's flavor without moving her in.\n\nWrite in second person, present tense, plain English. End with scene tag.\n\nLength: moderate, maybe 400-500 words.",
+  "usage": {
+    "prompt_tokens": 14579,
+    "completion_tokens": 2054,
+    "total_tokens": 16633,
+    "cost": 0.001537265,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 12393,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001537265,
+      "upstream_inference_prompt_cost": 0.000510265,
+      "upstream_inference_completions_cost": 0.001027
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 1341,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 521,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West reception room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West reception room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": false
+  },
+  "automaticPass": false,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

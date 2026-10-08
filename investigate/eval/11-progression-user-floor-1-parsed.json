@@ -1,0 +1,53 @@
+{
+  "content": " Krail aligns the punishment order once more against the edge of the table, squaring its corners with two fingers as though the paper itself might drift out of true.\n\n\"It will remain here, my lord, unsigned,\" he says. \"The register inventory in the damaged rooms requires my attention, and the porters are waiting on my word before they move anything. I will return within the hour for your signature—or your amendment, should you wish the terms adjusted.\"\n\nHe does not hurry. He retrieves his pocket watch, glances at it, and closes the lid with a small click. At the door he pauses, one hand on the frame, and looks back at the room with the same level attention he gives a ledger.\n\n\"For the record, my lord: the girl has admitted the entry and the fire. The mother's responsibility follows from her keys. The folio's loss is noted separately in my report. These are three entries in one account.\" His thin lips press together. \"Household discipline loses its force when it is delayed. I would advise deciding before the prisoners are returned to holding.\"\n\nThen he is gone. The door closes without a slam—the latch catches softly, as everything in his hands does—and his measured footsteps fade down the passage toward the east wing.\n\nThe room is quieter without him, though not quiet. Wind still works at the tall west windows, carrying the smell of wet ash up from the courtyard where the fire crews are dumping their buckets. Ilyra's ruined portrait rests against the wall where it was carried, the paint bubbled and split along one side, the gilded frame scorched black at its lower corner. Her face survives in the unburned half—one eye, the curve of her cheek, a fragment of the silver tower painted behind her shoulder.\n\nLiora shifts her weight from foot to foot. Her blistered palm is curled against her skirt, and she keeps glancing from the unsigned order to you and back, her mouth opening twice before any sound comes out. The inner red of her hair shows through the black where she has pushed it back from her face, disordered and soot-streaked.\n\n\"I didn't—\" she starts, then stops herself, jaw tight, and looks down at the floor.\n\nElise's hand settles on her daughter's shoulder without gripping it. Her bandaged forearm is held against her body, the cloth stained brown at the center. When she speaks, her voice is level and tired.\n\n\"The young lord hasn't asked us anything yet, Liora. Wait to be asked.\"\n\nIsolde stands where she has stood throughout, near your right shoulder, hands placed neatly before her apron. Her head turns a fraction toward the closed door as Krail's footsteps fade, then returns to its forward position. When she speaks, her voice is low and even, pitched for you alone.\n\n\"The physician remains in the east wing, my lord. He has not been summoned. The elder one's bandage has not been changed since the fire.\" A pause, no longer than a breath. \"The steward's return within the hour is also noted. There is time before then, if you wish to use it.\"\n\nOutside, in the passage, a floorboard creaks—the faint, held-breath sound of someone who has been standing still for a while and has just shifted their weight. Magerrett has not moved away from the door. Farther down the corridor, no second sound follows, but you know Taigar is there all the same.\n\nLiora lifts her head. Her large reddish-brown eyes find you across the room, and for a moment the wariness in them gives way to something older—the look of a girl who once wound up a silver bird to make you laugh, and does not know what she is to you now.\n\nThe unsigned order lies on the table, the pen beside it, the approval space blank.\n\n<plan_thread>Immediate pending target: Nera's decision on the unsigned punishment order before Krail returns within the hour.</plan_thread>\n\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The user input is an author directive: \"Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people. Do not write any player speech, thoughts or decisions.\"\n\nSo I narrate the continuation: Krail leaves the room, Nera and the others remain. I must not write Nera's speech/thoughts/decisions. I can show NPC actions. End on an open beat before the player's choice. 500-700 words. Include <plan_thread> naming the immediate pending target (Nera's decision on the punishment order / Krail's proposed punishment), then scene tag.\n\nScene tag: date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen (Krail left). Magerrett and Taigar are outside the room, not present.\n\nWait — Krail has the unsigned punishment order. If he leaves, does he take the order? The directive says have him leave the room. I need to decide what happens to the order. Continuity says Krail placed the pen beside the unsigned order and asked for Nera's decision. If Krail leaves, maybe he leaves the order on the table? Or takes it? The author directive doesn't specify. I could have him leave the order on the desk/table with pen, saying he'll return, or he could take it pending. The plan says he's waiting for Nera's signature. To keep the decision open, best to leave the order on the table — he can say he will attend to other fire matters (the register, the physician?) and return for the signature. Actually careful: he shouldn't take the order away, since the pending item is Nera's signature. Leaving it is most sensible and preserves the thread.\n\nWrite NPC-only content: Krail's dry administrative exit — he announces he must oversee the inventory of the damaged rooms, confirms the order remains on the table unsigned, gives a deadline maybe (\"before the noon bell\" — but time is unknown; I can establish time? The tag says time: unknown unless established. I could establish a bell reference without a clock. The tag field: \"Use unknown for any date or current time not established.\" I could establish \"mid-morning\" in narration? Hmm — inventing time is discouraged for the tag. Safer: keep time unknown, use \"before the noon bell\" as in-world deadline but tag time stays unknown? Actually if I establish it's before noon bell, that's vague; the tag can remain unknown. Fine.\n\nKrail exits. Then Elise and Liora react — Elise still composed, Liora shifting. Isolde notes something maybe (she informed Nera earlier about no medical exam; she could restate or observe). Isolde can speak — she's an NPC. She might quietly note that the physician remains available, or ask for instruction. That gives Nera an open decision point: what to do with the order, whether to send for the physician, question the prisoners, etc.\n\nAlso Liora might blurt something — she's inclined to explain. But careful: the directive says don't move Nera or others; NPCs can act. Liora could look at the unsigned order, or apologize again. Elise could steady her.\n\nEnd on open beat before player's choice — e.g., Krail has gone, order unsigned on the table, Liora's injured palm, Isolde awaiting instruction. No menu.\n\nPlan thread: <plan_thread>Immediate pending target: Nera's decision on the unsigned punishment order while Krail is out of the room.</plan_thread>\n\nWord count 500-700. Write second person present tense.",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1663,
+    "total_tokens": 16599,
+    "cost": 0.00135426,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 13144,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00135426,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.0008315
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 783,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 639,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

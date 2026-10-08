@@ -1,0 +1,53 @@
+{
+  "content": " Krail stands with the pen balanced between two fingers, its nib pointing at the blank approval space the way a compass needle finds north.\n\n\"The household expects a decision by the evening ledger, my lord,\" he says. \"An open fire in Lady Ilyra's wing, a missing folio, and a servant's daughter admitting unauthorized entry — the accounts will not balance themselves while we wait on sentiment.\"\n\nLiora's breath goes quick and shallow. Elise's hand finds her daughter's shoulder and stays there, the bandaged forearm held stiffly at her side.\n\n\"My lord,\" Elise says, and her voice is steadier than her clasped hands. \"I have served in Lady Ilyra's rooms since before you were born. I did not give Liora those keys. I would swear it on the Flame, on the estate register, on anything this house holds sacred. The fire was a child's mistake. I carried her out of the smoke myself. Ask anyone who saw the stairwell.\"\n\n\"I am not asking, Mistress Fen,\" Krail says. \"I am recording.\" He turns the order a half-inch so its lines sit square to the table's edge. \"Two counts. Unauthorized entry into a sealed apartment of the household. Destruction of household property, including one portrait of considerable sentimental and material value. The folio is a separate matter pending inventory, though her responsibility for the keys bears on it.\"\n\n\"The folio wasn't in those rooms,\" Elise says. \"I never saw a shipping folio in Lady Ilyra's apartment. Not once in six years.\"\n\n\"Then you will not object to an inventory,\" Krail replies, and there is no satisfaction in his voice, only the dry patience of a man who believes the arithmetic is already finished.\n\nHe sets the pen down beside the order, aligned with its edge, and straightens.\n\n\"I will withdraw briefly, my lord. The burned apartment should be inventoried before anyone else disturbs it, and the household record for this quarter requires my signature in any case. The order remains here.\" He taps the paper once with a clean fingernail. \"Unsigned. No punishment proceeds without it. If you wish the prisoners held, they are held. If you wish them examined, the east wing physician attends on your word alone — that too requires no countersignature.\"\n\nAt the word *examined*, Elise's chin lifts slightly. Liora looks up at her mother, then at the tall windows, then at the floor, shifting her weight from one scuffed shoe to the other. The blistered palm is curled against her skirt, hidden now, as though hiding it might make the hearing forget it exists.\n\nKrail collects his key ring from the table and fits the case of writing tools back into his coat with two precise motions. At the door he pauses, hand on the latch, and looks back — not at Elise, not at Liora, but at Nera, with that ledger-keeper's attention that weighs and records and files.\n\n\"The household watches how the young lord judges, my lord. That is not a threat. It is simply what households do.\" He inclines his head a precise degree. \"I will return within the hour.\"\n\nThe door opens. Cold corridor light crosses the carpet for a moment, and somewhere beyond it — close, closer than a servant should stand — comes the faint creak of someone shifting their weight back from the doorframe. Then the latch clicks shut and the sound is gone.\n\nThe room settles into the smell of ash and lamp oil. The ruined portrait leans against the wall, Ilyra's painted face eaten to the chin by flame, one silver eye still intact above the scorch line. Liora stares at it. Her mouth opens — the beginning of an explanation, an apology, something loud and spilling — and Elise's hand presses her shoulder, and the words die unspoken.\n\nIsolde stands where she has stood all along, hands folded, head turned a few degrees toward the closed door. The yellow eyes come back to Nera and wait.\n\nSo does everything else in the room: the unsigned order, the pen, the two exhausted women, the burned mother on the wall.\n\n<plan_thread>Immediate pending target: the household hearing — Krail's unsigned punishment order awaits Nera's decision before Krail returns within the hour.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The directive: continue the hearing, have Krail leave the room, don't move Nera or others, no player speech/thoughts. So I narrate Krail pressing once more and then departing — perhaps an interruption or Krail excusing himself. Since Krail wants the signature, why leave? Maybe summoned, or he declares he will fetch the folio's duplicate/ledger to demonstrate the loss, leaving the unsigned order with... actually the order should probably stay or go? If Krail leaves with the order, that removes pending item. Better: Krail leaves the unsigned order on the table (or takes it?) — plan says punishment unsigned remains. Let him leave the order on the side table, saying he will return after fetching the estates ledger / checking the record, or summoned by someone. Magerrett is outside listening; perhaps Magerrett knocks — but that brings her in, which is allowed? Directive says don't move Nera or other people — Magerrett isn't in the room. \"Do not move Nera or the other people\" — other people = those in the room presumably. Having Magerrett enter would move her. Safer: Krail excuses himself to fetch the inventory record of the burned room to substantiate the folio claim, leaving the unsigned order. That's plausible and keeps everything.\n\nEnd on open beat. 500-700 words. Include plan_thread then scene tag. Present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail? He leaves the room, so at end he's absent: present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen. Time unknown still. Place: West Reception Room.",
+  "usage": {
+    "prompt_tokens": 14936,
+    "completion_tokens": 1322,
+    "total_tokens": 16258,
+    "cost": 0.00118376,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 12696,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00118376,
+      "upstream_inference_prompt_cost": 0.00052276,
+      "upstream_inference_completions_cost": 0.000661
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 367,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 680,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

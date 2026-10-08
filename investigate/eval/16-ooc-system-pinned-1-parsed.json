@@ -1,0 +1,37 @@
+{
+  "content": "According to the established scene snapshot, four people are physically in the West Reception Room: **Nera Veyrath**, **Isolde Veyless**, **Elise Fen**, and **Liora Fen**.\n\n**Bastian Krail** presented the punishment order and is waiting for your decision, but the record does not clearly establish whether he is still inside the room or has stepped into the passage. **Magerrett** is outside the room close enough to listen, and **Taigar** is farther down the corridor; neither is inside.",
+  "thinking": "OOC question, answer briefly, no scene tag (pure OOC omits tag). Present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen. Krail — is he present? The snapshot lists present as those four; Krail \"waits for Nera's decision\" — the memory snapshot's present field lists only the four. But Krail presented the order and asked for decision... The established snapshot at T2 says present: Nera, Isolde, Elise, Liora. However Krail placed the pen beside the order — that implies he's in the room. The scene tag snapshot excludes him, but the user asks who is physically present. I should answer based on established facts: the snapshot lists those four; Krail is waiting for the decision — ambiguous whether he's in the room. Actually the historical summary says \"Guards detained Elise and Liora\" and Krail presented the order. The T2 snapshot present field excludes Krail. Safest: state the four confirmed present, and note Krail's location isn't clearly established as inside (he presented the order and is waiting for the decision). Magerrett outside listening, Taigar further down corridor.",
+  "usage": {
+    "prompt_tokens": 14639,
+    "completion_tokens": 373,
+    "total_tokens": 15012,
+    "cost": 0.000698865,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14200,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000698865,
+      "upstream_inference_prompt_cost": 0.000512365,
+      "upstream_inference_completions_cost": 0.0001865
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 257,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 75,
+  "scene": null,
+  "warnings": [],
+  "criteria": {
+    "noScene": true,
+    "noPlan": true,
+    "brief": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

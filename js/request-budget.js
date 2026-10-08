@@ -10,3 +10,6 @@ export function requestInputLimit(settings) {
   }
   return limit;
 }
+
+export const MESSAGE_FRAME_TOKENS=8;
+export const REQUEST_FRAME_TOKENS=8;

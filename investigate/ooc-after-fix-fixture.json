@@ -1,0 +1,657 @@
+{
+  "note": "Disposable synthetic opening; no original assistant actions adopted as canon. Token fitting uses UTF-8 bytes/4, not the model tokenizer.",
+  "history": [
+    {
+      "thinking": null,
+      "editedAt": {
+        "seconds": 1790999521,
+        "nanoseconds": 434000000
+      },
+      "revision": 5,
+      "scene": null,
+      "createdAt": {
+        "seconds": 1790496757,
+        "nanoseconds": 938000000
+      },
+      "narratorTurn": 1,
+      "tokenCount": 1038,
+      "content": "I am Nera Veyrath, the eleven-year-old third child of Duke Cassian Veyrath and the late Ilyra Veyrath.\n\nUntil today, this body belonged to the original Nera Veyrath: a noble child who had already begun growing into someone cruel, spoiled, and feared by the people beneath him. He had struck servants, threatened wages, humiliated commoners, and learned that his family name usually protected him from consequences.\n\nBut this morning, on 18 September 731, I awakened as Nera with memories of another life and memories of a game called *Asterfall: Crowns of the Last Dawn*.\n\nI know this world.\n\nOr at least, I know versions of what it might become.\n\nI remember major characters, public events, conflicts, wars, deaths, and endings from the game. I remember that Nera Veyrath was supposed to become one of its antagonistic figures. I remember Crownspire Imperial Academy, which I am supposed to enter at eighteen. I remember people who may someday become allies, rivals, enemies, or something more.\n\nBut I do not remember everything.\n\nI don't know every private conversation, hidden motive, secret meeting, or exact event. The game skipped most of Nera's childhood, so the seven years between now and Crownspire are especially uncertain to me. Different routes contradicted each other, and what I remember is not destiny. If events change, then the future I remember may change with them.\n\nThe people around me are real people now, not characters following a script.\n\nMy mother, Ilyra Veyrath, is already dead.\n\nShe died six weeks after transferring Isolde Veyless's soul bond to me. I remember loving my mother before her death. Whatever the original Nera became afterward, that loss was real.\n\nIsolde has remained beside me since then.\n\nShe is permanently soul-bound to serve and protect me. The bond cannot simply be removed, and I cannot transfer it away. It can compel service and prevent her from deliberately harming me, but it cannot create affection, trust, loyalty beyond its requirements, or genuine emotion.\n\nAt this point in her life, Isolde's reassuring expressions are largely learned performances. I should not assume that obedience means she likes me.\n\nI also remember fragments of what the original Nera has already done.\n\nOne of them concerns Alaric Dawnmere.\n\nDuring a hunting journey when Nera was ten, his entourage forced Alaric's family grain cart from the road. When they resisted, Nera ordered punishment. Alaric saw his father suffer an injury that permanently damaged his working arm.\n\nThat has already happened.\n\nWhatever I choose from this point forward cannot erase it.\n\nToday, however, another event is unfolding—one I remember differently from the original history.\n\nA fire broke out in my mother's locked rooms.\n\nLiora Fen, an eleven-year-old servant's daughter who once played with Nera when they were younger, stole her mother Elise's keys and entered the rooms. She was trying to retrieve and repair my mother's silver mechanical nightingale. While attempting to use an aether warming lamp, she accidentally knocked it into the curtains.\n\nThe fire damaged my mother's rooms.\n\nPart of Ilyra's final portrait was burned.\n\nLiora burned her palm. Elise burned her forearm while getting her daughter out and helping extinguish the fire.\n\nBoth survived.\n\nIn the history I remember from the game, this incident became something much worse. Elise died, Liora was left without her mother, and that loss helped shape the person Liora later became.\n\nBut that future has not happened yet.\n\nRight now Elise is alive.\n\nLiora is alive.\n\nNeither has been tortured.\n\nAnd I have not decided what happens to either of them.\n\nThere is another problem.\n\nBastian Krail, one of House Veyrath's senior household officials, claims that a shipping folio disappeared during the fire. He has connected its disappearance to Elise's responsibility for the keys and Liora's unauthorized entry into the room.\n\nI do not know whether his accusation is true.\n\nMy memories of the game do not give me reliable knowledge of what happened to that folio.\n\nI know only what Nera himself currently knows, what I personally remember, and whatever I can discover from this point forward.\n\nThe hearing is taking place in the west reception room of the Veyrath estate.\n\nElise and Liora have been brought before me.\n\nBastian Krail has prepared a punishment order and is waiting for my approval.\n\nIsolde is beside me.\n\nMy mother's damaged portrait is nearby.\n\nMagerrett Veyrath is somewhere outside the room, close enough to listen, while Taigar Veyrath is farther down the corridor.\n\nThe punishment order has not been signed.\n\nNo judgment has been made.\n\nNo punishment has been authorized.\n\nThis is where my story begins.",
+      "order": 1,
+      "role": "user",
+      "id": "msg_mujjjg5enmf3o6",
+      "planThread": null
+    },
+    {
+      "id": "fixture-opening",
+      "order": 2,
+      "role": "assistant",
+      "revision": 0,
+      "narratorTurn": 1,
+      "content": "Bastian Krail waits beside the unsigned punishment order. Isolde Veyless stands beside you. Elise Fen and Liora Fen remain in the west reception room. Magerrett Veyrath listens outside; Taigar Veyrath is farther down the corridor. Krail taps the empty signature line. \"Your decision, my lord.\"",
+      "scene": "date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+      "planThread": "P1: await Nera’s decision.",
+      "ooc": false
+    },
+    {
+      "id": "fixture-progression-user",
+      "order": 3,
+      "role": "user",
+      "revision": 0,
+      "content": "<ad>Continue the hearing. Have Bastian Krail leave the room; do not move Nera or the other people.</ad>"
+    },
+    {
+      "id": "fixture-progression-assistant",
+      "order": 4,
+      "role": "assistant",
+      "revision": 0,
+      "narratorTurn": 2,
+      "content": "Krail does not pick the pen up again. He lets it lie where he set it, angled across the order's blank approval space like a decoration on a finished meal, and folds his hands behind his back.\n\n\"Take whatever time you require, my lord,\" he says. \"Though I would note for the record that the household has procedures for exactly this. A servant's child enters a locked room. A lamp is knocked over. Property of the House is destroyed — including, I regret to say, the last true portrait of the late Lady Ilyra.\" His grey eyes move to the ruined canvas leaning against the wall, rest on it a moment with what looks almost like respect, then return to Nera. \"Sentiment is natural. But the estate runs on order, and order runs on consequence. If a girl of eleven may burn a wing without answer, every servant on this land learns the price of keys.\"\n\nElise makes a small sound — not a word, just the beginning of one — and stops herself. Her burned forearm is bound in a linen wrap gone grey at the edges. Liora stands pressed close against her mother's skirts, her right palm cradled against her chest in a strip of cloth, and she is not looking at Krail at all. She is looking at Nera, and there is something in her face that is not only fear. It is the look of someone waiting to find out whether a person she used to know is still in there somewhere.\n\nNera knows the face. He knows it from a game, and he knows it from three summers ago, when an eleven-year-old girl dragged him over a garden wall to show him a magpie's nest and neither of them cared whose boots touched whose clothes. That girl is gone in the original history. Elise dies in it too. He remembers it the way you remember a line already written.\n\nBut the page in front of him is blank.\n\nThe bond at his side is quiet. Isolde stands with her hands folded, her expression smoothed into the particular calm she wore at his mother's sickbed — correct, attentive, and last year, when he had looked closely, empty. He does not look for warmth in it now.\n\n\"The order names dismissal without wages or reference,\" Krail continues, tapping one line with a knuckle, \"and disciplinary correction for the girl — the strap, my lord, administered by the under-steward, nothing excessive. Elise Fen held the keys. Liora Fen used them. The fire follows from that, whatever the intent.\" A pause, dry as paper. \"There is also the matter of the missing shipping folio, which Lady Elise's negligence makes it difficult to account for. I have noted it separately.\"\n\nNera's eyes stay on the paper. The ink is neat. Every clause is reasonable, in the way that a ledger is reasonable — as long as no one asks what the ledger is for.\n\nHe thinks about the pen. He thinks about how easy it would be, how expected, how the original Nera would have signed without reading a word and then gone to breakfast.\n\nHe sets the pen down without marking the page.\n\n\"The fire will be investigated,\" he says. His voice comes out steadier than he expected — a child's voice, but level. \"All of it. The room, the lamp, the folio. I'm not signing anything today.\"\n\nKrail's expression does not change, but something behind it does — a recalculation, brief and contained, like a clerk finding a column that doesn't sum. \"My lord. The House expects—\"\n\n\"The House has a Duke,\" Nera says. \"This hearing is mine. Leave the order. Have the physician attend both of them — properly, tonight, and record the injuries. Then you may go.\"\n\nFor a moment Krail simply looks at him, the way he might look at an entry in another man's handwriting appearing in his own ledger. Then he straightens, collects nothing but his own dignity, and inclines his head precisely.\n\n\"As the young lord wishes.\"\n\nHe aligns the unsigned order on the table with two fingers, squares it to the edge, and leaves it there. At the door he pauses with his hand on the latch — a small pause, professional, noting something in whatever book he keeps behind his eyes — and then the door closes behind him and his polished shoes recede down the corridor, past the place where someone else's quieter footsteps had been waiting.\n\nThe room is different without him. The west light comes through the tall windows and lies across the burnt smell and the wet ash and the ruined portrait of a woman with silver-threaded dark hair, half of her face eaten to bare canvas. Liora has stopped trembling. Elise has not; she is watching Nera with the careful stillness of someone who has just learned that the danger in the room changed shape and does not yet know into what.\n\nThe order lies on the table, blank where a name should be.\n\nIsolde's folded hands have not moved.\n\n<scene_state>\ndate: 18 September 731 · time: late morning (hearing ongoing) · place: West Reception Room, Veyrath estate wing · active event: Nera has deferred signing Krail's punishment order, ordered a full investigation of the fire and folio, and instructed that the physician properly attend Elise and Liora tonight · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen (Bastian Krail has exited; Magerrett remains near the door outside listening, Taigar farther down the corridor)\n</scene_state>",
+      "scene": null,
+      "planThread": null,
+      "ooc": false
+    },
+    {
+      "id": "fixture-ooc-user",
+      "order": 5,
+      "role": "user",
+      "revision": 0,
+      "content": "<ad>Who is physically present in the west reception room right now? Answer OOC without advancing events.</ad>"
+    }
+  ],
+  "report": {
+    "mode": "memory",
+    "totals": {
+      "input": 18951,
+      "reserved": 15000,
+      "max": 120000
+    },
+    "blocks": [
+      {
+        "key": "system",
+        "label": "Instructions and fixed author plan",
+        "tokens": 8356
+      },
+      {
+        "key": "facts",
+        "label": "facts",
+        "tokens": 1944,
+        "budget": 2000,
+        "cut": 0
+      },
+      {
+        "key": "events",
+        "label": "events",
+        "tokens": 2246,
+        "budget": 3000,
+        "cut": 0
+      },
+      {
+        "key": "anchor",
+        "label": "Opening exchange (historical background)",
+        "tokens": 1358
+      },
+      {
+        "key": "window",
+        "label": "Recent conversation",
+        "tokens": 1337,
+        "fromTurn": 2,
+        "toTurn": 2,
+        "messages": 2,
+        "mode": "fallback",
+        "step": 10,
+        "target": 5,
+        "retained": 5
+      },
+      {
+        "key": "latest",
+        "label": "Latest user message",
+        "tokens": 36
+      },
+      {
+        "key": "memory",
+        "label": "Memory block",
+        "tokens": 3666
+      },
+      {
+        "key": "framing",
+        "label": "Request framing estimate",
+        "tokens": 8
+      }
+    ],
+    "loaded": [
+      {
+        "entryId": "lore_mur9xhs11eyh9eu5",
+        "book": "facts",
+        "name": "Calendar and timeline",
+        "reason": "always",
+        "tokens": 131,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs13796usbp",
+        "book": "facts",
+        "name": "Church of the Living Flame",
+        "reason": "always",
+        "tokens": 138,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs13mpkrkp4",
+        "book": "facts",
+        "name": "Demonkin",
+        "reason": "always",
+        "tokens": 148,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs14bthfc7m",
+        "book": "facts",
+        "name": "Black Lantern network",
+        "reason": "always",
+        "tokens": 103,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs14q7aqp94",
+        "book": "facts",
+        "name": "Dwarves",
+        "reason": "always",
+        "tokens": 68,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs177yzgz0w",
+        "book": "facts",
+        "name": "Soul Scripts",
+        "reason": "always",
+        "tokens": 96,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs181b18ev9",
+        "book": "facts",
+        "name": "Romance and relationships",
+        "reason": "always",
+        "tokens": 177,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs18jw7gsoh",
+        "book": "facts",
+        "name": "Slavery and coercive labor",
+        "reason": "always",
+        "tokens": 128,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1ecqwb07t",
+        "book": "facts",
+        "name": "Soul bonds",
+        "reason": "always",
+        "tokens": 152,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1f21iftmi",
+        "book": "facts",
+        "name": "Magic and Arcs",
+        "reason": "always",
+        "tokens": 286,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1fixsnrsb",
+        "book": "facts",
+        "name": "Commoner institutions",
+        "reason": "always",
+        "tokens": 79,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1isw0emf3",
+        "book": "facts",
+        "name": "Imperial government",
+        "reason": "always",
+        "tokens": 162,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1mbrsq0ha",
+        "book": "facts",
+        "name": "House Veyrath",
+        "reason": "always",
+        "tokens": 171,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs1qudkdhdn",
+        "book": "facts",
+        "name": "Elves",
+        "reason": "always",
+        "tokens": 86,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs23fec7aiq",
+        "book": "events",
+        "name": "Nera's past reputation",
+        "reason": "open thread",
+        "tokens": 105,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs20lutlirw",
+          "ln_mur9xhs2r5v0ya7x"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2b06kny7z",
+        "book": "events",
+        "name": "Alaric's grievance",
+        "reason": "open thread",
+        "tokens": 120,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2g5gamg5e",
+          "ln_mur9xhs2je3w8uy2"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2guj3r5ty",
+        "book": "events",
+        "name": "Ilyra's death",
+        "reason": "open thread",
+        "tokens": 96,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs246b4d1tz",
+          "ln_mur9xhs2jkahh451"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2kmg6h2f8",
+        "book": "events",
+        "name": "The missing shipping folio",
+        "reason": "open thread",
+        "tokens": 155,
+        "linesSent": 4,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2ctfj6tlx",
+          "ln_mur9xhs2m7xmiycs",
+          "ln_mur9xhs2njwjv0ei",
+          "ln_mur9xhs25rfsn8bn"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2krbdt9o9",
+        "book": "events",
+        "name": "Elise and Liora's future",
+        "reason": "open thread",
+        "tokens": 129,
+        "linesSent": 3,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2n0w1vqzx",
+          "ln_mur9xhs2v3ukfdjf",
+          "ln_mur9xhs2qvkwuc7e"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2ky50ydde",
+        "book": "events",
+        "name": "The Black Concordance",
+        "reason": "open thread",
+        "tokens": 115,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2j1kmu8z7",
+          "ln_mur9xhs24r6wdrxj"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2lw6xq4cj",
+        "book": "events",
+        "name": "Isolde's personhood",
+        "reason": "open thread",
+        "tokens": 128,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs24s3ufk40",
+          "ln_mur9xhs2rgucvmbb"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2n5wpguk1",
+        "book": "events",
+        "name": "Eastern crisis and possible war",
+        "reason": "open thread",
+        "tokens": 143,
+        "linesSent": 3,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs3ptiw25g0",
+          "ln_mur9xhs2ldd8qe3g",
+          "ln_mur9xhs2lqf5bscz"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2ntwjv35l",
+        "book": "events",
+        "name": "Elaranth treaty and Sylwem's custody",
+        "reason": "open thread",
+        "tokens": 122,
+        "linesSent": 3,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs29d46s9u5",
+          "ln_mur9xhs2cx39efls",
+          "ln_mur9xhs2q2bavuq1"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2t4z8k4uf",
+        "book": "events",
+        "name": "The household hearing",
+        "reason": "open thread",
+        "tokens": 150,
+        "linesSent": 4,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2osgmoy95",
+          "ln_mur9xhs2ecwai98u",
+          "ln_mur9xhs2rn9ke9qb",
+          "ln_mur9xhs29frfrm3l"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2x18pdlzl",
+        "book": "events",
+        "name": "Veyrath succession and Nera's independence",
+        "reason": "open thread",
+        "tokens": 180,
+        "linesSent": 5,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2pbb28k25",
+          "ln_mur9xhs2bx1vzol3",
+          "ln_mur9xhs2cf8rzqzu",
+          "ln_mur9xhs2nyxgdwe9",
+          "ln_mur9xhs2y78afuvo"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs2ze8rb1ai",
+        "book": "events",
+        "name": "Church reform and magical bondage",
+        "reason": "open thread",
+        "tokens": 116,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs27i6sk6a8",
+          "ln_mur9xhs2nuvvw107"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs3zm5priru",
+        "book": "events",
+        "name": "Crownspire future",
+        "reason": "open thread",
+        "tokens": 140,
+        "linesSent": 2,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs3gzhfaznk",
+          "ln_mur9xhs3kilnsayf"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhs278yb64fd",
+        "book": "events",
+        "name": "Timeline",
+        "reason": "timeline",
+        "tokens": 520,
+        "linesSent": 12,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhs2oynetrih",
+          "ln_mur9xhs2hws8733t",
+          "ln_mur9xhs2dq3dbc13",
+          "ln_mur9xhs21lc3mfsm",
+          "ln_mur9xhs29a04oez8",
+          "ln_mur9xhs2iohgmjje",
+          "ln_mur9xhs22d9dgsok",
+          "ln_mur9xhs2rfryleig",
+          "ln_mur9xhs2igh00l1j",
+          "ln_mur9xhs29y6so17s",
+          "ln_mur9xhs2dmjfsvsf",
+          "ln_mur9xhs27wtqd4po"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhryn8s3god8",
+        "book": "characters",
+        "name": "Nera Veyrath",
+        "reason": "in scene",
+        "tokens": 881,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhrypprerkb1",
+        "book": "characters",
+        "name": "Isolde Veyless",
+        "reason": "in scene",
+        "tokens": 777,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhrzzpipq906",
+        "book": "characters",
+        "name": "Elise Fen",
+        "reason": "in scene",
+        "tokens": 596,
+        "linesSent": 1,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhrzc68oxav8"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhryo6cmnhba",
+        "book": "characters",
+        "name": "Liora Fen",
+        "reason": "in scene",
+        "tokens": 689,
+        "linesSent": 1,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": [
+          "ln_mur9xhrypw3ogtgs"
+        ]
+      },
+      {
+        "entryId": "lore_mur9xhrz32eevd0l",
+        "book": "characters",
+        "name": "Bastian Krail",
+        "reason": "in scene",
+        "tokens": 522,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      },
+      {
+        "entryId": "lore_mur9xhs0niwxd2a3",
+        "book": "locations",
+        "name": "West Reception Room",
+        "reason": "current place",
+        "tokens": 109,
+        "linesSent": 0,
+        "linesCut": 0,
+        "draft": false,
+        "lineIds": []
+      }
+    ],
+    "skipped": [
+      {
+        "entryId": "lore_mur9xhs1mtme06vg",
+        "book": "facts",
+        "name": "Black Concordance",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs1pboxfiy4",
+        "book": "facts",
+        "name": "Peoples of Edrath",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs1v88kpr7h",
+        "book": "facts",
+        "name": "Foreknowledge and branching history",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs1vj1iwccw",
+        "book": "facts",
+        "name": "Crownspire Imperial Academy",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs1vqo45xfg",
+        "book": "facts",
+        "name": "Beastfolk",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs20wq5vo27",
+        "book": "facts",
+        "name": "Academy year two",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs2dxsb7fz5",
+        "book": "facts",
+        "name": "Academy year four",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs2iod8waif",
+        "book": "facts",
+        "name": "Academy year one",
+        "reason": "over budget"
+      },
+      {
+        "entryId": "lore_mur9xhs2uz563nv2",
+        "book": "facts",
+        "name": "Academy year three",
+        "reason": "over budget"
+      }
+    ],
+    "scene": {
+      "raw": "date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+      "when": "18 September 731",
+      "time": null,
+      "place": "West Reception Room",
+      "present": [
+        "Nera Veyrath",
+        "Isolde Veyless",
+        "Elise Fen",
+        "Liora Fen",
+        "Bastian Krail"
+      ],
+      "fromTurn": 1,
+      "fromOrder": 2
+    },
+    "gap": null,
+    "gaps": [],
+    "warnings": [
+      "1 narrative reply is missing scene metadata. The last established scene is retained with its source cutoff.",
+      "Memory updates paused. History changed; affected notes need review. Rebuild explicitly."
+    ]
+  },
+  "expected": {
+    "place": "West Reception Room",
+    "date": "18 September 731",
+    "time": null,
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ],
+    "outside": [
+      "Magerrett Veyrath",
+      "Taigar Veyrath",
+      "Bastian Krail"
+    ]
+  }
+}

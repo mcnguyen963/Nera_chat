@@ -2,14 +2,11 @@
 // - delta.content  -> visible response, becomes message.content
 // - delta.reasoning -> collapsible "thinking" pane, becomes message.thinking.
 //                      Stored for reference but NEVER re-sent in context (spec §6/§7).
-import { storyText } from "./story-text.js";
 
 export function buildRequestBody(settings, messages) {
   const body = {
     model: settings.modelId,
-    messages: messages.map(({ role, content }) => ({ role,
-      content: role === "assistant" ? storyText(content) : content,
-    })).filter((message) => message.role !== "assistant" || message.content.trim()),
+    messages,
     max_tokens: settings.maxResponseTokens,
   };
   if (settings.advancedParametersEnabled) {
@@ -22,11 +19,12 @@ export function buildRequestBody(settings, messages) {
   if (r?.enabled) {
     // Never send both effort and max_tokens together (spec §4.1).
     if (r.mode === "effort") {
-      body.reasoning = { effort: r.effort };
+      body.reasoning = {effort:['minimal','low','medium','high','xhigh','max','none'].includes(r.effort) ? r.effort : 'medium'};
     } else {
-      body.reasoning = { max_tokens: r.maxTokens };
+      body.reasoning = {max_tokens:Math.max(0,Math.min(Number(r.maxTokens)||0,settings.maxResponseTokens-1))};
     }
   }
+  if (r?.enabled === false && r.explicitDisable && /^https:\/\/openrouter\.ai\//.test(settings.endpoint)) body.reasoning = {enabled:false};
   return body;
 }
 
@@ -42,69 +40,90 @@ function responseError(data) {
   return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
 }
 
-// Providers spell finish reasons differently; map them to OpenAI's names.
-function normalizeFinishReason(reason) {
-  if (!reason) return null;
-  const r = String(reason).toLowerCase();
-  return r === "max_tokens" || r === "max_output_tokens" ? "length" : r;
-}
+const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call', 'safety', 'recitation', 'blocklist', 'prohibited_content']);
 
-const FAILED_FINISH = new Set(["content_filter", "error", "tool_calls", "function_call", "safety", "recitation", "blocklist", "prohibited_content"]);
-function checkFinishReason(reason) {
-  if (reason && FAILED_FINISH.has(reason)) {
-    throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
-  }
+function finishKind(reason) {
+  const kind = String(reason ?? '').toLowerCase();
+  return kind === 'length' || kind === 'max_tokens' || kind === 'max_output_tokens' ? 'length' : kind;
 }
 
 function emptyReplyError(reason) {
-  return new Error(reason === "length"
+  return new Error(finishKind(reason) === 'length'
     ? "The output limit left no reply. Raise Max response tokens or lower the reasoning budget."
     : "The model returned no reply; nothing was saved.");
 }
 
-export async function chatCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal }) {
+function checkFinishReason(reason, allowTruncated) {
+  const kind = finishKind(reason);
+  if (kind === "length") {
+    if (allowTruncated) return;
+    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+  }
+  if (BAD_FINISH.has(kind)) {
+    throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
+  }
+}
+
+function serializedRequestBody(settings, messages, stream = false, format = {}) {
+  const body = { ...buildRequestBody(settings, messages), ...(stream ? { stream: true } : {}),
+    ...(format.responseFormat ? { response_format:format.responseFormat } : {}),
+    ...(format.provider ? { provider:format.provider } : {}) };
+  const serialized = JSON.stringify(body);
+  return serialized;
+}
+
+export async function chatCompletion(options) {
+  const controller=new AbortController();let timer,content='',thinking='';
+  const kick=()=>{globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort('timeout'),120000);timer?.unref?.();};
+  const cancel=()=>controller.abort(options.signal?.reason ?? 'user');
+  if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
+  let rejectAbort;
+  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
+  kick();
+  try {
+    if(controller.signal.aborted)rejectAbort();
+    return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{content+=t;options.onDelta?.(t);},onReasoning:t=>{thinking+=t;options.onReasoning?.(t);}}),aborted]);
+  } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
+}
+
+async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false, kick }) {
   if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
   if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, onRequest, signal });
+    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated, kick });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick });
 }
 
-async function nonStreamedCompletion({ settings, messages, onRequest, signal }) {
-  const body = buildRequestBody(settings, messages);
-  onRequest?.(structuredClone({ model: body.model, messages: body.messages }));
+async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify(body),
+    body: serializedRequestBody(settings, messages, false, { responseFormat,provider }),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
-  const finishReason = normalizeFinishReason(data.choices[0].finish_reason);
-  checkFinishReason(finishReason);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
-    throw emptyReplyError(finishReason);
+    throw emptyReplyError(data.choices[0].finish_reason);
   }
+  checkFinishReason(data.choices[0].finish_reason, allowTruncated);
   return {
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
     usage: data.usage ?? null,
-    finishReason,
+    finishReason: finishKind(data.choices[0].finish_reason) || null,
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, onRequest, signal }) {
-  const body = { ...buildRequestBody(settings, messages), stream: true };
-  onRequest?.(structuredClone({ model: body.model, messages: body.messages }));
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick }) {
   const res = await fetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: JSON.stringify(body),
+    body: serializedRequestBody(settings, messages, true, { responseFormat,provider }),
     signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
@@ -138,7 +157,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, on
     if (!Array.isArray(json.choices) && !json.usage) throw responseError(json);
     const delta = json.choices?.[0]?.delta ?? {};
     if (json.choices?.[0]?.finish_reason) {
-      finishReason = normalizeFinishReason(json.choices[0].finish_reason);
+      finishReason = json.choices[0].finish_reason;
       completed = true;
     }
     if (delta.content && typeof delta.content !== "string") throw responseError(json);
@@ -154,8 +173,12 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, on
     if (json.usage) usage = json.usage;
   };
 
+  const cancelReader=()=>{Promise.resolve(reader.cancel?.()).catch(()=>{});};
+  signal?.addEventListener('abort',cancelReader,{once:true});
+  try {
   while (true) {
     const { done, value } = await reader.read();
+    kick?.();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let nl;
@@ -165,16 +188,17 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, on
       processLine(line);
     }
   }
+  } finally {signal?.removeEventListener('abort',cancelReader);cancelReader();}
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
   if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
-  checkFinishReason(finishReason);
   if (!content.trim()) throw emptyReplyError(finishReason);
+  checkFinishReason(finishReason, allowTruncated);
 
   return {
     content,
     thinking: thinking || null,
     usage,
-    finishReason,
+    finishReason: finishKind(finishReason) || null,
   };
 }

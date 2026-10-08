@@ -1,0 +1,1 @@
+Keep the complete updated summary within {{MAX_OUTPUT_TOKENS}} output tokens. Budget all sections before writing; preserve the previous summary's still-relevant facts while merging the supplied events. End at the last supplied event, not an assumed present-day scene. Output only the summary.

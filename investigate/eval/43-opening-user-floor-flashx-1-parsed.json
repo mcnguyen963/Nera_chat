@@ -1,0 +1,54 @@
+{
+  "content": "The pen lies on the table where Krail set it down, its nib pointed toward you. The punishment order beside it is written in his small, even hand: names at the top, the accusation in the middle, and a blank space at the bottom where a signature goes. The blank space looks very large.\n\nThe room still smells wrong. Burned cloth, lamp oil, wet ash. Two servants have scrubbed at the hearth rug, but the smoke has gotten into the curtains and the upholstery, and it sits in the back of your throat. Against the far wall, propped where someone carried it out of your mother's rooms, rests the portrait. The right half is intact: Ilyra's shoulder, the edge of her jaw, a strand of painted hair. The left half is black and curled, the canvas buckled where the heat got into it. Her face is half gone.\n\nElise Fen stands with her hands clasped in front of her apron. Her left forearm is wrapped in a cloth bandage stained brown at the center, and there is a clean rip in her sleeve where someone cut the fabric away from the burn. Soot still marks her collar and one cheek. She has not sat down. She has not looked at the pen. She looks at you, steady, the way a person looks when she has decided to be afraid later.\n\nLiora stands half a step in front of her mother and cannot hold still. She shifts her weight from foot to foot. Her burned palm is cradled against her skirt, red and blistered at the base of the fingers, and every few seconds she glances at it and then away. Soot streaks one cheek. Her hair has come half loose, and the red underneath shows through the black whenever she turns her head. Her mouth opens once, closes, opens again.\n\n\"Lord Nera.\" Krail's voice is dry and level. He has not moved since he set the pen down. His hands rest on the table on either side of the order, aligned, patient. \"The household cannot leave this unresolved. There is the matter of the destroyed register, the missing shipping folio, and damage to your late mother's rooms. The order before you proposes measures proportionate to each. I would note, for the record, that the elder is charged with negligence only, and the younger's part is treated as a child's trespass.\" A pause, measured out like a line in a ledger. \"The duke returns after sunset. It would be better to have the matter settled before then.\"\n\n\"It wasn't—\" Liora gets the words out before she remembers where she is. \"The nightingale was broken. I only wanted to fix it. It used to—\" Elise's good hand touches her daughter's shoulder, light, and Liora stops, jaw tight, eyes bright.\n\n\"Enough.\" Krail does not raise his voice. \"You have confessed. The lordship has heard it.\"\n\n\"She confessed to the keys and the fire,\" Elise says. Her voice is quiet and does not shake, though her clasped hands whiten at the knuckles. \"She has said it three times, my lord, and I don't dispute a word of it. What she will not say, and what I will not swear to, is that I gave her leave. I didn't. I was on the east stair when she took them. And the fire was an accident, and I'll swear that too, on whatever the house requires.\" She smooths her apron once, the motion small. \"The folio, my lord. I've never handled a folio. I carry keys to linen closets and your mother's outer rooms, nothing with numbers in it.\"\n\nKrail's expression does not change. \"That is for the record to sort,\" he says. \"The record requires a signature.\" He turns the order a few degrees, so the blank space faces you more squarely, and steps back from the table.\n\nBeside you, Isolde stands exactly where she has stood since the prisoners were brought in. Her hands are folded at her apron. Her yellow eyes rest on Krail's hands, then move to Elise's bandage, then to Liora's palm, cataloguing. She says nothing. She waits for you.\n\nDown the corridor, past the door that someone left open an inch, there is the faint creak of a floorboard. Magerrett, close enough to hear every word.\n\n<plan_thread>the unsigned punishment order at the household hearing (P1)</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "The user's message is background/opening setup, no player action beyond narration establishing the scene. Actually the memory block ends, then the user's input is first-person background — it says \"The first-person background in the user's input does not authorize new player actions.\" So I should narrate the current scene moment: Krail waiting with pen beside unsigned order, Isolde beside him, Elise and Liora, ending on an open beat before Nera's choice.\n\nI must not decide anything for Nera. End on concrete beat — perhaps Liora speaking, or Krail prompting. Include plan_thread naming the immediate pending target: \"the unsigned punishment order\" or \"the household hearing (P1)\". Include scene tag: date 18 September 731, time unknown, place West Reception Room, present Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail.\n\nAim 500-700 words. Write scene: silence after Krail placed pen. Details: smells of wet ash, bandage, Liora's blistered palm, Elise steady, Krail dry, Isolde still. Maybe Liora starts to speak, Krail cuts her off, or Elise smoothing apron. End on Krail's line or Elise's appeal. Keep second person present tense.",
+  "usage": {
+    "prompt_tokens": 15356,
+    "completion_tokens": 1280,
+    "total_tokens": 16636,
+    "cost": 0.00728172,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00728172,
+      "upstream_inference_prompt_cost": 0.00568172,
+      "upstream_inference_completions_cost": 0.0016
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 283,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 716,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

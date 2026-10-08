@@ -1,0 +1,53 @@
+{
+  "content": " Krail lets the silence hold for exactly as long as it takes to become uncomfortable. His grey eyes stay on you, patient as a clerk waiting for a figure to balance. When you do not reach for the pen, he does something small and telling: he straightens the punishment order on the table, aligning its edge with the wood, and sets the pen down beside it again — precisely parallel, as if the document itself might sign while he is gone.\n\n\"Of course, my lord,\" he says. \"The matter need not be resolved this instant. The order will keep.\"\n\nHe retrieves his pocket watch, glances at it, and snaps it shut.\n\n\"I have the fire-warden's inventory to reconcile, and the assessors will want a statement on the estate register before evening. When you have determined the household's response, send for me. I would caution you only of this—\" his thin lips press together, \"—deliberation has a cost of its own. A house that cannot discipline its servants invites worse than fire. Your father understands that.\"\n\nHe bows. It is a shallow, correct bow, measured to the exact degree owed to a third child, and no deeper.\n\n\"I will attend you when called.\"\n\nKrail gathers his key ring and writing case, checks that the pen sits where he left it, and withdraws. The door closes behind him with a soft, deliberate click, and through it, briefly, you hear the murmur of the corridor — someone was standing close to the door, and now steps back. The footfalls retreat unhurried.\n\nThen the room is quieter than it has been all afternoon.\n\nThe smell of wet ash hangs over everything. Ilyra's ruined portrait leans against the wall where it was carried, the burned edge of the canvas curling inward like a closed hand. Elise stands where the guards left her, her bandaged left forearm held against her waist, her disordered apron streaked with soot. Beside her, Liora shifts her weight from foot to foot, her blistered palm cupped against her chest, the red layers of her hair flashing when she turns her head to look at you — then quickly away, as if she's not sure she's allowed to look.\n\nIsolde stands at your shoulder, hands placed neatly, her yellow eyes moving once to the door and back. She says nothing.\n\nIt is Liora who breaks first — it was always going to be Liora. She takes half a step forward, stops herself, and the words come out anyway, tumbling over each other.\n\n\"I didn't mean—\" Her voice cracks and she pushes through it. \"The nightingale was jammed, I only wanted to fix it, I didn't think the lamp would— I'm sorry. I'm sorry about the picture. I'll fix it. I can fix it, I just need—\" She looks at her mother.\n\nElise's hand comes to rest on her daughter's shoulder, quieting her without a word. Then Elise smooths her apron with her good hand, a small practiced motion, and addresses you directly. Her voice is steady, though the tension sits plain around her mouth.\n\n\"My lord. Before anything is decided — the physician has not seen either of us. Liora's hand is blistered, and this bandage has not been changed since it was tied. I'm not asking you to excuse anything.\" Her brown eyes hold yours, careful and level. \"Only that the burns be treated. Whatever judgment comes after.\"\n\nShe waits, hands clasped, for your answer.\n\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen</scene>",
+  "thinking": "The user (app) directive: Continue the hearing. Have Krail leave the room; do not move Nera or other people. Do not write player speech, thoughts, or decisions.\n\nSo I narrate from where we left: Krail placed the pen beside the unsigned order and asked for Nera's decision. The directive says Krail leaves the room. I need to write a transition where Krail exits without player action authorizing it. Perhaps Krail, pressed by protocol or a summons, withdraws. I can invent a plausible in-world reason: Krail notes the young lord needs time to consider, formally withdraws to wait outside, maybe mentions the folio matter or states he'll return. The other people (Isolde, Elise, Liora) remain in the room with Nera. Krail might address the room. Perhaps he hears something—maybe Magerrett outside—but I shouldn't add too much.\n\nI should write the scene: silence after his question, then Krail decides to withdraw (perhaps citing that the young lord may wish to deliberate, and that the records must be checked, or that the duke's evening schedule requires him elsewhere). He might leave the unsigned order and pen on the table. He gives a cold remark. Then he exits. Then the room with Nera, Isolde, Elise, Liora — an opportunity for Nera to act. Elise or Liora may say something? Careful: I can have NPCs speak, but stop at a concrete opportunity for Nera to act. Ending with the room quiet, maybe Liora breaking silence with a plea or Elise requesting the physician — that gives Nera a decision point.\n\nAlso maybe include Magerrett outside — Krail steps out and Magerrett is there listening. But the room present list: Nera, Isolde, Elise, Liora (Krail left). Taigar farther down corridor.\n\nScene tag: date: 18 September 731 · time: unknown? Time of day — no established time. The fire happened... daytime likely. But rule says \"unknown\" for unsupported fields. Previous snapshot had time: unknown. I should repeat \"unknown\" unless established. Hmm, but maybe I can support something. Nothing establishes time of day. Keep unknown.\n\nPlace: West Reception Room. Present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen (Krail now outside).\n\nWrite natural second-person present tense narration. No player speech/thoughts/decisions. I can describe Nera's physical presence minimally? Avoid inventing voluntary actions. I can note the pen lying before him etc.\n\nDraft:\n\nKrail waits. The silence. Then Krail, perhaps checking his watch, says something like: \"You need not decide standing, my lord. The order will keep. I have the fire-warden's inventory to reconcile and the estate register to assess for the assessors. When you have determined the matter, send for me.\" He aligns the order, leaves the pen, bows precisely, and withdraws. Outside, brief sound — Magerrett's voice? Maybe just the door closing.\n\nThen in the room: Elise's bandage, Liora's blistered palm. Liora maybe speaks — she's inclined to blurt. Or Elise formally asks: \"My lord... may I ask for the physician?\" That is a natural hook and a decision point for Nera. Isolde might say something? Isolde could state a fact: \"The physician is available in the east wing.\" Earlier Isolde told Nera neither prisoner had been examined. Maybe she repeats or waits.\n\nKeep NPC voices distinct: Krail dry administrative; Liora loud/curious; Elise composed.\n\nEnd at concrete opportunity: Elise's request hanging, or Liora's plea. Stop there.\n\nAlso the directive says don't move Nera or other people — only Krail leaves. Good.\n\nLength: moderate, a few paragraphs. Then scene tag.",
+  "usage": {
+    "prompt_tokens": 14579,
+    "completion_tokens": 1633,
+    "total_tokens": 16212,
+    "cost": 0.001326765,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 14434,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001326765,
+      "upstream_inference_prompt_cost": 0.000510265,
+      "upstream_inference_completions_cost": 0.0008165
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 839,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 574,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": false
+  },
+  "automaticPass": false,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}

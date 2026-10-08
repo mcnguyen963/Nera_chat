@@ -1,0 +1,54 @@
+{
+  "content": "The room still smells of what burned there. Burned cloth, lamp oil, wet ash. The tall west windows let in pale afternoon light that falls across Ilyra's ruined portrait where it leans against the wall, one corner charred black, her painted face half lost to a ragged brown scar. You stand in your own reception room with the fire's aftermath in your nose and the weight of a decision sitting on the table in front of you.\n\nBastian Krail stands with his hands behind his back, the picture of administrative patience. The punishment order lies flat on the table between you, its edges aligned with the wood grain, its approval space blank. A pen rests beside it, laid at a neat angle, ready for a hand. He has not asked again. He does not need to; the order itself asks, and the pen beside it asks louder.\n\n\"Whenever you are ready, my lord.\" His voice is dry and even, like a man reading a ledger line. \"The household prefers these matters concluded the same day. Delay breeds rumor, and rumor breeds worse.\"\n\nAcross the room, near the cold hearth, stand the two accused. Elise Fen has a cloth bandage wrapped around her left forearm, stained brown at its center where the burn seeped through. Soot still marks the collar of her dress. She stands with her back straight and her hands clasped before her apron, and though you can see the fear in the tightness around her mouth, she does not lower her eyes. She has already said her piece once: she did not give her daughter the keys, she did not authorize anything, and she will swear the fire was accident before any hearth or temple they like.\n\nLiora is harder to still. She is eleven, with soot streaked across one cheek and her black-and-crimson hair coming loose around her shoulders, and her burned palm is curled against her skirt. Her reddish-brown eyes keep flicking from Krail to the portrait to you. Twice she has started to speak and her mother's nearest hand has settled on her shoulder without a word. The second time, Liora's mouth stayed open a moment longer, and then she shut it.\n\nTo your left stands Isolde, precisely still, hands folded, white hair neat against her black dress. She reported to you what Krail's people did not: that neither prisoner has seen the physician, that Elise's bandage has not been changed since the fire, that the burn beneath it has not been treated. She does not repeat it now. She simply stands where she can see everyone, yellow eyes moving without hurry, waiting on you.\n\nFrom the passage beyond the door comes a faint creak of floorboards, then stillness. Someone is out there, close to the door, not entering. Farther off, a second set of footsteps retreating down the corridor.\n\n\"My lord.\" Krail's thin lips barely move. \"For the record, the girl admits the entry. The admitted destruction of a register of some value follows from it. The mother's responsibility for the keys is a separate matter, but the household will want both addressed in one order, or not at all.\" He turns the page a fraction, squaring it again with the table edge. \"Sign, and it is settled. Decline, and it comes back to you later, perhaps in worse form. That is the whole of it.\"\n\nElise's clasped hands tighten. Liora has stopped shifting from foot to foot; for once she is entirely still, watching you the way children watch the person who decides whether their day becomes survivable or not.\n\nKrail slides the pen a half-inch nearer the blank space and steps back, hands returning behind his back, grey eyes on you with the same close attention he gives a ledger entry.\n\n<plan_thread>Pending: Nera's decision on the unsigned punishment order — sign, refuse, redirect, or question Krail's account before the pen touches paper.</plan_thread>\n<scene>date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail</scene>",
+  "thinking": "Let me look at the current user input. The memory block establishes the scene. The user input is the opening first-person background — this is the first user message establishing the scenario. There's no new player action in it beyond setting the scene. Wait — the instructions say \"The first-person background in the user's input does not authorize new player actions. Only the user writes Nera Veyrath's voluntary actions.\" But this user message is entirely background, no actions. So I must narrate the scene without moving Nera — end on an open beat before the player's choice. Krail is waiting for Nera's signature/decision. So I should write the scene: Krail presenting the order, asking for decision, NPCs speaking, Isolde beside him, Elise and Liora present. End on open beat awaiting Nera's choice.\n\nWord count 500-700 visible words. Include <plan_thread> naming immediate pending target, then scene tag.\n\nScene: date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail\n\nPlan thread: immediate pending target — Nera's decision on the unsigned punishment order / Krail's demand for authorization.\n\nWrite second person present tense. Show NPCs, external observations. End open beat.\n\nLet me draft.\n\nScene beats: Krail aligning documents, presenting the order again, pen beside it. Elise's bandage, Liora's blistered palm. Liora perhaps speaking — she's loud, inclined to explain. But careful: I shouldn't have her do too much that forces the player. She can blurt an apology or protest. Elise composed, smoothing apron, refusing to confess falsely. Krail frames it as routine administrative matter. Isolde still beside Nera. The smell of burned cloth. Portrait against the wall. Maybe sounds of Magerrett outside? Keep people outside the room outside — but the door was established with Magerrett stopping outside listening; I can mention a faint sound in the passage without bringing her in.\n\nEnd: Krail waiting, pen offered, silence. Open beat.\n\nWord count: aim ~550-650.",
+  "usage": {
+    "prompt_tokens": 15377,
+    "completion_tokens": 1361,
+    "total_tokens": 16738,
+    "cost": 0.001218695,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 15224,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.001218695,
+      "upstream_inference_prompt_cost": 0.000538195,
+      "upstream_inference_completions_cost": 0.0006805
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 476,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "visibleWords": 629,
+  "scene": {
+    "raw": "date: 18 September 731 · time: unknown · place: West Reception Room, Veyrath estate · present: Nera Veyrath, Isolde Veyless, Elise Fen, Liora Fen, Bastian Krail",
+    "when": "18 September 731",
+    "time": null,
+    "place": "West Reception Room, Veyrath estate",
+    "present": [
+      "Nera Veyrath",
+      "Isolde Veyless",
+      "Elise Fen",
+      "Liora Fen",
+      "Bastian Krail"
+    ]
+  },
+  "warnings": [],
+  "criteria": {
+    "finalSingleTag": true,
+    "noAgencyLint": true,
+    "supportedTime": true,
+    "supportedDate": true,
+    "correctPlace": true,
+    "correctAttendance": true,
+    "wordLimit": true,
+    "planBreadcrumb": true
+  },
+  "automaticPass": true,
+  "humanReview": "pending: player agency, attendance, knowledge, OOC progression and plan target"
+}
