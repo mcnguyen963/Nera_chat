@@ -1,6 +1,6 @@
 // MAIN context builder frozen at fbcc95ad2498e24670d8daaf66f712e76f34dccf8787c5c3d00976ff13e03c64; golden fixtures verify wire parity. Prompt strings live in Markdown.
 import {prompts,renderPrompt} from "./system-prompts.js";
-const PLAN_THREAD_RECOVERY_RULE=" If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears anywhere in the visible conversation history, even though a plan seems to have been set earlier, treat that plan as lost from context. Its exact contents cannot be ";
+const PLAN_THREAD_RECOVERY_RULE=" If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears anywhere in the visible conversation history, even though a plan seems to have been set earlier, treat that plan as lost from context. Its exact contents cannot be reconstructed; proceed with no active plan until the user sets a new one.";
 // Context window assembly (spec §6). Whole-message granularity, never cut mid-text.
 // Budget accounting: narrator prompt + plan block + summary + sliding-window messages
 // all live inside the input limit maxContextTokens. Output has its own limit.
@@ -128,7 +128,7 @@ export async function buildLegacyContext(session, settings, opts = {}) {
     // Reserving the summary marker can itself push a later turn out of the
     // window. Rebuild the marker once if that creates an uncovered gap.
     for (let pass = 0; pass < 2; pass++) {
-      const content = coveredGap ? (uncoveredGap && summaryText ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : prompts.omittedTurns;
+      const content = coveredGap ? (uncoveredGap && summaryText ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : (uncoveredGap && summaryText ? prompts.omittedTurnsPartialUncovered : prompts.omittedTurns);
       const tokens = await countSystemTokensCached(content);
       const cost = tokens + MESSAGE_FRAME_TOKENS;
       exceedsInputLimit = requiredCost + cost > available;

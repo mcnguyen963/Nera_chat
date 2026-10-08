@@ -43,8 +43,8 @@ const cases=[
  [`${P}\n${tag(B.replace('Inn','West Wing - Reception Room, Palace'))}`,B.replace('Inn','West Wing - Reception Room, Palace'),P],
  [`${P}\n<plan_thread>x</plan_thread> ${tag(B)}`,B,P],
  [`${P}\n${tag(B.replace(/(date|time|place|present):/g,'**$1:**'))}`,B,P],
- [`${P}\n${tag(B.replace('Inn','Inn: upstairs room'))}`,B.replace('Inn','Inn, upstairs room'),P],
- [`${P}\n${tag(B.replace('Inn','Old Inn: upstairs'))}`,B.replace('Inn','Old Inn, upstairs'),P],
+ [`${P}\n${tag(B.replace('Inn','Inn: upstairs room'))}`,B.replace('Inn','Inn: upstairs room'),P],
+ [`${P}\n${tag(B.replace('Inn','Old Inn: upstairs'))}`,B.replace('Inn','Old Inn: upstairs'),P],
  [`${P}\n${tag(B+' · active event: the hearing')}`,B,P],
 ];
 for (const [i,[input,scene,clean]] of cases.entries()) test(`S3 scene fixture ${i+1}`,() => {

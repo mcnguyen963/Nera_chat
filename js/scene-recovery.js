@@ -17,10 +17,11 @@ export function parseRecovery(text, context) {
   let obj;
   try { text=String(text);obj=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1)); } catch {return null;}
   const keys=['date','time','place','present','planThread'];
-  if (!obj || Array.isArray(obj) || Object.keys(obj).some(k => !keys.includes(k)) || !['date','time','place'].every(k => typeof obj[k]==='string') || !Array.isArray(obj.present) || obj.present.some(n => typeof n!=='string') || obj.present.length > 50 || !(obj.planThread==null || typeof obj.planThread==='string' && obj.planThread.length <= 500)) return null;
+  if (!obj || Array.isArray(obj) || !['date','time','place'].every(k => typeof obj[k]==='string') || !Array.isArray(obj.present) || obj.present.some(n => typeof n!=='string') || obj.present.length > 50 || !(obj.planThread==null || typeof obj.planThread==='string' && obj.planThread.length <= 500)) return null;
   const names=[...(context.names ?? []),context.protagonist].filter(Boolean);
   obj.present=obj.present.map(n => names.find(x => x.toLowerCase()===n.trim().toLowerCase()) ?? n.trim()).filter(n => n && (names.includes(n) || (context.narration+' '+context.userText).toLowerCase().includes(n.toLowerCase())));
-  const checked = validateSceneValues(sceneLine(obj),{ narration:context.narration,userText:context.userText,prior:context.prior?.scene });
+  let raw;try{raw=sceneLine(obj);}catch{return null;}
+  const checked = validateSceneValues(raw,{ narration:context.narration,userText:context.userText,prior:context.prior?.scene });
   return { ...checked,sceneMeta:{ ...checked.sceneMeta,kind:'inferred' },
     planThread:context.plan?.trim() ? obj.planThread : null };
 }

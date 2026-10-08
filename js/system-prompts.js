@@ -1,5 +1,8 @@
 // Prompt text lives only in Markdown. Resolve relative to this module for Pages subpaths.
 const files = {
+  "memoryExtractionFrame": "memory-extraction-frame.md",
+  "loreLabels": "lore-labels.md",
+  "omittedTurnsPartialUncovered": "omitted-turns-partial-uncovered.md",
   "planStatusInactive": "plan-status-inactive.md",
   "planStatusActive": "plan-status-active.md",
   "sceneReminderPlan": "scene-reminder-plan.md",
@@ -29,7 +32,6 @@ const files = {
   "lorebookJson": "lorebook-conversion-json.md",
   "memoryExtractionOutput": "memory-extraction-output.md",
   "plan": "fixed-author-plan.md",
-  "emptyPlan": "empty-plan.md",
   "summaryOutput": "summary-output.md",
   "historicalSummary": "historical-summary.md",
   "openingExchange": "opening-exchange.md",
@@ -57,4 +59,15 @@ export const prompts = Object.freeze(Object.fromEntries(
 export function renderPrompt(template, values) {
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (placeholder, key) =>
     Object.hasOwn(values, key) ? String(values[key]) : placeholder);
+}
+
+// Small label templates keep all text sent to models in editable Markdown.
+export const loreLabels = Object.freeze(Object.fromEntries(prompts.loreLabels.split('\n').map(line => {
+  const match = line.match(/^([a-zA-Z]+): (.*)$/);
+  if (!match) throw new Error('Invalid lore label template: '+line);
+  return [match[1],match[2]];
+})));
+export function renderLoreLabel(key, values = {}) {
+  if (!Object.hasOwn(loreLabels,key)) throw new Error('Missing lore label template: '+key);
+  return renderPrompt(loreLabels[key],values);
 }

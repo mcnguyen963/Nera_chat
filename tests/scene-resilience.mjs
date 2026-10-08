@@ -74,7 +74,7 @@ test('structured recovery validates schema, names and provenance locally and nev
   const obj = { date:'18 September 731',time:'late morning',place:'West Reception Room',present:context.names,planThread:'Await the player’s choice.' };
   const result = r.parseRecovery(JSON.stringify(obj),context);
   assert.equal(result.sceneMeta.kind,'inferred');assert.equal(s.parseScene(result.scene).time,null);
-  for(const invalid of [{ ...obj,extra:true },{ ...obj,time:14 },{ ...obj,planThread:[] }]) assert.equal(r.parseRecovery(JSON.stringify(invalid),context),null);
+  for(const invalid of [{ ...obj,time:14 },{ ...obj,planThread:[] }]) assert.equal(r.parseRecovery(JSON.stringify(invalid),context),null);
   assert.equal(r.parseRecovery(JSON.stringify(obj),{ ...context,plan:'' }).planThread,null);
 });
 

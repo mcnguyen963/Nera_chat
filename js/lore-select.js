@@ -1,4 +1,4 @@
-import { prompts } from './system-prompts.js';
+import { prompts, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { normalizeName, STOPLIST, SECTION_KEYS } from './lore-lines.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
@@ -20,10 +20,12 @@ export function buildLoreIndex(entries) {
   return index;
 }
 export function findMentions(text, index, book) {
-  const matches = [];
+  const matches = [], nfc = String(text).normalize('NFC');
   for (const term of index[book] ?? []) {
-    const re = new RegExp('(?<![\\p{L}\\p{N}])'+escapeRegex(term.normTerm)+'(?![\\p{L}\\p{N}])','giu');
-    for (const m of (term.firstName ? String(text).normalize('NFC') : normalizeName(text)).matchAll(term.firstName ? new RegExp('(?<![\\p{L}\\p{N}])'+escapeRegex(term.term)+'(?![\\p{L}\\p{N}])','gu') : re)) matches.push({ id:term.entryId, start:m.index, end:m.index+m[0].length });
+    // All matches share offsets in the same string; allow names across whitespace.
+    const phrase = escapeRegex(term.firstName ? term.term : term.normTerm).replace(/\s+/g, '\\s+');
+    const re = new RegExp('(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',term.firstName ? 'gu' : 'giu');
+    for (const m of nfc.matchAll(re)) matches.push({ id:term.entryId, start:m.index, end:m.index+m[0].length });
   }
   matches.sort((a,b) => (b.end-b.start)-(a.end-a.start)||a.start-b.start);
   const chosen = [];
@@ -54,9 +56,9 @@ export function selectEntries(entries, mem, text, scene, recentText = '') {
     const list = entries.filter(e => e.book === book);
     if (!mem.lorebooks || !mem.books[book].on) { for (const e of list) skipped.push({ entryId:e.id, book, name:e.name, reason:'book off' }); continue; }
     const add = (id,reason) => { const entry = list.find(e => e.id === id); if (entry && !selected[book].some(x => x.entry.id === id)) selected[book].push({ entry, reason }); };
-    if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,...Object.values(b.sections).flatMap(s=>s.lines.map(l=>l.at)))-Math.max(0,...Object.values(a.sections).flatMap(s=>s.lines.map(l=>l.at)))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
+    if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,...Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))-Math.max(0,...Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
     else if (book === 'events') {
-      for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,...Object.values(b.sections).flatMap(s => s.lines.map(l => l.at)))-Math.max(0,...Object.values(a.sections).flatMap(s => s.lines.map(l => l.at))))) add(e.id,'open thread');
+      for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,...Object.values(b.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0)))-Math.max(0,...Object.values(a.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))))) add(e.id,'open thread');
       for (const e of list.filter(e => e.kind === 'timeline')) add(e.id,'timeline');
     } else {
       for (const e of list.filter(e => e.alwaysLoad)) add(e.id,'always');
@@ -74,16 +76,18 @@ export function selectEntries(entries, mem, text, scene, recentText = '') {
   if (mem.lorebooks && mem.books.characters.on) for (const name of resolved.ambiguous) skipped.push({ entryId:null, book:'characters', name, reason:'ambiguous scene name; use the full card name' });
   return { selected, skipped, index, resolved };
 }
-export function renderLine(line,{provenance=false}={}) {return provenance ? '- ['+[line.turn != null ? 'T'+line.turn : null,line.when].filter(Boolean).join(' · ')+'] '+line.text : '- '+line.text;}
-export function sectionLabel(key, protagonist) { return key === 'bond' ? 'Bond with '+(protagonist || 'the protagonist') : key === 'text' ? '' : key[0].toUpperCase()+key.slice(1); }
+export function renderLine(line,{provenance=false}={}) {
+  return provenance ? renderLoreLabel('lineStamp',{STAMP:[line.turn != null ? renderLoreLabel('turnLabel',{TURN:line.turn}) : null,line.when].filter(Boolean).join(' · '),TEXT:line.text}) : line.when ? renderLoreLabel('lineDate',{WHEN:line.when,TEXT:line.text}) : renderLoreLabel('linePlain',{TEXT:line.text});
+}
+export function sectionLabel(key, protagonist) { return key === 'bond' ? renderLoreLabel('bond',{PROTAGONIST:protagonist || renderLoreLabel('protagonistName')}) : key === 'text' ? '' : renderLoreLabel(key); }
 export function renderEntry(entry, lineIds = null, protagonist = '', { provenance = false } = {}) {
-  const out = [`## ${entry.name}${entry.aliases?.length ? ' (also called: '+entry.aliases.join(', ')+')' : ''}`];
+  const out = [renderLoreLabel('entryHeading',{NAME:entry.name,ALIASES:entry.aliases?.length ? renderLoreLabel('aliases',{ALIASES:entry.aliases.join(', ')}) : ''})];
   for (const key of SECTION_KEYS[entry.book]) {
     const s = entry.sections[key]; if (!s) continue;
     const lines = sortLines(s.lines ?? []).filter(l => !lineIds || lineIds.has(l.id));
     if (!s.text && !lines.length) continue;
     const label = sectionLabel(key,protagonist);
-    if (s.text) { const meta = sectionMeta(s,entry); if (provenance) out.push(`[${meta.kind}; origin: ${meta.origin}; ${meta.kind === 'canon' ? 'author authority' : cutoffLabel(meta.cutoff)}]`); out.push(label ? label+':'+(s.text.includes('\n') ? '\n' : ' ')+s.text : s.text); }
+    if (s.text) { const meta = sectionMeta(s,entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:meta.kind === 'canon' ? renderLoreLabel('authorAuthority') : cutoffLabel(meta.cutoff)})); out.push(label ? label+':'+(s.text.includes('\n') ? '\n' : ' ')+s.text : s.text); }
     else if (label) out.push(label+':');
     out.push(...lines.map(l=>renderLine(l,{provenance})));
   }
@@ -127,19 +131,19 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
 export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
 export function renderEventsBlock(fit, { provenance = false } = {}) {
   const out = [], threads = fit.included.filter(e => e.entry.kind === 'thread'), timeline = fit.included.find(e => e.entry.kind === 'timeline');
-  if (threads.length) out.push('Open threads:',...threads.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
+  if (threads.length) out.push(renderLoreLabel('openThreads'),...threads.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
   if (timeline && (timeline.entry.sections.text?.text || timeline.lineIds.size)) {
-    out.push('Timeline (oldest first'+(timeline.linesCut ? ', '+timeline.linesCut+' earlier events not shown' : '')+'):');
-    if (timeline.entry.sections.text?.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(`[${meta.kind}; origin: ${meta.origin}; ${cutoffLabel(meta.cutoff)}]`); out.push(timeline.entry.sections.text?.text); }
+    out.push(renderLoreLabel('timeline',{OMITTED:timeline.linesCut ? renderLoreLabel('omittedEvents',{COUNT:timeline.linesCut}) : ''}));
+    if (timeline.entry.sections.text?.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:cutoffLabel(meta.cutoff)})); out.push(timeline.entry.sections.text?.text); }
     out.push(...sortLines(timeline.entry.sections.text?.lines ?? []).filter(l => timeline.lineIds.has(l.id)).map(l=>renderLine(l,{provenance})));
   }
   return out.length ? prompts.eventsHeader+'\n'+out.join('\n') : '';
 }
-export function renderMemoryBlock({ scene, sceneFromTurn, sceneFromOrder, staleScene, plan = '', characters, locations }) {
+export function renderMemoryBlock({ scene, staleScene, plan = '', characters, locations }) {
   const out = [prompts.memoryHeader];
-  if (scene) out.push(`Established scene snapshot at T${sceneFromTurn ?? '?'} (message order ${sceneFromOrder ?? '?'}${staleScene ? '; later narrative omitted scene metadata' : ''}): ${scene.raw}`);
+  if (scene) out.push(renderLoreLabel(staleScene ? 'staleScene' : 'currentScene',{SCENE:scene.raw}));
   if (plan) out.push(plan);
-  if (characters?.text) out.push('Characters:',characters.text);
-  if (locations?.text) out.push(locations.included?.length>1?'Places:':'Place:',locations.text);
+  if (characters?.text) out.push(renderLoreLabel('characters'),characters.text);
+  if (locations?.text) out.push(renderLoreLabel(locations.included?.length>1?'places':'place'),locations.text);
   return out.join('\n');
 }

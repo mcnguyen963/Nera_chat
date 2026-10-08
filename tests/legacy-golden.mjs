@@ -12,6 +12,8 @@ async function api(main) {
  return appHarness({sources,stubs:{'messages.js':{getMessages:async()=>messages},'tokenizer.js':tok,...(main?{'settings.js':{PLAN_THREAD_RECOVERY_RULE:JSON.parse(await fx('recovery-rule.json'))}}:{})}})('context-builder.js');
 }
 const scenarios=[
+ {settings:{narratorSystemPrompt:'Custom narration.'+JSON.parse(await fx('recovery-rule.json'))}},
+ {all:[...messages,{id:'sum',role:'summary',order:31,content:'Past events'}],session:{activeSummaryMessageId:'sum',breakpointOrder:1},settings:{maxContextTokens:900}},
  {},{all:messages.slice(0,4)},
  {all:[...messages,{id:'sum',role:'summary',order:31,content:'Past events'}],session:{activeSummaryMessageId:'sum',breakpointOrder:20}},
  {settings:{maxContextTokens:900}},{opts:{upToOrder:15}},
