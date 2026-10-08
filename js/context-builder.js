@@ -65,7 +65,8 @@ export async function buildContextForRequest(session, settings, opts = {}) {
 
 // Indicator metric: tokens that would be sent for the next turn (no new user turn yet).
 export async function computeContextUsage(session, settings, messages = null, opts = {}) {
-  const { usedTokens, droppedCount, report } = await buildContextForRequest(session, settings, { ...opts, messages,placeholderLatest:memoryActive(normalizeMemory(session.memory)) && !opts.draftText?.trim() });
+  messages ??= await getMessages(session.id);
+  const { usedTokens, droppedCount, report } = await buildContextForRequest(session, settings, { ...opts, messages,placeholderLatest:memoryActive(normalizeMemory(session.memory)) && !opts.draftText?.trim() && [...messages].filter(m=>m.role!=='summary').at(-1)?.role==='assistant' });
   const max = requestInputLimit(settings);
   const threshold = (max * settings.autoSummaryThresholdPercent) / 100;
   return { usedTokens, max, threshold,

@@ -5,13 +5,13 @@ const placeholder = /^(?:DATE|TIME|TIME OF DAY|PLACE|FULL NAME|TBD|\.{3}|…)$/;
 function value(raw) {
   let s = String(raw ?? '').trim().replace(/^["'`*\s]+|["'`*\s]+$/g,'').replace(/[.;·•|]+$/g,'').trim();
   if (!s || unknown.test(s)) return 'unknown';
-  s = s.replace(/\s*[·•|]\s*/g,', ').replace(/\b\d{1,2}:\d{2}\b/g,m => m.replace(':','\u0001')).replace(/[·•|:]/g,',').replace(/\u0001/g,':');
+  s = s.replace(/\s*[·•|]\s*/g,', ').replace(/\b\d{1,2}:\d{2}\b/g,m => m.replace(':','\u0001')).replace(/[·•|]/g,',').replace(/\u0001/g,':');
   return s;
 }
 export function parseSceneFields(body) {
   const raw = String(body ?? '').trim().replace(/^["'`]+|["'`]+$/g,'').replace(/^scene(?: state)?\s*:\s*/i,'').replace(/\*\*/g,'');
   if (!raw || raw.length > 2000) return null;
-  const matches = [...raw.matchAll(/(?:^|[\n·•|;]| - |\.\s+)(\s*[a-z][a-z ]{0,30}?)\s*[:=]\s*/gi)];
+  const matches = [...raw.matchAll(/(?:^|[\n·•|;]| - |\.\s+)(\s*[a-z][a-z ]{0,30}?)\s*[:=]\s*/gi)].filter(m=>!m[0].startsWith('.') || Object.hasOwn(aliases,m[1].trim().toLowerCase()) || m[1].trim().toLowerCase()==='active event');
   const fields = {}, supplied = [];
   for (let i=0;i<matches.length;i++) {
     const m = matches[i], key = aliases[m[1].trim().toLowerCase()];
@@ -26,7 +26,7 @@ export function parseSceneFields(body) {
     if (parts.length < 3 && !fields.present) return null;
     if (parts.length >= 3) Object.assign(fields,{date:parts[0],time:parts[1],place:parts.slice(2).join(', ')});
   }
-  if (!Object.keys(fields).length || supplied.length && supplied.every(x => placeholder.test(x))) return null;
+  if (!Object.keys(fields).length || Object.values(fields).every(x => placeholder.test(x))) return null;
   const present = [];
   for (const name of String(fields.present ?? '').replace(/\([^)]*\)/g,'').split(/[,;&\n]|\band\b/i)) {
     const n = value(name);
@@ -41,7 +41,7 @@ export function canonicalFromFields(fields) {
   return raw.length <= 2000 ? raw : null;
 }
 export function canonicalScene(raw) { return canonicalFromFields(parseSceneFields(raw)); }
-export function readSceneOutput(content) {
+export function readSceneOutput(content,{sceneEnabled=true}={}) {
   let text = stripThinking(content), planThread = null;
   text = text.replace(/```[^\n]*\n([\s\S]*?)```/g,(all,body) => /<\s*(?:scene|plan_thread)|scene\s*:/i.test(body) ? body : all);
   for (const m of text.matchAll(/<plan_thread\b[^>]*>([\s\S]*?)<\/plan_thread\s*>/gi)) planThread=m[1].trim() || null;
@@ -56,9 +56,9 @@ export function readSceneOutput(content) {
   text = text.replace(unclosed,(_,body) => parseSceneFields(body) ? '' : body);
   text = text.replace(/<(plan|plan_thread)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,'')
     .replace(/<(?:plan|plan_thread)\b[^>]*>[^\n]*/gi,'')
-    .replace(/^\s*<\/?(?:div|span|p|section|scene)\s*>\s*$/gim,'')
-    .replace(/<!--[\s\S]*?-->/g,'').replace(/```[^\n]*\n\s*```/g,'')
-    .replace(/[ \t]+$/gm,'').replace(/ {2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+    .replace(/<\/scene\s*>/gi,'');
+  if(sceneEnabled)text=text.replace(/^\s*<\/?(?:div|span|p|section|scene)\s*>\s*$/gim,'').replace(/<!--[\s\S]*?-->/g,'').replace(/```[^\n]*\n\s*```/g,'').replace(/[ \t]+$/gm,'').replace(/ {2,}/g,' ').replace(/\n{3,}/g,'\n\n');
+  text=text.trim();
   candidates.sort((a,b) => a.index-b.index);
   return {scene:candidates.at(-1)?.scene ?? null,planThread,clean:text,count:candidates.length,warning:candidates.length > 1 ? 'Several scene tags; the last one was used.' : candidates.length ? null : 'The model omitted a readable scene tag.'};
 }

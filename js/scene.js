@@ -12,7 +12,7 @@ export function normalizeSceneLine(raw) {
 export function classifyUserInput(text) {
   text = String(text ?? '').trim();
   const cue = /(?:then|and)\s+(?:continue|advance|narrate|play|resume)|\banyway\b|back to the story/i;
-  if (/^<\s*ooc\s*>[\s\S]*?<\/\s*ooc\s*>$/i.test(text) || /^\(\([\s\S]*\)\)$/.test(text) || /^(?:\(OOC[\s\S]*\)|\[OOC[\s\S]*\])$/i.test(text)) return 'ooc';
+  if (/^<\s*ooc\s*>(?:(?!<\/?\s*ooc)[\s\S])*<\/\s*ooc\s*>$/i.test(text) || /^\(\((?:(?!\(\(|\)\))[\s\S])*\)\)$/.test(text) || /^(?:\(OOC[\s\S]*\)|\[OOC[\s\S]*\])$/i.test(text)) return 'ooc';
   if (/^(?:OOC\s*[:–-]|\[OOC\]|\(OOC\))/i.test(text)) return cue.test(text) ? 'narrative' : 'ooc';
   const ad=text.match(/^<ad>([\s\S]*?)<\/ad>$/i);
   if (!ad) return 'narrative';

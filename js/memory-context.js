@@ -1,22 +1,22 @@
-import { prompts, renderPrompt } from './system-prompts.js';
+import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
 import { SCENE_RULE, latestScene, sceneTimeline, readSceneOutput } from './scene.js';
 import { replyContract } from './reply-contract.js';
 import { computeTurns } from './turns.js';
 import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
 import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
-import { CONTINUITY_RULE, usableLore, cutoffLabel, revisionOf, effectivelyPaused } from './continuity.js';
+import { CONTINUITY_RULE, usableLore, revisionOf, effectivelyPaused } from './continuity.js';
 import {MESSAGE_FRAME_TOKENS as FRAME,requestInputLimit} from './request-budget.js';
 function stripOcc(content) {
-  const cleaned=content.replace(/<\s*(OOC|OCC)\b[^>]*>[\s\S]*?(?:<\/\s*\1\s*>|$)|<\/\s*(?:OOC|OCC)\s*>/gi, '');
+  const cleaned=content.replace(/<\s*(?:OOC|OCC)\b[^>]*>[\s\S]*?<\/\s*(?:OOC|OCC)\s*>/gi,'').replace(/<\s*(?:OOC|OCC)\b[^>]*>[^\n]*|<\/\s*(?:OOC|OCC)\s*>/gi,'');
   return cleaned.trim() ? cleaned : content;
 }
 // Memory mode uses additive message costs and renders the final wire request once.
-export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd }) {
+export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd, accountingRetry = false }) {
   const mem = normalizeMemory(session.memory), limit = requestInputLimit(settings);
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
-  const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
+  const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
   if (opts.draftText?.trim() || opts.placeholderLatest) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '' });
   const byId=new Map(raw.map(m=>[m.id,m]));
   const turns = computeTurns(raw), current = mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
@@ -35,22 +35,27 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
 
   const checkpoint = summary ? (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0) : 0;
   if (summary) {
-    const content = renderPrompt(prompts.historicalSummary, { CUTOFF: cutoffLabel({ order:checkpoint,turn:summary.cutoffTurn }), SUMMARY: summary.content });
+    // Render old summaries without changing their persisted provenance or content.
+    const narratorSummary = summary.content
+      .replace(/\*\*Last established situation[^*]*\*\*:?/gi, () => renderLoreLabel('oldSummarySituation'))
+      .replace(/\bT\d{1,5}\b|\bTurn\s+\d+\b/gi, '');
+    const content = renderPrompt(prompts.historicalSummary, { SUMMARY: narratorSummary });
     summaryText=content; blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content) });
   }
   const timeline=mem.scene ? sceneTimeline(raw,{startingScene:mem.startingScene}) : new Map();
   const contentCache=new Map();
   const contentFor = (m,{gap=false}={}) => {
-    const key=m.id+'|'+gap;if(contentCache.has(key))return contentCache.get(key);
-    let text = m.role === 'assistant' ? readSceneOutput(normalizeAd(m.content)).clean : normalizeAd(m.content);
+    const gapPrefix=gap && gapUser()?.id===m.id ? gapInfo()+'\n\n' : '';
+    const key=m.id+'|'+gap+'|'+gapPrefix;if(contentCache.has(key))return contentCache.get(key);
+    let text = m.role === 'assistant' ? readSceneOutput(normalizeAd(m.content),{sceneEnabled:mem.scene}).clean : normalizeAd(m.content);
     if (m.role === 'assistant' && mem.scene && !m.ooc) {
       if (session.longTermPlan?.trim() && m.planThread) text+='\n<plan_thread>'+m.planThread+'</plan_thread>';
       const effective=timeline.get(m.id)?.effective;
       if (effective) text+='\n<scene>'+effective+'</scene>';
     }
     if (m.id !== latest?.id) text=stripOcc(text);
-    if (gap && anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{TURN:turns.turnById.get(m.id),CONTENT:text});
-    contentCache.set(key,text);return text;
+    if (gap && anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{CONTENT:text});
+    text=gapPrefix+text;contentCache.set(key,text);return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
   const contract = mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
@@ -62,10 +67,12 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const covered=!!summaryText && checkpoint>(anchors.at(-1)?.order ?? 0);
     return covered ? (raw.some(m=>!selected.has(m.id) && m.order>checkpoint) ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : prompts.omittedTurns;
   };
+  // Keep the omission note with the first retained user input after the opening anchors.
+  const gapUser=()=> { const first=raw.find(m=>selected.has(m.id) && !anchorIds.has(m.id)); return first?.role==='user' ? first : null; };
   const render = () => {
     const gap=gapInfo();
     const history=raw.filter(m=>selected.has(m.id)).map(m=>({id:m.id,role:m.role,content:contentFor(m,{gap:!!gap})}));
-    if(gap) history.splice(history.filter(m=>anchorIds.has(m.id) && m.id!==latest?.id).length,0,{role:'system',content:gap});
+    if(gap && !gapUser()) history.splice(history.filter(m=>anchorIds.has(m.id) && m.id!==latest?.id).length,0,{role:'system',content:gap});
     const userMemory=memory && mem.memoryBlock && mem.blockRole==='user' && latest;
     if(memory && !userMemory) {
       const li=history.findIndex(m=>m.id===latest?.id);
@@ -83,18 +90,18 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
   };
   const messageCosts=new Map();
-  const costOf=async(m,gap)=>{const key=m.id+'|'+gap;if(!messageCosts.has(key))messageCosts.set(key,await count(contentFor(m,{gap}))+FRAME);return messageCosts.get(key);};
+  const costOf=async(m,gap)=>{const key=m.id+'|'+contentFor(m,{gap});if(!messageCosts.has(key))messageCosts.set(key,await count(contentFor(m,{gap}))+FRAME);return messageCosts.get(key);};
   const cost=async()=>{
     const gap=gapInfo(),userMemory=memory && mem.memoryBlock && mem.blockRole==='user' && latest;
     let total=FRAME+FRAME+await count([system,summaryText,...books].filter(Boolean).join('\n\n'));
     for(const id of selected) {
       const m=byId.get(id);
-      if(m.id!==latest?.id){const key=m.id+'|'+!!gap;total+=messageCosts.has(key) ? messageCosts.get(key) : await costOf(m,!!gap);continue;}
+      if(m.id!==latest?.id){total+=await costOf(m,!!gap);continue;}
       let content=contentFor(m,{gap:!!gap});
       if(m.id===latest?.id){if(userMemory)content='<memory>\n'+memory+'\n</memory>\n\n'+content;if(contract && mem.replyContract==='user')content+='\n\n'+contract;if(reminder)content+='\n\n'+reminder;}
       total+=FRAME+await count(content);
     }
-    if(gap)total+=FRAME+await count(gap);
+    if(gap && !gapUser())total+=FRAME+await count(gap);
     if(memory && !userMemory)total+=FRAME+await count(memory);
     if(contract && mem.replyContract==='system' && latest)total+=FRAME+await count(contract);
     return total;
@@ -116,18 +123,18 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
   let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
   const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
-  const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content).clean).join('\n'));
+  const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).join('\n'));
   const skipped = [...filtered.skipped,...selection.skipped];
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
-  const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && 'Characters:\n'+chars.text,places.text && 'Places:\n'+places.text].filter(Boolean).join('\n\n');
+  const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
   if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
   for (const book of ['facts','events','characters','locations']) {
     if (!selection.selected[book].length) continue;
     const beforeMemory = memory;
-    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\nOpen threads:\nTimeline (oldest first, 999999 earlier events not shown):\n' : book === 'characters' ? 'Characters:\n' : 'Places:\n';
+    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:true });
-    const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:true}) : fit.text;
+    let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
+    const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;
     if (book === 'characters') chars = fit;
     else if (book === 'locations') places = fit;
     if (book === 'characters' || book === 'locations') memory = memoryText();
@@ -162,16 +169,33 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     selected.add(m.id); if (await cost() > limit) { selected.delete(m.id); break; }
   }
   const apiMessages=render(),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);
-  if(actual!==await cost())throw new Error('Context cost accounting mismatch.');
+  if(actual!==await cost()) {
+    if(!accountingRetry) {
+      // A tokenizer can recover from fallback estimates midway through assembly.
+      // Rebuild every local part cost once using the now-current counter.
+      const rebuilt=await buildMemoryContext(session,settings,opts,{count,adRule,normalizeAd,accountingRetry:true});
+      rebuilt.report.warnings.unshift('Token counts changed during context assembly; the request was rebuilt once.');
+      return rebuilt;
+    }
+    warnings.push('Token counts remained inconsistent after rebuilding; the final rendered request count is used.');
+  }
   if (actual > limit) throw new Error('The fully rendered request exceeds the context budget.');
   const window = raw.filter(m => selected.has(m.id) && !anchorIds.has(m.id) && m.id !== latest?.id);
-  const messageCost = async ms => (await Promise.all(ms.map(async m => await count(contentFor(m,{gap:!!gapInfo()}))+FRAME))).reduce((a,b) => a+b,0);
+  const messageCost = async ms => (await Promise.all(ms.map(async m => {
+    let text=contentFor(m,{gap:!!gapInfo()});
+    if(gapInfo() && gapUser()?.id===m.id) text=text.slice((gapInfo()+'\n\n').length);
+    return await count(text)+FRAME;
+  }))).reduce((a,b) => a+b,0);
   blocks.push({ key:'anchor',label:'Opening exchange (historical background)',tokens:await messageCost(anchors.filter(m => m.id !== latest?.id)) });
   blocks.push({ key:'window',label:'Recent conversation',tokens:await messageCost(window),fromTurn:turns.turnById.get(window[0]?.id),toTurn:turns.turnById.get(window.at(-1)?.id),messages:window.length,mode:windowMode,step:mem.batchTurns,target:targetCount,retained:retainedTarget });
   if (latest) blocks.push({ key:'latest',label:'Latest user message',tokens:await messageCost([latest]) });
   if (memory) blocks.push({ key:'memory',label:'Memory block',tokens:mem.blockRole === 'user' && mem.memoryBlock && latest ? await count('<memory>\n'+memory+'\n</memory>\n\n'+contentFor(latest))-await count(contentFor(latest)) : await count(memory)+FRAME });
   if(reminder) blocks.push({key:'reminder',label:'Scene reminder',tokens:await count('\n\n'+reminder)});
-  if(gapInfo()) blocks.push({key:'gap',label:'Omitted turns marker',tokens:await count(gapInfo())+FRAME});
+  if(gapInfo()) {
+    const recipient=gapUser(),prefixed=recipient && contentFor(recipient,{gap:true});
+    const tokens=recipient ? await count(prefixed)-await count(prefixed.slice((gapInfo()+'\n\n').length)) : await count(gapInfo())+FRAME;
+    blocks.push({key:'gap',label:'Omitted turns marker',tokens});
+  }
   blocks.push({key:'framing',label:'Request framing and section joins',tokens:actual-blocks.reduce((n,b)=>n+b.tokens,0)});
   const uncovered = raw.filter(m => !selected.has(m.id) && m.order > checkpoint);
   const gaps = []; for (const m of uncovered) { const turn = turns.turnById.get(m.id); const last = gaps.at(-1); if (last && turn <= last.toTurn+1) { last.toTurn = turn; last.toOrder = m.order; } else gaps.push({ fromTurn:turn,toTurn:turn,fromOrder:m.order,toOrder:m.order }); }

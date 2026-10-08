@@ -84,7 +84,7 @@ test('a saved labeled scene round trip feeds the next request and missing scenes
   assert.equal(result.report.scene.place,'West Reception Room');
   assert.equal(result.report.loaded.find(x => x.book==='locations').name,'West Reception Room');
   assert.ok(!result.report.loaded.some(x => x.name==='unknown'));
-  assert.match(result.apiMessages.find(x => x.content.includes('Established scene snapshot')).content,/message order 2/);
+  assert.match(result.apiMessages.find(x => x.content.includes('Current scene (from the latest reply):')).content,/West Reception Room/);
   history[1].scene=null;
   const missing = await buildContextForRequest(session,settings,{ messages:history,loreEntries:entries,requireLatestUser:true });
   assert.equal(missing.report.scene,null);

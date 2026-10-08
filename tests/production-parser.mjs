@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {appHarness} from './app-harness.mjs';
+const use=()=>appHarness({stubs:{'tokenizer.js':{countTokens:async s=>s.length},'messages.js':{getMessages:async()=>[]}}});
+const messages=Array.from({length:10},(_,i)=>({id:'m'+i,order:i+1,narratorTurn:Math.floor(i/2)+1,role:i%2?'assistant':'user',content:'Mira walks.'}));
+async function parser(){const u=use(),l=await u('lore-lines.js'),t=await u('turns.js');return {l,range:{assistants:t.computeTurns(messages).assistants.filter(a=>a.turn>=3),fromTurn:3,toTurn:5},u};}
+test('B4 NONE tolerates stray prose but rejects malformed notes',async()=>{
+ const {l}=await parser();for(const text of ['NONE','NONE\nNo changes.','none.'])assert.equal(l.parseMemoryLines(text).valid,true,text);assert.equal(l.parseMemoryLines('NONE\n- [char] X | bad').valid,false);
+});
+test('B5 Timeline colon shares the event timeline card',async()=>{const {l,range}=await parser();const p=l.parseMemoryLines('[open] Timeline: Arrival\n[event] Departure',{range,messages});const c=l.applyOps([],p.ops);assert.equal(c.creates.length,1);assert.equal(c.creates[0].kind,'timeline');assert.equal(c.creates[0].sections.text.lines.length,2);});
+test('B5 pronouns and generic aliases are rejected',async()=>{const {l,range}=await parser();for(const alias of ['he','the guard']){const p=l.parseMemoryLines('[char] Mira | aliases: '+alias,{range,messages});assert.equal(p.ops.length,0);assert.equal(p.skipped[0].reason,'not a valid alias');}});
+test('B5 forward and reversed evidence ranges clamp to the extraction range',async()=>{const {l,range}=await parser();for(const stamp of ['T1-5','T5-3']){const p=l.parseMemoryLines(stamp+' [char] Mira | notes: Walked',{range,messages});assert.deepEqual(Array.from(p.ops[0].evidence,e=>e.order),[5,6,7,8,9,10]);}});
+test('B6 dollars in canon and protagonist stay literal in extraction prompts',async()=>{
+ const {l,range,u}=await parser(),p=await u('memory-prompts.js'),m=await u('memory-settings.js'),e=l.makeEntry('characters','Mira');e.sections.notes.text="$' $& $$";
+ const mem=m.normalizeMemory({lorebooks:true,protagonist:"$' $& $$"}),r=await p.buildExtractionMessages({settings:{maxContextTokens:100000},mem,entries:[e],messages,range:{...range,messages:messages.slice(4),endOrder:10},count:async s=>s.length});
+ assert.equal(r.messages[1].content.split("$' $& $$").length-1,2);assert.equal(p.fillProtagonist('{{PROTAGONIST}}',"$' $& $$"),"$' $& $$");
+});
+test('B8 separated OOC blocks never absorb a narrative action',async()=>{const s=await use()('scene.js');assert.equal(s.classifyUserInput('<ooc>a</ooc> I attack <ooc>b</ooc>'),'narrative');assert.equal(s.classifyUserInput('((a)) I attack ((b))'),'narrative');assert.equal(s.classifyUserInput('<ooc>hello</ooc>'),'ooc');});
+test('B18 positional placeholders, colon-containing places and lone closes are handled',async()=>{const p=await use()('scene-parser.js');assert.equal(p.parseSceneFields('DATE · TIME · PLACE'),null);assert.equal(p.parseSceneFields('date: Day 1 · time: night · place: Mr. Smith: house').place,'Mr. Smith: house');assert.equal(p.readSceneOutput('Hello </scene>').clean,'Hello');assert.equal(p.readSceneOutput('Hello\n<p>\n<!-- keep -->',{sceneEnabled:false}).clean,'Hello\n<p>\n<!-- keep -->');});
+test('B18 recovery ignores extra keys and rejects excessive scene length without throwing',async()=>{const r=await appHarness({stubs:{'llm-client.js':{chatCompletion:async()=>{}},'tokenizer.js':{countTokens:async()=>0}}})('scene-recovery.js');const ctx={names:[],narration:'A house.',userText:'',prior:{},plan:''},obj={date:'unknown',time:'unknown',place:'House',present:[],planThread:null,extra:'ignored'};assert.ok(r.parseRecovery(JSON.stringify(obj),ctx));assert.equal(r.parseRecovery(JSON.stringify({...obj,place:'a'.repeat(2100)}),ctx),null);});
+test('B8 historical mismatched OOC closes preserve following action; unclosed strips one line',async()=>{
+ const b=await use()('context-builder.js');const cfg={narratorSystemPrompt:'Narrate.',maxContextTokens:50000,maxResponseTokens:1000};
+ for(const text of ['I attack. <OOC>btw</OCC> Then I run away.','I attack. <OOC>btw\n\nThen I run away.']){const r=await b.buildContextForRequest({id:'s',memory:{memoryBlock:true} },cfg,{messages:[{id:'u1',order:1,role:'user',content:text},{id:'a1',order:2,role:'assistant',content:'Reply'},{id:'u2',order:3,role:'user',content:'Continue'}]});const sent=r.apiMessages.find(m=>m.content.includes('I attack.'));assert.match(sent.content,/Then I run away\./);assert.doesNotMatch(sent.content,/btw/);}
+});
+test('B21 usage only creates a latest-user placeholder after an assistant',async()=>{const b=await use()('context-builder.js');const session={id:'s',memory:{memoryBlock:true}},settings={narratorSystemPrompt:'N',maxContextTokens:50000,maxResponseTokens:1000,autoSummaryThresholdPercent:70},m=[{id:'u',role:'user',order:1,content:'Start.'}];const u=await b.computeContextUsage(session,settings,m),r=await b.buildContextForRequest(session,settings,{messages:m});assert.equal(u.usedTokens,r.usedTokens);});

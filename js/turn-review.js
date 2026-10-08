@@ -23,7 +23,7 @@ export function lintPlayerAgency(text, protagonist = '') {
 
 export function lintUnestablishedTime(text, { prior = null,userText = '' } = {}) {
   if (prior?.time || /\b(?:it is|it's|now|skip to|advance to|set (?:the )?time (?:to|as))\s+(?:early |late |mid-?)?(?:morning|afternoon|evening|night|noon|midnight)\b/i.test(userText)) return [];
-  const prose = String(text ?? '').replace(/["“][\s\S]*?["”]/g,'');
+  const prose = stripDialogue(text);
   return /\b(?:all (?:morning|afternoon|evening)|(?:morning|afternoon|evening) (?:light|sun)|(?:it is|it's|now) (?:early |late )?(?:morning|afternoon|evening|night)|midday is coming)\b/i.test(prose)
     ? ['Narration introduces a current time while the scene clock is unknown.'] : [];
 }

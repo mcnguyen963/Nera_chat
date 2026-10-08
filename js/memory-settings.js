@@ -6,7 +6,7 @@ export const memoryValidationRanges = {
 export const DEFAULT_MEMORY = {
   v: 1, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false,
   books: { characters: { on: true, budget: 4000, maxCards: 6 }, locations: { on: true, budget: 4000, maxCards: 2 }, facts: { on: true, budget: 1000 }, events: { on: true, budget: 3000 } },
-  batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'system',
+  batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'user',
 };
 export const DEFAULT_MEMORY_STATE = { extractedThroughOrder: null, lastUpdateAt: null, lastUpdateTurns: null, failureStreak: 0, paused: false, lastError: null };
 export function normalizeMemory(raw) {
@@ -24,7 +24,7 @@ export function normalizeMemory(raw) {
     return Number.isFinite(Number(value)) && value != null && value !== '' ? Math.max(min, Math.min(max, Math.round(Number(value)))) : fallback;
   };
   for (const k of ['batchTurns', 'lagTurns', 'updateMaxTokens', 'reorganizeMaxTokens', 'blockDepth']) out[k] = clamp(k, raw[k], out[k]);
-  out.blockRole = raw.blockRole === 'user' ? 'user' : 'system';
+  out.blockRole = raw.blockRole === 'system' ? 'system' : 'user';
   for (const [book, defaults] of Object.entries(out.books)) {
     const b = raw.books?.[book];
     if (!b) continue;

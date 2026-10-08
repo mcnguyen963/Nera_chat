@@ -1,2 +1,2 @@
-[First exchange of the story (T{{TURN}}); not current conditions]
+[First exchange of the story; not current conditions]
 {{CONTENT}}
