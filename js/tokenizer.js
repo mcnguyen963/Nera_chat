@@ -1,31 +1,26 @@
-// cl100k_base token counting via gpt-tokenizer (pure JS, no WASM), loaded lazily from CDN.
+// cl100k_base token counting via gpt-tokenizer (pure JS, no WASM), vendored at exact version 2.9.0 and loaded lazily.
 // Counts are approximate across models; caller also reserves message framing.
 
-const CDNS = [
-  "https://esm.sh/gpt-tokenizer@2",
-  "https://cdn.jsdelivr.net/npm/gpt-tokenizer@2/+esm",
-];
+const VENDOR = './vendor/gpt-tokenizer-2.9.0.js';
+// Literal imports allow the release assembler to stamp every module URL.
+const importVendor = (_url, attempt) => attempt
+  ? import(`./vendor/gpt-tokenizer-2.9.0.js?nera_retry=${attempt}`)
+  : import('./vendor/gpt-tokenizer-2.9.0.js');
 
-export function createTokenizer({ importer = (url) => import(url), now = () => Date.now() } = {}) {
+export function createTokenizer({ importer = importVendor, now = () => Date.now() } = {}) {
   let modPromise = null, retryAfter = 0, attempts = 0, ready = false;
   function loadTokenizer() {
     if (now() < retryAfter) return Promise.reject(new Error("Tokenizer retry is cooling down."));
     if (!modPromise) {
       const attempt = attempts++;
       modPromise = (async () => {
-        let lastErr;
-        for (const url of CDNS) {
-          try {
-            // Browsers can cache a failed module import by its URL.
-            const mod = await importer(attempt ? `${url}?nera_retry=${attempt}` : url);
-            if (typeof mod.countTokens !== "function" && typeof mod.encode !== "function") {
-              throw new Error("Tokenizer module has no encoder.");
-            }
-            ready = true;
-            return mod;
-          } catch (error) { lastErr = error; }
+        // Browsers can cache a failed module import by its URL.
+        const mod = await importer(attempt ? `${VENDOR}?nera_retry=${attempt}` : VENDOR, attempt);
+        if (typeof mod.countTokens !== "function" && typeof mod.encode !== "function") {
+          throw new Error("Tokenizer module has no encoder.");
         }
-        throw lastErr ?? new Error("Failed to load tokenizer from all CDNs");
+        ready = true;
+        return mod;
       })().catch((error) => {
         modPromise = null;
         retryAfter = now() + 30000;
