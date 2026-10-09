@@ -1482,11 +1482,12 @@ test('Unsupported vibration is explained without disabling the synced setting', 
 
 test('MAIN merge keeps rewrite settings editable and resettable with the Markdown default',async()=>{
  const h=await harness();(await h.use('ui/chat-view.js')).initChatView();const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
- await new Promise(resolve=>setTimeout(resolve,10));const def=h.el('set-rewrite-prompt').value;assert.ok(def.trim());
+ const rewrite=await h.use('rewrite.js');await rewrite.loadRewriteDefaultPrompt();
+ const def=h.el('set-rewrite-prompt').value;assert.equal(def,(await readFile(new URL('../system prompts/rewrite.md',import.meta.url),'utf8')).trim());assert.equal(h.el('set-rewrite-prompt').disabled,false);
  h.el('set-rewrite-n').value='2.5';await h.fire('btn-save-settings');assert.match(h.el('settings-saved-msg').textContent,/whole number/);
  h.el('set-rewrite-n').value='0';h.el('set-rewrite-prompt').value='My custom prompt';h.el('set-stream-vibration').value='speed';await h.fire('btn-save-settings');
  assert.equal(h.state.settings.rewriteRecentMessages,0);assert.equal(h.state.settings.rewriteSystemPrompt,'My custom prompt');assert.equal(h.state.settings.streamVibrationMode,'speed');
- await h.fire('btn-reset-rewrite-prompt');await new Promise(resolve=>setTimeout(resolve,0));await h.fire('btn-save-settings');assert.equal(h.state.settings.rewriteSystemPrompt,null);
+ await h.fire('btn-reset-rewrite-prompt');await rewrite.loadRewriteDefaultPrompt();assert.equal(h.el('set-rewrite-prompt').value,def);await h.fire('btn-save-settings');assert.equal(h.state.settings.rewriteSystemPrompt,null);
 });
 test('MAIN merge stops a rewrite during history loading without a model call',async()=>{
  const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
