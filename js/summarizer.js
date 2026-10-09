@@ -35,6 +35,19 @@ function summarizerSettings(settings, outputCapacity) {
 
 export function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
 
+// Surface suspect summary lines for manual review; preserve the model's text.
+export function lintSummary(content) {
+  const warnings=[];
+  for(const [index,text] of String(content ?? '').split(/\r?\n/).entries()) {
+    const reasons=[];
+    if(/\bno,? that'?s\b|\bcareful,|\buse sourced\b|\(paraphrase\b/i.test(text)) reasons.push('self-correction');
+    const entry=text.match(/^\s*(?:[-*+]\s+)?\*\*[^\n]+?\*\*\s*[—–-]\s*(.*)$/u);
+    if(entry && (entry[1].match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) ?? []).length<3) reasons.push('short-entry');
+    if(reasons.length) warnings.push({line:index+1,text,reasons});
+  }
+  return warnings;
+}
+
 const summaryRunning=new Set();
 export function planSummary(session,settings,messages,{maxChunks=Infinity,force=true,full=false,running=false,urgent=false}={}) {
   if(running)return {skip:'running'};
@@ -73,7 +86,7 @@ async function runSummary(session,settings,opts) {
       : null;
 
   const probe = await buildContextForRequest({ ...session,activeSummaryMessageId:null,breakpointOrder:0 },settings,{ ...opts,messages:all,loreEntries:[],onlyRequiredWindow:true,requireLatestUser:true });
-  const summaryHeaderCost = await countTokens(renderPrompt(prompts.historicalSummary, { CUTOFF: 'message order '+newBreakpointOrder, SUMMARY: '' }))+MESSAGE_FRAME_TOKENS+32;
+  const summaryHeaderCost = await countTokens(renderPrompt(prompts.historicalSummary, { SUMMARY: '' }))+MESSAGE_FRAME_TOKENS+32;
   const capacity = Math.floor(requestInputLimit(settings)-probe.usedTokens-summaryHeaderCost);
   if (capacity < 64 || probe.report.warnings.some(w => w.startsWith('Recent window reduced'))) throw new Error('No room for a summary and the required recent conversation; checkpoint was not changed.');
   const requestSettings = summarizerSettings(settings,capacity);
@@ -142,6 +155,7 @@ async function runSummary(session,settings,opts) {
     foldedCount: offset,
     summaryMessage:{ ...summaryMessage,...(newMsg.message ?? Object.fromEntries(Object.entries(newMsg).filter(([key])=>key!=='session'))) },
     historyRevision:newMsg.historyRevision,
+    lintWarnings:lintSummary(content),
   };
 }
 

@@ -1,3 +1,4 @@
+import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { computeTurns } from './turns.js';
 import { canonicalScene } from './scene.js';
@@ -135,7 +136,7 @@ export async function ensureContinuityMetadata(sessionId) {
     assertMigrationSource(session);
     const active = chunks.docs.find(chunk => chunk.id === session.activeChunkId);
     if (session.activeChunkId && !active) throw new Error('Active history chunk is missing; migration was not completed.');
-    tx.update(target,{ continuityVersion:2,historyRevision:sourceRevision,nextNarratorTurn:Math.max(0,...source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(active ? { activeChunkBytes:chunkBytes(migrateMessages(active.data().messages ?? [])) } : {}) });
+    tx.update(target,{ continuityVersion:2,historyRevision:sourceRevision,nextNarratorTurn:Math.max(0,maxOf(source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0)))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(active ? { activeChunkBytes:chunkBytes(migrateMessages(active.data().messages ?? [])) } : {}) });
   });
   metadataReady.add(key);
 }
@@ -210,7 +211,7 @@ export async function addMessagesBulk(sessionId, items) {
     tx.update(sessionRef(sessionId), {
     nextOrder: messages.at(-1).order,
     historyRevision:(snap.data().historyRevision ?? 0)+1,continuityVersion:2,
-    nextNarratorTurn:Math.max(0,...messages.map(m => m.narratorTurn ?? 0))+(messages.at(-1)?.role === "user" ? 0 : 1),
+    nextNarratorTurn:Math.max(0,maxOf(messages.map(m => m.narratorTurn ?? 0)))+(messages.at(-1)?.role === "user" ? 0 : 1),
     updatedAt: serverTimestamp(),
     activeChunkId: chunkId(last[0].order),
     activeChunkBytes: chunkBytes(last),
@@ -227,6 +228,17 @@ function flatten(snap) {
 export async function getMessages(sessionId) {
   await ensureChunked(sessionId);
   return flatten(await getDocsFromServer(query(chunksCol(sessionId), orderBy("firstOrder", "asc"))));
+}
+
+// Server discovery runs before retrying a potentially committed save.
+export async function findSavedMessage(sessionId,messageId,minOrder,{overwrite=false}={}) {
+  const constraints=overwrite && Number.isFinite(minOrder)
+    ? [where('firstOrder','<=',minOrder),orderBy('firstOrder','desc'),limit(1)]
+    : Number.isFinite(minOrder)
+      ? [where('lastOrder','>=',minOrder),orderBy('lastOrder','asc')]
+      : [orderBy('firstOrder','asc'),limitToLast(3)];
+  const snap=await getDocsFromServer(query(chunksCol(sessionId),...constraints));
+  return flatten(snap).find(message=>message.id===messageId) ?? null;
 }
 
 export async function getMessagesAfterOrder(sessionId, breakpointOrder) {

@@ -4,16 +4,16 @@ import { appHarness } from './app-harness.mjs';
 const plain = x => JSON.parse(JSON.stringify(x));
 const seed = 'date: 18 September 731 · time: unknown · place: West Reception Room · present: Nera Veyrath, Isolde Veyless';
 
-test('unsupported date/time cannot use their own tag as provenance, but prior and story text can support them',async () => {
+test('declared date/time do not use their own tag as narration evidence',async () => {
   const s = await appHarness()('scene.js');
   const candidate = seed.replace('time: unknown','time: late morning');
   const checked = s.validateSceneValues(candidate,{ narration:'Krail waits.\n<scene>'+candidate+'</scene>',userText:'I woke this morning on 18 September 731.' });
-  assert.equal(s.parseScene(checked.scene).time,null);assert.equal(s.parseScene(checked.scene).when,'18 September 731');
-  assert.equal(checked.sceneMeta.provenance.time,'unknown');assert.equal(checked.warnings.length,1);
+  assert.equal(s.parseScene(checked.scene).time,'late morning');assert.equal(s.parseScene(checked.scene).when,'18 September 731');
+  assert.equal(checked.sceneMeta.provenance.time,'declared');assert.equal(checked.warnings.length,0);
   const supported = s.validateSceneValues(candidate,{ narration:'It is late morning.',prior:s.parseScene(seed) });
   assert.equal(s.parseScene(supported.scene).time,'late morning');assert.equal(supported.sceneMeta.provenance.date,'prior');
-  assert.equal(s.parseScene(s.validateSceneValues(candidate,{ narration:'It is early morning.',prior:s.parseScene(seed) }).scene).time,null);
-  assert.equal(s.parseScene(s.validateSceneValues(candidate,{ narration:'Krail says, "It is late morning."',prior:s.parseScene(seed) }).scene).time,null,'NPC claims do not establish the scene clock');
+  assert.equal(s.parseScene(s.validateSceneValues(candidate,{ narration:'It is early morning.',prior:s.parseScene(seed) }).scene).time,'late morning');
+  assert.equal(s.parseScene(s.validateSceneValues(candidate,{ narration:'Krail says, "It is late morning."',prior:s.parseScene(seed) }).scene).time,'late morning','NPC claims are not narration evidence, but a declared clock is accepted');
 });
 
 test('carried scenes survive reload with their original cutoff and accumulate staleness; pending candidates do not replace accepted state',async () => {
@@ -73,7 +73,7 @@ test('structured recovery validates schema, names and provenance locally and nev
     names:['Nera Veyrath','Isolde Veyless'],plan:'Pending hearing.' };
   const obj = { date:'18 September 731',time:'late morning',place:'West Reception Room',present:context.names,planThread:'Await the player’s choice.' };
   const result = r.parseRecovery(JSON.stringify(obj),context);
-  assert.equal(result.sceneMeta.kind,'inferred');assert.equal(s.parseScene(result.scene).time,null);
+  assert.equal(result.sceneMeta.kind,'inferred');assert.equal(s.parseScene(result.scene).time,'late morning');
   for(const invalid of [{ ...obj,time:14 },{ ...obj,planThread:[] }]) assert.equal(r.parseRecovery(JSON.stringify(invalid),context),null);
   assert.equal(r.parseRecovery(JSON.stringify(obj),{ ...context,plan:'' }).planThread,null);
 });

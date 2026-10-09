@@ -320,7 +320,7 @@ test('T204 summary cutoff stays historical while later scene, placements and cur
   const history=[
     {id:'u1',order:1,narratorTurn:1,role:'user',content:'Begin the term.'},
     {id:'a1',order:2,narratorTurn:1,role:'assistant',content:'The term begins.'},
-    {id:'summary',order:409,role:'summary',cutoffTurn:204,coveredRange:{toOrder:408},content:'**Last established situation (end of T204):** Nera is mid-hug with Vesper on her floor. Placements are expected on the fourth day. Turn 204.'},
+    {id:'summary',order:409,role:'summary',cutoffTurn:204,coveredRange:{toOrder:408},content:'**Last established situation (end of T204):** Nera is mid-hug with Vesper on her floor. Placements are expected on the fourth day. Turn 204:'},
     {id:'u205',order:410,narratorTurn:205,role:'user',content:'The class placements have been published.'},
     {id:'a205',order:411,narratorTurn:205,role:'assistant',revision:0,content:'It is morning in the common room. Isolde has the facilities records. The published list places Lysandra in Class A and Vesper in Class B.',thinking:'PRIVATE_REASONING_MUST_NOT_BE_SENT',scene:'date: First week of term · time: morning · place: Common room · present: Nera, Isolde'},
     {id:'u206',order:412,narratorTurn:206,role:'user',content:'A and B class so I will see Lysandra today. Did you give the records of our meeting with facilities office yesterday to group 3 Isolde? If yes we can go to the class now.'},
@@ -584,4 +584,65 @@ test('B3 skipped-note panel text is bounded and explains full cards',async()=>{
  assert.equal(result.length,10);assert.ok(result.every(note=>JSON.stringify(note).length<=200));
  assert.match(skippedNotesText([{card:'Mira',reason:'card full'},{card:'Nera',reason:'empty or oversized note'}]),/2 notes were skipped: card 'Mira' is full — reorganize it/);
  assert.equal(skippedNotesText([]),'');
+});
+
+for (const heading of ['### Last established situation (end of T12)', '## Last established situation']) test('historical summary heading rewrite: '+heading,async()=>{
+ const use=await setup(), {buildMemoryContext}=await use('memory-context.js');
+ const content=heading+'\n[T4 · Oct 738] Take Turn 5 of the dance; t12 code.\nat T12, she stopped.';
+ const summary={id:'summary',order:3,role:'summary',content,coveredRange:{toOrder:2}};
+ const session={activeSummaryMessageId:'summary',breakpointOrder:2,memory:{scene:true}};
+ const built=await buildMemoryContext(session,settings,{messages:[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Beginning.'},summary,{id:'u2',order:4,role:'user',content:'Continue.'}]},{count,adRule:'',normalizeAd:x=>x});
+ assert.match(built.apiMessages[0].content,/Situation at the summary cutoff \(superseded by the chat that follows\):/);
+ assert.match(built.apiMessages[0].content,/\[Oct 738\] Take Turn 5 of the dance; t12 code\.\nShe stopped\./);
+ assert.doesNotMatch(built.apiMessages[0].content,/Last established situation|\bT12\b/);
+ assert.equal(summary.content,content);
+});
+
+test('F5 narrator lore strips free text, line prose and date ranges while extraction preserves raw provenance',async()=>{
+ const use=await setup(),{renderLine,renderEntry,fitBook,renderEventsBlock}=await use('lore-select.js'),{makeEntry}=await use('lore-lines.js');
+ const ln={id:'note',text:'since T120 she cut her hair',when:'T4-T5',turn:120,by:'user',at:1};
+ const card=makeEntry('characters','Mira',{alwaysLoad:true});
+ card.sections.status.text='at T12, she stopped';card.sections.status.lines=[ln];
+ const before=JSON.stringify(card);
+ assert.equal(renderLine(ln),'- She cut her hair');
+ assert.match(renderLine(ln,{provenance:true}),/T120 · T4-T5.*since T120 she cut her hair/);
+ assert.match(renderEntry(card),/She stopped/);assert.doesNotMatch(renderEntry(card),/\bT\d/);
+ assert.match(renderEntry(card,null,'',{provenance:true}),/at T12, she stopped/);
+ const timeline=makeEntry('events','Timeline',{kind:'timeline'});
+ timeline.sections.text.text='T120: She departed';timeline.sections.text.lines=[ln];
+ const fit=await fitBook([{entry:timeline,reason:'timeline'}],10000,count,{events:true});
+ assert.doesNotMatch(renderEventsBlock(fit),/\bT\d/);
+ const provenanceFit=await fitBook([{entry:timeline,reason:'timeline'}],10000,count,{events:true,provenance:true});
+ assert.match(renderEventsBlock(provenanceFit,{provenance:true}),/T120: She departed/);
+ assert.equal(JSON.stringify(card),before);
+});
+
+test('F5 final narrator request contains no embedded lore stamps and leaves source notes intact',async()=>{
+ const use=await setup(),{buildMemoryContext}=await use('memory-context.js'),{makeEntry}=await use('lore-lines.js');
+ const card=makeEntry('characters','Mira',{alwaysLoad:true});
+ card.sections.status.text='at T12, she stopped';
+ card.sections.status.lines=[{id:'note',text:'since T120 she cut her hair',when:'T4-T5',turn:120,by:'user',at:1}];
+ const before=JSON.stringify(card);
+ const built=await buildMemoryContext({memory:{lorebooks:true,memoryBlock:true}},settings,{messages:[{id:'u',order:1,role:'user',content:'Ask Mira.'}],loreEntries:[card]},{count,adRule:'',normalizeAd:x=>x});
+ const wire=built.apiMessages.map(m=>m.content).join('\n');
+ assert.match(wire,/She stopped/);assert.match(wire,/She cut her hair/);assert.doesNotMatch(wire,/\bT\d/);
+ assert.equal(JSON.stringify(card),before);
+});
+
+test('E2 generic definite aliases do not select cards while specific titles remain searchable',async()=>{
+ const use=await setup(),{buildLoreIndex,findMentions}=await use('lore-select.js'),{makeEntry}=await use('lore-lines.js');
+ const generic=makeEntry('characters','Arlen');generic.aliases=['the captain','the old guard','The Lady','the woman'];
+ const specific=makeEntry('characters','Mira');specific.aliases=['the Silver Captain'];
+ const index=buildLoreIndex([generic,specific]);
+ assert.deepEqual(plain(findMentions('The captain orders the old guard to greet the lady and the woman.',index,'characters')),[]);
+ assert.deepEqual(plain(findMentions('The Silver Captain arrives.',index,'characters')),[specific.id]);
+});
+
+test('E3 dotted honorifics are not first names and genuine first names remain case sensitive',async()=>{
+ const use=await setup(),{buildLoreIndex,findMentions}=await use('lore-select.js'),{makeEntry}=await use('lore-lines.js');
+ const cards=['Mr. Will Reed','Mrs. Rose Vale','Ms. Hope Dawn','Dr. Grey Stone','Will Grove','Rose Amber','Hope Frost'].map(name=>makeEntry('characters',name));
+ const index=buildLoreIndex(cards);
+ assert.deepEqual(plain(findMentions('Mr. Mrs. Ms. Dr. will rose hope',index,'characters')),[]);
+ assert.deepEqual(plain(findMentions('Will Rose Hope',index,'characters')),cards.slice(4).map(card=>card.id));
+ assert.deepEqual(plain(findMentions('Mr. Will Reed arrived.',index,'characters')),[cards[0].id]);
 });

@@ -46,3 +46,18 @@ export function diffMemorySettings(original,next) {
   visit(original,next,'memory');
   return partial;
 }
+
+// Dismiss only the invalidations the user has seen; preserve extraction state.
+export async function dismissRebuild(sid,seenRevision) {
+  const owner=currentUid();
+  return runTransaction(db,async tx=>{
+    assertOwner(owner);
+    const target=sessionRef(sid,owner),snap=await tx.get(target),session=assertStory(snap.exists()?snap.data():null);
+    assertOwner(owner);
+    const remaining=(session.memoryInvalidations ?? []).filter(i=>i.revision>seenRevision);
+    let order=Infinity;for(const i of remaining)order=Math.min(order,i.fromOrder);
+    const memoryState={needsRebuild:remaining.length>0,rebuildFromOrder:remaining.length?order:null};
+    tx.update(target,{memoryInvalidations:remaining,'memoryState.needsRebuild':memoryState.needsRebuild,'memoryState.rebuildFromOrder':memoryState.rebuildFromOrder,updatedAt:serverTimestamp()});
+    return {memoryInvalidations:remaining,memoryState};
+  });
+}

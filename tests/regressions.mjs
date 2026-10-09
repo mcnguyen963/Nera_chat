@@ -119,7 +119,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
       saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async () => {}, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importLore: async () => 'backup', replaceLines: async () => 'backup',
     },
-    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {} },
+    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
       initPetView() {}, startPetTurn() {}, finishPetTurn:status=>{(calls.petFinishes ??= []).push(status);},
       refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
@@ -129,7 +129,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     'auth.js': { currentUid: () => 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
     'tokenizer.js': { countTokens: async (text) => text.length },
     'sessions.js': {
-      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{},
+      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
       getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
@@ -138,6 +138,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     'import-export.js': {exportAllStories:async()=>{}, importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
       HistoryConflict:class HistoryConflict extends Error {},
+      findSavedMessage:async(...args)=>{(calls.saveLookups ??= []).push(args);return calls.findSavedMessage?.(...args) ?? null;},
       ensureContinuityMetadata:async () => {},
       getMessages:async () => { const read = calls.historyReads = (calls.historyReads ?? 0)+1; const result = structuredClone(calls.serverHistory ?? calls.history ?? []); await calls.onHistoryRead?.(read); return result; }, getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
       addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); if(args[1].role==='assistant' && args[2]?.expectedSource?.historyRevision !== undefined && args[2].expectedSource.historyRevision !== (calls.historyRevision ?? 0)) throw Object.assign(new Error('History changed'),{name:'HistoryConflict'}); calls.messages.push(args); const result = { ...args[1],id:args[1].role==='summary' && args[2]?.id ? args[2].id : calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) Object.assign(calls.sessionDocs[args[0]],args[2]?.sessionUpdate ?? {},{historyRevision:result.historyRevision}); calls.history = [...(calls.history ?? []),result]; result.session={id:args[0],...(calls.sessionDocs?.[args[0]] ?? {}),historyRevision:result.historyRevision};return result; },
@@ -1508,4 +1509,120 @@ test('MAIN merge retains narrative vibration callbacks without persisting hidden
  h.calls.streamLines=['data: '+JSON.stringify({choices:[{delta:{reasoning:'thinking words ',content:'Narrative words '},finish_reason:'stop'}]})+'\n'];
  h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.ok(pulses.includes(10));assert.equal(pulses.at(-1),0);
  assert.equal(h.calls.messages.at(-1)[1].content,'Narrative words');
+});
+
+test('F3 missing tags store exactly one carry warning or recover reasoning without another call',async()=>{
+ for(const thinking of [null,'Scene tag: date: October 738 · time: evening · place: Hall · present: Mira']){
+  const h=await harness();await openImprovementChat(h,{memory:{scene:true,sceneFallback:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);
+  // Recovery is disabled for carry case so it does not make a paid fallback.
+  if(!thinking){h.calls.sessionDocs.improvement.memory.sceneFallback=false;h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>h.calls.sessionDocs.improvement});}
+  h.calls.responseData={choices:[{message:{content:'Mira waited.',reasoning:thinking}}]};
+  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+  const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
+  assert.equal(h.calls.requests.length,1);
+  if(thinking){assert.equal(saved.sceneMeta.source,'thinking');assert.match(saved.scene,/date: October 738/);assert.equal(saved.reviewWarnings.filter(s=>s==="Scene taken from the model's reasoning.").length,1);}
+  else{assert.equal(saved.sceneMeta.kind,'carried');assert.equal(saved.reviewWarnings.filter(s=>s==='No scene tag; previous scene carried.').length,1);}
+ }
+});
+test('F7 a story switch clears the reconnect guard so the next listener can retry',async()=>{
+ let sequence=0;const scheduled=new Map();
+ const h=await harness({timers:{setTimeout:(fn,ms)=>{scheduled.set(++sequence,{fn,ms});return sequence;},clearTimeout:id=>scheduled.delete(id)}});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('one');await new Promise(r=>setTimeout(r,0));
+ h.calls.sessionErrors.at(-1)(Error('offline'));assert.ok([...scheduled.values()].some(t=>t.ms===2000));
+ chat.setSession('two');await new Promise(r=>setTimeout(r,0));assert.equal([...scheduled.values()].filter(t=>t.ms===2000).length,0);
+ h.calls.sessionErrors.at(-1)(Error('offline again'));assert.equal([...scheduled.values()].filter(t=>t.ms===2000).length,1);
+ const timer=[...scheduled.values()].find(t=>t.ms===2000);const before=h.calls.sessionCallbacks.length;timer.fn();assert.equal(h.calls.sessionCallbacks.length,before+1);
+});
+for(const asNew of [false,true])test(`F8 ambiguous committed save is discovered before ${asNew?'save as new':'save again'}`,async()=>{
+ const h=await harness();await openImprovementChat(h,{nextOrder:1},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Paid narration.';
+ let saved,attempts=0;h.calls.addMessage=async(sid,message,opts)=>{attempts++;saved={...message,id:opts.id,order:2};h.calls.history.push(saved);h.calls.historyRevision=1;h.calls.sessionDocs[sid].historyRevision=1;throw Object.assign(Error('Ambiguous save'),{name:asNew?'HistoryConflict':'Error'});};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ h.calls.findSavedMessage=(sid,id,minOrder)=>{assert.equal(id,saved.id);assert.equal(minOrder,2);return saved;};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent===(asNew?'Save as new reply at the end':'Save again')).click();
+ assert.equal(attempts,1);assert.equal(h.calls.requests.length,1);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+ assert.equal(h.el('message-list').querySelectorAll('.msg-content').filter(n=>n.textContent==='Paid narration.').length,1);
+});
+test('F10 a dropped stream can be kept as truncated without scene recovery',async()=>{
+ const h=await harness();await openImprovementChat(h,{memory:{scene:true,sceneFallback:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.state.settings.streaming=true;
+ h.calls.streamLines=['data: {"choices":[{"delta":{"content":"Mira waited."}}]}\n'];
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];assert.equal(saved.content,'Mira waited.');assert.equal(saved.truncated,true);assert.equal(saved.reviewWarnings.length,0);assert.equal(h.calls.requests.length,1);assert.ok(h.calls.confirmations.some(s=>/Keep the partial reply/.test(s)));
+});
+
+for(const mode of ['turn-already-stopped','summary-user-stop','summary-network-error'])test('F9 '+mode,async()=>{
+ const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
+ const h=await harness({sources:{'ui/chat-view.js':source+'\nexport const testSummaryBackoff=sid=>summaryBackoff.get(sid);'}}),chat=await h.use('ui/chat-view.js');
+ Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',modelId:'model',apiKey:'key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0});
+ h.calls.messageOrder=4;chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u1',order:1,role:'user',content:'Opening',tokenCount:7},{id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5},{id:'u2',order:3,role:'user',content:'Next',tokenCount:4},{id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6}],hasEarlier:false});
+ h.calls.onRequest=async body=>{
+  if(h.calls.requests.length===1){h.calls.response='A complete reply.';if(mode==='turn-already-stopped')await h.fire('btn-stop');}
+  else if(mode==='summary-user-stop')await h.fire('btn-stop');
+  else if(mode==='summary-network-error')throw Error('network failed');
+  else h.calls.response='Clean summary.';
+ };
+ // Stop the narrator after its provider call has returned but before maintenance.
+ if(mode==='turn-already-stopped')h.calls.onRequest=async()=>{h.calls.response='A complete reply.';};
+ if(mode==='turn-already-stopped')h.calls.addMessage=async(sid,message,opts)=>{
+  const result={...message,id:opts?.id ?? 'u3',order:message.role==='user'?5:message.role==='assistant'?6:7,historyRevision:(h.calls.historyRevision ?? 0)+1};h.calls.historyRevision=result.historyRevision;h.calls.history.push(result);h.calls.sessionDocs[sid].historyRevision=result.historyRevision;h.calls.messages.push([sid,message,opts]);if(message.role==='assistant')await h.fire('btn-stop');return {...result,session:{...h.calls.sessionDocs[sid],...(opts?.sessionUpdate ?? {})}};
+ };
+ h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.calls.requests.length,2);
+ assert.equal(chat.testSummaryBackoff('story') ?? 0,mode==='summary-network-error'?3:0);
+ if(mode==='turn-already-stopped')assert.equal(h.calls.messages.filter(c=>c[1].role==='summary').length,1);
+ if(mode==='summary-user-stop')assert.ok(h.el('message-list').children.some(n=>n.textContent==='Summary stopped.'));
+});
+
+test('E6 failed story deletion preserves its local unsaved reply',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Paid reply.';h.calls.addMessage=async()=>{throw Error('offline');};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const side=await h.use('ui/sidebar.js');side.initSidebar();h.calls.sidebarCallback([{id:'improvement',title:'Story'}]);h.calls.failDelete=true;
+ await h.el('session-list').querySelector('.del').click();
+ const chat=await h.use('ui/chat-view.js');chat.setSession('improvement');await new Promise(r=>setTimeout(r,0));h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({title:'Story'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Begin.'}],hasEarlier:false});
+ assert.equal(h.el('message-list').querySelector('.unsaved')?.querySelector('.msg-content').textContent,'Paid reply.');
+});
+test('E7 full backup is blocked during an active turn',async()=>{
+ const h=await harness();(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/settings-view.js')).initSettingsView();h.state.sessionId='s';h.state.busy=true;
+ await h.fire('btn-export-full');assert.match(h.el('settings-saved-msg').textContent,/Finish the current turn first/);assert.notEqual(h.el('btn-export-full').disabled,true);
+});
+test('E8 inner Catch up and choose-start refuse a busy turn',async()=>{
+ const h=await harness();await openImprovementChat(h,{memory:{autoUpdate:true,batchTurns:2,lagTurns:0},memoryState:{extractedThroughOrder:0}},[{id:'u',order:1,role:'user',content:'Begin'},{id:'a',order:2,role:'assistant',content:'Story'}]);
+ const panel=await h.use('ui/memory-settings-view.js');panel.initMemorySettings(()=>{});await h.fire('mem-catch-up');await new Promise(r=>setImmediate(r));
+ const button=h.document.body.querySelector('.memory-sub-sheet').querySelectorAll('button').find(b=>b.textContent==='Catch up');h.state.busy=true;await button.click();assert.equal(h.calls.catchUps ?? 0,0);assert.notEqual(button.disabled,true);
+ const reads=h.calls.sessionReads;await h.fire('mem-choose-start');assert.equal(h.calls.sessionReads,reads);assert.match(h.document.body.querySelectorAll('.toast').at(-1).textContent,/Finish the current turn first/);
+});
+test('E10 old defaults with CRLF or trailing whitespace still migrate and custom prompts survive',async()=>{
+ const outgoing=await readFile(new URL('./fixtures/summary-before-f20.md',import.meta.url),'utf8');
+ for(const value of [outgoing.replace(/\n/g,'\r\n')+'\r\n',outgoing+'\n  ']){
+  const h=await harness();const merged=await h.settings.mergeDefaults({summarizerSystemPrompt:value});assert.equal(merged.summarizerSystemPrompt,h.settings.DEFAULT_SETTINGS.summarizerSystemPrompt);
+  assert.equal((await h.settings.mergeDefaults({summarizerSystemPrompt:value+'Custom.'})).summarizerSystemPrompt,value+'Custom.');
+ }
+});
+test('E14 recent-window setting states that it counts user and reply messages',async()=>{
+ const html=await readFile(new URL('../index.html',import.meta.url),'utf8');assert.match(html,/Keep recent messages \(user \+ reply\) after summary/);
+});
+
+test('F8 an ambiguous regeneration succeeds on retry without a second overwrite',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Old reply.'}]);h.calls.response='Regenerated reply.';
+ let overwrites=0;h.calls.overwriteMessage=async(sid,id,message)=>{overwrites++;const found={...message,id,order:2};h.calls.history=h.calls.history.map(m=>m.id===id?found:m);h.calls.historyRevision=1;h.calls.sessionDocs[sid].historyRevision=1;throw Error('commit response lost');};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Regenerate').click();
+ for(let i=0;i<40 && !h.el('message-list').querySelector('.unsaved');i++)await new Promise(r=>setImmediate(r));
+ assert.ok(h.el('message-list').querySelector('.unsaved'));
+ h.calls.findSavedMessage=(sid,id,order,opts)=>{assert.equal(id,'a');assert.equal(order,2);assert.equal(opts.overwrite,true);return h.calls.history.find(m=>m.id===id);};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save again').click();
+ assert.equal(overwrites,1);assert.equal(h.el('message-list').querySelector('.unsaved'),null);assert.equal(h.calls.requests.length,1);
+});
+test('F8 a real unsaved conflict still requires a new append, then saves exactly once',async()=>{
+ const h=await harness();await openImprovementChat(h,{nextOrder:1},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='New paid reply.';
+ let attempts=0;h.calls.addMessage=async(sid,message,opts)=>{attempts++;if(attempts<3)throw Object.assign(Error('History changed'),{name:'HistoryConflict'});assert.equal(opts.expectedSource.historyRevision,5);const found={...message,id:opts.id,order:10,historyRevision:6};h.calls.history.push(found);return {...found,session:{id:sid,historyRevision:6}};};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save again').click();assert.ok(h.el('message-list').querySelector('.unsaved'));
+ h.calls.sessionDocs.improvement.historyRevision=5;h.calls.sessionDocs.improvement.nextOrder=9;
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save as new reply at the end').click();
+ assert.equal(attempts,3);assert.equal(h.el('message-list').querySelector('.unsaved'),null);assert.equal(h.calls.history.filter(m=>m.content==='New paid reply.').length,1);assert.equal(h.calls.requests.length,1);
+});
+test('F6 all summary application paths show lint warnings without gating acceptance',async()=>{
+ const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');const h=await harness({sources:{'ui/chat-view.js':source+'\nexport {applySummaryResult as testApplySummaryResult};'}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
+ chat.testApplySummaryResult({skipped:true,lintWarnings:[{line:1},{line:2}]});assert.ok(h.el('message-list').children.some(n=>n.textContent==='Summary has 2 suspect lines — review it in the summary editor.'));assert.equal(chat.memorySnapshot().session.memoryState?.paused,undefined);
 });

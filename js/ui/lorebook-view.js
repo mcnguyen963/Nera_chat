@@ -1,3 +1,6 @@
+import { maxOf } from '../math-utils.js';
+import {dismissRebuild} from '../session-memory.js';
+import {rebuildLabel} from '../memory-rebuild.js';
 import {getPref,setPref} from '../local-pref.js';
 import { noteNeedsReview, snapshotNeedsReview, sectionMeta, cutoffLabel } from '../continuity.js';
 import { rebuild, rebuildFrom } from '../memory-updater.js';
@@ -30,7 +33,7 @@ let lineMemo={src:null,value:null};
 function lineContext() {
   const all=live()?.messages ?? [];
   if (lineMemo.src===all) return lineMemo.value;
-  const turns=computeTurns(all),orders=new Set(all.map(m=>Number(m.order)).filter(Number.isFinite)),maxOrder=Math.max(0,...orders),turnByOrder=new Map(),editedAtByTurn=new Map();
+  const turns=computeTurns(all),orders=new Set(all.map(m=>Number(m.order)).filter(Number.isFinite)),maxOrder=Math.max(0,maxOf(orders)),turnByOrder=new Map(),editedAtByTurn=new Map();
   for (const a of turns.assistants) { turnByOrder.set(a.order,a.turn); }
   for (const m of all) {
     const t=turns.turnById.get(m.id),at=m.editedAt?.toMillis?.() ?? (m.editedAt?.seconds!=null ? m.editedAt.seconds*1000+(m.editedAt.nanoseconds ?? 0)/1e6 : m.editedAt ? new Date(m.editedAt).getTime() : 0);
@@ -144,7 +147,11 @@ function renderList() {
   const renderFilters = () => { filters.replaceChildren();
   for (const [value,label] of [['all','All'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) { const count = books.filter(e => passes(e,value)).length; if (!count && value !== 'all') continue; filters.append(button(label+' '+count,() => { filter = value; renderList(); },'btn small'+(filter === value ? ' selected' : ''))); } }; renderFilters(); list.append(filters);
   const rows = node('div',null,'lore-rows'); rows.setAttribute('role','listbox'); rows.setAttribute('aria-label',BOOK_LABELS[book]); list.append(rows); renderRows(rows);
-  const edited=live()?.session.memoryState?.rebuildFromOrder;if(live()?.session.memoryState?.needsRebuild && edited!=null){const t=computeTurns(live().messages).turnById.get(live().messages.find(m=>m.order===edited)?.id) ?? '?';list.append(button('History edited at T'+t+' · Re-extract from there',async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}));}
+  const edited=live()?.session.memoryState?.rebuildFromOrder;
+  if(live()?.session.memoryState?.needsRebuild && edited!=null){
+    const snapshot=live();
+    list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}}));
+  }
   list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
   list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small'));
   if (filter === 'deleted' && deletedHistoryReady && live()?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
@@ -152,7 +159,7 @@ function renderList() {
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
 }
 function renderRows(rows) {
-  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,...linesOf(b).map(l => l.at))-Math.max(0,...linesOf(a).map(l => l.at)));
+  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
   if (!cards.length) {
     const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.' };
     rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : messages[book],'muted')); return;

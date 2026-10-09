@@ -1,3 +1,4 @@
+import { maxOf } from './math-utils.js';
 import * as sessionsApi from './sessions.js';
 import * as messagesApi from './messages.js';
 import {currentUid} from './auth.js';
@@ -58,11 +59,12 @@ export async function importSillyTavern(file) {
     if(lore.length)await importLore(sessionId,{writes:lore.map(e=>({id:e.id,data:e}))},[]);
     const source=metadata?.session ?? {},memory=normalizeMemory(source.memory);
     memory.autoUpdate=false;memory.sceneFallback=false;memory.updateMaxTokens=normalizeMemory().updateMaxTokens;
-    const maxOrder=Math.max(0,...messages.map((m,i)=>m.order ?? i+1));
+    const maxOrder=Math.max(0,maxOf(messages.map((m,i)=>m.order ?? i+1)));
     const summary=messages.find(m=>m.id===source.activeSummaryMessageId && m.role==='summary');
     const pointer=source.memoryState?.extractedThroughOrder;
+    const hasUnorderedMessages=messages.some(m=>m.order == null);
     const patch={longTermPlan:typeof source.longTermPlan==='string'?source.longTermPlan:'',memory,
-      memoryState:{extractedThroughOrder:Number.isSafeInteger(pointer)?Math.max(0,Math.min(maxOrder,pointer)):null,failureStreak:0,paused:false,lastError:null},
+      memoryState:{extractedThroughOrder:hasUnorderedMessages ? 0 : Number.isSafeInteger(pointer)?Math.max(0,Math.min(maxOrder,pointer)):null,failureStreak:0,paused:false,lastError:null},
       activeSummaryMessageId:summary?.id ?? null,breakpointOrder:summary ? Math.max(0,Math.min(maxOrder,Number(source.breakpointOrder)||0)) : 0,
       importing:false};
     await updateSession(sessionId,patch);

@@ -1,3 +1,5 @@
+import {dismissRebuild} from '../session-memory.js';
+import {rebuildLabel} from '../memory-rebuild.js';
 import { skippedNotesText } from '../memory-skipped.js';
 import {getPref,setPref} from '../local-pref.js';
 import {requestInputLimit} from '../request-budget.js';
@@ -59,7 +61,8 @@ export function initMemorySettings(openLore) {
   get('open-lore').addEventListener('click',openLore);
   get('update-now').addEventListener('click',() => void manualUpdate());
   get('reextract')?.addEventListener('click',async()=>{try{const live=memorySnapshot(),order=live?.session.memoryState?.rebuildFromOrder;if(order==null)return;if(!confirm('Re-extract edited history from this turn? Generated notes will be marked for review and backed up.'))return;const finished=await rebuildFrom(live.session.id,order);toast(finished ? 'Re-extraction finished; review prior notes in Lorebooks.' : 'Re-extraction stopped. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);}});
-  get('choose-start')?.addEventListener('click',async()=>{try{const live=await prepareMemorySnapshot(),mem=normalizeMemory(live.session.memory),pointer=await chooseMemoryStart(mem,mem,live.session,true);if(pointer==='cancel' || pointer==null)return;await updateSession(live.session.id,{'memoryState.extractedThroughOrder':pointer});document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
+  get('dismiss-rebuild')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}const live=memorySnapshot();if(!live)return;await dismissRebuild(live.session.id,live.session.historyRevision ?? 0);document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
+  get('choose-start')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}const live=await prepareMemorySnapshot(),mem=normalizeMemory(live.session.memory),pointer=await chooseMemoryStart(mem,mem,live.session,true);if(pointer==='cancel' || pointer==null)return;await updateSession(live.session.id,{'memoryState.extractedThroughOrder':pointer});document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
   get('retry').addEventListener('click',() => void manualUpdate(true));
   get('catch-up').addEventListener('click',() => void catchUpDialog());
   document.addEventListener('memory-refresh',updateMemorySettingsHints);
@@ -96,7 +99,7 @@ export function updateMemorySettingsHints() {
   get('update-actions').classList.toggle('hidden',!savedOn);
   for (const key of ['update-now','catch-up','retry']) { get(key).disabled = !!state.busy || isRunning(state.sessionId); get(key).title = state.busy ? 'Wait for the current reply or summary.' : isRunning(state.sessionId) ? 'A memory update is already running.' : ''; }
   get('retry').classList.toggle('hidden',!paused);
-  const rebuildOrder=live?.session.memoryState?.rebuildFromOrder;get('reextract')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);if(get('reextract') && rebuildOrder!=null)get('reextract').textContent='Re-extract from T'+(turns.turnById.get(live.messages.find(m=>m.order===rebuildOrder)?.id) ?? '?');
+  const rebuildOrder=live?.session.memoryState?.rebuildFromOrder;get('reextract')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);if(get('reextract') && rebuildOrder!=null)get('reextract').textContent=rebuildLabel(live);get('dismiss-rebuild')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);
   get('choose-start')?.classList.toggle('hidden',pointer!=null);
   const status=dueRangeStatus(live?.messages ?? [],live?.session.memoryState,mem);
   get('update-status').textContent = paused ? ['Paused.',live.session.memoryState.lastError].filter(Boolean).join(' ') : pointer == null ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : done ? `Updated through turn ${done} · next update after turn ${done+mem.batchTurns+mem.lagTurns}.` : `Waiting for ${Math.max(0,mem.batchTurns-pending)} more turns.`;
@@ -128,6 +131,6 @@ async function catchUpDialog() {
     const controller = new AbortController();let started=false;
     const s = subSheet('Catch up…',{ close:() => { controller.abort(); if(started)stop(live.session.id); return true; } });
     const body = node('div',null,'memory-content'), progress = node('p',`Catch up on ${eligible.length} turns? This makes about ${calls} model calls (about ${tokens.toLocaleString()} input tokens). You can stop at any time.`);
-    body.append(progress,button('Catch up',async b => {if(isRunning(live.session.id)){toast('Wait for the current memory update.');return;}started=true;b.disabled=true;try {const finished=await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent=finished ? 'Finished. Saved updates are kept.' : 'Stopped. Saved updates are kept. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'No further turns were updated.');}catch(e){progress.textContent='Catch up failed: '+e.message;}finally{started=false;b.disabled=false;b.textContent='Catch up';} }),button('Stop',s.hide)); s.dialog.append(body);
+    body.append(progress,button('Catch up',async b => {if(state.busy){toast('Finish the current turn first');return;}if(isRunning(live.session.id)){toast('Wait for the current memory update.');return;}started=true;b.disabled=true;try {const finished=await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent=finished ? 'Finished. Saved updates are kept.' : 'Stopped. Saved updates are kept. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'No further turns were updated.');}catch(e){progress.textContent='Catch up failed: '+e.message;}finally{started=false;b.disabled=false;b.textContent='Catch up';} }),button('Stop',s.hide)); s.dialog.append(body);
   } catch (e) { toast(e.message); }
 }

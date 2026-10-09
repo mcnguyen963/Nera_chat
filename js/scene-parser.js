@@ -4,37 +4,46 @@ const unknown = /^(?:unknown|n\/?a|none|[-?]|unclear|unspecified)$/i;
 const placeholder = /^(?:DATE|TIME|TIME OF DAY|PLACE|FULL NAME|TBD|\.{3}|…)$/;
 function value(raw) {
   let s = String(raw ?? '').trim().replace(/^["'`*\s]+|["'`*\s]+$/g,'').replace(/[.;·•|]+$/g,'').trim();
-  if (!s || unknown.test(s)) return 'unknown';
+  if (!s || unknown.test(s) || placeholder.test(s)) return 'unknown';
   s = s.replace(/\s*[·•|]\s*/g,', ').replace(/\b\d{1,2}:\d{2}\b/g,m => m.replace(':','\u0001')).replace(/[·•|]/g,',').replace(/\u0001/g,':');
   return s;
 }
-export function parseSceneFields(body) {
+function sceneFieldsResult(body) {
   const raw = String(body ?? '').trim().replace(/^["'`]+|["'`]+$/g,'').replace(/^scene(?: state)?\s*:\s*/i,'').replace(/\*\*/g,'');
-  if (!raw || raw.length > 2000) return null;
-  const matches = [...raw.matchAll(/(?:^|[\n·•|;]| - |\.\s+)(\s*[a-z][a-z ]{0,30}?)\s*[:=]\s*/gi)].filter(m=>!m[0].startsWith('.') || Object.hasOwn(aliases,m[1].trim().toLowerCase()) || m[1].trim().toLowerCase()==='active event');
-  const fields = {}, supplied = [];
+  if (!raw || raw.length > 2000) return {fields:null,unfilledTemplate:false};
+  const matches = [...raw.matchAll(/(?:^|[\n·•|;]| - |\.\s+)(\s*[a-z][a-z ]{0,30}?)\s*[:=]\s*/gi)].filter(m => {
+    const key = m[1].trim().toLowerCase();
+    if (m[0].startsWith(' - ')) return Object.hasOwn(aliases,key);
+    return !m[0].startsWith('.') || Object.hasOwn(aliases,key) || key==='active event';
+  });
+  const fields = {};
   for (let i=0;i<matches.length;i++) {
     const m = matches[i], key = aliases[m[1].trim().toLowerCase()];
     if (!key) continue;
     const text = raw.slice(m.index+m[0].length,matches[i+1]?.index ?? raw.length).trim();
-    fields[key] = text; supplied.push(text);
+    fields[key] = text;
   }
   const positional = text => text.split(/\s*(?:[·•|;]| - )\s*/).filter(Boolean);
   const prefix = matches.length ? raw.slice(0,matches[0].index) : raw;
   if (!Object.keys(fields).length || Object.keys(fields).every(k => k==='present')) {
     const parts = positional(prefix);
-    if (parts.length < 3 && !fields.present) return null;
+    if (parts.length < 3 && !fields.present) return {fields:null,unfilledTemplate:false};
     if (parts.length >= 3) Object.assign(fields,{date:parts[0],time:parts[1],place:parts.slice(2).join(', ')});
   }
-  if (!Object.keys(fields).length || Object.values(fields).every(x => placeholder.test(x))) return null;
   const present = [];
   for (const name of String(fields.present ?? '').replace(/\([^)]*\)/g,'').split(/[,;&\n]|\band\b/i)) {
     const n = value(name);
     if (n==='unknown' || /^(?:nobody|no one|full name|everyone|\.{3}|…)$/i.test(n)) continue;
     if (!present.some(x => x.toLowerCase()===n.toLowerCase())) present.push(n);
   }
-  return {date:value(fields.date),time:value(fields.time),place:value(fields.place),present};
+  const parsed = {date:value(fields.date),time:value(fields.time),place:value(fields.place),present};
+  if ([parsed.date,parsed.time,parsed.place].every(x => x==='unknown') && !present.length) {
+    const unfilledTemplate = Object.values(fields).some(text => String(text).split(/[,;&\n]|\band\b/i).some(part => placeholder.test(part.trim())));
+    return {fields:null,unfilledTemplate};
+  }
+  return {fields:parsed,unfilledTemplate:false};
 }
+export function parseSceneFields(body) { return sceneFieldsResult(body).fields; }
 export function canonicalFromFields(fields) {
   if (!fields) return null;
   const raw = `date: ${value(fields.date ?? fields.when)} · time: ${value(fields.time)} · place: ${value(fields.place)} · present: ${fields.present?.length ? fields.present.map(value).join(', ') : 'unknown'}`;
@@ -47,7 +56,12 @@ export function readSceneOutput(content,{sceneEnabled=true}={}) {
   for (const m of text.matchAll(/<plan_thread\b[^>]*>([\s\S]*?)<\/plan_thread\s*>/gi)) planThread=m[1].trim() || null;
   const original=text,closedSpans=[];
   const candidates = [];
-  const add = (raw,index) => { const scene=canonicalScene(raw); if (scene) candidates.push({scene,index}); };
+  let unfilledTemplate = false;
+  const add = (raw,index) => {
+    const result=sceneFieldsResult(raw), scene=canonicalFromFields(result.fields);
+    if (scene) candidates.push({scene,index});
+    else if (result.unfilledTemplate) unfilledTemplate=true;
+  };
   const pattern = /<(scene(?:[_-](?:state|info))?|scene\s+(?:tag|data)|state)\b[^>]*>([\s\S]*?)<\/\1\s*>|<!--\s*scene\s*:?([\s\S]*?)-->|^\s*\[Scene:\s*([^\n]*)\]\s*$|^\s*\*\*Scene:\*\*\s*([^\n]*)$/gim;
   text = text.replace(pattern,(all,tag,body,comment,bracket,line,index) => { closedSpans.push([index,index+all.length]); add(body ?? comment ?? bracket ?? line,index); return ''; });
   // Preserve candidate ordering even after cleanup changes string lengths.
@@ -60,5 +74,5 @@ export function readSceneOutput(content,{sceneEnabled=true}={}) {
   if(sceneEnabled)text=text.replace(/^\s*<\/?(?:div|span|p|section|scene)\s*>\s*$/gim,'').replace(/<!--[\s\S]*?-->/g,'').replace(/```[^\n]*\n\s*```/g,'').replace(/[ \t]+$/gm,'').replace(/ {2,}/g,' ').replace(/\n{3,}/g,'\n\n');
   text=text.trim();
   candidates.sort((a,b) => a.index-b.index);
-  return {scene:candidates.at(-1)?.scene ?? null,planThread,clean:text,count:candidates.length,warning:candidates.length > 1 ? 'Several scene tags; the last one was used.' : candidates.length ? null : 'The model omitted a readable scene tag.'};
+  return {scene:candidates.at(-1)?.scene ?? null,planThread,clean:text,count:candidates.length,warning:candidates.length > 1 ? 'Several scene tags; the last one was used.' : candidates.length ? null : unfilledTemplate ? 'Scene tag was the unfilled template.' : 'The model omitted a readable scene tag.'};
 }

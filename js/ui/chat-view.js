@@ -1,3 +1,4 @@
+import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
 import {buildRewriteMessages} from '../rewrite.js';
 import {createStreamVibration} from '../stream-vibration.js';
@@ -12,7 +13,7 @@ import {createBusyGate,bridgeHistory,waitForPreparation} from './busy-token.js';
 import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
-import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene } from '../scene.js';
+import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene, sceneFromThinking } from '../scene.js';
 import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns, dueRangeStatus } from '../turns.js';
@@ -42,6 +43,7 @@ const unsavedReplies=new Map(),unsavedRevisions=new Map();
 const unsavedKey=(owner,sid)=>owner+':'+sid;
 let unsavedNode=null;
 let chatRetry=0,chatRetryTimer=null,chatStatus='ok';
+function clearChatRetry(){clearTimeout(chatRetryTimer);chatRetryTimer=null;}
 let msgUnsub = null;
 let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
@@ -429,7 +431,7 @@ export function setSession(sessionId) {
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   rememberMemoryStory();
-  clearTimeout(chatRetryTimer);chatRetry=0;chatStatus='ok';
+  clearChatRetry();chatRetry=0;chatStatus='ok';
   clearTimeout(indicatorTimer);clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
   loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastProviderUsage = null;
   msgUnsub?.();
@@ -504,7 +506,7 @@ function saveLocalCache(owner, sid, snapshot) {
 }
 
 export async function prepareChatLogout() {
-  cacheWritesPaused = true;clearTimeout(chatRetryTimer);
+  cacheWritesPaused = true;clearChatRetry();
   clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
   busyGate.active?.abort?.();
   rewriteController?.abort();
@@ -674,6 +676,7 @@ async function ensureHistory(forceServer = false) {
 }
 
 function applySummaryResult(result) {
+  if(result?.lintWarnings?.length)showTransientInfo(`Summary has ${result.lintWarnings.length} suspect lines — review it in the summary editor.`);
   if (result.skipped) return;
   session = {
     ...session,
@@ -876,6 +879,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
     const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = sceneState?.effective ? formatSceneForDisplay(sceneState.effective) : '+ Add scene'; chip.title = 'Edit scene line';
     if (!sceneState?.own && sceneState?.effective) chip.textContent += ' (carried forward · stale)';
     if (m.sceneMeta?.kind === 'inferred') chip.textContent += ' (inferred)';
+    if (m.sceneMeta?.provenance?.time === 'declared') chip.textContent += ' (model-declared time)';
     chip.addEventListener('click', () => {
       const row = document.createElement('div'), field = document.createElement('input'); field.value = sceneState?.effective ?? ''; field.maxLength = MAX_SCENE_LENGTH;
       const save = actionBtn('Save', async () => {
@@ -1263,7 +1267,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     } catch(error) {
       assertActive(token);
       if(!error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
-      stopReason=error.aborted==='timeout' ? 'timeout' : 'stopped';
+      stopReason=error.aborted==='timeout' ? 'timeout' : error.aborted==='dropped' ? 'dropped' : 'stopped';
       result={...error.partial,finishReason:'length',usage:null};
     }
     vibration.stop();
@@ -1284,7 +1288,11 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     if (sceneEnabled && !ooc) {
       acceptedScene=carryScene(prior);
       if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene});
-      else if (!truncated && mem.sceneFallback && !maintenanceUsed) {
+      else if (!truncated) {
+        const candidate=sceneFromThinking(thinking);
+        if(candidate){acceptedScene=validateSceneValues(candidate,{narration:clean,userText,prior:prior.scene});acceptedScene.sceneMeta.source='thinking';sceneWarning="Scene taken from the model's reasoning.";}
+      }
+      if (!truncated && acceptedScene.sceneMeta?.kind==='carried' && mem.sceneFallback && !maintenanceUsed) {
         try {
           const recovered=await recoverScene(settings,{narration:clean,userText,prior,
             names:loreEntries.filter(e => e.book==='characters').map(e => e.name),protagonist:mem.protagonist,plan:sourceSession.longTermPlan,model:mem.sceneFallbackModel},{signal:controller.signal,onStart:()=>{maintenanceUsed=true;}});
@@ -1297,13 +1305,14 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       ...lintPlayerAgency(clean,mem.protagonist),
       ...(!prior.scene?.time && !parseScene(acceptedScene.scene).time ? lintUnestablishedTime(clean,{prior:prior.scene,userText}) : []),
       ...(acceptedScene.warnings ?? []),...(out.count > 1 ? ['Several scene tags; the last one was used.'] : []),
-      ...(sceneWarning ? [sceneWarning] : [])] : [];
+      ...(sceneWarning ? [sceneWarning] : []),
+      ...(acceptedScene.sceneMeta?.kind==='carried' ? ['No scene tag; previous scene carried.'] : [])] : [];
     const message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
       scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
       ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
     updatePetPhase('saving',petTurn);
     let saved;
-    const pendingReply={sid,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:opts.upToOrder ?? null,sourceRevision:sourceSession.historyRevision ?? 0};
+    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:opts.upToOrder ?? null,sourceRevision:sourceSession.historyRevision ?? 0};
     if(streamState)streamState.savedId=pendingReply.id;
     try {
       const result=await saveNarration(pendingReply);
@@ -1328,7 +1337,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     historyRevision = historyChanged ? null : session.historyRevision;
     if (streamState) { streamState.savedId = saved.id; streamState.saveCompleted = true; }
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
-    if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
+    if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
     lastMemoryReport = built.report;
     finishPetTurn('ready',petTurn);
@@ -1343,9 +1352,10 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     if(due && pick!=='memory')memoryDeferrals.set(sid,(memoryDeferrals.get(sid) ?? 0)+1);
     if(pick==='memory'){memoryUpdater.maybeStartAfterTurn(sid);memoryDeferrals.set(sid,0);}
     else if(pick==='summary') {
+      const summaryController=new AbortController();token.abort=()=>summaryController.abort('user');
       const ui=streamSummaryUI('Context near limit — summarizing…');
-      try {const summaryResult=await runSummarization(structuredClone(session),settings,{signal:controller.signal,maxChunks:1,messages:structuredClone(hist),loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta});assertActive(token);applySummaryResult(summaryResult);}
-      catch(error){if(error instanceof StaleTurn)throw error;assertActive(token);summaryBackoff.set(sid,3);showTransientInfo('Summary skipped: '+error.message);}
+      try {const summaryResult=await runSummarization(structuredClone(session),settings,{signal:summaryController.signal,maxChunks:1,messages:structuredClone(hist),loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta});assertActive(token);applySummaryResult(summaryResult);}
+      catch(error){if(error instanceof StaleTurn)throw error;assertActive(token);if(summaryController.signal.reason==='user')showTransientInfo('Summary stopped.');else{summaryBackoff.set(sid,3);showTransientInfo('Summary skipped: '+error.message);}}
       finally {ui.done();}
     }
     } catch(error){if(!(error instanceof StaleTurn))showTransientInfo('Reply saved. Background memory was skipped: '+error.message);}
@@ -1381,7 +1391,12 @@ function renderUnsavedReply() {
   const controls=document.createElement('div');controls.className='msg-actions';
   const retry=asNew=>historyAction('save-reply',async token=>{
     const pending=unsavedReplies.get(unsavedKey(reply.owner,reply.sid));if(pending!==reply)return;
-    if(asNew){const fresh=await getSessionFromServer(reply.sid);assertActive(token);if(!fresh || fresh.deleting)throw new Error('This story was deleted.');reply.sourceRevision=fresh.historyRevision ?? 0;reply.id=messagesApi.newMessageId();}
+    const found=await messagesApi.findSavedMessage(reply.sid,reply.id,reply.overwriteId ? reply.order : reply.minOrder,{overwrite:!!reply.overwriteId});assertActive(token);
+    if(found && (!reply.overwriteId || found.content===reply.message.content)){
+      const fresh=await getSessionFromServer(reply.sid);assertActive(token);if(!fresh || fresh.deleting)throw new Error('This story was deleted.');
+      session=fresh;historyMessages=null;historyRevision=null;clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[found]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');return;
+    }
+    if(asNew){const fresh=await getSessionFromServer(reply.sid);assertActive(token);if(!fresh || fresh.deleting)throw new Error('This story was deleted.');reply.sourceRevision=fresh.historyRevision ?? 0;reply.id=messagesApi.newMessageId();reply.minOrder=(fresh.nextOrder ?? 0)+1;reply.overwriteId=null;reply.order=null;}
     try {
       const result=await saveNarration(reply,asNew);assertActive(token);
       session=result.session ?? {...session,historyRevision:result.historyRevision};historyMessages=null;historyRevision=null;
@@ -1677,7 +1692,7 @@ async function reconcileDeletedMemory() {
   if (!session || !normalizeMemory(session.memory).autoUpdate && !loreEntries.length) return;
   const messages = await ensureHistory(), orders = new Set(messages.filter(m => m.role === 'assistant').map(m => m.order));
 
-  const count = loreEntries.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.filter(l => l.src != null && l.src<=Math.max(0,...messages.map(m=>m.order)) && !orders.has(l.src)).length,0),0);
+  const count = loreEntries.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.filter(l => l.src != null && l.src<=Math.max(0,maxOf(messages.map(m=>m.order))) && !orders.has(l.src)).length,0),0);
   if (count) document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: `${count} memory notes came from deleted turns.`, action: 'Review', event: 'lorebooks', options: { filter: 'deleted' } } }));
   rememberMemoryStory();
 }

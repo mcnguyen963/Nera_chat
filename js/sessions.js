@@ -1,3 +1,4 @@
+import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { deleteChatCache } from './chat-cache.js';
 import { loadUnsavedReply, storeUnsavedReply } from './unsaved-replies.js';
@@ -131,9 +132,18 @@ export async function deleteSession(sessionId) {
   deletionNotice(sessionId);
   return resumeSessionDeletion(sessionId,owner).catch(error=>{error.deletionPending=true;throw error;});
 }
+const sweptImports=new Set();
 function visibleSessions(snap,onError) {
   const owner=currentUid(),sessions=snap.docs.map(d=>({id:d.id,...d.data()}));
   for(const s of sessions)if(s.deleting)void resumeSessionDeletion(s.id,owner).catch(error=>{error.deletionPending=true;if(onError)onError(error);else console.error('Story deletion will resume on the next connection:',error);});
+  for(const s of sessions) {
+    const createdAt=s.createdAt?.toMillis?.() ?? (Number.isFinite(s.createdAt?.seconds) ? s.createdAt.seconds*1000 : null);
+    const key=owner+':'+s.id;
+    if(s.importing && !s.deleting && createdAt!=null && Date.now()-createdAt>24*60*60*1000 && !sweptImports.has(key)) {
+      sweptImports.add(key);
+      void deleteSession(s.id).catch(error=>{if(onError)onError(error);else console.error('Incomplete story cleanup will resume on the next connection:',error);});
+    }
+  }
   return sessions.filter(s=>!s.deleting && !s.importing);
 }
 export function subscribeSessions(callback,onError) {
@@ -180,7 +190,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     nextOrder: selected.at(-1)?.order ?? 0,
-    nextNarratorTurn:Math.max(0,...selected.map(m => m.narratorTurn ?? 0))+(selected.at(-1)?.role === "user" ? 0 : 1),
+    nextNarratorTurn:Math.max(0,maxOf(selected.map(m => m.narratorTurn ?? 0)))+(selected.at(-1)?.role === "user" ? 0 : 1),
     storageVersion: 2,
     activeChunkId: last ? chunkId(last[0].order) : null,
     activeChunkBytes: last ? chunkBytes(last) : 0,

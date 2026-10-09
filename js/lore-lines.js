@@ -3,6 +3,7 @@ import { evidenceFor, revisionOf, noteNeedsReview } from './continuity.js';
 import { computeTurns } from './turns.js';
 import { latestScene } from './scene.js';
 export const STOPLIST = new Set('he she they him her them i you me we it someone somebody man woman boy girl guard the a narrator user unknown'.split(' '));
+export const COMMON_ALIAS_WORDS = new Set('captain guard old lady lord man woman girl boy'.split(' '));
 export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
 export const SECTION_MAP = {
   characters: { appearance:'appearance', looks:'appearance', look:'appearance', status:'status', state:'status', condition:'status', health:'status', bond:'bond', relationship:'bond', relations:'relations', relationships:'relations', alias:'alias', aka:'alias', 'also called':'alias', name:'alias', notes:'notes', note:'notes', other:'notes', personality:'personality', traits:'personality' },
@@ -19,7 +20,7 @@ export function makeEntry(book, name, extra = {}) {
   return { id:newLoreId(), book, kind:'card', name, aliases:[], alwaysLoad:false, draft:false, status:null, sections:Object.fromEntries(SECTION_KEYS[book].map(k => [k,{ text:'',lines:[],origin:extra.createdFrom === 'import' ? 'import' : 'user',kind:extra.createdFrom === 'import' ? 'background' : 'canon',cutoff:null }])), createdFrom:'user', ...extra };
 }
 export function parseMemoryLines(text,ctx={}) {
-  const ops=[],skipped=[],info=[];let sawNone=false;
+  const ops=[],skipped=[],adjusted=[],info=[];let sawNone=false;
   const tags={char:'char',character:'char',characters:'char',chars:'char',chr:'char',loc:'loc',location:'loc',locations:'loc',place:'loc',places:'loc',fact:'fact',facts:'fact',world:'fact',event:'event',events:'event',open:'open',thread:'open',threads:'open',opened:'open',closed:'closed',close:'closed',resolved:'closed'};
   const assistants=ctx.range?.assistants ?? [],turns=computeTurns(ctx.messages ?? []);
   for(const [i,source] of stripThinking(text).split(/\r?\n/).entries()) {
@@ -28,7 +29,7 @@ export function parseMemoryLines(text,ctx={}) {
     if(!line || /^```/.test(line))continue;
     if(/^(?:none|no new notes?|nothing new)\.?$/i.test(line)){sawNone=true;continue;}
     if(/^#{1,6}\s|^Here are (?:the )?notes:?$/i.test(line)){info.push('heading ignored');continue;}
-    const m=line.match(/^(?:\[?\s*(?:T|Turn\s*)(\d+)(?:\s*[-–]\s*(\d+))?\s*\]?\s*:?\s*)?\[\s*([A-Za-z ]+?)\s*\]\s*(.*)$/i);
+    const m=line.match(/^(?:\[?\s*(?:T|Turn\s*)(\d+)(?:\s*[-–]\s*(?:T|Turn\s*)?(\d+))?\s*\]?\s*:?\s*)?\[\s*([A-Za-z ]+?)\s*\]\s*(.*)$/i);
     if(!m){skip('not a note');continue;}
     let tag=tags[m[3].toLowerCase()];if(!tag){skip('unknown tag');continue;}
     const book=tag==='char'?'characters':tag==='loc'?'locations':tag==='fact'?'facts':'events';
@@ -56,7 +57,8 @@ export function parseMemoryLines(text,ctx={}) {
     if(section==='alias' && (normalizeName(value).length<2 || normalizeName(value).split(' ').every(w=>STOPLIST.has(w)))){skip('not a valid alias');continue;}
     if((!value && !['open','closed'].includes(tag)) || value.length>400){skip('empty or oversized note');continue;}
     if(ops.length>=80){info.push('too many notes; first 80 kept');continue;}
-    let turn=Number(m[2] ?? m[1]),startTurn=Number(m[1]),assistant,evidence=[],original=null;
+    let turn=Math.max(Number(m[1]),Number(m[2] ?? m[1])),startTurn=Math.min(Number(m[1]),Number(m[2] ?? m[1])),assistant,evidence=[],original=null;
+    const declaredStart=startTurn,declaredTurn=turn;
     if(ctx.reorganize) {
       const entry=ctx.entries?.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(name)));
       const candidates=entry?.sections?.[section]?.lines ?? [];
@@ -69,13 +71,14 @@ export function parseMemoryLines(text,ctx={}) {
       assistant=assistants.find(a=>a.turn===turn);
       if(!m[1] || !assistant){turn=ctx.range?.toTurn ?? assistants.at(-1)?.turn;startTurn=ctx.range?.fromTurn ?? turn;assistant=assistants.find(a=>a.turn===turn);info.push(m[1]?'turn out of range':'turn missing');}
       if(!assistant){skip('missing source evidence');continue;}
+      if(m[1] && (startTurn!==declaredStart || assistant.turn!==declaredTurn))adjusted.push({line:i+1,text:source,card:name,reason:'adjusted: turn '+(declaredStart===declaredTurn ? 'T'+declaredTurn : 'T'+declaredStart+'–T'+declaredTurn)+' → '+(startTurn===assistant.turn ? 'T'+assistant.turn : 'T'+startTurn+'–T'+assistant.turn)});
       evidence=evidenceFor((ctx.messages ?? []).filter(m=>m.role!=='summary' && turns.turnById.get(m.id)>=startTurn && turns.turnById.get(m.id)<=turn));
     }
     const when=original?.when ?? latestScene(ctx.messages ?? [],assistant.order+1).scene?.when ?? null;
     ops.push({tag,book,name,section,text:value,turn:assistant.turn,when,src:assistant.order,evidence,sourceRevision:original?.sourceRevision,line:i+1});
   }
   if(sawNone && ops.length)info.push('NONE ignored because notes were present');
-  return {ops,skipped,info,sawNone,valid:ops.length>0 || sawNone && !skipped.some(s=>s.reason!=='not a note')};
+  return {ops,skipped,adjusted,info,sawNone,valid:ops.length>0 || sawNone && !skipped.some(s=>s.reason!=='not a note')};
 }
 export function applyOps(entries, ops, stampCtx = {}) {
   const working = structuredClone(entries), creates = [], appends = [], statusChanges = [], aliases = [], skipped = [];

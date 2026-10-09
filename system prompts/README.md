@@ -9,7 +9,7 @@ Built-in LLM instructions and labels live in this folder. `js/system-prompts.js`
 - `fixed-author-plan.md`, `plan-thread.md`, `plan-status-active.md`, `plan-status-inactive.md`, `no-plan.md`: the author's fixed plan and optional hidden pending-plan notes.
 - `scene.md`, `reply-contract.md`, `scene-reminder.md`, `scene-reminder-plan.md`, `scene-recovery.md`: optional scene output and recovery contracts.
 - `historical-summary.md`, `opening-exchange.md`: earlier-history wrappers. The narrator receives no app turn or message-order labels in these wrappers. Old summaries are cleaned when rendered, preserving stored text.
-- `summarizer.md`, `summary-output.md`: summary instructions and output budget. New summaries end with **Open stakes at the cutoff** and omit physical blocking and turn labels.
+- `summarizer.md`, `summary-output.md`: summary instructions and output budget. The summary is the narrative layer next to the lorebooks: story sequence, voice, relationships, knowledge, and promises. Appearance, places, items, setting, and thread lists are left to the lorebooks. New summaries end with **Open stakes at the cutoff** and omit physical blocking and turn labels.
 
 ## Lore and maintenance
 

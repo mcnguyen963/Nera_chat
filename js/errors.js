@@ -16,6 +16,6 @@ export function recordError(e){
 }
 export function recentErrors(){return recent.map(e=>({...e}));}
 export function installErrorHandlers({target=window,show,now=()=>Date.now()}={}){
- let last=-Infinity;const handle=e=>{const error=e.reason ?? e.error ?? e;recordError(error);if(now()-last>=10000){last=now();show('Something went wrong: '+friendlyError(error));}};
+ let last=-Infinity;const handle=e=>{if(/^ResizeObserver loop/.test(String(e.message ?? e.error?.message ?? ''))){console.warn(e.message ?? e.error.message);return;}const error=e.reason ?? e.error ?? e;recordError(error);if(now()-last>=10000){last=now();show('Something went wrong: '+friendlyError(error));}};
  target.addEventListener('error',handle);target.addEventListener('unhandledrejection',handle);
 }
