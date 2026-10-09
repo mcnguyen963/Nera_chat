@@ -8,8 +8,8 @@ import {promptFetch} from './prompt-files.mjs';
 const root=process.env.F20_PROMPT_ROOT;
 const readPrompt=file=>readFile(root ? `${root}/${file}` : new URL('../system prompts/'+file,import.meta.url),'utf8');
 test('F20 default summary prompt matches the approved narrative-layer text within its word budget',async()=>{
-  const plan=await readFile(new URL('../RELEASE.md',import.meta.url),'utf8');
-  const approved=plan.split('**Text of the new `system prompts/summarizer.md`**')[1].split('```markdown\n')[1].split('\n```')[0];
+  // Keep approved text in a versioned fixture, independent of local release notes.
+  const approved=(await readFile(new URL('./fixtures/summary-approved-f20.md',import.meta.url),'utf8')).trim();
   const actual=(await readPrompt('summarizer.md')).trim();
   assert.equal(actual,approved);
   assert.ok(actual.split(/\s+/).length<=1470);
