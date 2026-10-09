@@ -27,7 +27,7 @@ function summarizerSettings(settings, outputCapacity) {
     throw new Error("Summarization needs a context limit of at least 1024 tokens.");
   }
   const maxResponseTokens = Math.min(
-    20000, settings.summarizerMaxTokens ?? 20000, Math.floor(contextLimit / 3), outputCapacity
+    settings.summarizerMaxTokens ?? 20000, outputCapacity
   );
   // Summaries need their output budget for facts, not the chat profile's thinking.
   return { ...settings, maxResponseTokens, reasoning: { ...settings.reasoning, enabled: false } };
