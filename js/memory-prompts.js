@@ -1,3 +1,4 @@
+import { maxOf } from './math-utils.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
@@ -31,7 +32,7 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   }
   const known = [prompts.knownNamesHeader];
   for (const [book,label] of [['characters',renderLoreLabel('knownCharacters')],['locations',renderLoreLabel('knownLocations')],['facts',renderLoreLabel('knownFacts')],['events',renderLoreLabel('knownThreads')]]) {
-    const candidates=entries.filter(e=>e.book===book && (book!=='events' || e.kind==='thread' && e.status!=='closed')).sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)) || Math.max(0,...Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))-Math.max(0,...Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))));
+    const candidates=entries.filter(e=>e.book===book && (book!=='events' || e.kind==='thread' && e.status!=='closed')).sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))));
     const names=candidates.map(e=>e.name+(e.aliases?.length?' ('+e.aliases.join(', ')+')':''));
     let n=names.length;
     while(n>0 && !ids.has(candidates[n-1].id) && await count(renderLoreLabel('knownList',{LABEL:label,NAMES:names.slice(0,n).join('; '),MORE:''}))>inputBudget*.15/4)n--;

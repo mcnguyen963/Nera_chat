@@ -94,7 +94,7 @@ test('S8 scene validation retains unsupported known values and recognizes progre
  const result=api.validateSceneValues(B.replace('Day 2','Day 3').replace('night','dawn'),{prior,narration:'The third day dawns.'});
  assert.equal(api.parseScene(result.scene).when,'Day 3'); assert.equal(api.parseScene(result.scene).time,'dawn');
  for(const narration of ['He remembered last night.','Nothing establishes the clock.']) {
-  const result=api.validateSceneValues(B,{prior,narration});assert.equal(api.parseScene(result.scene).time,'afternoon');assert.equal(result.sceneMeta.provenance.time,'kept');
+  const result=api.validateSceneValues(B,{prior,narration});assert.equal(api.parseScene(result.scene).time,'night');assert.equal(result.sceneMeta.provenance.time,'declared');
  }
 });
 

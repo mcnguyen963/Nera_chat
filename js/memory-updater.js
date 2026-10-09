@@ -92,7 +92,7 @@ async function start(sid,range,manual) {
     const latestMem=normalizeMemory(latest.session.memory);
     if(!manual && !latestMem.autoUpdate)return false;
     const changes=applyOps(latest.entries,parsed.ops,{mem:latestMem,protagonist:mem.protagonist,sourceRevision:guard.startRevision,messages:latest.messages,session:latest.session});
-    const skipped=[...parsed.skipped,...changes.skipped].map(note=>({...note,card:note.card ?? note.name ?? latest.entries.find(e=>e.id===note.entryId)?.name ?? ''}));
+    const skipped=[...parsed.skipped,...changes.skipped,...(parsed.adjusted ?? [])].map(note=>({...note,card:note.card ?? note.name ?? latest.entries.find(e=>e.id===note.entryId)?.name ?? ''}));
     const committed=await commitExtraction(sid,changes,{...range,guard,skipped});
     const lastSkipped=committed?.lastSkipped ?? limitSkippedNotes([...skipped,...(committed?.skipped ?? [])]);
     const nextEntries=committed?.entries ? latest.entries.filter(e=>!committed.entries.some(w=>w.id===e.id)).concat(committed.entries) : changes.entries;

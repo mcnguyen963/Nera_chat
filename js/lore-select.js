@@ -1,6 +1,8 @@
+import { maxOf } from './math-utils.js';
 import { prompts, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
-import { normalizeName, STOPLIST, SECTION_KEYS } from './lore-lines.js';
+import { normalizeName, STOPLIST, COMMON_ALIAS_WORDS, SECTION_KEYS } from './lore-lines.js';
+import { stripTurnStamps } from './story-text.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
 export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? (a.by==='user'?Infinity:0))-(b.turn ?? (b.by==='user'?Infinity:0))||(a.at ?? 0)-(b.at ?? 0)); }
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -8,11 +10,12 @@ export function buildLoreIndex(entries) {
   const index = { entries, characters:[], locations:[], facts:[], events:[] };
   for (const e of entries) {
     const terms = [e.name,...(e.aliases ?? [])];
-    if (e.book === 'characters') {const first=normalizeName(e.name).split(' ')[0];if(first.length>=3 && !new Set('lord lady sir dame king queen prince princess master mistress captain father mother brother sister'.split(' ')).has(first) && entries.filter(x=>x.book==='characters' && normalizeName(x.name).split(' ')[0]===first).length===1)terms.push(e.name.split(' ')[0]);}
+    if (e.book === 'characters') {const first=normalizeName(e.name).split(' ')[0];if(first.length>=3 && !new Set('lord lady sir dame king queen prince princess master mistress captain father mother brother sister mr. mrs. ms. dr.'.split(' ')).has(first) && entries.filter(x=>x.book==='characters' && normalizeName(x.name).split(' ')[0]===first).length===1)terms.push(e.name.split(' ')[0]);}
     const seen = new Set();
     for (const [i,term] of terms.entries()) {
       const normTerm = normalizeName(term);
       if (normTerm.length < 2 || STOPLIST.has(normTerm) || seen.has(normTerm)) continue;
+      if (i>0 && i<= (e.aliases?.length ?? 0) && normTerm.startsWith('the ') && normTerm.slice(4).split(' ').every(word=>STOPLIST.has(word) || COMMON_ALIAS_WORDS.has(word))) continue;
       seen.add(normTerm);
       index[e.book]?.push({ entryId:e.id, term, normTerm, isMain:i === 0,firstName:e.book==='characters' && i>=(1+(e.aliases?.length ?? 0)) });
     }
@@ -56,9 +59,9 @@ export function selectEntries(entries, mem, text, scene, recentText = '') {
     const list = entries.filter(e => e.book === book);
     if (!mem.lorebooks || !mem.books[book].on) { for (const e of list) skipped.push({ entryId:e.id, book, name:e.name, reason:'book off' }); continue; }
     const add = (id,reason) => { const entry = list.find(e => e.id === id); if (entry && !selected[book].some(x => x.entry.id === id)) selected[book].push({ entry, reason }); };
-    if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,...Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))-Math.max(0,...Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
+    if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
     else if (book === 'events') {
-      for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,...Object.values(b.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0)))-Math.max(0,...Object.values(a.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))))) add(e.id,'open thread');
+      for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,maxOf(Object.values(b.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0)))))) add(e.id,'open thread');
       for (const e of list.filter(e => e.kind === 'timeline')) add(e.id,'timeline');
     } else {
       for (const e of list.filter(e => e.alwaysLoad)) add(e.id,'always');
@@ -77,7 +80,9 @@ export function selectEntries(entries, mem, text, scene, recentText = '') {
   return { selected, skipped, index, resolved };
 }
 export function renderLine(line,{provenance=false}={}) {
-  return provenance ? renderLoreLabel('lineStamp',{STAMP:[line.turn != null ? renderLoreLabel('turnLabel',{TURN:line.turn}) : null,line.when].filter(Boolean).join(' · '),TEXT:line.text}) : line.when ? renderLoreLabel('lineDate',{WHEN:line.when,TEXT:line.text}) : renderLoreLabel('linePlain',{TEXT:line.text});
+  if (provenance) return renderLoreLabel('lineStamp',{STAMP:[line.turn != null ? renderLoreLabel('turnLabel',{TURN:line.turn}) : null,line.when].filter(Boolean).join(' · '),TEXT:line.text});
+  const text=stripTurnStamps(line.text),when=line.when ? stripTurnStamps(line.when) : '';
+  return when ? renderLoreLabel('lineDate',{WHEN:when,TEXT:text}) : renderLoreLabel('linePlain',{TEXT:text});
 }
 export function sectionLabel(key, protagonist) { return key === 'bond' ? renderLoreLabel('bond',{PROTAGONIST:protagonist || renderLoreLabel('protagonistName')}) : key === 'text' ? '' : renderLoreLabel(key); }
 export function renderEntry(entry, lineIds = null, protagonist = '', { provenance = false } = {}) {
@@ -87,7 +92,7 @@ export function renderEntry(entry, lineIds = null, protagonist = '', { provenanc
     const lines = sortLines(s.lines ?? []).filter(l => !lineIds || lineIds.has(l.id));
     if (!s.text && !lines.length) continue;
     const label = sectionLabel(key,protagonist);
-    if (s.text) { const meta = sectionMeta(s,entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:meta.kind === 'canon' ? renderLoreLabel('authorAuthority') : cutoffLabel(meta.cutoff)})); out.push(label ? label+':'+(s.text.includes('\n') ? '\n' : ' ')+s.text : s.text); }
+    if (s.text) { const meta = sectionMeta(s,entry),text=provenance ? s.text : stripTurnStamps(s.text); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:meta.kind === 'canon' ? renderLoreLabel('authorAuthority') : cutoffLabel(meta.cutoff)})); out.push(label ? label+':'+(text.includes('\n') ? '\n' : ' ')+text : text); }
     else if (label) out.push(label+':');
     out.push(...lines.map(l=>renderLine(l,{provenance})));
   }
@@ -134,7 +139,7 @@ export function renderEventsBlock(fit, { provenance = false } = {}) {
   if (threads.length) out.push(renderLoreLabel('openThreads'),...threads.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
   if (timeline && (timeline.entry.sections.text?.text || timeline.lineIds.size)) {
     out.push(renderLoreLabel('timeline',{OMITTED:timeline.linesCut ? renderLoreLabel('omittedEvents',{COUNT:timeline.linesCut}) : ''}));
-    if (timeline.entry.sections.text?.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:cutoffLabel(meta.cutoff)})); out.push(timeline.entry.sections.text?.text); }
+    if (timeline.entry.sections.text?.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:cutoffLabel(meta.cutoff)})); const text=timeline.entry.sections.text.text; out.push(provenance ? text : stripTurnStamps(text)); }
     out.push(...sortLines(timeline.entry.sections.text?.lines ?? []).filter(l => timeline.lineIds.has(l.id)).map(l=>renderLine(l,{provenance})));
   }
   return out.length ? prompts.eventsHeader+'\n'+out.join('\n') : '';

@@ -64,7 +64,7 @@ async function setup(legacyCount = 0) {
       for (const c of constraints.filter((item) => item.kind === 'where')) {
         paths = paths.filter((path) => {
           const value = documents.get(path)[c.field];
-          return c.op === '<' ? value < c.value : c.op === '<=' ? value <= c.value : value > c.value;
+          return c.op === '<' ? value < c.value : c.op === '<=' ? value <= c.value : c.op === '>=' ? value >= c.value : value > c.value;
         });
       }
       const sort = constraints.find((item) => item.kind === 'orderBy');
@@ -723,13 +723,13 @@ test('D7 import backs up current cards and identifies new cards from the server'
  assert.ok(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.some(l=>l.id==='server-only'));
  assert.equal(h.documents.has(h.sessionPath+'/lore/new'),false);
 });
-test('D7 restore backs up current server data and marks older memory for rebuilding',async()=>{
+test('D7 restore backs up current server data and flags the newer lost extraction source',async()=>{
  const h=await setup(),old=loreEntry();old.updatedAt=new Date(1000);await h.lore.createEntry('s',old);
  const backup=await h.lore.writeBackup('s','test','Old snapshot',[old]);
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'newer',text:'Fresh extraction',src:50,by:'auto',at:2});
  h.documents.get(h.sessionPath).memoryState={lastUpdateAt:new Date(3000),extractedThroughOrder:50};
  await h.lore.restoreBackup('s',backup,[]);
- const session=h.documents.get(h.sessionPath);assert.equal(session.memoryState.needsRebuild,true);assert.equal(session.memoryState.rebuildFromOrder,2);
+ const session=h.documents.get(h.sessionPath);assert.equal(session.memoryState.needsRebuild,true);assert.equal(session.memoryState.rebuildFromOrder,50);
  const undo=(await h.lore.listBackups('s')).find(g=>g.reason==='restore');const parts=await h.lore.loadBackupGroup('s',undo.id);
  assert.ok(parts.flatMap(p=>p.entries).some(e=>e.data.sections.appearance.lines.some(l=>l.id==='newer')));
  await h.lore.restoreBackup('s',undo.id,[]);
@@ -809,4 +809,42 @@ test('D5 cleanup whose tombstone initially fails is queued and resumes on reconn
 
 test('D9 deleting a reply before a later pending user preserves that user turn for Retry',async()=>{
  const h=await setup();await h.api.addMessage('s',{role:'user',content:'First'});const old=await h.api.addMessage('s',{role:'assistant',content:'Old reply'}),user=await h.api.addMessage('s',{role:'user',content:'Pending next action'});await h.api.deleteMessage('s',old.id,old.order);const reply=await h.api.addMessage('s',{role:'assistant',content:'Pending reply'});assert.equal(reply.narratorTurn,user.narratorTurn);
+});
+
+function discoveryChunk(h,id,firstOrder,lastOrder,messages) {
+  h.documents.set(h.sessionPath+'/messageChunks/'+id,{firstOrder,lastOrder,messages,count:messages.length});
+}
+
+test('F8 server discovery finds a committed reply in an older chunk after active rollover',async()=>{
+  const h=await setup();
+  discoveryChunk(h,'older',1,100,[{id:'paid',order:100,role:'assistant',content:'Paid reply'}]);
+  discoveryChunk(h,'active',101,200,[{id:'other-device',order:200,role:'assistant',content:'Later reply'}]);
+  Object.assign(h.documents.get(h.sessionPath),{activeChunkId:'active',nextOrder:200});
+  const before=h.reads.documents;
+  const found=await h.api.findSavedMessage('s','paid',100);
+  assert.equal(found.content,'Paid reply');assert.equal(found.order,100);
+  assert.equal(h.reads.documents-before,2,'range starts inclusively at the original minimum order');
+  assert.equal(h.transactions.length,0,'discovery performs no writes');
+});
+
+test('F8 old pending replies without a minimum order search only the last three chunks',async()=>{
+  const h=await setup();
+  for(let i=0;i<5;i++)discoveryChunk(h,'chunk'+i,i*100+1,i*100+100,[{id:'reply'+i,order:i*100+1,role:'assistant',content:'Reply '+i}]);
+  const before=h.reads.documents;
+  assert.equal((await h.api.findSavedMessage('s','reply2')).content,'Reply 2');
+  assert.equal(h.reads.documents-before,3);
+  assert.equal(await h.api.findSavedMessage('s','reply0'),null);
+  assert.equal(h.transactions.length,0);
+});
+
+test('F8 overwrite discovery reads the chunk containing the known original order',async()=>{
+  const h=await setup();
+  discoveryChunk(h,'original',1,100,[{id:'regenerated',order:100,role:'assistant',content:'Already overwritten'}]);
+  discoveryChunk(h,'newer',101,200,[{id:'later',order:101,role:'assistant',content:'Later'}]);
+  const before=h.reads.documents;
+  const found=await h.api.findSavedMessage('s','regenerated',100,{overwrite:true});
+  assert.equal(found.content,'Already overwritten');assert.equal(found.order,100);
+  assert.equal(h.reads.documents-before,1);
+  assert.equal(await h.api.findSavedMessage('s','unsaved',100,{overwrite:true}),null);
+  assert.equal(h.transactions.length,0);
 });

@@ -131,8 +131,8 @@ function render(listEl, sessions) {
       if (state.sessionId === s.id && !setSession(null)) { toast('Wait for the reply to finish.');return; }
       delBtn.disabled=true;
       try {
-        forgetChatSession(s.id);
         await deleteSession(s.id);
+        forgetChatSession(s.id);
       } catch (error) {
         toast('Delete did not finish: '+friendlyError(error)+(error.deletionPending ? ' It will resume after reconnecting.' : ' Try again.'));
       } finally {delBtn.disabled=false;}

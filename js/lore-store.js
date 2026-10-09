@@ -1,3 +1,4 @@
+import { minOf, maxOf } from './math-utils.js';
 import { limitSkippedNotes } from './memory-skipped.js';
 import { assertStory } from './errors.js';
 import { assertSource, noteNeedsReview, sectionMeta, assertExtractionSource } from './continuity.js';
@@ -152,13 +153,21 @@ async function batches(sid,writes,{ preserveTimestamps = false, source = null } 
 }
 function millisOf(value) {
   if(value?.toMillis)return value.toMillis();
-  if(value?.seconds!=null)return value.seconds*1000;
+  if((value?.seconds ?? value?._seconds)!=null)return (value.seconds ?? value._seconds)*1000;
   if(value instanceof Date)return value.getTime();
   const result=typeof value==='number' ? value : Date.parse(value);return Number.isFinite(result) ? result : null;
 }
-function earliestSource(...cards) {
-  const orders=cards.flatMap(e=>Object.values(e?.sections ?? {}).flatMap(s=>(s.lines ?? []).map(l=>Number(l.src)).filter(n=>Number.isFinite(n) && n>0)));
-  return orders.length ? Math.min(...orders) : 0;
+function lostSource(current,restored) {
+  let maxRestored=0,lost=null;
+  for(const section of Object.values(restored?.sections ?? {}))for(const line of section.lines ?? []) {
+    const order=Number(line.src);
+    if(Number.isFinite(order) && order>maxRestored)maxRestored=order;
+  }
+  for(const section of Object.values(current?.sections ?? {}))for(const line of section.lines ?? []) {
+    const order=Number(line.src);
+    if(Number.isFinite(order) && order>maxRestored && (lost==null || order<lost))lost=order;
+  }
+  return lost;
 }
 async function restoreBackupImpl(sid,id,_currentEntries) {
   const group=await loadBackupGroup(sid,id);
@@ -172,9 +181,10 @@ async function restoreBackupImpl(sid,id,_currentEntries) {
     if(restored)guardSize(restored);
     backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,current.exists() ? [{id:cardId,...current.data()}] : [],!current.exists() && restored ? [cardId] : [],sequence);
     if(restored)tx.set(target,clean({id:cardId,...restored}));else tx.delete(target);
-    const restoredAt=millisOf(restored?.updatedAt) ?? Math.min(...group.map(b=>b.createdMs ?? 0));
+    const restoredAt=millisOf(restored?.updatedAt) ?? minOf(group.map(b=>b.createdMs ?? 0));
     const lastUpdate=millisOf(session.memoryState?.lastUpdateAt);
-    if(lastUpdate!=null && restoredAt<lastUpdate)tx.update(sessionRef(sid),{'memoryState.needsRebuild':true,'memoryState.rebuildFromOrder':Math.min(session.memoryState?.rebuildFromOrder ?? Infinity,earliestSource(currentData,restored))});
+    const lost=lostSource(currentData,restored);
+    if(lastUpdate!=null && restoredAt<lastUpdate && lost!=null)tx.update(sessionRef(sid),{'memoryState.needsRebuild':true,'memoryState.rebuildFromOrder':Math.min(session.memoryState?.rebuildFromOrder ?? Infinity,lost)});
   });
 }
 async function deleteEntryImpl(sid,entry) {
@@ -295,7 +305,7 @@ async function removeDeletedLinesImpl(sid,entries,_callerOrders,shownCount) {
   const history = await getMessages(sid.id);
   if (sid.uid !== currentUid()) throw new Error('Account changed; this memory action was cancelled.');
   const orders = new Set(history.map(m => Number(m.order)).filter(Number.isFinite));
-  const maxOrder = Math.max(0,...orders);
+  const maxOrder = Math.max(0,maxOf(orders));
   const deleted = l => l.src != null && Number(l.src) <= maxOrder && !orders.has(Number(l.src));
   // Count current server cards, including notes that arrived after the view opened.
   const cards = await Promise.all(entries.map(e => getDocFromServer(ref(sid,e.id))));
@@ -316,13 +326,29 @@ async function removeDeletedLinesImpl(sid,entries,_callerOrders,shownCount) {
   });return base.id;
 }
 async function removeReviewedLinesImpl(sid,entries,fromOrder,throughOrder) {
-  const affected=entries.filter(e=>Object.values(e.sections).some(s=>(s.lines ?? []).some(l=>l.needsReview && !['user','import'].includes(l.by) && l.src!=null && l.src>=fromOrder && l.src<=throughOrder)));
+  const removable=l=>l.needsReview && !['user','import'].includes(l.by) && l.src!=null && l.src>=fromOrder && l.src<=throughOrder;
+  const affected=entries.filter(e=>Object.values(e.sections).some(s=>(s.lines ?? []).some(removable)));
   if(!affected.length)return null;
-  const backup=await writeBackupImpl(sid,'rebuild-cleanup','Removed unreproduced notes',affected);
-  await storyTransaction(sid,async tx=>{
-    const cards=await Promise.all(affected.map(e=>tx.get(ref(sid,e.id))));
-    for(const card of cards){if(!card.exists())continue;const data=card.data();for(const section of Object.values(data.sections))section.lines=(section.lines ?? []).filter(l=>!(l.needsReview && !['user','import'].includes(l.by) && l.src!=null && l.src>=fromOrder && l.src<=throughOrder));tx.update(ref(sid,card.id),{sections:data.sections,updatedAt:serverTimestamp()});}
-  });return backup;
+  await ensureBackupIndex(sid);const base=backupBase('rebuild-cleanup','Removed unreproduced notes');
+  let changed=0;
+  for(const [sequence,e] of affected.entries()) {
+    try {
+      const removed=await storyTransaction(sid,async tx=>{
+        const target=ref(sid,e.id),card=await tx.get(target),index=await tx.get(backupIndexRef(sid));
+        if(!card.exists())return false;
+        const data=card.data();
+        if(!Object.values(data.sections ?? {}).some(s=>(s.lines ?? []).some(removable)))return false;
+        backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,[{id:e.id,...card.data()}],[],sequence);
+        for(const section of Object.values(data.sections ?? {}))section.lines=(section.lines ?? []).filter(l=>!removable(l));
+        tx.update(target,{sections:data.sections,updatedAt:serverTimestamp()});
+        return true;
+      });
+      if(removed)changed++;
+    } catch(error) {
+      throw new Error('Removed notes from '+changed+' of '+affected.length+' cards. Undo in Backups restores those '+changed+'.',{cause:error});
+    }
+  }
+  return base.id;
 }
 async function deleteLoreTreesImpl(sid) { for (const name of ['lore','loreBackups','loreMeta']) { const snap = await getDocsFromServer(root(sid,name)); for (let i=0;i<snap.docs.length;i+=450) await storyTransaction(sid,async tx=>{for (const d of snap.docs.slice(i,i+450)) tx.delete(d.ref);}); } }
 

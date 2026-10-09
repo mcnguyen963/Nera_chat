@@ -72,9 +72,12 @@ export async function mergeDefaults(data) {
   for (const key of PROMPT_KEYS) {
     const saved=data?.[key];
     if (typeof saved!=='string' || saved===DEFAULT_SETTINGS[key]) {merged[key]=DEFAULT_SETTINGS[key];continue;}
-    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(saved));
-    const hash=Array.from(new Uint8Array(digest),byte => byte.toString(16).padStart(2,'0')).join('');
-    if (legacyHashes.get(key)?.has(hash)) merged[key]=DEFAULT_SETTINGS[key];
+    const variants=new Set([saved,saved.replace(/\r\n/g,'\n').replace(/\n$/,'').trimEnd()]);
+    for(const value of variants){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
+      const hash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+      if(legacyHashes.get(key)?.has(hash)){merged[key]=DEFAULT_SETTINGS[key];break;}
+    }
   }
   return merged;
 }

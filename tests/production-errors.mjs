@@ -9,3 +9,11 @@ test('R1 maps database failures and throttles global errors while retaining twen
 test('D4 missing and tombstoned story guards fail closed',async()=>{const e=await appHarness()('errors.js');for(const s of [null,undefined,{deleting:true}])assert.throws(()=>e.assertStory(s),x=>x.name==='StoryDeleted');assert.equal(e.assertStory({historyRevision:1}).historyRevision,1);});
 test('P1 diagnostics whitelist excludes account keys and story text',async()=>{const v=await appHarness()('version.js');const d=v.diagnostics({sessionId:'s',settings:{apiKey:'SECRET'},session:{content:'STORY',memoryState:{failureStreak:2,lastError:'STORY SECRET'}}},{version:{sha:'abcd',builtAt:'today'},agent:'Test'});assert.doesNotMatch(JSON.stringify(d),/SECRET|STORY/);assert.equal(d.memory.failureStreak,2);});
 test('P1 manifest full SHA equals the running short stamp',async()=>{const v=await appHarness()('version.js');assert.equal(v.versionChanged('12345678','12345678'.padEnd(40,'a')),false);assert.equal(v.versionChanged('12345678','87654321'.padEnd(40,'b')),true);});
+test('E9 ResizeObserver loop notices warn without global toast or diagnostics',async()=>{
+ const warnings=[],handlers={},shown=[];
+ const e=await appHarness({globals:{console:{warn:message=>warnings.push(message)}}})('errors.js');
+ e.installErrorHandlers({target:{addEventListener:(t,f)=>handlers[t]=f},show:text=>shown.push(text)});
+ for(const message of ['ResizeObserver loop limit exceeded','ResizeObserver loop completed with undelivered notifications.'])handlers.error({message,error:Error(message)});
+ assert.equal(warnings.length,2);assert.equal(shown.length,0);assert.equal(e.recentErrors().length,0);
+ handlers.error({message:'Ordinary failure',error:Error('Ordinary failure')});assert.equal(shown.length,1);
+});

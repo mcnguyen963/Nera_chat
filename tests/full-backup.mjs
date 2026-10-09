@@ -14,7 +14,8 @@ async function setup(changed = false) {
   let reads = 0;
   const context = vm.createContext({ console });
   const module = new vm.SourceTextModule(await readFile(new URL('../js/import-export.js', import.meta.url), 'utf8'), { context });
-  await module.link(specifier => {
+  await module.link(async specifier => {
+    if(specifier==='./math-utils.js')return new vm.SourceTextModule(await readFile(new URL('../js/math-utils.js',import.meta.url),'utf8'),{context});
     const exports = specifier.includes('sessions') ? {
       createSession() {}, getSession() {}, updateSession(){}, deleteSession(){},listSessions:async()=>[], getSessionFromServer: async () => {
         reads++;

@@ -7,3 +7,36 @@ test('D5 import publishes only after chunks and normalized lore; no imported rev
 test('D5 failed import stays unpublished and requests resumable cleanup',async()=>{const h=await setup({fail:true});await assert.rejects(h.api.importSillyTavern(file()),/write failed/);assert.deepEqual(h.calls.map(c=>c[0]),['create','chunks','delete']);});
 test('R4 null lines are skipped and files over twenty MB rejected before reading',async()=>{const h=await setup();assert.equal(h.api.parseSillyTavernJsonl('null\n'+JSON.stringify({mes:'Hi',is_user:true})).messages.length,1);let read=false;await assert.rejects(h.api.importSillyTavern({size:21*1024*1024,text:async()=>{read=true;}}),/20 MB/);assert.equal(read,false);});
 test('P2 account download contains every story, reports progress and cancels without a download',async()=>{const h=await setup(),progress=[];h.sessions.push({id:'b',title:'B'});assert.equal(await h.api.exportAllStories({onProgress:p=>progress.push(p)}),2);const download=h.calls.at(-1);assert.equal(download[0],'download');assert.equal((download[1].match(/neraStorySeparator/g) ?? []).length,2);assert.equal(progress.at(-1).done,2);const controller=new AbortController();h.calls.length=0;await assert.rejects(h.api.exportAllStories({signal:controller.signal,onProgress:()=>controller.abort()}),e=>e.name==='AbortError');assert.equal(h.calls.length,0);});
+
+const importFile=(records)=>({name:'mixed.jsonl',size:500,text:async()=>records.map(record=>JSON.stringify(record)).join('\n')});
+test('E5 mixed Nera and plain message orders reset imported extraction progress',async()=>{
+ const h=await setup();
+ await h.api.importSillyTavern(importFile([
+  {character_name:'Mixed',nera:{version:2,session:{memoryState:{extractedThroughOrder:40}}}},
+  {mes:'Nera narration.',nera:{message:{id:'a',role:'assistant',order:40}}},
+  {mes:'Plain new input.',is_user:true},
+ ]));
+ assert.equal(h.calls.find(c=>c[0]==='publish')[2].memoryState.extractedThroughOrder,0);
+});
+test('E5 fully ordered Nera imports preserve and clamp extraction progress',async()=>{
+ for (const [pointer,expected] of [[35,35],[90,40],[null,null]]) {
+  const h=await setup();
+  await h.api.importSillyTavern(importFile([
+   {character_name:'Ordered',nera:{version:2,session:{memoryState:{extractedThroughOrder:pointer}}}},
+   {mes:'Input.',nera:{message:{id:'u',role:'user',order:39}}},
+   {mes:'Narration.',nera:{message:{id:'a',role:'assistant',order:40}}},
+  ]));
+  assert.equal(h.calls.find(c=>c[0]==='publish')[2].memoryState.extractedThroughOrder,expected);
+ }
+});
+test('E13 reserved Firestore lore ids are regenerated without changing card names or text',async()=>{
+ const use=appHarness(),{normalizeLoreEntry,fromJson}=await use('lore-format.js');
+ for (const id of ['__x__','__init__','.','..','bad/id']) {
+  const source={id,book:'characters',name:'__init__',sections:{notes:{text:'Preserve this note.'}}};
+  const normalized=normalizeLoreEntry(source);
+  assert.notEqual(normalized.id,id);assert.match(normalized.id,/^lore_/);
+  assert.equal(normalized.name,'__init__');assert.equal(normalized.sections.notes.text,'Preserve this note.');assert.equal(source.id,id);
+  const parsed=fromJson(JSON.stringify({version:2,characters:[],entries:[source]}));assert.notEqual(parsed.entries[0].id,id);
+ }
+ assert.equal(normalizeLoreEntry({id:'safe-card',book:'characters',name:'Mira'}).id,'safe-card');
+});

@@ -20,7 +20,7 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
 }
 export function normalizeLoreEntry(e){
       if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
-      const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
+      const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
         const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
         if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');

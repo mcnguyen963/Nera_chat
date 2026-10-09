@@ -83,6 +83,12 @@ export async function chatCompletion(options) {
   try {
     if(controller.signal.aborted)rejectAbort();
     return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{content+=t;options.onDelta?.(t);},onReasoning:t=>{thinking+=t;options.onReasoning?.(t);}}),aborted]);
+  } catch(error) {
+    if(!controller.signal.aborted && !error.partial) {
+      error.partial={content,thinking};
+      error.aborted='dropped';
+    }
+    throw error;
   } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
 }
 

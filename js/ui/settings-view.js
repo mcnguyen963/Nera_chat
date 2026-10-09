@@ -110,7 +110,7 @@ export function initSettingsView() {
   input("btn-import-st").addEventListener("click", () => input("file-import-st").click());
   input("file-import-st").addEventListener("change", handleImport);
   input("btn-export-st").addEventListener("click", handleExport);
-  input('btn-export-full').addEventListener('click',async()=>{const b=input('btn-export-full');if(b.disabled || !state.sessionId)return;b.disabled=true;try{await storyTransfer.exportFullBackup(state.sessionId);feedback('Full backup exported ✓');}catch(error){feedback('Export failed: '+error.message,true);}finally{b.disabled=false;}});
+  input('btn-export-full').addEventListener('click',async()=>{if(state.busy){feedback('Finish the current turn first',true);return;}const b=input('btn-export-full');if(b.disabled || !state.sessionId)return;b.disabled=true;try{await storyTransfer.exportFullBackup(state.sessionId);feedback('Full backup exported ✓');}catch(error){feedback('Export failed: '+error.message,true);}finally{b.disabled=false;}});
   document.addEventListener("session-changed", (event) => {
     if (!el.overlay.classList.contains("hidden") && (panel === "story" || panel === "memory") && (sessionId !== state.sessionId || !sessionDirty())) fillSession(event);
   });

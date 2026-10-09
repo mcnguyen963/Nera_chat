@@ -1,3 +1,4 @@
+import { minOf, maxOf } from './math-utils.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
 import { SCENE_RULE, latestScene, sceneTimeline, readSceneOutput } from './scene.js';
@@ -7,6 +8,7 @@ import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemo
 import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
 import { CONTINUITY_RULE, usableLore, revisionOf, effectivelyPaused } from './continuity.js';
 import {MESSAGE_FRAME_TOKENS as FRAME,requestInputLimit} from './request-budget.js';
+import { stripTurnStamps } from './story-text.js';
 function stripOcc(content) {
   const cleaned=content.replace(/<\s*(?:OOC|OCC)\b[^>]*>[\s\S]*?<\/\s*(?:OOC|OCC)\s*>/gi,'').replace(/<\s*(?:OOC|OCC)\b[^>]*>[^\n]*|<\/\s*(?:OOC|OCC)\s*>/gi,'');
   return cleaned.trim() ? cleaned : content;
@@ -36,9 +38,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const checkpoint = summary ? (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0) : 0;
   if (summary) {
     // Render old summaries without changing their persisted provenance or content.
-    const narratorSummary = summary.content
+    const narratorSummary = stripTurnStamps(summary.content
+      .replace(/^#{1,4}\s*Last established situation.*$/gmi, () => renderLoreLabel('oldSummarySituation'))
       .replace(/\*\*Last established situation[^*]*\*\*:?/gi, () => renderLoreLabel('oldSummarySituation'))
-      .replace(/\bT\d{1,5}\b|\bTurn\s+\d+\b/gi, '');
+    );
     const content = renderPrompt(prompts.historicalSummary, { SUMMARY: narratorSummary });
     summaryText=content; blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content) });
   }
@@ -154,7 +157,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   }
   if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
     const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];
-    for(let k=Math.floor((Math.min(...ts)-1)/mem.batchTurns);k*mem.batchTurns+1<=Math.max(...ts);k++)starts.push(k*mem.batchTurns+1);
+    for(let k=Math.floor((minOf(ts)-1)/mem.batchTurns);k*mem.batchTurns+1<=maxOf(ts);k++)starts.push(k*mem.batchTurns+1);
     for (const start of starts) {
       const aligned = candidates.filter(m => turns.turnById.get(m.id) >= start);
       if (!recentRaw.slice(targetStart).every(m => required.has(m.id) || aligned.some(a => a.id === m.id))) continue;
