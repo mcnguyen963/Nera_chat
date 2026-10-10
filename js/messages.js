@@ -417,15 +417,15 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
 export async function editMessage(sessionId, messageId, content, order, metadata = {}) {
   const { expectedRevision,...replacementMetadata } = metadata;
   const tokenCount = await countTokens(content);
-  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,truncated:false,...(message.acceptance==='pending' ? {scene:message.sceneCandidate?.scene ?? message.scene,sceneMeta:message.sceneCandidate?.sceneMeta ?? message.sceneMeta,sceneCandidate:null,acceptance:'accepted'} : {}),reviewWarnings:[],...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
+  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,lastContinuation:null,truncated:false,...(message.acceptance==='pending' ? {scene:message.sceneCandidate?.scene ?? message.scene,sceneMeta:message.sceneCandidate?.sceneMeta ?? message.sceneMeta,sceneCandidate:null,acceptance:'accepted'} : {}),reviewWarnings:[],...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
   return { tokenCount,...result };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false,sceneMeta = null,sceneCandidate = null,acceptance,reviewWarnings = [],truncated = false }, order, sessionUpdate = {}, expectedSource = null) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false,sceneMeta = null,sceneCandidate = null,acceptance,reviewWarnings = [],truncated = false,lastContinuation = null,responseDiagnostics = null }, order, sessionUpdate = {}, expectedSource = null) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   const result = await changeMessage(sessionId,messageId,order,message => {
     const {editedAt,acceptance:oldAcceptance,reviewWarnings:oldWarnings,sceneCandidate:oldCandidate,truncated:oldTruncated,...rest}=message;
-    return {...rest,content,thinking:thinking ?? null,planThread,planBefore,scene,ooc,tokenCount,sceneMeta,
+    return {...rest,lastContinuation,responseDiagnostics,content,thinking:thinking ?? null,planThread,planBefore,scene,ooc,tokenCount,sceneMeta,
       ...(acceptance!==undefined ? {acceptance,reviewWarnings,sceneCandidate} : {}),...(truncated || oldTruncated ? {truncated} : {})};
   },sessionUpdate,expectedSource,true);
   return { tokenCount,...result };
@@ -439,7 +439,7 @@ export async function updateMessageScene(sessionId, messageId, order, scene, pri
   if (String(scene ?? '').length > 2000) throw new Error('The scene line exceeds 2000 characters. Shorten it before saving.');
   const raw = scene?.trim() ? canonicalScene(scene) : null;
   if (scene?.trim() && !raw) throw new Error('Could not read that scene. Use: date: … · time: … · place: … · present: …');
-  return changeMessage(sessionId, messageId, order, message => ({ ...message, scene:raw,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }));
+  return changeMessage(sessionId, messageId, order, message => ({ ...message,lastContinuation:null, scene:raw,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }));
 }
 
 export function acceptMessage(sessionId,messageId,order,expectedRevision) {

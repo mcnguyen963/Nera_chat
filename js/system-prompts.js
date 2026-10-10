@@ -1,5 +1,6 @@
 // Prompt text lives only in Markdown. Resolve relative to this module for Pages subpaths.
 const files = {
+  "continue": "continue.md",
   "rewrite": "rewrite.md",
   "memoryExtractionFrame": "memory-extraction-frame.md",
   "loreLabels": "lore-labels.md",

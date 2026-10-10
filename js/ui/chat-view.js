@@ -1,3 +1,4 @@
+import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
 import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
 import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
@@ -575,7 +576,7 @@ function subscribeChat(sessionId) {
           session.longTermPlan !== previous.longTermPlan || JSON.stringify(session.memory) !== JSON.stringify(previous.memory) || JSON.stringify(session.memoryState) !== JSON.stringify(previous.memoryState)) {
         document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
       }
-      syncLore(); rememberMemoryStory();
+      syncLore(); rememberMemoryStory();updateRewriteControls();
       if(JSON.stringify([previous?.memory,previous?.memoryState,previous?.loreRevision])!==JSON.stringify([session?.memory,session?.memoryState,session?.loreRevision]))document.dispatchEvent(new CustomEvent('memory-refresh'));
       if (JSON.stringify(previous?.memory) !== JSON.stringify(session?.memory)) { invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator(); }
       queueCacheSave();
@@ -675,9 +676,10 @@ async function ensureHistory(forceServer = false) {
     throw new Error('History is updating repeatedly. Try again after the current writes finish.');
   })().finally(() => {
     // A session switch can start another read before this one settles.
-    if (historyLoading === pending) historyLoading = null;
+    if (historyLoading === pending) {historyLoading = null;updateRewriteControls();}
   });
   historyLoading = pending;
+  updateRewriteControls();
   return pending;
 }
 
@@ -737,6 +739,7 @@ function renderMessages(msgs) {
   ) ?? null;
   for (let i = visible.length - 1; i >= 0; i--) {
     const m = visible[i];
+    if(streamState?.continuationId===m.id && !streamState.saveCompleted){anchor=streamState.wrap;continue;}
     let entry = renderedMessages.get(m.id);
     const turnLabel=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) : null;
     const sceneState=timeline.get(m.id),renderedScene=sceneState?.effective;
@@ -773,6 +776,7 @@ function renderMessages(msgs) {
     refreshPetPlacement();
   } else if (sticky) scrollToEnd();
   queueCacheSave();
+  updateRewriteControls();
 }
 
 export function sameRenderedMessage(a,b) {
@@ -1104,10 +1108,11 @@ async function regenerateMessage(message) {
       throw new Error("Only the latest, unsummarized reply can be regenerated. Later story turns depend on older replies.");
     }
     assertActive(token);
-    await runAssistantTurn({
-      reconciled:true,messages: all, upToOrder: message.order, overwriteId: message.id,
-
-    },token);
+    const target=all.find(m=>m.id===message.id);
+    if(target.lastContinuation!=null) {
+      const prefix=continuationPrefix(target);
+      await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:prefix,overwriteId:target.id},token);
+    } else await runAssistantTurn({reconciled:true,messages:all,upToOrder:target.order,overwriteId:target.id},token);
   } catch (err) {
     if(!(err instanceof StaleTurn))showTransientError(err);
   } finally {releaseBusy(token);}
@@ -1124,16 +1129,35 @@ function clearOriginalDraft() {
 
 function updateRewriteControls() {
   if (!el.rewriteBtn) return;
-  el.rewriteBtn.textContent = rewriteController ? "Stop" : "Rewrite";
-  el.rewriteBtn.disabled = !rewriteController && (busy || state.busy || !session || !!editingState || !el.input.value.trim());
+  const empty=!el.input.value.trim();
+  let eligible=false;
+  try { if(session) {continuationTarget(session,lastMessages);eligible=true;} } catch {}
+  el.rewriteBtn.textContent = rewriteController ? "Stop" : empty ? "Continue" : "Rewrite";
+  el.rewriteBtn.disabled = !rewriteController && (busy || state.busy || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))));
   el.restoreDraftBtn.disabled = busy;
   el.input.readOnly = !!rewriteController;
   el.restoreDraftBtn.hidden = originalDraft === null;
 }
 
+async function handleContinue() {
+  if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))return;
+  const sid=state.sessionId;
+  if(loreWritesPending())await waitForLoreWrites();
+  if(busy || editingState || sid!==state.sessionId)return;
+  const token=acquireBusy('continue');if(!token)return;
+  try {
+    await reconcileStory(token);assertActive(token);
+    const all=await ensureHistory();assertActive(token);
+    const target=continuationTarget(session,all);
+    await runAssistantTurn({reconciled:true,continuationId:target.id,overwriteId:target.id},token);
+  }catch(error){if(!(error instanceof StaleTurn))showTransientError(error);}
+  finally{releaseBusy(token);}
+}
+
 async function handleRewrite() {
   if (rewriteController) { rewriteController.abort(); return; }
-  if (busy || state.busy || !session || editingState || !el.input.value.trim()) return;
+  if (busy || state.busy || !session || editingState) return;
+  if(!el.input.value.trim()){await handleContinue();return;}
   const settings = effectiveActiveSettings();
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in Settings first.");
@@ -1261,19 +1285,27 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const vibration=createStreamVibration(settings.streamVibrationMode ?? 'spaces');
   const petTurn = startPetTurn();
-  let maintenanceUsed = false;
+  let maintenanceUsed = false,turnStream=null;
   try {
     if(!opts.reconciled)await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     if (opts.expectLatestUserId) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
       if (latest?.role !== 'user' || latest.id !== opts.expectLatestUserId) throw new Error('The latest story turn changed. Review it before retrying.');
     }
+    if(!settings.modelId || !settings.apiKey)throw new Error('Set your API key and Model ID in Settings first.');
     let sourceMessages = structuredClone(historyMessages);
+    let prefix=null;
+    if(opts.continuationId) {
+      const target=continuationTarget(session,sourceMessages,opts.continuationId);
+      prefix=opts.continuationPrefix ?? target;
+      sourceMessages=sourceMessages.map(m=>m.id===target.id ? prefix : m);
+      opts={...opts,upToOrder:undefined};
+    }
     let sourceSession = structuredClone(session);
     if(settings._storySettingsRevision!=null)sourceSession.storySettingsRevision=settings._storySettingsRevision;
     let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
-    startStreamUI();
+    startStreamUI(prefix);turnStream=streamState;
     let result,stopReason=null;
     try {
       result=await chatCompletion({ settings,messages:built.apiMessages,allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
@@ -1294,8 +1326,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     let planThread=sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
     if (truncated && !clean) throw new Error('The output limit left no narrative reply. Raise Max response tokens or lower the reasoning budget.');
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
-    const userText=normalizeAdDirective(sourceMessages.filter(m => m.role==='user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
-    const inputKind=classifyUserInput(userText),ooc=inputKind==='ooc' || inputKind==='question' && !out.scene;
+    const userText=opts.continuationId ? '' : normalizeAdDirective(sourceMessages.filter(m => m.role==='user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
+    const inputKind=classifyUserInput(userText),ooc=opts.continuationId ? false : inputKind==='ooc' || inputKind==='question' && !out.scene;
     const prior=latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
     let acceptedScene={scene:null,sceneMeta:null},sceneWarning=null;
     if (sceneEnabled && !ooc) {
@@ -1320,13 +1352,20 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       ...(acceptedScene.warnings ?? []),...(out.count > 1 ? ['Several scene tags; the last one was used.'] : []),
       ...(sceneWarning ? [sceneWarning] : []),
       ...(acceptedScene.sceneMeta?.kind==='carried' ? ['No scene tag; previous scene carried.'] : [])] : [];
-    const message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
+    let message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
       scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
       responseDiagnostics:{finishReason:result.originalFinishReason ?? finishReason,classification:result.failureClassification ?? null,error:result.originalError ?? null},
       ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
+    if(prefix) {
+      if(!sceneEnabled || acceptedScene.sceneMeta?.kind==='carried') {
+        message.scene=prefix.scene ?? null;message.sceneMeta=prefix.sceneMeta ?? null;
+      }
+      if(!planThread)message.planThread=prefix.planThread ?? null;
+      message=appendContinuation(prefix,message);
+    }
     updatePetPhase('saving',petTurn);
     let saved;
-    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:opts.upToOrder ?? null,sourceRevision:sourceSession.historyRevision ?? 0};
+    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:prefix?.order ?? opts.upToOrder ?? null,continuation:!!prefix,sourceRevision:sourceSession.historyRevision ?? 0};
     if(streamState)streamState.savedId=pendingReply.id;
     try {
       const result=await saveNarration(pendingReply);
@@ -1340,7 +1379,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       const key=unsavedKey(pendingReply.owner,sid);unsavedRevisions.set(key,(unsavedRevisions.get(key) ?? 0)+1);
       unsavedReplies.set(key,pendingReply);
       void storeUnsavedReply(pendingReply.owner,sid,pendingReply);
-      streamState?.wrap.remove();streamState=null;renderUnsavedReply();finishPetTurn('ready',petTurn);
+      restoreStreamUI();renderUnsavedReply();finishPetTurn('ready',petTurn);
       showTransientInfo('Reply not saved. Your text is available below — Save again or Copy.');
       return;
     }
@@ -1376,11 +1415,12 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
 
   } catch (err) {
     if(err instanceof StaleTurn)return;
-    finishPetTurn('blocked',petTurn); streamState?.wrap.remove(); streamState = null; refreshPetPlacement(); clampListScroll(); showTransientError(err);
-  } finally {vibration.stop();if(ownsToken)releaseBusy(token);}
+    finishPetTurn('blocked',petTurn); restoreStreamUI(); refreshPetPlacement(); clampListScroll(); showTransientError(err);
+  } finally {vibration.stop();if(streamState===turnStream && streamState?.continuationId && !streamState.saveCompleted)restoreStreamUI();if(ownsToken)releaseBusy(token);}
 }
 
 async function saveNarration(reply,asNew=false) {
+  if(asNew && reply.continuation)throw new Error('A continuation must replace its original reply.');
   const expectedSource={historyRevision:reply.sourceRevision};
   if(reply.overwriteId && !asNew){
     const result=await messagesApi.overwriteMessage(reply.sid,reply.overwriteId,reply.message,reply.order,{},expectedSource);
@@ -1394,7 +1434,7 @@ async function saveNarration(reply,asNew=false) {
 function clearUnsaved(owner,sid) {
   const key=unsavedKey(owner,sid);unsavedRevisions.set(key,(unsavedRevisions.get(key) ?? 0)+1);
   unsavedReplies.delete(key);void storeUnsavedReply(owner,sid,null);
-  if(owner===currentUid() && sid===state.sessionId){unsavedNode?.remove();unsavedNode=null;}
+  if(owner===currentUid() && sid===state.sessionId){unsavedNode?.remove();unsavedNode=null;updateRewriteControls();}
 }
 function renderUnsavedReply() {
   unsavedNode?.remove();unsavedNode=null;
@@ -1418,7 +1458,7 @@ function renderUnsavedReply() {
     }catch(error){if(error.name==='HistoryConflict'){reply.conflict=true;void storeUnsavedReply(reply.owner,reply.sid,reply);renderUnsavedReply();}throw error;}
   });
   controls.append(actionBtn('Save again',()=>retry(false)),actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(confirm('Discard this unsaved reply?')){clearUnsaved(reply.owner,reply.sid);updateWelcome();}}));
-  if(reply.conflict)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
+  if(reply.conflict && !reply.continuation)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
   wrap.append(label,body,controls);if(reply.message.thinking)wrap.append(buildThinking(reply.message.thinking));el.list.append(wrap);unsavedNode=wrap;
 }
 
@@ -1560,7 +1600,15 @@ async function handleResetSummary() {
 
 // ---------- streaming UI ----------
 
-function startStreamUI() {
+function restoreStreamUI() {
+  const current=streamState;streamState=null;
+  if(!current)return;
+  if(current.frame)cancelAnimationFrame(current.frame);
+  current.wrap.remove();
+  if(current.continuationId){const entry=renderedMessages.get(current.continuationId);if(entry)entry.message=null;renderMessages(lastMessages);}
+}
+
+function startStreamUI(prefix=null) {
   const wrap = document.createElement("div");
   wrap.className = "msg assistant";
 
@@ -1576,12 +1624,18 @@ function startStreamUI() {
   content.className = "msg-content";
   wrap.append(thinking, content);
 
-  el.list.appendChild(wrap);
+  if(prefix) {
+    const existing=renderedMessages.get(prefix.id)?.node;
+    if(!existing)throw new Error('The continuation reply is no longer visible.');
+    existing.replaceWith(wrap);wrap.dataset.messageId=prefix.id;
+    renderedMessages.get(prefix.id).node=wrap;
+    content.textContent=prefix.content;
+  }else el.list.appendChild(wrap);
   scrollToEnd();
 
   streamState = {
     wrap, thinking, thinkingBody: thinking.querySelector(".thinking-body"), content,
-    thinkingText: "", contentText: "", frame: 0,
+    thinkingText: prefix?.thinking ?? "", contentText: "", prefix:prefix?.content ?? "",continuationId:prefix?.id ?? null, frame: 0,
   };
   updateWelcome();
 }
@@ -1599,7 +1653,7 @@ function appendStream(kind, text) {
       current.frame = 0;
       if (streamState !== current) return;
       const sticky = isNearBottom();
-      current.content.textContent = stripPlan(current.contentText);
+      current.content.textContent = current.prefix ? current.prefix+'\n\n'+stripPlan(current.contentText) : stripPlan(current.contentText);
       current.thinkingBody.textContent = current.thinkingText.slice(-4000);
       if (sticky) scrollToEnd();
     });

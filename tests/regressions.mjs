@@ -1653,3 +1653,75 @@ test('Stale scene confirmation opens carried values and dismissing makes no mode
  h.calls.latestCallbacks.at(-1)({messages:history.map(m=>({...m,content:m.content+' '})),hasEarlier:false});
  const dismiss=root.querySelector('.scene-stale-confirm').querySelectorAll('button').find(b=>b.textContent==='Dismiss');await dismiss.click();assert.equal(root.querySelector('.scene-stale-confirm'),null);assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
 });
+
+async function continueChatHarness({scene=false}={}) {
+  const h=await rewriteChatHarness();
+  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'<OOC>Explain this</OOC>'},{id:'a',order:2,role:'assistant',content:'Saved prefix.  ',thinking:'Earlier thinking',narratorTurn:1,...(scene ? {scene:'date: Day 1 · time: night · place: Inn · present: Nera'} : {})}],hasEarlier:false});
+  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene,sceneFallback:false}})});
+  h.el('chat-input').value='  ';await h.fire('chat-input','input');h.calls.response='New passage.';
+  return h;
+}
+for(const streaming of [false,true])test(`Continue appends without a user write, temporary request only (stream ${streaming})`,async()=>{
+  const h=await continueChatHarness();h.state.settings.streaming=streaming;
+  if(streaming)h.calls.streamLines=['data: {"choices":[{"delta":{"content":"New passage."},"finish_reason":"stop"}]}\n'];
+  assert.equal(h.el('btn-rewrite').textContent,'Continue');assert.equal(h.el('btn-rewrite').disabled,false);
+  await h.fire('btn-rewrite');
+  assert.equal(h.calls.messages.length,0);assert.equal(h.calls.history.length,2);
+  const saved=h.calls.history.at(-1);assert.equal(saved.content,'Saved prefix.  \n\nNew passage.');assert.equal(saved.narratorTurn,1);assert.equal(saved.id,'a');assert.equal(saved.order,2);
+  assert.equal(saved.lastContinuation.contentOffset,'Saved prefix.  '.length);
+  const req=h.calls.requests[0];assert.equal(req.messages.at(-1).role,'user');assert.match(req.messages.at(-1).content,/Continue the latest assistant reply/);assert.equal(req.messages.filter(m=>m.content.includes('Continue the latest assistant reply')).length,1);
+  assert.ok(req.messages.some(m=>m.role==='assistant' && m.content.includes('Saved prefix.')));
+  const builder=await h.use('context-builder.js');const ordinary=await builder.buildContextForRequest({id:'story'},h.state.settings,{messages:h.calls.history});assert.ok(ordinary.apiMessages.every(m=>!m.content.includes('Continue the latest assistant reply')));
+  assert.equal(h.el('btn-rewrite').disabled,false);
+});
+test('Repeated Continue and Regenerate replace only the newest passage',async()=>{
+  const h=await continueChatHarness();await h.fire('btn-rewrite');h.calls.response='Second passage.';await h.fire('btn-rewrite');
+  assert.equal(h.calls.history.at(-1).content,'Saved prefix.  \n\nNew passage.\n\nSecond passage.');
+  h.calls.response='Replacement.';
+  const reply=h.el('message-list').children.find(n=>n.dataset.messageId==='a');
+  await reply.querySelectorAll('button').find(n=>n.textContent==='Regenerate').click();await new Promise(r=>setImmediate(r));
+  assert.equal(h.calls.history.at(-1).content,'Saved prefix.  \n\nNew passage.\n\nReplacement.');assert.equal(h.calls.history.length,2);assert.equal(h.calls.messages.length,0);
+  assert.ok(h.calls.requests.at(-1).messages.some(m=>m.role==='assistant' && m.content.includes('New passage.') && !m.content.includes('Second passage.')));
+});
+test('Continue disables at summary checkpoint, while editing and with non-assistant latest turn',async()=>{
+  const h=await continueChatHarness();h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',breakpointOrder:2})});assert.equal(h.el('btn-rewrite').disabled,true);
+  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:3,role:'user',content:'Waiting'}],hasEarlier:false});assert.equal(h.el('btn-rewrite').disabled,true);
+  h.el('chat-input').value='Rewrite me';await h.fire('chat-input','input');assert.equal(h.el('btn-rewrite').textContent,'Rewrite');assert.equal(h.el('btn-rewrite').disabled,false);
+});
+test('Continue failed save restores prefix and offers no save-as-new action on conflict',async()=>{
+  const h=await continueChatHarness();h.calls.overwriteMessage=async()=>{throw Object.assign(Error('changed'),{name:'HistoryConflict'});};await h.fire('btn-rewrite');
+  assert.equal(h.calls.history.at(-1).content,'Saved prefix.  ');assert.equal(h.el('btn-rewrite').disabled,true);
+  const unsaved=h.el('message-list').children.find(n=>n.className==='msg assistant unsaved');assert.ok(unsaved);const labels=unsaved.children.find(n=>n.className==='msg-actions').children.map(n=>n.textContent);assert.deepEqual(labels,['Save again','Copy','Discard']);
+  assert.ok(h.el('message-list').children.find(n=>n.dataset.messageId==='a'));
+});
+test('Continue uses ending scene rather than interpreting the old OOC directive',async()=>{
+  const h=await continueChatHarness({scene:true});h.calls.response='The candle dims.\n<scene>date: Day 1 · time: night · place: Inn · present: Nera</scene>';await h.fire('btn-rewrite');
+  assert.equal(h.calls.history.at(-1).ooc,false);assert.match(h.calls.history.at(-1).scene,/Inn/);assert.match(h.calls.requests[0].messages.at(-1).content,/scene/i);
+});
+for(const keep of [false,true])test('Continue interrupted output restores or accepts partial '+keep,async()=>{
+ const h=await continueChatHarness();h.state.settings.streaming=true;h.calls.confirm=keep;h.calls.streamLines=['data: {"choices":[{"delta":{"content":"Partial passage"}}]}\n'];await h.fire('btn-rewrite');
+ assert.equal(h.calls.history.at(-1).content,keep ? 'Saved prefix.  \n\nPartial passage' : 'Saved prefix.  ');assert.equal(h.calls.overwrites?.length ?? 0,keep ? 1 : 0);
+ if(keep)assert.equal(h.calls.history.at(-1).truncated,true);
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent===h.calls.history.at(-1).content));
+});
+test('Continue previews inline and restores on Stop',async()=>{
+ const h=await continueChatHarness();h.state.settings.streaming=true;h.calls.confirm=false;
+ let read=0,release,started;const ready=new Promise(r=>started=r);
+ h.calls.streamReader={read:async()=>{if(!read++){return {done:false,value:new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Preview passage"}}]}\n')};}started();return new Promise(r=>release=r);},cancel:async()=>release?.({done:true})};
+ const running=h.fire('btn-rewrite');await ready;
+ assert.equal(h.el('message-list').children.filter(n=>n.className==='msg assistant').length,1);
+ assert.equal(h.el('message-list').querySelector('.msg-content').textContent,'<OOC>Explain this</OOC>');
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Saved prefix.  \n\nPreview passage'));
+ assert.equal(h.el('btn-rewrite').disabled,true);await h.fire('btn-stop');await running;
+ assert.equal(h.calls.overwrites?.length ?? 0,0);assert.equal(h.calls.history.at(-1).content,'Saved prefix.  ');
+});
+test('Continue refuses changed target before provider call and retains proposed output after concurrent revision',async()=>{
+ const h=await continueChatHarness();h.calls.serverHistory=[{id:'later',order:3,role:'user',content:'Later action'}];h.calls.sessionDocs.story.historyRevision=1;await h.fire('btn-rewrite');assert.equal(h.calls.requests.length,0);
+ const other=await continueChatHarness();other.calls.onRequest=()=>{other.calls.historyRevision=1;other.calls.sessionDocs.story.historyRevision=1;};await other.fire('btn-rewrite');assert.equal(other.calls.overwrites?.length ?? 0,0);assert.equal(other.calls.history.at(-1).content,'Saved prefix.  ');assert.ok(other.el('message-list').querySelector('.unsaved'));
+});
+test('Continuation save retry uses the same overwrite and makes no model call; Discard re-enables Continue',async()=>{
+ const h=await continueChatHarness();h.calls.overwriteMessage=async()=>{throw Error('offline');};await h.fire('btn-rewrite');const count=h.calls.requests.length;h.calls.overwriteMessage=null;
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save again').click();assert.equal(h.calls.requests.length,count);assert.equal(h.calls.history.at(-1).content,'Saved prefix.  \n\nNew passage.');assert.equal(h.calls.history.length,2);
+ h.calls.overwriteMessage=async()=>{throw Error('offline');};await h.fire('btn-rewrite');await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Discard').click();
+ assert.equal(h.el('btn-rewrite').disabled,false);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+});
