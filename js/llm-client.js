@@ -9,6 +9,10 @@ export function buildRequestBody(settings, messages) {
     messages,
     max_tokens: settings.maxResponseTokens,
   };
+  const outputPrice = Number(settings.maxOutputPrice);
+  if (/^https:\/\/openrouter\.ai\//i.test(settings.endpoint) && settings.maxOutputPrice !== null && settings.maxOutputPrice !== undefined && settings.maxOutputPrice !== "" && Number.isFinite(outputPrice) && outputPrice >= 0) {
+    body.provider = { max_price: { completion: outputPrice } };
+  }
   if (settings.advancedParametersEnabled) {
     for (const [key, parameter] of [["temperature", "temperature"], ["topP", "top_p"], ["frequencyPenalty", "frequency_penalty"], ["presencePenalty", "presence_penalty"]]) {
       const value = settings[key];
@@ -67,9 +71,15 @@ function checkFinishReason(reason, allowTruncated) {
 }
 
 function serializedRequestBody(settings, messages, stream = false, format = {}) {
-  const body = { ...buildRequestBody(settings, messages), ...(stream ? { stream: true } : {}),
+  const base = buildRequestBody(settings, messages);
+  const provider = format.provider ? { ...base.provider, ...format.provider,
+    ...(base.provider?.max_price || format.provider.max_price ? { max_price:{ ...base.provider?.max_price,...format.provider.max_price } } : {}) } : base.provider;
+  if (base.provider?.max_price?.completion != null && format.provider?.max_price?.completion != null) {
+    provider.max_price.completion = Math.min(base.provider.max_price.completion,format.provider.max_price.completion);
+  }
+  const body = { ...base, ...(stream ? { stream: true } : {}),
     ...(format.responseFormat ? { response_format:format.responseFormat } : {}),
-    ...(format.provider ? { provider:format.provider } : {}) };
+    ...(provider ? { provider } : {}) };
   const serialized = JSON.stringify(body);
   format.onRequest?.(serialized);
   return serialized;

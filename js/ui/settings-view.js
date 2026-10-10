@@ -19,6 +19,7 @@ const el = {};
 const connectionFields = {
   endpoint: "set-endpoint", apiKey: "set-apikey", modelId: "set-model",
   maxResponseTokens: "set-max-resp", temperature: "set-temperature", topP: "set-top-p",
+  maxOutputPrice: "set-max-output-price",
   frequencyPenalty: "set-frequency-penalty", presencePenalty: "set-presence-penalty",
 };
 const contextFields = {
@@ -348,7 +349,7 @@ function resetPanel() {
   capture();
   if (panel === "model") {
     const profile = activeProfile(draft);
-    for (const key of ["streaming", "maxResponseTokens", "advancedParametersEnabled", "temperature", "topP", "frequencyPenalty", "presencePenalty"])
+    for (const key of ["streaming", "maxResponseTokens", "maxOutputPrice", "advancedParametersEnabled", "temperature", "topP", "frequencyPenalty", "presencePenalty"])
       profile[key] = DEFAULT_SETTINGS[key];
     profile.reasoning = structuredClone(DEFAULT_SETTINGS.reasoning);
     draft.streamVibrationMode=DEFAULT_SETTINGS.streamVibrationMode;set('set-stream-vibration',draft.streamVibrationMode);
@@ -412,6 +413,7 @@ function validatedDraft(storyValues=null) {
       }
     }
     profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
+    profile.maxOutputPrice = numberField(profile.maxOutputPrice, "set-max-output-price", 0, Number.MAX_SAFE_INTEGER, true);
     profile.reasoning={...DEFAULT_SETTINGS.reasoning,...profile.reasoning};
     profile.reasoning.maxTokens=normalizeReasoningBudget(profile.reasoning.maxTokens,profile.maxResponseTokens);
     if (profile.reasoning.enabled && profile.reasoning.mode === "max_tokens") {

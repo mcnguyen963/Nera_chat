@@ -210,7 +210,9 @@
                   <label>Streaming vibration<select id="set-stream-vibration"><option value="off">Off</option><option value="speed">Speed</option><option value="spaces">Spaces</option></select></label>
                   <p id="stream-vibration-help" class="muted" hidden>Streaming vibration is not supported by this browser.</p>
                   <label>Max response tokens<input type="text" id="set-max-resp" inputmode="numeric" data-min="1" required /></label>
+                  <label>OpenRouter max output price ($/1M tokens)<input type="text" id="set-max-output-price" inputmode="decimal" placeholder="No cap" /></label>
                 </div>
+                <p class="muted">Optional hard cap for the provider’s completion-token price. OpenRouter will reject routing if no provider is at or below this price. Applies only to OpenRouter endpoints.</p>
                 <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-advanced-enabled" aria-controls="advanced-options" /> Custom sampling parameters</label>
                 <div id="advanced-options" class="hidden">
                   <p class="muted">Leave a field blank to use the provider default.</p>
