@@ -28,10 +28,10 @@ export function usableLore(entries, messages, session, upToOrder = Infinity) {
   const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && noteNeedsReview(entry.statusSource,messages,session,upToOrder) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
     const meta = sectionMeta(s,entry);
     const unavailable = snapshotNeedsReview(s,entry,session,upToOrder);
-    if (unavailable && s.text) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,reason:`${key}: snapshot needs review` });
+    if (unavailable && s.text) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,section:key,text:s.text,reason:`${key}: snapshot needs review` });
     const lines = (s.lines ?? []).filter(l => {
       const stale = noteNeedsReview(l,messages,session,upToOrder);
-      if (stale) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,lineId:l.id,reason:'Needs review: stale or unverified evidence' });
+      if (stale) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,lineId:l.id,section:key,text:l.text,reason:'Needs review: stale or unverified evidence' });
       return !stale;
     });
     return [key,{ ...s,...meta,text:unavailable ? '' : s.text,lines }];

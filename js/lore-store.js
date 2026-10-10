@@ -52,6 +52,10 @@ async function createEntryImpl(sid,entry) { guardSize(entry); const id = entry.i
 export function mergeEntryEdits(current, staged, base) {
   const out = { ...current };
   for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
+  if (cardFingerprint(staged.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) {
+    if (cardFingerprint(current.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) throw new Error('Core references changed while editing. Reopen the card and review again.');
+    out.coreReferences = structuredClone(staged.coreReferences ?? []);
+  }
   out.sections = { ...current.sections };
   for (const [key,section] of Object.entries(staged.sections)) {
     const baseLines = base.sections[key]?.lines ?? [], ids = new Set(baseLines.map(l => l.id));
@@ -216,6 +220,7 @@ async function mergeEntriesImpl(sid,source,target,threadStatus=null) {
       if(s.text){if(!dest.text)dest.text=s.text;else dest.lines.push({id:newLoreId('ln'),text:'From '+from.name+': '+s.text,turn:null,when:null,src:null,by:'user',at:Date.now()});}
       dest.lines.push(...(s.lines ?? []).filter(l=>!dest.lines.some(x=>x.id===l.id)));into.sections[key]=dest;
     }
+    if(from.coreReferences) into.coreReferences=[...new Map([...(into.coreReferences ?? []),...from.coreReferences].map(b=>[b.id,b])).values()];
     if(into.kind==='thread'){if(!['open','closed'].includes(threadStatus))throw new Error('Choose the surviving thread status.');into.status=threadStatus;into.statusSource=null;}
     guardSize(into);
     backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,[{id:source.id,...a.data()},{id:target.id,...b.data()}]);

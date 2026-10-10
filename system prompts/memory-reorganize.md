@@ -14,3 +14,8 @@ T41 [fact] TOPIC | note
 T41 [event] note
 T41 [open] THREAD TITLE | note
 Use only the NAMES, TOPICS and THREAD TITLES given in the notes.
+
+- Preserve distinct behavioral/capability constraints, authority and knowledge boundaries, conditions, attribution, uncertainty, consequential history and current state, even if unrelated to the current scene. Never remove a qualification merely to shorten a note. Obedience does not imply affection.
+- Keep future plans, invitations, conditional trajectories and open possibilities conditional; do not turn them into played events. Preserve resolved-thread status; never reopen a resolved event without evidence of a new development.
+- Keep each note under 400 characters. When splitting information, each note must be independently meaningful, with conditions and negations accompanying the claims they qualify. Preserve source-turn stamps and dates.
+- Never change author-written notes or author text. Never generate or approve core-reference metadata.

@@ -71,6 +71,7 @@ function serializedRequestBody(settings, messages, stream = false, format = {}) 
     ...(format.responseFormat ? { response_format:format.responseFormat } : {}),
     ...(format.provider ? { provider:format.provider } : {}) };
   const serialized = JSON.stringify(body);
+  format.onRequest?.(serialized);
   return serialized;
 }
 
@@ -96,21 +97,21 @@ export async function chatCompletion(options) {
   } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
 }
 
-async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false, kick }) {
+async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated = false, kick }) {
   if (!settings.modelId) throw classified("No model ID set — configure it in Settings.",'configuration');
   if (!settings.endpoint) throw classified("No endpoint set — configure it in Settings.",'configuration');
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated, kick });
+    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, onRequest, allowTruncated, kick });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated, kick });
 }
 
-async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated }) {
+async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, onRequest, allowTruncated }) {
   const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: serializedRequestBody(settings, messages, false, { responseFormat,provider }),
+    body: serializedRequestBody(settings, messages, false, { responseFormat,provider,onRequest }),
     signal,
   });
   if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});
@@ -130,11 +131,11 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated, kick }) {
   const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
-    body: serializedRequestBody(settings, messages, true, { responseFormat,provider }),
+    body: serializedRequestBody(settings, messages, true, { responseFormat,provider,onRequest }),
     signal,
   });
   if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});

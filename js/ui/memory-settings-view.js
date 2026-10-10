@@ -13,7 +13,7 @@ import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
 import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-updater.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
-const booleans = ['scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
+const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
 const seedKeys = ['date','time','place','present'];
 const numbers = ['loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
