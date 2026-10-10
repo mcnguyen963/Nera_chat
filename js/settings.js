@@ -1,3 +1,5 @@
+import {getPref,setPref} from './local-pref.js';
+import { preserveLegacyStorySeed } from './story-settings-store.js';
 import { prompts } from './system-prompts.js';
 import { DEFAULT_MEMORY_EXTRACTION_PROMPT, DEFAULT_MEMORY_REORGANIZE_PROMPT } from './memory-prompts.js';
 import {
@@ -16,14 +18,12 @@ for (const line of prompts.legacyPromptHashes.split('\n')) { const [key,hash]=li
 export function storedSettings(settings) {
   const out=structuredClone(settings);
   for (const key of PROMPT_KEYS) if (out[key]===DEFAULT_SETTINGS[key]) delete out[key];
+  delete out.streamVibrationMode;
   return out;
 }
 const localKey=() => 'nera.settings.local.'+currentUid();
 export function withLocal(settings) {
-  const out=structuredClone(settings);let local;
-  try {local=JSON.parse(localStorage.getItem(localKey()) ?? '{}');} catch {local={};}
-  if (out.profiles?.some(p => p.id===local.profileId)) {out.activeProfileId=local.profileId;mirrorFromActiveProfile(out);}
-  if (local.reasoning) {out.reasoning={...out.reasoning,...local.reasoning};mirrorToActiveProfile(out);}
+  const out=structuredClone(settings);out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
   return out;
 }
 
@@ -200,6 +200,7 @@ export async function loadSettings({ requireServer = false } = {}) {
   state.settingsSource='server';
   if (snap.exists()) {
     const settings = hydrateProfiles(await mergeDefaults(snap.data()));
+    await preserveLegacyStorySeed(settings);
     cacheSettings(settings);
     return withLocal(settings);
   }
@@ -209,6 +210,7 @@ export async function loadSettings({ requireServer = false } = {}) {
   const seed = structuredClone(DEFAULT_SETTINGS);
   hydrateProfiles(seed);
   await setDoc(ref, storedSettings(seed));
+  await preserveLegacyStorySeed(seed);
   cacheSettings(seed);
   return withLocal(seed);
 }
@@ -234,17 +236,6 @@ export function watchSettings() {
   }, (error) => console.error("Failed to sync settings:", error));
 }
 
-// Quick controls are device-local. Only an explicit Settings save writes Firestore.
-export function useLocalSettings(settings) {
-  const snapshot = structuredClone(settings);
-  normalizeProfiles(snapshot);
-  mirrorToActiveProfile(snapshot);
-  try {localStorage.setItem(localKey(),JSON.stringify({profileId:snapshot.activeProfileId,reasoning:snapshot.reasoning}));} catch {}
-  state.settings = snapshot;
-  cacheSettings(snapshot);
-  document.dispatchEvent(new CustomEvent("settings-changed"));
-}
-
 export async function saveSettings(settings) {
   if (state.settingsSaving) throw new Error("A settings save is already in progress. Please try again.");
   state.settingsSaving = true;
@@ -261,6 +252,7 @@ export async function saveSettings(settings) {
     normalizeProfiles(snapshot);
     mirrorToActiveProfile(snapshot);
     await setDoc(userSettingsRef(), storedSettings(snapshot));
+    setPref('nera.streamVibrationMode',snapshot.streamVibrationMode);
     try {localStorage.removeItem(localKey());} catch {}
     state.settings = snapshot;
     cacheSettings(snapshot);

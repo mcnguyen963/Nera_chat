@@ -138,7 +138,10 @@ export function validateSceneValues(raw, { narration = '', userText = '', prior 
   };
   for(const [key,field] of [['date','when'],['time','time']]) {
     const value=parsed[field],needle=normalized(value),previous=prior?.[field];
-    if(!value)provenance[key]='unknown';
+    const declared=key==='time' ? [...timeClassesIn(value ?? '')][0] : null,endClasses=[...timeClassesIn(ending)];
+    const compatible=other=>other===declared || NEIGHBOURS.some(pair=>pair.split(' ').includes(other) && pair.split(' ').includes(declared));
+    if(value && declared && endClasses.length && !endClasses.some(compatible)) {parsed[field]=previous ?? null;provenance[key]='contradicted';warnings.push('Unsupported scene time; explicit ending contradicts the declared clock.');}
+    else if(!value)provenance[key]='unknown';
     else if(normalized(previous)===needle)provenance[key]='prior';
     else if(supports(userText,needle,key==='time'))provenance[key]='user';
     else {

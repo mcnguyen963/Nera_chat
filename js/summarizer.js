@@ -72,7 +72,10 @@ export async function runSummarization(session, settings, opts = {}) {
   try{return await runSummary(session,settings,opts);}finally{summaryRunning.delete(session.id);}
 }
 async function runSummary(session,settings,opts) {
-  session=structuredClone(session);
+  const checkCancelled=()=>{if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});};
+  checkCancelled();
+  session=structuredClone(session);settings=structuredClone(settings);
+  if(settings._storySettingsRevision!=null)session.storySettingsRevision=settings._storySettingsRevision;
   const expectedSource=summarySource(session),all=structuredClone(opts.messages ?? (opts.full ? await getMessages(session.id) : await getCheckpointMessages(session)));
   // The running gate belongs to this call; planning is pure over the captured history.
   const plan=planSummary(session,settings,all,{full:opts.full});
@@ -102,6 +105,7 @@ async function runSummary(session,settings,opts) {
   let offset = 0;
   let part = 0;
   while (offset < toFold.length) {
+    checkCancelled();
     const chunk = [];
     const prefix = running + "New events to fold in:\n";
     const fixedTokens = await countTokens(summaryPrompt + "\n" + prefix + detailDirective) + frameTokens;
@@ -132,6 +136,7 @@ async function runSummary(session,settings,opts) {
       allowTruncated: true,
     });
     if (r.finishReason === 'length') throw new Error('The summary hit the output limit; the checkpoint was not changed. Raise Summarizer max tokens or use smaller summary chunks.');
+    checkCancelled();
     await opts.validateSource?.(expectedSource);
     content = r.content;
     if (!content?.trim()) throw new Error("The summarizer returned an empty summary; checkpoint was not changed.");
@@ -146,7 +151,8 @@ async function runSummary(session,settings,opts) {
   const summaryMessage = { id:summaryId,order:(all.at(-1)?.order ?? 0)+1,role:'summary',content,coveredRange:{fromOrder:all.find(m=>m.id===session.activeSummaryMessageId)?.coveredRange?.fromOrder ?? (session.activeSummaryMessageId && !opts.full ? 1 : toFold[0].order),toOrder:newBreakpointOrder},sourceRevision:expectedSource.historyRevision,cutoffTurn:turns.turnById.get(toFold[Math.max(0,offset-1)]?.id) };
   const candidate = await buildContextForRequest({ ...session,activeSummaryMessageId:summaryId,breakpointOrder:newBreakpointOrder },settings,{ ...opts,messages:[...all,summaryMessage],requireLatestUser:true });
   if (candidate.report.warnings.some(w => w.startsWith('Recent window reduced'))) throw new Error('Candidate summary displaced required recent conversation; checkpoint was not changed.');
-  const newMsg = await addMessage(session.id,summaryMessage,{ id:summaryId,expectedSource,sessionUpdate:{ activeSummaryMessageId:summaryId,breakpointOrder:newBreakpointOrder } });
+  checkCancelled();
+  const newMsg = await addMessage(session.id,summaryMessage,{ id:summaryId,expectedSource,signal:opts.signal,sessionUpdate:{ activeSummaryMessageId:summaryId,breakpointOrder:newBreakpointOrder } });
 
   return {
     skipped: false,

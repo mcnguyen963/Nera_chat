@@ -1,3 +1,5 @@
+import {writeInitialStorySettings,ensureStorySettings} from './story-settings-store.js';
+import {assertSnapshotRevisions} from './story-settings.js';
 import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { deleteChatCache } from './chat-cache.js';
@@ -59,7 +61,8 @@ export async function createSession(title, { importing = false } = {}) {
     activeChunkBytes: 0,
     activeChunkCount: 0,
   };
-  await setDoc(sessionDoc(id), data);
+  await setDoc(sessionDoc(id), {...data,importing:true});
+  try {await writeInitialStorySettings(id);if(!importing)await updateSession(id,{importing:false});}catch(error){await deleteSession(id);throw error;}
   return id;
 }
 
@@ -91,7 +94,7 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     await storeUnsavedReply(owner,sessionId,null);
     deletionNotice(sessionId);
     await waitForStoryWrites(sessionId);
-    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta']) {
+    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings']) {
       const snap=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,name));
       for(let i=0;i<snap.docs.length;i+=450) {
         const batch=writeBatch(db);
@@ -178,6 +181,8 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     if (index < 0) throw new Error("This message no longer exists. Refresh the session and try again.");
     selected = messages.slice(0, index + 1);
   }
+  const sourceSettings=await ensureStorySettings(sourceId,owner);
+  const capturedSource={...source,storySettingsRevision:source.storySettingsRevision ?? sourceSettings.revision};
   const groups = packMessages(selected);
   const last = groups.at(-1);
   const hasSummary = selected.some((m) => m.id === source.activeSummaryMessageId && m.role === "summary");
@@ -224,11 +229,13 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
       });
     }
     if (owner !== currentUid()) throw new Error('Account changed; session copy cancelled.');
+    await writeInitialStorySettings(id,sourceSettings.values,owner);
     await copyLore(sourceId,id,selected.at(-1)?.order ?? 0);
     await runTransaction(db,async tx=>{
-      assertStory((await tx.get(sessionDoc(sourceId,owner))).data());
+      const fresh=assertStory((await tx.get(sessionDoc(sourceId,owner))).data());
+      assertSnapshotRevisions(capturedSource,fresh);
       assertStory((await tx.get(sessionDoc(id,owner))).data());
-      tx.set(sessionDoc(id,owner),data);
+      tx.set(sessionDoc(id,owner),{...data,storySettingsRevision:1});
     });
   } catch (error) {
     try { if (owner === currentUid()) await deleteSession(id); } catch (cleanupError) {

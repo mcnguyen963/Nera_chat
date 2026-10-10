@@ -37,7 +37,7 @@ test('L2 extraction guard accepts unrelated append/lore/plan/scene changes and r
 test('L1 old edit pauses resume only below the failure threshold and invalidations remain bounded',async()=>{
  const c=await use()('continuity.js');
  for(const [ms,expected] of [[{},false],[{paused:true,lastError:'History changed',failureStreak:2},false],[{paused:true,lastError:'History changed',failureStreak:3},true],[{paused:true,lastError:'API failed'},true]])assert.equal(c.effectivelyPaused(ms),expected);
- const result=c.trimInvalidations(Array.from({length:60},(_,i)=>({fromOrder:60-i,revision:i+1})));assert.equal(result.length,50);assert.deepEqual(plain(result[0]),{fromOrder:50,revision:11});
+ const result=c.trimInvalidations(Array.from({length:60},(_,i)=>({fromOrder:60-i,revision:i+1})));assert.equal(result.length,50);assert.deepEqual(plain(result[0]),{fromOrder:50,toOrder:Number.MAX_SAFE_INTEGER,revision:11});
 });
 test('L3 tolerant grammar keeps partial notes, real aliases and status-only threads',async()=>{
  const u=use(),l=await u('lore-lines.js'),t=await u('turns.js'),range={assistants:t.computeTurns(history).assistants,fromTurn:1,toTurn:5};
@@ -95,7 +95,7 @@ test('U1 busy ownership rejects stale releases and history bridges only from the
 });
 test('C1 all four outgoing defaults migrate by exact hash; customized and omitted settings stay distinct',async()=>{
  const fields=[['narratorSystemPrompt','narrator.md'],['summarizerSystemPrompt','summarizer.md'],['memoryExtractionPrompt','memory-extraction.md'],['memoryReorganizePrompt','memory-reorganize.md']];
- const u=appHarness({globals:{crypto:webcrypto},stubs:{'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'},'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:()=>({}),getDocFromServer:async()=>({exists:()=>true,data:()=>({})}),onSnapshot:()=>()=>{},setDoc:async()=>{}}}}),s=await u('settings.js');
+ const u=appHarness({globals:{crypto:webcrypto},stubs:{'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'},'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:()=>({}),getDocFromServer:async()=>({exists:()=>true,data:()=>({})}),onSnapshot:()=>()=>{},setDoc:async()=>{},runTransaction(){},serverTimestamp(){}}}}),s=await u('settings.js');
  const hashLines=await readFile(new URL('../system prompts/legacy-prompt-default-hashes.md',import.meta.url),'utf8');
  for(const [key,file]of fields){const old=(await readFile(new URL('./fixtures/outgoing-prompts/'+file,import.meta.url),'utf8')).trim();assert.ok(hashLines.split('\n').includes(key+' '+createHash('sha256').update(old).digest('hex')),file+' outgoing fixture hash');assert.equal((await s.mergeDefaults({[key]:old}))[key],s.DEFAULT_SETTINGS[key]);assert.equal((await s.mergeDefaults({[key]:old+' custom'}))[key],old+' custom');assert.equal((await s.mergeDefaults({}))[key],s.DEFAULT_SETTINGS[key]);assert.equal(key in s.storedSettings(s.DEFAULT_SETTINGS),false);}
  const hashes=await readFile(new URL('../system prompts/legacy-prompt-default-hashes.md',import.meta.url),'utf8');for(const line of hashes.trim().split('\n'))assert.match(line,/^(narratorSystemPrompt|summarizerSystemPrompt|memoryExtractionPrompt|memoryReorganizePrompt) [0-9a-f]{64}$/);

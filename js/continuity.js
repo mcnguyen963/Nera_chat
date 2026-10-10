@@ -13,6 +13,8 @@ export function cutoffLabel(cutoff) {
 export function noteNeedsReview(line, messages, session = {}, upToOrder = Infinity) {
   if (line.needsReview || line.kind === 'snapshot' && snapshotNeedsReview(line,null,session,upToOrder)) return true;
   if (line.by === 'user' || line.by === 'import') return false;
+  const sourceOrder=line.src ?? Math.max(0,...(line.evidence ?? []).map(e=>e.order ?? 0));
+  if ((session.memoryInvalidations ?? []).some(i => (line.sourceRevision ?? 0)<i.revision && sourceOrder>=i.fromOrder && sourceOrder<=(i.toOrder ?? session.memoryState?.extractedThroughOrder ?? Infinity))) return true;
   if (!line.evidence?.length) return true;
   const byId = new Map(messages.map(m => [m.id,m]));
   if (line.evidence.some(e => !byId.has(e.id) || revisionOf(byId.get(e.id)) !== e.revision || byId.get(e.id).order >= upToOrder)) return true;
@@ -43,7 +45,7 @@ function orderedValue(value) {
   return value;
 }
 export function requestSource(session) {
-  return { historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(orderedValue(session.memory ?? null)), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
+  return { storySettingsRevision:session.storySettingsRevision ?? 0, historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(orderedValue(session.memory ?? null)), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
 }
 export function summarySource(session) {
   const { loreRevision, ...source } = requestSource(session);
@@ -66,10 +68,11 @@ export function effectivelyPaused(ms={}) {return !!ms.paused && !(String(ms.last
 export function trimInvalidations(list,cap=50) {
   if(list.length<=cap)return list;
   const old=list.slice(0,list.length-cap+1);
-  return [{fromOrder:Math.min(...old.map(i=>i.fromOrder)),revision:Math.max(...old.map(i=>i.revision))},...list.slice(-(cap-1))];
+  return [{fromOrder:Math.min(...old.map(i=>i.fromOrder)),toOrder:Math.max(...old.map(i=>i.toOrder ?? Number.MAX_SAFE_INTEGER)),revision:Math.max(...old.map(i=>i.revision))},...list.slice(-(cap-1))];
 }
 export function assertExtractionSource(s,guard) {
   if(!s)throw new SupersededError('Story deleted.');
+  if(guard.storySettingsRevision!=null && (s.storySettingsRevision ?? 0)!==guard.storySettingsRevision)throw new StaleSourceError('Story prompts changed during the update. Retry memory extraction.');
   if((s.memoryState?.extractedThroughOrder ?? 0)!==guard.startPointer)throw new SupersededError('Another update already covered these turns.');
   if((s.contentEditsFloor ?? 0)>guard.startRevision || (s.contentEdits ?? []).some(e=>e.revision>guard.startRevision && e.order>=guard.fromOrder && e.order<=guard.endOrder))throw new StaleSourceError('Messages in this range were edited during the update.');
 }

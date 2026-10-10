@@ -1,3 +1,5 @@
+import {effectiveActiveSettings} from '../story-settings-store.js';
+import {computeTurns} from '../turns.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
 import { state } from '../state.js';
 import { buildContextForRequest } from '../context-builder.js';
@@ -8,7 +10,7 @@ let open = false, version = 0, timer;
 export function initContextViewer() {
   document.addEventListener('context-details',openContextViewer);
   document.getElementById('chat-input').addEventListener('input',() => { if (open) { clearTimeout(timer); timer = setTimeout(render,400); } });
-  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed']) document.addEventListener(event,() => { if (open) void render(); });
+  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed','story-settings-changed']) document.addEventListener(event,() => { if (open) void render(); });
 }
 export function openContextViewer() {
   if (open) return;
@@ -19,13 +21,13 @@ export function openContextViewer() {
 async function render() {
   const dialog = document.querySelector('#context-viewer .sheet'); if (!dialog) return;
   dialog.querySelector('.memory-content')?.remove(); const body = node('div',null,'memory-content'); dialog.append(body);
-  let live = memorySnapshot(); if (!live) { body.append(node('p','Open a story to see its context.','muted')); return; }
   const run = ++version;
+  let live = memorySnapshot(); if (!live) { body.append(node('p','Open a story to see its context.','muted')); return; }
   try {
     body.append(button('Refresh',async()=>{await prepareMemorySnapshot();void render();}));
     const draftText = document.getElementById('chat-input').value;
-    const built = await buildContextForRequest(live.session,state.settings,{ messages:live.messages,loreEntries:live.entries,draftText });
-    if (run !== version || !open) return;
+    const built = await buildContextForRequest(live.session,effectiveActiveSettings(),{ messages:live.messages,loreEntries:live.entries,draftText });
+    if (run !== version || !open || state.sessionId!==live.session.id) return;
     const r = built.report;
     body.append(node('p',`${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens`));
     if (live.providerUsage) body.append(node('p',`Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`,'muted'));
@@ -41,6 +43,17 @@ async function render() {
       if (e.reason.startsWith('card limit')) row.append(button('Raise limit',() => { closeViewer(); document.dispatchEvent(new CustomEvent('memory-settings',{ detail:{ focus:'mem-'+e.book+'-maxCards' } })); },'btn small'));
       body.append(row);
     }
+    body.append(node('h3','COVERAGE','eyebrow'));
+    for(const [book,config] of Object.entries(normalizeMemory(live.session.memory).books)){
+      const cards=live.entries.filter(e=>e.book===book),total=cards.reduce((n,e)=>n+Object.values(e.sections).reduce((n,s)=>n+(s.lines?.length ?? 0),0),0),sent=r.loaded.filter(e=>e.book===book).reduce((n,e)=>n+(e.linesSent ?? 0),0);
+      const reasons=new Set(r.skipped.filter(e=>e.book===book).map(e=>e.reason));
+      if(r.loaded.some(e=>e.book===book && e.linesCut))reasons.add('book token budget');
+      if(!config.on)reasons.add('book disabled');
+      if(total>sent && !reasons.size)reasons.add('not selected for this scene or memory disabled');
+      body.append(node('p',`${book}: ${sent} notes sent · ${total-sent} omitted${reasons.size ? ' · '+[...reasons].join('; ') : ''}`,'muted'));
+    }
+    const mem=normalizeMemory(live.session.memory),pending=computeTurns(live.messages).assistants.filter(a=>a.order>(live.session.memoryState?.extractedThroughOrder ?? 0)).length;
+    body.append(node('p',`${pending} pending memory turns · batch ${mem.batchTurns} · lag ${mem.lagTurns}`,'muted'));
     if (r.scene) body.append(node('h3','SCENE','eyebrow'),node('p',r.scene.raw+' (from turn '+r.scene.fromTurn+')','muted'));
     if (live.session.memory?.autoUpdate) { const update = button(live.session.memoryState?.paused ? 'Retry' : 'Update now',async b=>{b.disabled=true;try{await updateNow(live.session.id,{retry:live.session.memoryState?.paused});}catch(e){toast(e.message);}finally{b.disabled=false;void render();}}); update.disabled = !!state.busy || isRunning(live.session.id); update.title = state.busy ? 'Wait for the current reply or summary.' : isRunning(live.session.id) ? 'A memory update is already running.' : ''; body.append(node('h3','MEMORY UPDATES','eyebrow'),node('p',live.session.memoryState?.lastUpdateTurns ? 'Updated through turns '+live.session.memoryState.lastUpdateTurns : 'Not started yet','muted'),update); }
     if (live.session.memoryState?.lastError && !live.session.memoryState.paused) body.append(node('p','Last memory update failed: '+live.session.memoryState.lastError,'memory-warning'));

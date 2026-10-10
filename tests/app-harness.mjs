@@ -12,7 +12,9 @@ export function appHarness({ stubs = {}, sources = {}, globals = {} } = {}) {
     const pending = create(path); cache.set(path, pending); return pending;
   }
   async function create(path) {
-    const stub = stubs[path];
+    const stub = stubs[path] ?? (path==='story-settings-store.js' && stubs['sessions.js'] && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] ? {ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},preserveLegacyStorySeed:async()=>({})} : null);
+    if(path==='sessions.js' && stub && !stub.getSessionFromServer)stub.getSessionFromServer=stub.getSession;
+    if(path==='messages.js' && stub && !stub.ensureChunked)stub.ensureChunked=async()=>{};
     const module = stub
       ? new vm.SyntheticModule(Object.keys(stub), function () {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);

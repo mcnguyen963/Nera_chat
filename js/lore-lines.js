@@ -4,7 +4,13 @@ import { computeTurns } from './turns.js';
 import { latestScene } from './scene.js';
 export const STOPLIST = new Set('he she they him her them i you me we it someone somebody man woman boy girl guard the a narrator user unknown'.split(' '));
 export const COMMON_ALIAS_WORDS = new Set('captain guard old lady lord man woman girl boy'.split(' '));
-export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
+export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’]/g,"'").replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
+export function duplicateCards(entries) {
+  const names=new Map(),ids=new Set();
+  for(const e of entries)for(const n of new Set([e.name,...(e.aliases ?? [])].map(normalizeName).filter(Boolean))){const key=e.book+':'+n;const previous=names.get(key);if(previous && previous!==e.id){ids.add(e.id);ids.add(previous);}else names.set(key,e.id);}
+  const timelines=entries.filter(e=>e.kind==='timeline');if(timelines.length>1)for(const e of timelines)ids.add(e.id);
+  return ids;
+}
 export const SECTION_MAP = {
   characters: { appearance:'appearance', looks:'appearance', look:'appearance', status:'status', state:'status', condition:'status', health:'status', bond:'bond', relationship:'bond', relations:'relations', relationships:'relations', alias:'alias', aka:'alias', 'also called':'alias', name:'alias', notes:'notes', note:'notes', other:'notes', personality:'personality', traits:'personality' },
   locations: { description:'description', look:'description', appearance:'description', state:'state', status:'state', condition:'state', alias:'alias', aka:'alias', 'also called':'alias', notes:'notes', note:'notes' },
@@ -82,14 +88,15 @@ export function parseMemoryLines(text,ctx={}) {
 }
 export function applyOps(entries, ops, stampCtx = {}) {
   const working = structuredClone(entries), creates = [], appends = [], statusChanges = [], aliases = [], skipped = [];
-  const match = (book,name) => working.find(e => e.book === book && [e.name,...(e.aliases ?? [])].some(n => normalizeName(n) === normalizeName(name)));
+  const match = (book,name) => {const matches=working.filter(e => e.book === book && [e.name,...(e.aliases ?? [])].some(n => normalizeName(n) === normalizeName(name)));if(matches.length>1)throw Object.assign(new Error('Duplicate cards match '+name+'. Open Lorebooks → Duplicate review and choose the surviving card before retrying memory extraction.'),{code:'duplicate-lore'});return matches[0];};
+  const timeline=()=>{const cards=working.filter(e=>e.kind==='timeline');if(cards.length>1)throw Object.assign(new Error('Duplicate timeline cards. Open Lorebooks → Duplicate review and choose the surviving card before retrying memory extraction.'),{code:'duplicate-lore'});return cards[0];};
   const now = stampCtx.now ?? Date.now();
   for (const op of ops) {
     if (stampCtx.mem?.books?.[op.book]?.on === false) { skipped.push({ ...op, reason:'book off' }); continue; }
-    let e = op.tag === 'event' ? working.find(e => e.kind === 'timeline') : match(op.book,op.name);
+    let e = op.tag === 'event' ? timeline() : match(op.book,op.name);
     if (stampCtx.reorganize && (!e || stampCtx.allowedIds && !stampCtx.allowedIds.includes(e.id))) { skipped.push({ ...op, reason:'name outside the notes' }); continue; }
     let text = op.text;
-    if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed')) { e = working.find(e => e.kind === 'timeline'); text = `Resolved: ${op.name} — ${text}`; }
+    if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed')) { e = timeline(); text = `Resolved: ${op.name} — ${text}`; }
     if (!e && op.section === 'alias') { const clash = match(op.book,text); if (clash) { skipped.push({ ...op,reason:'name already used by '+clash.name }); continue; } }
     if (!e) {
       const timeline = op.tag === 'event' || op.tag === 'closed';

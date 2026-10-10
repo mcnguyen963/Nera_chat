@@ -11,7 +11,7 @@ async function setup(stubs = {}, globals = {}) {
     const pending = create(path); cache.set(path, pending); return pending;
   }
   async function create(path) {
-    const source = stubs[path];
+    const source = stubs[path] ?? (path==='story-settings-store.js' && stubs['sessions.js'] ? {ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},preserveLegacyStorySeed:async()=>({})} : null);
     const module = source ? new vm.SyntheticModule(Object.keys(source),function () { for (const [k,v] of Object.entries(source)) this.setExport(k,v); },{ context,identifier:path }) : new vm.SourceTextModule(await readFile(new URL('../js/'+path,import.meta.url),'utf8'),{ context,identifier:path,initializeImportMeta:promptImportMeta });
     await module.link((specifier,parent) => load(specifier.startsWith('https:') ? specifier : new URL(specifier,'https://local/'+parent.identifier).pathname.slice(1)));
     return module;

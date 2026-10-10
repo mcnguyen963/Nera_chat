@@ -8,7 +8,7 @@ import { state } from '../state.js';
 import { normalizeMemory } from '../memory-settings.js';
 import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
 import * as store from '../lore-store.js';
-import { makeEntry, newLoreId, normalizeName, STOPLIST, SECTION_KEYS } from '../lore-lines.js';
+import { makeEntry, newLoreId, normalizeName, duplicateCards, STOPLIST, SECTION_KEYS } from '../lore-lines.js';
 import { sortLines, renderEntry, sectionLabel } from '../lore-select.js';
 import { BOOK_LABELS, detectFormat, fromMarkdown, fromJson, toMarkdown, toJson, planImport } from '../lore-format.js';
 import { LOREBOOK_TEMPLATE_MD, LOREBOOK_TEMPLATE_JSON, fillProtagonist } from '../memory-prompts.js';
@@ -130,7 +130,7 @@ function renderRail() {
   rail.append(button('Import & export',() => { if (!canLeave()) return; staged = base = null; screen = 'transfer'; renderShell(); }),button('Backups',() => { if (!canLeave()) return; staged = base = null; screen = 'backups'; renderShell(); }));
 }
 function needsReview(l) { return noteNeedsReview(l,live()?.messages ?? [],live()?.session ?? {}); }
-function passes(e,f) { return f === 'needs-review' && (linesOf(e).some(needsReview) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
+function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && (linesOf(e).some(needsReview) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
 function badge(text,kind = '') { return node('span',text,'badge '+kind); }
 function renderList() {
   if (!list || ['transfer','backups'].includes(screen)) return;
@@ -145,7 +145,7 @@ function renderList() {
   const books = entries().filter(e => e.book === book);
   const filters = node('div',null,'lore-filters');
   const renderFilters = () => { filters.replaceChildren();
-  for (const [value,label] of [['all','All'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) { const count = books.filter(e => passes(e,value)).length; if (!count && value !== 'all') continue; filters.append(button(label+' '+count,() => { filter = value; renderList(); },'btn small'+(filter === value ? ' selected' : ''))); } }; renderFilters(); list.append(filters);
+  for (const [value,label] of [['all','All'],['duplicates','Duplicate review'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) { const count = books.filter(e => passes(e,value)).length; if (!count && value !== 'all') continue; filters.append(button(label+' '+count,() => { filter = value; renderList(); },'btn small'+(filter === value ? ' selected' : ''))); } }; renderFilters(); list.append(filters);
   const rows = node('div',null,'lore-rows'); rows.setAttribute('role','listbox'); rows.setAttribute('aria-label',BOOK_LABELS[book]); list.append(rows); renderRows(rows);
   const edited=live()?.session.memoryState?.rebuildFromOrder;
   if(live()?.session.memoryState?.needsRebuild && edited!=null){
@@ -159,7 +159,7 @@ function renderList() {
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
 }
 function renderRows(rows) {
-  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
+  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
   if (!cards.length) {
     const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.' };
     rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : messages[book],'muted')); return;
@@ -224,6 +224,7 @@ function renderEditor() {
 
     const text = field('Your text',section.text,{ textarea:true }); text.input.placeholder = key === 'personality' ? 'How they think and behave. Only you write here — memory updates never touch it.' : 'Your description (optional). Updates below add to it.'; text.input.addEventListener('input',() => { section.text = text.input.value; void updateFooter(); });
     if (staged.kind === 'timeline') { const d = node('details'); d.append(node('summary','Backstory before the story starts (optional)'),text.wrap); container.append(d); } else container.append(text.wrap);
+    if(section.text && section.lines.length)container.append(button('Reconcile background…',()=>reconcileBackground(key),'btn small'));
     if (own && key === 'relations') container.append(node('p',"This is the protagonist's own card.",'muted'));
     if (staged.kind === 'timeline' && !section.lines.length) container.append(node('p','No events yet. Important moments will be added here every few turns.','muted'));
     const lineList = node('div',null,'lore-lines'); lineList.dataset.section = key; let expanded = false;
@@ -256,7 +257,7 @@ function aliasWarnings(e) {
 }
 function editLine(ln,row,key,renderLines) {
   row.replaceChildren(); const turn = field('Turn',ln.turn ?? ''), when = field('Date',ln.when ?? ''), text = field('Note',ln.text,{ textarea:true }); turn.input.inputMode = 'numeric'; turn.input.addEventListener('input',() => turn.input.value = turn.input.value.replace(/\D/g,''));
-  row.append(turn.wrap,when.wrap,text.wrap,button('Save line',() => { if (!text.input.value.trim()) return; if (turn.input.value && !Number.isSafeInteger(Number(turn.input.value))) throw new Error('Enter a valid turn number.'); Object.assign(ln,{ text:text.input.value.trim(),turn:turn.input.value ? Number(turn.input.value) : null,when:when.input.value.trim() || null,by:'user' }); renderLines(); }),button('Cancel',renderLines)); text.input.focus();
+  row.append(turn.wrap,when.wrap,text.wrap,button('Save line',() => { if (!text.input.value.trim()) return; if (turn.input.value && !Number.isSafeInteger(Number(turn.input.value))) throw new Error('Enter a valid turn number.'); Object.assign(ln,{ text:text.input.value.trim(),turn:turn.input.value ? Number(turn.input.value) : null,when:when.input.value.trim() || null,by:'user',needsReview:false,sourceRevision:live()?.session.historyRevision ?? 0 }); renderLines(); }),button('Cancel',renderLines)); text.input.focus();
 }
 async function saveCard() {
   if (!staged || reorganizing.has(staged.id)) return;
@@ -286,11 +287,28 @@ async function removeDeletedNotes(affected,shownCount) {
 }
 async function undoAction(id,text) { toast(text,'Undo',async () => { await store.restoreBackup(sid,id,entries()); toast('Restored'); }); }
 async function deleteCard() { if (state.busy) throw new Error('Wait for the current reply or summary.'); const e = entries().find(e => e.id === selected) ?? staged; if (!confirm(`Delete the card '${e.name}' and its ${linesOf(e).length} notes?`)) return; const backup = await store.deleteEntry(sid,e); staged = base = null; selected = null; screen = 'list'; renderShell(); await undoAction(backup,'Deleted '+e.name+'.'); }
+async function reconcileBackground(key) {
+  if(dirty()){toast('Save or cancel your changes before reconciling background.');return;}
+  const storyId=sid,entry=entries().find(e=>e.id===selected),section=entry?.sections[key];if(!section)return;
+  const dialog=subSheet('RECONCILE BACKGROUND'),body=node('div',null,'memory-content');
+  body.append(node('h3','Current background'),node('p',section.text),node('h3','Supporting notes'));
+  for(const line of sortLines(section.lines))body.append(node('p',`T${line.turn ?? '?'} · ${line.text}`));
+  const replacement=field('Replacement background',section.text,{textarea:true});body.append(replacement.wrap);
+  body.append(button('Confirm replacement',async b=>{
+    if(state.busy){toast('Wait for the current reply or summary.');return;}
+    b.disabled=true;try{
+      const backup=await store.reconcileBackground(storyId,entry,key,replacement.input.value,section.text);
+      dialog.hide();staged=base=null;
+      toast('Background replaced; supporting notes retained.','Undo',()=>store.restoreBackup(storyId,backup,memorySnapshot(storyId)?.entries ?? []));
+    }catch(error){toast(error.message);}finally{b.disabled=false;}
+  },'btn primary'));dialog.dialog.append(body);
+}
 async function mergeCard() {
   if (dirty()) { toast('Save or cancel your changes before merging.'); return; }
   if (state.busy) throw new Error('Wait for the current reply or summary.');
   const source = entries().find(e => e.id === selected) ?? staged, s = subSheet('Merge '+source.name+' into…'), body = node('div',null,'memory-content'), search = field('Search names…',''), results = node('div');
-  const render = () => { results.replaceChildren(); for (const target of entries().filter(e => e.book === source.book && e.kind === source.kind && e.id !== source.id && normSearch(e.name).includes(normSearch(search.input.value)))) results.append(button(target.name,async () => { if (!confirm(`Merge '${source.name}' into '${target.name}'? Its notes move over and '${source.name}' becomes another name for ${target.name}.`)) return; const backup = await store.mergeEntries(sid,source,target); s.hide(); staged = base = null; openCard(target); await undoAction(backup,'Merged into '+target.name+'.'); })); }; search.input.addEventListener('input',render); body.append(search.wrap,results); s.dialog.append(body); render();
+  const status=node('select');for(const value of ['open','closed']){const o=node('option',value);o.value=value;status.append(o);}status.value=source.status ?? 'open';if(source.kind==='thread')body.append(node('p','Choose the surviving thread status.'),status);
+  const render = () => { results.replaceChildren(); for (const target of entries().filter(e => e.book === source.book && e.kind === source.kind && e.id !== source.id && normSearch(e.name).includes(normSearch(search.input.value)))) results.append(button(target.name,async () => { if (!confirm(`Merge '${source.name}' into '${target.name}'? Its notes move over and '${source.name}' becomes another name for ${target.name}.`)) return; const backup = await store.mergeEntries(sid,source,target,source.kind==='thread' ? status.value : null); s.hide(); staged = base = null; openCard(target); await undoAction(backup,'Merged into '+target.name+'.'); })); }; search.input.addEventListener('input',render); body.append(search.wrap,results); s.dialog.append(body); render();
 }
 function renderTransfer() {
   list.replaceChildren(); editor.replaceChildren(); list.append(button('‹ Books',() => { screen = 'books'; renderShell(); },'btn mobile-back'),node('h2','Import & export'));

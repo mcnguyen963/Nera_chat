@@ -1,3 +1,6 @@
+import {ensureStorySettings,writeInitialStorySettings,preserveLegacyStorySeed} from './story-settings-store.js';
+import {assertSnapshotRevisions,explicitStorySettings} from './story-settings.js';
+import {state} from './state.js';
 import { maxOf } from './math-utils.js';
 import * as sessionsApi from './sessions.js';
 import * as messagesApi from './messages.js';
@@ -43,18 +46,23 @@ export function parseSillyTavernJsonl(text) {
     });
   }
 
-  if (messages.length === 0) throw new Error("No messages found in file.");
+  if (messages.length === 0 && !metadata) throw new Error("No messages found in file.");
   return { title,messages,metadata };
 }
 
 export async function importSillyTavern(file) {
   if(file.size>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
   const text=await file.text();if(new TextEncoder().encode(text).length>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
-  const {title,messages,metadata}=parseSillyTavernJsonl(text);
+  let parsed;
+  try{const full=JSON.parse(text);if(full?.format==='nera-chat-backup' && Array.isArray(full.messages))parsed={title:full.session?.title,messages:full.messages,metadata:{session:full.session,lore:full.lore,storySettings:full.storySettings}};}catch{}
+  const {title,messages,metadata}=parsed ?? parseSillyTavernJsonl(text);
   const lore=[];let droppedLore=0;
   for(const e of Array.isArray(metadata?.lore) ? metadata.lore : []){try{lore.push(normalizeLoreEntry(e));}catch{droppedLore++;}}
   const sessionId=await createSession(title || file.name.replace(/\.jsonl$/i,'') || 'Imported chat',{importing:true});
   try {
+    const importedSettings=metadata?.storySettings?.values ?? metadata?.storySettings;
+    const values=importedSettings ? explicitStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
+    await writeInitialStorySettings(sessionId,values);
     await addMessagesBulk(sessionId,messages);
     if(lore.length)await importLore(sessionId,{writes:lore.map(e=>({id:e.id,data:e}))},[]);
     const source=metadata?.session ?? {},memory=normalizeMemory(source.memory);
@@ -76,17 +84,23 @@ export async function importSillyTavern(file) {
 }
 
 export async function serializeStory(sessionId) {
-  const session = await getSession(sessionId);
+  const owner=currentUid();
+  await messagesApi.ensureChunked(sessionId);
+  const storySettings=await ensureStorySettings(sessionId);
+  const session = await sessionsApi.getSessionFromServer(sessionId);
   if (!session) throw new Error("No active session to export.");
+  assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
   const msgs = await getMessages(sessionId);
   const lore = await getLore(sessionId);
+  assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));
+  if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');
 
   const lines = [
     JSON.stringify({
       user_name: "You",
       character_name: session.title,
       create_date: new Date().toISOString(),
-      nera:{ version:2,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn"].filter(k => k in session).map(k => [k,session[k]])),lore },
+      nera:{ version:2,storySettings,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn"].filter(k => k in session).map(k => [k,session[k]])),lore },
     }),
   ];
   for (const m of msgs) {
@@ -102,13 +116,15 @@ export async function serializeStory(sessionId) {
     );
   }
 
-  return {text:lines.join('\n')+'\n',title:session.title};
+  return {text:lines.join('\n')+'\n',title:session.title,source:session};
 }
 export async function exportSillyTavern(sessionId){const {text,title}=await serializeStory(sessionId);download(text,(title || 'session').replace(/[^\w\- ]+/g,'').trim()+'.jsonl','application/x-ndjson');}
 export async function exportAllStories({signal,onProgress=()=>{},save=download}={}){
+ const owner=currentUid(),captured=[];
  const sessions=(await listSessions()).filter(s=>!s.deleting && !s.importing),blocks=[JSON.stringify({neraAccount:{version:1,exportedAt:new Date().toISOString(),stories:sessions.length}})];
- const check=()=>{if(signal?.aborted)throw Object.assign(new Error('Export cancelled.'),{name:'AbortError'});};
- for(const [i,s] of sessions.entries()){check();onProgress({done:i,total:sessions.length,title:s.title});const story=await serializeStory(s.id);check();blocks.push(JSON.stringify({neraStorySeparator:{index:i+1,id:s.id,title:story.title}}),story.text.trimEnd());}
+ const check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');if(signal?.aborted)throw Object.assign(new Error('Export cancelled.'),{name:'AbortError'});};
+ for(const [i,s] of sessions.entries()){check();onProgress({done:i,total:sessions.length,title:s.title});const story=await serializeStory(s.id);captured.push({id:s.id,source:story.source});check();blocks.push(JSON.stringify({neraStorySeparator:{index:i+1,id:s.id,title:story.title}}),story.text.trimEnd());}
+ for(const capture of captured){check();assertSnapshotRevisions(capture.source,await sessionsApi.getSessionFromServer(capture.id));}
  check();onProgress({done:sessions.length,total:sessions.length});const text=blocks.join('\n')+'\n';save(text,'nera-all-stories-'+new Date().toISOString().slice(0,10)+'.jsonl','application/x-ndjson');return sessions.length;
 }
 
@@ -116,11 +132,13 @@ export async function exportAllStories({signal,onProgress=()=>{},save=download}=
 export async function buildFullBackup(sessionId){
  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
  await messagesApi.ensureChunked(sessionId);check();
+ const storySettings=await ensureStorySettings(sessionId);check();
  const before=await sessionsApi.getSessionFromServer(sessionId);check();
  if(!before || before.deleting || before.importing)throw new Error('This story no longer exists on the server.');
+ assertSnapshotRevisions({...before,storySettingsRevision:storySettings.revision},before);
  const messages=await getMessages(sessionId),lore=await getLore(sessionId);check();
  const after=await sessionsApi.getSessionFromServer(sessionId);check();
  if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('The story changed while exporting. Try again when both devices are idle.');
- return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,messages,lore};
+ return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,storySettings,messages,lore};
 }
 export async function exportFullBackup(sessionId){const backup=await buildFullBackup(sessionId);download(JSON.stringify(backup,null,2)+'\n',(backup.session.title || 'session').replace(/[^\w\- ]+/g,'').trim()+'-backup.json','application/json');}

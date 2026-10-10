@@ -1,3 +1,5 @@
+import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
+import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings} from '../story-settings.js';
 import {loadRewriteDefaultPrompt} from '../rewrite.js';
 import {vibrationSupport} from '../stream-vibration.js';
 import {requestInputLimit} from '../request-budget.js';
@@ -27,6 +29,7 @@ const contextFields = {
 const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
 let draft;
 let original;
+let promptStoryId=null,promptBase=null;
 let panel = "model";
 let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
@@ -43,7 +46,7 @@ const set = (id, value) => { input(id).value = String(value ?? ""); };
 
 export function initSettingsView() {
   input('stream-vibration-help').hidden=vibrationSupport()==='unsupported' ? false : true;
-  input('btn-reset-rewrite-prompt').addEventListener('click',()=>{draft.rewriteSystemPrompt=null;renderRewritePrompt();clearMessage();});
+  input('btn-reset-rewrite-prompt').addEventListener('click',()=>{draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;renderRewritePrompt();clearMessage();});
   const openLore = (options = {}) => { if (closeSettingsPopup() !== false) document.dispatchEvent(new CustomEvent('lorebooks', { detail: options })); };
   initMemorySettings(() => openLore());
   input('btn-lore-transfer').addEventListener('click', () => openLore({ screen: 'transfer' }));
@@ -114,6 +117,7 @@ export function initSettingsView() {
   document.addEventListener("session-changed", (event) => {
     if (!el.overlay.classList.contains("hidden") && (panel === "story" || panel === "memory") && (sessionId !== state.sessionId || !sessionDirty())) fillSession(event);
   });
+  document.addEventListener('story-settings-changed',()=>{if(!saving && !el.overlay.classList.contains('hidden'))receiveSettingsChange();});
   document.addEventListener("settings-changed", () => {
     if (el.overlay.classList.contains("hidden")) return;
     if (saving) return;
@@ -135,6 +139,8 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
 
 function reloadGlobalSettings() {
   draft = structuredClone(state.settings);
+  promptStoryId=state.sessionId;promptBase=null;
+  try {const effective=effectiveActiveSettings();for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
   renderAll(); capture();
   original = structuredClone(draft);
   clearMessage();
@@ -201,6 +207,9 @@ function showPanel(name) {
   }
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
+  el.save.textContent=name==='prompts' ? 'Save story prompts' : 'Save shared settings';
+  const promptHeading=document.querySelector('[data-panel="prompts"] h2');if(promptHeading)promptHeading.textContent='Prompts · '+(sessionOriginal.title || 'current story');
+  if(name==='prompts' && state.sessionId)void getSession(state.sessionId).then(s=>{if(panel==='prompts' && promptHeading)promptHeading.textContent='Prompts · '+(s?.title ?? 'Select a story');}).catch(error=>feedback(error.message,true));
   el.footer.classList.toggle("hidden", !global && !["story", "memory"].includes(name));
   el.save.classList.toggle("hidden", !global);
   el.reset.classList.toggle("hidden", !global);
@@ -356,7 +365,7 @@ function resetPanel() {
     set("set-pet-movement", draft.petMovement);
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
-    draft.rewriteRecentMessages=DEFAULT_SETTINGS.rewriteRecentMessages;draft.rewriteSystemPrompt=null;set('set-rewrite-n',draft.rewriteRecentMessages);renderRewritePrompt();
+    draft.rewriteRecentMessages=DEFAULT_SETTINGS.rewriteRecentMessages;draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;set('set-rewrite-n',draft.rewriteRecentMessages);renderRewritePrompt();
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
     draft.memoryExtractionPrompt = DEFAULT_SETTINGS.memoryExtractionPrompt;
@@ -391,8 +400,8 @@ export function normalizeReasoningBudget(value,responseLimit) {
   const budget=Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_SETTINGS.reasoning.maxTokens;
   return Math.max(1,Math.min(budget,Math.max(1,responseLimit-1)));
 }
-function validatedDraft() {
-  const result = structuredClone(draft);
+function validatedDraft(storyValues=null) {
+  const result = {...structuredClone(draft),...(storyValues ?? {})};
   for (const profile of result.profiles) {
     for (const [key, id] of Object.entries(connectionFields)) {
       if (key in samplingRanges && profile.advancedParametersEnabled) {
@@ -429,16 +438,22 @@ async function handleSaveSettings() {
   if (saving) return;
   capture();
   let validated;
-  try { validated = validatedDraft(); }
+  try { validated = panel==='prompts' ? explicitStorySettings({...draft,rewriteRecentMessages:integerField(draft.rewriteRecentMessages,'set-rewrite-n')}) : validatedDraft(Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,state.settings[k]]))); }
   catch (error) { feedback(error.message, true); return; }
   saving = true; el.save.disabled = true;
   try {
+    if(panel==='prompts') {
+      if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
+      const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
+      promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;
+    }
+    for(const key of STORY_SETTING_KEYS)validated[key]=state.settings[key];
+    const promptDraft=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,draft[k]])),promptOriginal=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,original[k]]));
     await saveSettings(validated);
-    original = structuredClone(state.settings);
-    draft = structuredClone(state.settings);
+    draft = {...structuredClone(state.settings),...promptDraft};
     renderAll();
     capture();
-    original = structuredClone(draft);
+    original = {...structuredClone(draft),...promptOriginal};
     feedback("Saved ✓");
     refreshContextIndicator();
   } catch (error) {

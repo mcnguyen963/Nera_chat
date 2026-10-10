@@ -10,6 +10,7 @@ async function setup(legacyCount = 0) {
   const reads = { documents: 0, legacy: 0 };
   const transactions = [], fault = { failAt:null, failBatchAt:null, batchCount:0, beforeCommit:null };
   const sessionPath = 'users/u/sessions/s';
+  documents.set('users/u/settings/storyMigration',{version:1,values:{narratorSystemPrompt:'Legacy narrator',summarizerSystemPrompt:'Legacy summary'}});
   documents.set(sessionPath, { nextOrder: legacyCount, breakpointOrder: 0 });
   for (let order = 1; order <= legacyCount; order++) {
     documents.set(`${sessionPath}/messages/m${order}`, {
@@ -51,11 +52,13 @@ async function setup(legacyCount = 0) {
     increment: amount => ({kind:'increment',amount}),
     getDocFromServer: async (target) => {
       reads.documents++;
+      await fault.onServerRead?.(target.path);
       return snapshot(target.path);
     },
     getDoc: async (target) => firestore.getDocFromServer(target),
     getDocsFromServer: async (source) => {
       const target = source.target ?? source;
+      await fault.onServerRead?.(target.path);
       const constraints = source.constraints ?? [];
       const prefix = target.path + '/';
       let paths = [...documents.keys()].filter((path) =>
@@ -154,7 +157,9 @@ async function setup(legacyCount = 0) {
   const sessions = await load('sessions.js'); await link(sessions);
   await sessions.evaluate();
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
-  return { lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
+  const storySettings=await load('story-settings-store.js');await link(storySettings);await storySettings.evaluate();
+  const transfer=await load('import-export.js');await link(transfer);await transfer.evaluate();
+  return {transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
 
 test('migration packs existing messages once and checkpoint reads use chunks', async () => {
@@ -217,7 +222,7 @@ test('assistant plan updates are committed with the message', async () => {
   assert.equal((await h.api.getMessages('s'))[0].content, 'A revised event');
 });
 
-test('Editing folded story history preserves its summary checkpoint; deletion resets it', async () => {
+test('Editing folded story history retires its summary checkpoint; deletion preserves cleared state', async () => {
   const h = await setup();
   const first = await h.api.addMessage('s', { role: 'user', content: 'Old fact' });
   await h.api.addMessage('s', { role: 'assistant', content: 'Reply' });
@@ -226,9 +231,9 @@ test('Editing folded story history preserves its summary checkpoint; deletion re
   });
   assert.equal(summary.order, 3);
   const edited = await h.api.editMessage('s', first.id, 'Corrected fact', first.order);
-  assert.equal(edited.summaryReset, false);
-  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, "summary");
-  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 2);
+  assert.equal(edited.summaryReset, true);
+  assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId, null);
+  assert.equal(h.documents.get(h.sessionPath).breakpointOrder, 0);
   const secondSummary = await h.api.addMessage('s', { role: 'summary', content: 'Rebuilt' }, {
     sessionUpdate: { activeSummaryMessageId: 'summary2', breakpointOrder: 2 }, id: 'summary2',
   });
@@ -469,10 +474,10 @@ test('prose edits and scene corrections invalidate summary and memory without de
   const e = loreEntry(); e.sections.appearance.lines[0].src = a.order; await h.lore.createEntry('s',e);
   Object.assign(h.documents.get(h.sessionPath),{ activeSummaryMessageId:'summary',breakpointOrder:a.order,memoryState:{ extractedThroughOrder:a.order } });
   const result = await h.api.editMessage('s',a.id,'Edited',a.order);
-  assert.equal(result.summaryReset,false); assert.equal(result.replacement.scene,'Day 1 · Inn'); assert.equal(result.replacement.planThread,'Reminder');
-  const session = h.documents.get(h.sessionPath); assert.equal(session.activeSummaryMessageId,"summary"); assert.equal(session.memoryState.needsRebuild,true); assert.notEqual(session.memoryState.paused,true);
+  assert.equal(result.summaryReset,true); assert.equal(result.replacement.scene,'Day 1 · Inn'); assert.equal(result.replacement.planThread,'Reminder');
+  const session = h.documents.get(h.sessionPath); assert.equal(session.activeSummaryMessageId,null); assert.equal(session.memoryState.needsRebuild,true); assert.notEqual(session.memoryState.paused,true);
   assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,1);
-  await h.api.updateMessageScene('s',a.id,a.order,'unknown · unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,1);
+  await h.api.updateMessageScene('s',a.id,a.order,'unknown · unknown · Inn'); assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,2);
 });
 test('earlier session copies exclude future evidence and make later snapshots unavailable while preserving fixed plan',async () => {
   const h = await setup(); const a = await h.api.addMessage('s',{ role:'assistant',content:'One' }), b = await h.api.addMessage('s',{ role:'assistant',content:'Two' });
@@ -496,7 +501,7 @@ test('accepting a flagged reply is revision checked, persists its candidate scen
   assert.equal((await h.api.getMessages('s'))[0].acceptance,'pending');
   const accepted = await h.api.acceptMessage('s',reply.id,reply.order,0);
   assert.equal(accepted.replacement.acceptance,'accepted');assert.equal(accepted.replacement.scene,candidate.scene);
-  assert.equal(accepted.replacement.sceneCandidate,null);assert.equal(accepted.replacement.revision,0);
+  assert.equal(accepted.replacement.sceneCandidate,null);assert.equal(accepted.replacement.revision,1);
   assert.notEqual(h.documents.get(h.sessionPath).memoryState?.paused,true);
   assert.equal((await h.api.getMessages('s'))[0].sceneMeta.provenance.time,'unknown');
   const replacement = await h.api.overwriteMessage('s',reply.id,{ content:'Mira waits.',scene:'Inn',sceneMeta:{ kind:'inferred' },acceptance:'accepted' },reply.order);
@@ -535,8 +540,8 @@ test('L6 changed sent text refuses replacement and missing snapshot notes are re
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text='Edited elsewhere';await assert.rejects(h.lore.replaceLines('s',[preview],3),/changed since the preview/);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text,'Edited elsewhere');
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text=sent[0].text;h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'fresh',text:'fresh',by:'auto',at:6},{id:'user',text:'mine',by:'user',at:1});await h.lore.replaceLines('s',[preview],3);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['user','new','fresh']);
 });
-test('L1 content edits cap the edit log without pausing and metadata corrections create no invalidations',async()=>{
- const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Story'});h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:a.order};for(let i=0;i<25;i++)await h.api.editMessage('s',a.id,'Story '+i,a.order);const session=h.documents.get(h.sessionPath);assert.equal(session.contentEdits.length,20);assert.ok(session.contentEditsFloor>0);assert.notEqual(session.memoryState.paused,true);const n=session.memoryInvalidations.length,revision=(await h.api.getMessages('s'))[0].revision;await h.api.updateMessageScene('s',a.id,a.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,n);assert.equal((await h.api.getMessages('s'))[0].revision,revision);
+test('L1 content edits cap the edit log without pausing and scene corrections create revisioned invalidations',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Story'});h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:a.order};for(let i=0;i<25;i++)await h.api.editMessage('s',a.id,'Story '+i,a.order);const session=h.documents.get(h.sessionPath);assert.equal(session.contentEdits.length,20);assert.ok(session.contentEditsFloor>0);assert.notEqual(session.memoryState.paused,true);const n=session.memoryInvalidations.length,revision=(await h.api.getMessages('s'))[0].revision;await h.api.updateMessageScene('s',a.id,a.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,n+1);assert.equal((await h.api.getMessages('s'))[0].revision,revision+1);
 });
 test('L2 rebuild cleanup backs up unreproduced notes and preserves refreshed, imported, user and out-of-range notes',async()=>{
  const h=await setup(),e=loreEntry();e.sections.appearance.lines=[{id:'remove',by:'auto',text:'old',needsReview:true,src:4,at:1},{id:'updated',by:'auto',text:'reproduced',needsReview:false,src:4,at:2},{id:'later',by:'auto',text:'outside',needsReview:true,src:8,at:1},{id:'mine',by:'user',text:'mine',needsReview:true,src:4,at:1},{id:'import',by:'import',text:'canon',needsReview:true,src:4,at:1}];await h.lore.createEntry('s',e);const backup=await h.lore.removeReviewedLines('s',[e],3,6);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['updated','later','mine','import']);await h.lore.restoreBackup('s',backup,[]);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.length,5);
@@ -758,7 +763,7 @@ test('D7 failed per-card restore retains a backup for each card it already chang
  const h=await setup(),a=loreEntry('a'),b=loreEntry('b');await h.lore.createEntry('s',a);await h.lore.createEntry('s',b);
  const backup=await h.lore.writeBackup('s','test','Old pair',[a,b]);
  h.documents.get(h.sessionPath+'/lore/a').sections.appearance.text='New A';h.documents.get(h.sessionPath+'/lore/b').sections.appearance.text='New B';
- h.fault.failAt=h.transactions.length+3;
+ h.fault.failAt=h.transactions.length+2;
  await assert.rejects(h.lore.restoreBackup('s',backup,[]),/Injected transaction failure/);
  assert.equal(h.documents.get(h.sessionPath+'/lore/a').sections.appearance.text,'canon');assert.equal(h.documents.get(h.sessionPath+'/lore/b').sections.appearance.text,'New B');
  const undo=(await h.lore.listBackups('s')).find(g=>g.reason==='restore'),parts=await h.lore.loadBackupGroup('s',undo.id);
@@ -847,4 +852,113 @@ test('F8 overwrite discovery reads the chunk containing the known original order
   assert.equal(h.reads.documents-before,1);
   assert.equal(await h.api.findSavedMessage('s','unsaved',100,{overwrite:true}),null);
   assert.equal(h.transactions.length,0);
+});
+
+test('Continuity repair selects a valid earlier summary and retains retired history',async()=>{
+ const h=await setup();const story=[];for(let i=0;i<6;i++)story.push(await h.api.addMessage('s',{role:i%2?'assistant':'user',content:'Fact '+i}));
+ const early=await h.api.addMessage('s',{role:'summary',content:'Earlier facts',coveredRange:{fromOrder:1,toOrder:2}},{id:'early'});
+ const late=await h.api.addMessage('s',{role:'summary',content:'Obsolete fact',coveredRange:{fromOrder:1,toOrder:6}},{id:'late',sessionUpdate:{activeSummaryMessageId:'late',breakpointOrder:6}});
+ const edited=await h.api.editMessage('s',story[3].id,'Corrected fact',story[3].order);
+ assert.equal(edited.session.activeSummaryMessageId,early.id);assert.equal(edited.session.breakpointOrder,2);
+ const messages=await h.api.getMessages('s');assert.equal(messages.find(m=>m.id===late.id).retired,true);assert.equal(messages.find(m=>m.id===early.id).retired,undefined);
+ const second=await h.api.editMessage('s',story[0].id,'Corrected opening',story[0].order);assert.equal(second.session.activeSummaryMessageId,null);assert.ok((await h.api.getMessages('s')).filter(m=>m.role==='summary').every(m=>m.retired));
+});
+test('Scene edit rejects extraction at commit and preserves its checkpoint and lore',async()=>{
+ const h=await setup(),reply=await h.api.addMessage('s',{role:'assistant',content:'Story',scene:'date: Day 1 · time: morning · place: Inn · present: Mira'});
+ h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:0};
+ const guard={startPointer:0,startRevision:h.documents.get(h.sessionPath).historyRevision,fromOrder:1,endOrder:1};
+ await h.api.updateMessageScene('s',reply.id,reply.order,'date: Day 1 · time: night · place: Inn · present: Mira');
+ await assert.rejects(h.lore.commitExtraction('s',{creates:[loreEntry()],appends:[],aliases:[],statusChanges:[]},{guard,endOrder:1}),/edited/);
+ assert.equal(h.documents.get(h.sessionPath).memoryState.extractedThroughOrder,0);assert.equal(h.documents.has(h.sessionPath+'/lore/mira'),false);
+});
+test('Existing story migration is idempotent and the migration seed is immutable',async()=>{
+ const h=await setup(),api=h.storySettings;
+ const [a,b]=await Promise.all([api.ensureStorySettings('s'),api.ensureStorySettings('s')]);assert.deepEqual(a,b);assert.equal(a.values.narratorSystemPrompt,'Legacy narrator');
+ const saved=await api.preserveLegacyStorySeed({narratorSystemPrompt:'Later account prompt'});assert.equal(saved.narratorSystemPrompt,'Legacy narrator');
+ assert.equal(h.documents.get(h.sessionPath).storySettingsRevision,1);
+});
+test('Story prompt saves preserve unrelated remote fields and reject overlapping changes',async()=>{
+ const h=await setup(),api=h.storySettings,base=(await api.ensureStorySettings('s')).values;
+ await api.saveStorySettings('s',base,{summarizerSystemPrompt:'Remote summary'});
+ const merged=await api.saveStorySettings('s',base,{narratorSystemPrompt:'Local narrator',apiKey:'Never import credentials'});
+ assert.equal(merged.values.summarizerSystemPrompt,'Remote summary');assert.equal(merged.values.narratorSystemPrompt,'Local narrator');assert.equal('apiKey' in merged.values,false);
+ const before=JSON.stringify([...h.documents]);await assert.rejects(api.saveStorySettings('s',base,{narratorSystemPrompt:'Conflict'}),/Reload and review/);assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('New and zero-message copied stories receive independent explicit settings and deletion removes them',async()=>{
+ const h=await setup(),api=h.storySettings,source=await api.ensureStorySettings('s');
+ await api.saveStorySettings('s',source.values,{narratorSystemPrompt:'Custom source',rewriteSystemPrompt:'Custom rewrite'});
+ const copied=await h.sessions.duplicateSession('s',0),path='users/u/sessions/'+copied;
+ const copiedSettings=await api.ensureStorySettings(copied);assert.equal(copiedSettings.values.narratorSystemPrompt,'Custom source');
+ await api.saveStorySettings(copied,copiedSettings.values,{narratorSystemPrompt:'Independent copy'});assert.equal((await api.ensureStorySettings('s')).values.narratorSystemPrompt,'Custom source');
+ const fresh=await h.sessions.createSession('New');assert.notEqual((await api.ensureStorySettings(fresh)).values.narratorSystemPrompt,'Custom source');assert.ok((await api.ensureStorySettings(fresh)).values.rewriteSystemPrompt);
+ await h.sessions.deleteSession(copied);assert.equal(h.documents.has(path+'/storySettings/current'),false);
+});
+test('Concurrent source settings and lore changes abort unpublished copies',async()=>{
+ for(const field of ['historyRevision','loreRevision','storySettingsRevision']){
+  const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');
+  let changed=false;h.fault.beforeCommit=changes=>{if(!changed && changes.some(c=>c[1].path.includes('/storySettings/current') && !c[1].path.startsWith(h.sessionPath+'/'))){changed=true;h.documents.get(h.sessionPath)[field]=(h.documents.get(h.sessionPath)[field] ?? 0)+1;}};
+  await assert.rejects(h.sessions.duplicateSession('s'),/story changed while copying/);assert.equal([...h.documents].filter(([p,d])=>p.startsWith('users/u/sessions/') && p.split('/').length===4 && !d.importing).length,1);
+ }
+});
+test('Background reconciliation and Undo retain concurrent evidence and atomic backups',async()=>{
+ const h=await setup(),entry=loreEntry();await h.lore.createEntry('s',entry);const path=h.sessionPath+'/lore/mira';
+ h.documents.get(path).sections.appearance.lines.push({id:'concurrent',by:'auto',text:'Later fact',src:4,at:2});
+ const backup=await h.lore.reconcileBackground('s',entry,'appearance','Updated background','canon');
+ assert.equal(h.documents.get(path).sections.appearance.text,'Updated background');assert.equal(h.documents.get(path).sections.appearance.lines.length,2);
+ await h.lore.restoreBackup('s',backup,[]);assert.equal(h.documents.get(path).sections.appearance.text,'canon');assert.equal(h.documents.get(path).sections.appearance.lines.length,2);
+ const before=JSON.stringify([...h.documents]);await assert.rejects(h.lore.reconcileBackground('s',entry,'appearance','Conflict','outdated text'),/changed on another device/);assert.equal(JSON.stringify([...h.documents]),before);
+});
+test('Failed lore writes leave their revision and content unchanged',async()=>{
+ const h=await setup(),entry=loreEntry();await h.lore.createEntry('s',entry);const revision=h.documents.get(h.sessionPath).loreRevision;
+ h.fault.failAt=h.transactions.length+1;await assert.rejects(h.lore.saveEntry('s',{...entry,name:'Changed'},entry),/Injected/);
+ assert.equal(h.documents.get(h.sessionPath).loreRevision,revision);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').name,entry.name);
+});
+
+test('Story JSONL and full backups round trip only allowed settings and old files use the preserved seed',async()=>{
+ const h=await setup(),api=h.storySettings;
+ await h.api.addMessage('s',{role:'assistant',content:'Preserved story',scene:'Inn'});const base=(await api.ensureStorySettings('s')).values;
+ await api.saveStorySettings('s',base,{narratorSystemPrompt:'Export narrator',rewriteRecentMessages:3});
+ const exported=await h.transfer.serializeStory('s'),records=exported.text.trim().split('\n').map(JSON.parse);assert.equal(records[0].nera.storySettings.values.narratorSystemPrompt,'Export narrator');
+ Object.assign(records[0].nera.storySettings.values,{apiKey:'Blocked key',maxContextTokens:1,petCharacterIds:['blocked'],streamVibrationMode:'speed'});
+ const file={size:1000,name:'story.jsonl',text:async()=>records.map(JSON.stringify).join('\n')},id=await h.transfer.importSillyTavern(file),values=(await api.ensureStorySettings(id)).values;
+ assert.equal(values.narratorSystemPrompt,'Export narrator');assert.equal(values.rewriteRecentMessages,3);for(const key of ['apiKey','maxContextTokens','petCharacterIds','streamVibrationMode'])assert.equal(key in values,false);
+ const backup=await h.transfer.buildFullBackup('s'),full=await h.transfer.importSillyTavern({size:1000,name:'full.json',text:async()=>JSON.stringify(backup)});assert.equal((await api.ensureStorySettings(full)).values.narratorSystemPrompt,'Export narrator');
+ delete records[0].nera.storySettings;const old=await h.transfer.importSillyTavern({...file,text:async()=>records.map(JSON.stringify).join('\n')});assert.equal((await api.ensureStorySettings(old)).values.narratorSystemPrompt,'Legacy narrator');
+ assert.equal(h.documents.get('users/u/sessions/'+id).memory.autoUpdate,false);assert.equal(h.documents.get('users/u/sessions/'+id).memory.sceneFallback,false);
+});
+test('Export rejects history, lore, or settings changes during snapshot reads',async()=>{
+ for(const field of ['historyRevision','loreRevision','storySettingsRevision']){
+  const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');
+  h.fault.onServerRead=path=>{if(path===h.sessionPath+'/lore'){h.documents.get(h.sessionPath)[field]=(h.documents.get(h.sessionPath)[field] ?? 0)+1;}};
+  await assert.rejects(h.transfer.serializeStory('s'),/story changed while copying or exporting/);
+ }
+});
+test('Summary Stop before its save transaction leaves history and checkpoint untouched',async()=>{
+ const h=await setup(),controller=new AbortController();controller.abort('user');const before=JSON.stringify([...h.documents]);
+ await assert.rejects(h.api.addMessage('s',{role:'summary',content:'Discard'},{signal:controller.signal,sessionUpdate:{activeSummaryMessageId:'sum',breakpointOrder:2}}),/Summary stopped/);
+ // Lazy metadata initialization is permitted, but no summary/checkpoint write is.
+ assert.equal(h.documents.get(h.sessionPath).activeSummaryMessageId,undefined);assert.equal((await h.api.getMessages('s')).length,0);
+});
+
+test('Duplicate thread merge records an explicit surviving status independent of generated status evidence',async()=>{
+ const h=await setup();const entry=id=>({id,book:'events',kind:'thread',name:id==='a'?"Katarina's invitation":'Katarina’s invitation',aliases:[],status:'open',statusSource:{needsReview:true,by:'auto'},sections:{text:{text:'Invitation',lines:[]}}});const a=entry('a'),b=entry('b');await h.lore.createEntry('s',a);await h.lore.createEntry('s',b);
+ await assert.rejects(h.lore.mergeEntries('s',a,b),/Choose the surviving thread status/);
+ const backup=await h.lore.mergeEntries('s',a,b,'closed'),merged=h.documents.get(h.sessionPath+'/lore/b');assert.equal(merged.status,'closed');assert.equal(merged.statusSource,null);
+ await h.lore.restoreBackup('s',backup,[]);assert.equal(h.documents.has(h.sessionPath+'/lore/a'),true);assert.equal(h.documents.get(h.sessionPath+'/lore/b').status,'open');
+});
+
+test('Editing with a cleared checkpoint retires inactive summaries so they cannot become a stale fallback',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Old fact'});
+ await h.api.addMessage('s',{role:'summary',content:'Obsolete inactive summary',coveredRange:{fromOrder:1,toOrder:1}},{id:'old'});
+ await h.api.editMessage('s',a.id,'Corrected fact',a.order);assert.equal((await h.api.getMessages('s')).find(m=>m.id==='old').retired,true);
+ const active=await h.api.addMessage('s',{role:'summary',content:'Correct facts',coveredRange:{fromOrder:1,toOrder:1}},{id:'new',sessionUpdate:{activeSummaryMessageId:'new',breakpointOrder:1}});
+ const deleted=await h.api.deleteMessage('s',active.id,active.order);assert.equal(deleted.session.activeSummaryMessageId,null);
+});
+
+test('Copies and exports reject prompt changes between settings and parent reads',async()=>{
+ for(const mode of ['copy','jsonl','full']){
+  const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');let changed=false;
+  h.fault.onServerRead=path=>{if(!changed && path===(mode==='copy' ? h.sessionPath+'/messageChunks' : h.sessionPath)){changed=true;h.documents.get(h.sessionPath).storySettingsRevision++;const settings=h.documents.get(h.sessionPath+'/storySettings/current');settings.revision++;settings.values.narratorSystemPrompt='Concurrent prompt';}};
+  await assert.rejects(mode==='copy' ? h.sessions.duplicateSession('s') : mode==='jsonl' ? h.transfer.serializeStory('s') : h.transfer.buildFullBackup('s'),/story changed while copying or exporting/);
+ }
 });
