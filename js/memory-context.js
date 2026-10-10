@@ -133,7 +133,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
   let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
   const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
-  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).join('\n'));
+  const recentLoreMessages = mem.loreLookbackMessages > 0
+    ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
+  const recentLoreText = recentLoreMessages.map(m => stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)).join('\n');
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText);
   const skipped = [...filtered.skipped,...selection.skipped];
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
@@ -141,7 +144,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   for (const book of ['facts','events','characters','locations']) {
     if (!selection.selected[book].length) continue;
     const beforeMemory = memory;
-    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
+    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
     let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
     const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;

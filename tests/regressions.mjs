@@ -49,7 +49,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
+      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000, 'mem-loreLookbackMessages': 0, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
@@ -1759,4 +1759,10 @@ test('book list import requires an explicit choice for ambiguous name matches',a
 test('changing the import preview while a write is queued cancels its captured destination',async()=>{
  const {h,f,root,card}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
  let release;h.calls.onCardImport=()=>new Promise(r=>release=r);const pending=namedButton(dialog,'Import card').click();const mode=dialog.querySelectorAll('select')[1];mode.value='merge';await mode.dispatchEvent({type:'change'});release();await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
+});
+test('lore message lookback hydrates, stages and saves per story while rejecting invalid counts',async()=>{
+ const h=await harness();await openImprovementChat(h,{memory:{lorebooks:true,loreLookbackMessages:8}});const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await new Promise(r=>setImmediate(r));
+ assert.equal(Number(h.el('mem-loreLookbackMessages').value),8);h.el('mem-loreLookbackMessages').value='12';await h.fire('nav-story');await h.fire('nav-memory');assert.equal(Number(h.el('mem-loreLookbackMessages').value),12);await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreLookbackMessages'],12);
+ h.el('mem-loreLookbackMessages').value='0';await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreLookbackMessages'],0);const count=h.calls.sessionWrites.length;
+ for(const value of ['-1','1.5','not a number']){h.el('mem-loreLookbackMessages').value=value;await h.fire('btn-save-session');assert.match(h.el('settings-saved-msg').textContent,/whole number/);assert.equal(h.calls.sessionWrites.length,count);}
 });
