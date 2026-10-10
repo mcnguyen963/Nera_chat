@@ -16,7 +16,7 @@ const get = key => document.getElementById('mem-'+key);
 const booleans = ['scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
 const seedKeys = ['date','time','place','present'];
-const numbers = ['batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
+const numbers = ['loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
 let filled = null;
 export function fillMemory(raw) {
   filled = normalizeMemory(raw);
@@ -84,6 +84,7 @@ export function updateMemorySettingsHints() {
   get('show-scene-row').classList.toggle('hidden',!mem.scene);
   get('scene-options').classList.toggle('hidden',!mem.scene);
   for (const book of Object.keys(mem.books)) { get(book+'-on').disabled = !mem.lorebooks && !mem.autoUpdate; get(book+'-budget').disabled = !mem.lorebooks; if (get(book+'-maxCards')) get(book+'-maxCards').disabled = !mem.lorebooks; }
+  get('loreLookbackMessages').disabled = !mem.lorebooks;
   const hints = [];
   if (mem.startingSceneRaw) hints.push('Could not read this starting scene: '+mem.startingSceneRaw+'. Enter its date, time, location and attendees above.');
   if (mem.lorebooks && !mem.scene) hints.push('Turn on Scene line so characters who are present (not just mentioned) are remembered.');

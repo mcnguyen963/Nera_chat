@@ -61,6 +61,8 @@ export function selectEntries(entries, mem, text, scene, recentText = '') {
     const add = (id,reason) => { const entry = list.find(e => e.id === id); if (entry && !selected[book].some(x => x.entry.id === id)) selected[book].push({ entry, reason }); };
     if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
     else if (book === 'events') {
+      for (const id of findMentions(text,index,book)) if(list.find(e=>e.id===id)?.kind==='thread')add(id,'mentioned');
+      for (const id of findMentions(recentText,index,book)) if(list.find(e=>e.id===id)?.kind==='thread')add(id,'recent mention');
       for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,maxOf(Object.values(b.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0)))))) add(e.id,'open thread');
       for (const e of list.filter(e => e.kind === 'timeline')) add(e.id,'timeline');
     } else {
@@ -136,7 +138,9 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
 export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
 export function renderEventsBlock(fit, { provenance = false } = {}) {
   const out = [], threads = fit.included.filter(e => e.entry.kind === 'thread'), timeline = fit.included.find(e => e.entry.kind === 'timeline');
-  if (threads.length) out.push(renderLoreLabel('openThreads'),...threads.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
+  const open=threads.filter(e=>e.entry.status!=='closed'),closed=threads.filter(e=>e.entry.status==='closed');
+  if (open.length) out.push(renderLoreLabel('openThreads'),...open.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
+  if (closed.length) out.push(renderLoreLabel('closedThreads'),...closed.map(e => renderEntry(e.entry,e.lineIds,'',{provenance})));
   if (timeline && (timeline.entry.sections.text?.text || timeline.lineIds.size)) {
     out.push(renderLoreLabel('timeline',{OMITTED:timeline.linesCut ? renderLoreLabel('omittedEvents',{COUNT:timeline.linesCut}) : ''}));
     if (timeline.entry.sections.text?.text) { const meta = sectionMeta(timeline.entry.sections.text,timeline.entry); if (provenance) out.push(renderLoreLabel('provenance',{KIND:meta.kind,ORIGIN:meta.origin,CUTOFF:cutoffLabel(meta.cutoff)})); const text=timeline.entry.sections.text.text; out.push(provenance ? text : stripTurnStamps(text)); }

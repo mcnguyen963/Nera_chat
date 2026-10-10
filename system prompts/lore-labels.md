@@ -28,6 +28,7 @@ lineDate: - ({{WHEN}}) {{TEXT}}
 linePlain: - {{TEXT}}
 turnLabel: T{{TURN}}
 openThreads: Open threads:
+closedThreads: Closed threads (resolved; do not reopen without new story evidence):
 timeline: Timeline (oldest first{{OMITTED}}):
 omittedEvents: , {{COUNT}} earlier events not shown
 characters: Characters:
