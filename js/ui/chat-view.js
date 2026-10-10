@@ -1,3 +1,4 @@
+import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
 import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
 import {buildRewriteMessages} from '../rewrite.js';
@@ -32,7 +33,7 @@ import { updateSession, duplicateSession, getSessionFromServer } from "../sessio
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
 import {
-  useLocalSettings,
+  saveSettings,
   normalizeProfiles,
   activeProfile,
   mirrorFromActiveProfile,
@@ -60,7 +61,7 @@ async function historyAction(kind,run) {
 }
 function applyLocalChange(token,result,mutate) {
   assertActive(token);
-  if(result.summaryReset)clearLocalSummary();
+  if(result.summaryReset && !result.session)clearLocalSummary();
   const before=historyRevision;
   const committed=result.session ?? {...session,historyRevision:result.historyRevision,memoryInvalidations:result.memoryInvalidations ?? session.memoryInvalidations,memoryState:{...session.memoryState,...result.memoryStatePatch}};
   const newerSnapshot=(session.historyRevision ?? 0)>result.historyRevision;
@@ -94,12 +95,14 @@ const pendingCacheWrites = new Set();
 const renderedMessages = new Map();
 
 const el = {};
+const dismissedStaleScenes=new Set();
 let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
 let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
 const memoryStories = new Map();
 let lastMemoryReport = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session) return { session, settings: state.settings, messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
 export async function prepareMemorySnapshot() {
@@ -324,7 +327,7 @@ export function initChatView() {
 
 // ---------- quick model / thinking chips (composer) ----------
 
-// Quick controls update the device cache and live settings without Firestore.
+// Model selection and reasoning are shared account preferences.
 function initQuickControls() {
   el.chipModel = document.getElementById("btn-model-chip");
   el.chipModelLabel = document.getElementById("chip-model");
@@ -334,16 +337,16 @@ function initQuickControls() {
 
   el.chipModel.addEventListener("click", () => toggleQuickPopover());
 
-  el.quickProfile.addEventListener("change", () => {
+  el.quickProfile.addEventListener("change", async () => {
     const s = structuredClone(state.settings);
     if (!s) return;
     s.activeProfileId = el.quickProfile.value;
     normalizeProfiles(s);
     mirrorFromActiveProfile(s); // load the chosen profile's connection fields
-    useLocalSettings(s);
+    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickChips();}
   });
 
-  el.quickThinking.addEventListener("change", () => {
+  el.quickThinking.addEventListener("change", async () => {
     const s = structuredClone(state.settings);
     if (!s) return;
     const v = el.quickThinking.value;
@@ -356,7 +359,7 @@ function initQuickControls() {
     }
     normalizeProfiles(s);
     mirrorToActiveProfile(s);
-    useLocalSettings(s);
+    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickChips();}
   });
 
   // Close when tapping anywhere outside the popover and the chip.
@@ -367,6 +370,7 @@ function initQuickControls() {
     el.popover.hidden = true;
   });
 
+  document.addEventListener('story-settings-changed',()=>{++indicatorRun;refreshContextIndicator();});
   document.addEventListener("settings-changed", refreshQuickChips);
   document.addEventListener("settings-changed", updateIndicator);
   refreshQuickChips();
@@ -438,6 +442,7 @@ export function setSession(sessionId) {
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
   state.sessionId = sessionId;
+  void selectStorySettings(sessionId).catch(error=>showTransientError(error.message));
   session = null;
   streamState = null;
   editingState = null;clearOriginalDraft();
@@ -506,6 +511,7 @@ function saveLocalCache(owner, sid, snapshot) {
 }
 
 export async function prepareChatLogout() {
+  void selectStorySettings(null);
   cacheWritesPaused = true;clearChatRetry();
   clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
   busyGate.active?.abort?.();
@@ -770,7 +776,7 @@ function renderMessages(msgs) {
 }
 
 export function sameRenderedMessage(a,b) {
-  return a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
+  return a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
     (a.revision ?? 0)===(b.revision ?? 0) && a.acceptance===b.acceptance &&
     Boolean(a.editedAt)===Boolean(b.editedAt) && Boolean(a.ooc)===Boolean(b.ooc) && Boolean(a.truncated)===Boolean(b.truncated) &&
     JSON.stringify(a.sceneMeta ?? null)===JSON.stringify(b.sceneMeta ?? null) && JSON.stringify(a.sceneCandidate ?? null)===JSON.stringify(b.sceneCandidate ?? null) &&
@@ -801,7 +807,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   meta.className = "msg-meta";
   const label = document.createElement("span");
   label.textContent =
-    m.role === "user" ? "You" : m.role === "summary" ? "Summary checkpoint" : "Assistant";
+    m.role === "user" ? "You" : m.role === "summary" ? (m.retired ? "Retired summary" : "Summary checkpoint") : "Assistant";
   if (m.role !== 'summary' && anyMemory(normalizeMemory(session?.memory))) label.textContent += ' · T'+(turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) ?? '?');
   if (m.editedAt) label.textContent += " (edited)";
   if (m.truncated) label.textContent += " · cut off";
@@ -875,12 +881,18 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   }
 
   if (m.role==='assistant' && m.reviewWarnings?.length) { const note=document.createElement('p');note.className='muted';note.textContent='Note: '+m.reviewWarnings.join(' ');wrap.append(note); }
-  if (m.role === 'assistant' && !m.ooc && normalizeMemory(session?.memory).scene && getPref('nera.memory.showScene') !== '0') {
+  const latestNarrative=(historyMessages ?? lastMessages).filter(x=>x.role==='assistant' && !x.ooc).at(-1)?.id;
+  const staleKey=state.sessionId+':'+m.id+':'+(m.revision ?? 0);
+  const confirmStale=m.id===latestNarrative && sceneState?.missingStreak>=2 && !dismissedStaleScenes.has(staleKey);
+  if (m.role === 'assistant' && !m.ooc && normalizeMemory(session?.memory).scene && (getPref('nera.memory.showScene') !== '0' || confirmStale)) {
     const chip = document.createElement('button'); chip.className = 'scene-chip'; chip.type = 'button'; chip.textContent = sceneState?.effective ? formatSceneForDisplay(sceneState.effective) : '+ Add scene'; chip.title = 'Edit scene line';
     if (!sceneState?.own && sceneState?.effective) chip.textContent += ' (carried forward · stale)';
     if (m.sceneMeta?.kind === 'inferred') chip.textContent += ' (inferred)';
     if (m.sceneMeta?.provenance?.time === 'declared') chip.textContent += ' (model-declared time)';
+    let staleNotice=null;
+    if(confirmStale){staleNotice=document.createElement('div');staleNotice.className='scene-stale-confirm';const label=document.createElement('span');label.textContent='Scene is stale after '+sceneState.missingStreak+' replies. ';staleNotice.append(label,actionBtn('Confirm scene',()=>chip.click()),actionBtn('Dismiss',()=>{dismissedStaleScenes.add(staleKey);staleNotice.remove();}));wrap.append(staleNotice);}
     chip.addEventListener('click', () => {
+      staleNotice?.remove();
       const row = document.createElement('div'), field = document.createElement('input'); field.value = sceneState?.effective ?? ''; field.maxLength = MAX_SCENE_LENGTH;
       const save = actionBtn('Save', async () => {
         const token=acquireBusy('scene');if(!token){showTransientInfo('Wait for the current reply to finish.');return;}save.disabled=true;
@@ -1048,7 +1060,7 @@ export async function updateIndicator() {
   if (!session || !state.settings || !latestReady) return;
   const run = ++indicatorRun;
   let usage;
-  try { const messages = !anyMemory(normalizeMemory(session.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory(); usage = await computeContextUsage(session,state.settings,messages,{ loreEntries,draftText:el.input.value }); } catch (error) { if (run === indicatorRun) el.contextLabel.textContent = error.message; return; }
+  try { const messages = !anyMemory(normalizeMemory(session.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory(); usage = await computeContextUsage(session,effectiveActiveSettings(),messages,{ loreEntries,draftText:el.input.value }); } catch (error) { if (run === indicatorRun) el.contextLabel.textContent = error.message; return; }
   if (run !== indicatorRun) return; // a newer computation superseded this one
 
   lastMemoryReport = usage.report;
@@ -1122,7 +1134,7 @@ function updateRewriteControls() {
 async function handleRewrite() {
   if (rewriteController) { rewriteController.abort(); return; }
   if (busy || state.busy || !session || editingState || !el.input.value.trim()) return;
-  const settings = structuredClone(state.settings);
+  const settings = effectiveActiveSettings();
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in Settings first.");
     return;
@@ -1200,7 +1212,7 @@ async function handleSend(e) {
   let saved = false;
   const text = draft.trim();
   if (!text) return;
-  const settings = structuredClone(state.settings);
+  const settings = effectiveActiveSettings();
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in the Settings tab first.");
     return;
@@ -1244,7 +1256,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply first.');return;}
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
-  const settings = structuredClone(state.settings), sid = state.sessionId;
+  const settings = effectiveActiveSettings(), sid = state.sessionId;
   if (!settings) {if(ownsToken)releaseBusy(token);return;}
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const vibration=createStreamVibration(settings.streamVibrationMode ?? 'spaces');
@@ -1258,6 +1270,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     }
     let sourceMessages = structuredClone(historyMessages);
     let sourceSession = structuredClone(session);
+    if(settings._storySettingsRevision!=null)sourceSession.storySettingsRevision=settings._storySettingsRevision;
     let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
     startStreamUI();
@@ -1266,9 +1279,9 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       result=await chatCompletion({ settings,messages:built.apiMessages,allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
     } catch(error) {
       assertActive(token);
-      if(!error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
+      if(!['transport_loss','timeout','cancelled'].includes(error.classification) || !error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
       stopReason=error.aborted==='timeout' ? 'timeout' : error.aborted==='dropped' ? 'dropped' : 'stopped';
-      result={...error.partial,finishReason:'length',usage:null};
+      result={...error.partial,finishReason:'length',originalFinishReason:error.finishReason ?? null,failureClassification:error.classification,originalError:error.message,usage:null};
     }
     vibration.stop();
     const {content,thinking,finishReason,usage}=result;
@@ -1309,6 +1322,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       ...(acceptedScene.sceneMeta?.kind==='carried' ? ['No scene tag; previous scene carried.'] : [])] : [];
     const message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
       scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
+      responseDiagnostics:{finishReason:result.originalFinishReason ?? finishReason,classification:result.failureClassification ?? null,error:result.originalError ?? null},
       ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
     updatePetPhase('saving',petTurn);
     let saved;
@@ -1455,10 +1469,13 @@ async function handleSummarize() {
   if (busy || !session) return;
   const petTurn = startPetTurn();
   const token=acquireBusy('summary');if(!token)return;
+  const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing…");
   try {
-    await reconcileStory();assertActive(token);
-    const r = await runSummarization(session, state.settings, {
+    const settings=effectiveActiveSettings();
+    await waitForPreparation(reconcileStory(token),controller);assertActive(token);
+    const r = await runSummarization(session, settings, {
+      signal:controller.signal,
       validateSource: () => assertActive(token),
       messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
@@ -1469,7 +1486,8 @@ async function handleSummarize() {
     finishPetTurn("ready", petTurn);
   } catch (err) {
     finishPetTurn("blocked", petTurn);
-    showTransientError("Summarization failed: " + (err.message || String(err)));
+    if(controller.signal.aborted)showTransientInfo('Summary stopped. Previous checkpoint kept.');
+    else showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
     releaseBusy(token);
@@ -1489,10 +1507,13 @@ async function handleFullSummarize() {
     return;
   const petTurn = startPetTurn();
   const token=acquireBusy('summary');if(!token)return;
+  const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing full history…");
   try {
-    await reconcileStory();assertActive(token);
-    const r = await runSummarization(session, state.settings, {
+    const settings=effectiveActiveSettings();
+    await waitForPreparation(reconcileStory(token),controller);assertActive(token);
+    const r = await runSummarization(session, settings, {
+      signal:controller.signal,
       validateSource: () => assertActive(token),
       messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
       full: true,
@@ -1507,7 +1528,8 @@ async function handleFullSummarize() {
     finishPetTurn("ready", petTurn);
   } catch (err) {
     finishPetTurn("blocked", petTurn);
-    showTransientError("Summarization failed: " + (err.message || String(err)));
+    if(controller.signal.aborted)showTransientInfo('Summary stopped. Previous checkpoint kept.');
+    else showTransientError("Summarization failed: " + (err.message || String(err)));
   } finally {
     ui.done();
     releaseBusy(token);

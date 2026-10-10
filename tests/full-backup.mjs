@@ -16,7 +16,7 @@ async function setup(changed = false) {
   const module = new vm.SourceTextModule(await readFile(new URL('../js/import-export.js', import.meta.url), 'utf8'), { context });
   await module.link(async specifier => {
     if(specifier==='./math-utils.js')return new vm.SourceTextModule(await readFile(new URL('../js/math-utils.js',import.meta.url),'utf8'),{context});
-    const exports = specifier.includes('sessions') ? {
+    const exports = specifier.includes('story-settings-store') ? {ensureStorySettings:async()=>({version:1,revision:1,values:{narratorSystemPrompt:'Story prompt'}}),writeInitialStorySettings(){},preserveLegacyStorySeed(){}} : specifier.includes('story-settings') ? {assertSnapshotRevisions(){},explicitStorySettings:x=>x} : specifier.includes('state') ? {state:{}} : specifier.includes('sessions') ? {
       createSession() {}, getSession() {}, updateSession(){}, deleteSession(){},listSessions:async()=>[], getSessionFromServer: async () => {
         reads++;
         return { ...session, nextOrder: changed && reads > 1 ? 4 : 3 };

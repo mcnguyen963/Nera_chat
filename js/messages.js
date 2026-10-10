@@ -155,6 +155,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     const data = assertStory(snap.data());
     if (message.role === 'assistant') assertReplySource(data,opts.expectedSource);
     else assertSource(data,opts.expectedSource);
+    if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});
     const order = (data.nextOrder ?? 0) + 1;
     const item = makeMessage(id, order, { ...message,...(message.role !== "summary" ? { narratorTurn:data.nextNarratorTurn ?? 1 } : {}) }, tokenCount);
     const size = messageBytes(item);
@@ -165,6 +166,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     const bytes = append ? data.activeChunkBytes + size : chunkBytes([item]);
     const count = append ? data.activeChunkCount + 1 : 1;
     if(!append && (await tx.get(chunkRef(sessionId,activeId,owner))).exists())throw new Error('The next message chunk already exists. Refresh the story before sending.');
+    if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});
     tx.update(sessionRef(sessionId, owner), {
       nextOrder: order,
       historyRevision:(data.historyRevision ?? 0)+1,
@@ -326,15 +328,16 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
   }
   const deletingAssistant = deletingMessage && old.data().messages.find(m => m.id === messageId)?.role === 'assistant';
   let summaryChunks = null;
-  if (deletingMessage) {
+  {
     const source = await getDocFromServer(target),session = assertStory(source.data());
-    expectedSource = { historyRevision:session.historyRevision ?? 0,activeSummaryMessageId:session.activeSummaryMessageId ?? null,breakpointOrder:session.breakpointOrder ?? 0 };
+
     const current = old.data().messages.find(m => m.id === messageId);
-    if (session.activeSummaryMessageId && (current.id === session.activeSummaryMessageId || current.role !== 'summary' && order <= (session.breakpointOrder ?? 0))) {
+    if (current.role!=='summary' || current.id===session.activeSummaryMessageId) {
       // Discover documents before the transaction, then guard the revision and
       // reread every candidate chunk inside it before selecting a fallback.
       const all = await getDocsFromServer(query(chunksCol(sessionId,owner),orderBy('firstOrder','asc')));
-      summaryChunks = all.docs.filter(chunk => (chunk.data().messages ?? []).some(m => m.role === 'summary' && m.id !== messageId));
+      summaryChunks = all.docs.filter(chunk => (chunk.data().messages ?? []).some(m => m.role === 'summary' && !m.retired));
+      expectedSource ??= {...(summaryChunks.length || session.activeSummaryMessageId ? {historyRevision:session.historyRevision ?? 0} : {}),activeSummaryMessageId:session.activeSummaryMessageId ?? null,breakpointOrder:session.breakpointOrder ?? 0};
     }
   }
   const later = requireLatestReply || deletingAssistant ? await getDocsFromServer(query(chunksCol(sessionId,owner), where('lastOrder','>',order), orderBy('lastOrder','asc'))) : null;
@@ -343,7 +346,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
     const sessionSnap = await tx.get(target), chunkSnap = await tx.get(chunkRef(sessionId,old.id,owner));
     const data = assertStory(sessionSnap.data()), previous = chunkSnap.data();
     const freshChunks = new Map([[old.id,previous]]);
-    if (summaryChunks && (data.historyRevision ?? 0) !== expectedSource.historyRevision) throw new HistoryConflict('Story changed while finding earlier summaries. Try deleting again.');
+    if (summaryChunks?.length && expectedSource && (data.historyRevision ?? 0) !== expectedSource.historyRevision) throw new HistoryConflict('Story changed while finding earlier summaries. Try this change again.');
     if (requireLatestReply) assertReplySource(data,expectedSource);
     else assertSource(data,expectedSource);
     const current = previous?.messages?.find(m => m.id === messageId);
@@ -358,15 +361,16 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       if (requireLatestReply && (current.role !== 'assistant' || chunks.some(chunk => (chunk.messages ?? []).some(m => m.role !== 'summary' && m.order > current.order)))) throw new HistoryConflict('Newer story messages exist. Copy this reply or save it at the end.');
       resetNarratorTurn = deletingAssistant && current.role === 'assistant' && !chunks.some(chunk => (chunk.messages ?? []).some(m => ['assistant','user'].includes(m.role) && m.order > current.order));
     }
-    const changed=await change(current),contentChanged=!changed || changed.content!==current.content;
+    const changed=await change(current),contentChanged=!changed || changed.content!==current.content || canonicalScene(changed.scene)!==canonicalScene(current.scene) || JSON.stringify(changed.sceneMeta ?? null)!==JSON.stringify(current.sceneMeta ?? null);
     const replacement=changed ? {...changed,revision:revisionOf(current)+(contentChanged ? 1 : 0)} : null;
     const updated = previous.messages.flatMap(m => m.id === messageId ? (replacement ? [replacement] : []) : [m]);
     const groups = packMessages(updated);
     const records = groups.length ? groups.map((group,index) => ({ id:index === 0 ? old.id : chunkId(group[0].order),data:chunkRecord(group,index === 0 ? previous.firstOrder : group[0].order,index === groups.length-1 ? previous.lastOrder : group.at(-1).order) })) : [{ id:old.id,data:{ ...previous,messages:[],count:0,byteSize:chunkBytes([]) } }];
-    const summaryReset=!!data.activeSummaryMessageId && !replacement && (current.role!=='summary' && order<=(data.breakpointOrder ?? 0) || current.id===data.activeSummaryMessageId);
+    const summaryReset=!!data.activeSummaryMessageId && contentChanged && (current.role!=='summary' && order<=(data.breakpointOrder ?? 0) || !replacement && current.id===data.activeSummaryMessageId);
     let fallback = null;
+    if(contentChanged && current.role!=='summary' && summaryChunks)for(const candidate of summaryChunks)if(!freshChunks.has(candidate.id)){const fresh=await tx.get(chunkRef(sessionId,candidate.id,owner));if(fresh.exists())freshChunks.set(candidate.id,fresh.data());}
     if (summaryReset) {
-      if (!summaryChunks) throw new HistoryConflict('The summary checkpoint changed. Try deleting again.');
+      if (!summaryChunks) throw new HistoryConflict('The summary checkpoint changed. Try this change again.');
       for (const candidate of summaryChunks) if (!freshChunks.has(candidate.id)) {
         const fresh = await tx.get(chunkRef(sessionId,candidate.id,owner));
         if (fresh.exists()) freshChunks.set(candidate.id,fresh.data());
@@ -374,7 +378,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       const candidates = [...freshChunks.values()].flatMap(chunk => chunk?.messages ?? []).filter(m => {
         const cutoff = m.coveredRange?.toOrder ?? m.coveredRange?.to;
         const start = m.coveredRange?.fromOrder ?? m.coveredRange?.from;
-        return m.role === 'summary' && m.id !== messageId && m.content?.trim() && Number.isSafeInteger(cutoff) && cutoff > 0 && cutoff < order && cutoff < m.order && (start == null || Number.isSafeInteger(start) && start >= 0 && start <= cutoff);
+        return m.role === 'summary' && !m.retired && m.id !== messageId && m.content?.trim() && Number.isSafeInteger(cutoff) && cutoff > 0 && cutoff < order && cutoff < m.order && (start == null || Number.isSafeInteger(start) && start >= 0 && start <= cutoff);
       });
       fallback = candidates.sort((a,b) => b.order-a.order)[0] ?? null;
     }
@@ -386,12 +390,22 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       patch.contentEdits=edits.slice(-20);
       if(edits.length>20)patch.contentEditsFloor=Math.max(data.contentEditsFloor ?? 0,...edits.slice(0,-20).map(e=>e.revision));
       if(order<=pointer) {
-        patch.memoryInvalidations=trimInvalidations([...(data.memoryInvalidations ?? []),{fromOrder:order,revision:historyRevision}]);
+        patch.memoryInvalidations=trimInvalidations([...(data.memoryInvalidations ?? []),{fromOrder:order,toOrder:pointer,revision:historyRevision}]);
         patch['memoryState.needsRebuild']=true;
         patch['memoryState.rebuildFromOrder']=Math.min(data.memoryState?.rebuildFromOrder ?? Infinity,order);
       }
     }
     if (data.activeChunkId === old.id) { const active = records.at(-1); Object.assign(patch,{ activeChunkId:active.id,activeChunkBytes:active.data.byteSize,activeChunkCount:active.data.count }); }
+    if (summaryReset || contentChanged && current.role!=='summary') {
+      const retiredId=summaryReset ? data.activeSummaryMessageId : null;
+      const retire=m=>m.role==='summary' && (m.id===retiredId || (m.coveredRange?.toOrder ?? m.coveredRange?.to ?? Infinity)>=order);
+      for (const [id,chunk] of freshChunks) {
+        if (!chunk?.messages?.some(retire)) continue;
+        const record=records.find(r=>r.id===id);
+        if(record) record.data=chunkRecord(record.data.messages.map(m=>retire(m) ? {...m,retired:true} : m),record.data.firstOrder,record.data.lastOrder);
+        else tx.set(chunkRef(sessionId,id,owner),chunkRecord(chunk.messages.map(m=>retire(m) ? {...m,retired:true} : m),chunk.firstOrder,chunk.lastOrder));
+      }
+    }
     for (const record of records) tx.set(chunkRef(sessionId,record.id,owner),record.data);
     tx.update(target,patch);
     const after={id:sessionId,...data};

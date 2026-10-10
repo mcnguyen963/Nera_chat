@@ -242,7 +242,8 @@
                 <button type="button" id="btn-restore-pet" class="btn small">Show hidden pet</button>
               </section>
               <section data-panel="prompts" class="settings-panel hidden">
-                <h2>Prompts</h2>
+                <h2>Prompts · current story</h2>
+                <p class="muted">These prompts and rewrite preferences are saved independently for this story.</p>
                   <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
                   <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
                   <p id="rewrite-prompt-help" class="muted">The default comes from system prompts/rewrite.md.</p>
@@ -263,7 +264,7 @@
               <section data-panel="transfer" class="settings-panel hidden">
                 <h2>Import &amp; export</h2>
                 <p class="muted">Bring your stories with you.</p><h3>Lorebooks</h3><button id="btn-lore-transfer" type="button" class="btn">Open lorebook import &amp; export</button>
-                <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,application/jsonl" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl)</button><button id="btn-export-st" class="btn">Export current story</button><button id="btn-export-full" class="btn">Export full backup (JSON)</button></div>
+                <div class="settings-actions"><input type="file" id="file-import-st" accept=".jsonl,.json,application/jsonl,application/json" class="hidden" /><button id="btn-import-st" class="btn">Import story (.jsonl / .json)</button><button id="btn-export-st" class="btn">Export current story</button><button id="btn-export-full" class="btn">Export full backup (JSON)</button></div>
               </section>
               <section data-panel="account" class="settings-panel hidden">
                 <p><span id="app-version" class="muted"></span> <button id="btn-copy-diagnostics" class="btn small" type="button">Copy diagnostics</button></p><h2>Account</h2><p id="account-email" class="muted account-email"></p>

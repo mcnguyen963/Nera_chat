@@ -35,9 +35,11 @@ function headers(settings) {
   };
 }
 
+async function requestFetch(...args){try{return await fetch(...args);}catch(error){error.classification='transport_loss';throw error;}}
+function classified(message,classification,extra={}) {return Object.assign(new Error(message),{classification,...extra});}
 function responseError(data) {
   const detail = data?.error?.message ?? data?.error;
-  return new Error("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)));
+  return classified("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)),data?.error ? "api_rejection" : "malformed_response",{providerError:data?.error ?? null});
 }
 
 const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call', 'safety', 'recitation', 'blocklist', 'prohibited_content']);
@@ -48,19 +50,19 @@ function finishKind(reason) {
 }
 
 function emptyReplyError(reason) {
-  return new Error(finishKind(reason) === 'length'
+  return classified(finishKind(reason) === 'length'
     ? "The output limit left no reply. Raise Max response tokens or lower the reasoning budget."
-    : "The model returned no reply; nothing was saved.");
+    : "The model returned no reply; nothing was saved.","malformed_response",{finishReason:reason});
 }
 
 function checkFinishReason(reason, allowTruncated) {
   const kind = finishKind(reason);
   if (kind === "length") {
     if (allowTruncated) return;
-    throw new Error("The model stopped at its output limit. The incomplete reply was not saved.");
+    throw classified("The model stopped at its output limit. The incomplete reply was not saved.","provider_finish",{finishReason:reason});
   }
   if (BAD_FINISH.has(kind)) {
-    throw new Error(`The model stopped with ${reason}; the incomplete reply was not saved.`);
+    throw classified(`The model stopped with ${reason}; the incomplete reply was not saved.`,"provider_finish",{finishReason:reason});
   }
 }
 
@@ -78,23 +80,25 @@ export async function chatCompletion(options) {
   const cancel=()=>controller.abort(options.signal?.reason ?? 'user');
   if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
   let rejectAbort;
-  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
+  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{classification:controller.signal.reason==='timeout' ? 'timeout' : 'cancelled',aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
   kick();
   try {
     if(controller.signal.aborted)rejectAbort();
     return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{content+=t;options.onDelta?.(t);},onReasoning:t=>{thinking+=t;options.onReasoning?.(t);}}),aborted]);
   } catch(error) {
-    if(!controller.signal.aborted && !error.partial) {
+    if(!controller.signal.aborted && error.classification==='transport_loss' && !error.partial) {
+      error.classification="transport_loss";
       error.partial={content,thinking};
       error.aborted='dropped';
     }
+    error.classification ??= "malformed_response";
     throw error;
   } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
 }
 
 async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated = false, kick }) {
-  if (!settings.modelId) throw new Error("No model ID set — configure it in Settings.");
-  if (!settings.endpoint) throw new Error("No endpoint set — configure it in Settings.");
+  if (!settings.modelId) throw classified("No model ID set — configure it in Settings.",'configuration');
+  if (!settings.endpoint) throw classified("No endpoint set — configure it in Settings.",'configuration');
 
   if (!settings.streaming) {
     return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated, kick });
@@ -103,14 +107,14 @@ async function unboundedCompletion({ settings, messages, onDelta, onReasoning, s
 }
 
 async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, allowTruncated }) {
-  const res = await fetch(settings.endpoint, {
+  const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
     body: serializedRequestBody(settings, messages, false, { responseFormat,provider }),
     signal,
   });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
-  const data = await res.json();
+  if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});
+  let data;try {data=await res.json();}catch(error){if(error.name!=='SyntaxError'){error.classification='transport_loss';throw error;}throw classified("The model returned malformed JSON.","malformed_response",{cause:error});}
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
@@ -121,18 +125,19 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
     content: msg.content ?? "",
     thinking: msg.reasoning ?? null,
     usage: data.usage ?? null,
+    originalFinishReason: data.choices[0].finish_reason ?? null,
     finishReason: finishKind(data.choices[0].finish_reason) || null,
   };
 }
 
 async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, allowTruncated, kick }) {
-  const res = await fetch(settings.endpoint, {
+  const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
     body: serializedRequestBody(settings, messages, true, { responseFormat,provider }),
     signal,
   });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});
 
   let content = "";
   let thinking = "";
@@ -140,7 +145,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   let completed = false;
   let finishReason = null;
 
-  if (!res.body) throw new Error("The model returned no response stream.");
+  if (!res.body) throw classified("The model returned no response stream.",'malformed_response');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -157,7 +162,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     try {
       json = JSON.parse(payload);
     } catch {
-      throw new Error("The model returned a malformed response event.");
+      throw classified("The model returned a malformed response event.","malformed_response");
     }
     if (json.error) throw responseError(json);
     if (!Array.isArray(json.choices) && !json.usage) throw responseError(json);
@@ -183,7 +188,8 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   signal?.addEventListener('abort',cancelReader,{once:true});
   try {
   while (true) {
-    const { done, value } = await reader.read();
+    let part;try{part=await reader.read();}catch(error){error.classification='transport_loss';throw error;}
+    const { done, value } = part;
     kick?.();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -197,7 +203,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   } finally {signal?.removeEventListener('abort',cancelReader);cancelReader();}
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
-  if (!completed) throw new Error("The model response stream ended before completion. The partial reply was not saved.");
+  if (!completed) throw classified("The model response stream ended before completion. The partial reply was not saved.","transport_loss",{aborted:"dropped",partial:{content,thinking},finishReason});
   if (!content.trim()) throw emptyReplyError(finishReason);
   checkFinishReason(finishReason, allowTruncated);
 
@@ -205,6 +211,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     content,
     thinking: thinking || null,
     usage,
+    originalFinishReason:finishReason,
     finishReason: finishKind(finishReason) || null,
   };
 }

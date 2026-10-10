@@ -22,7 +22,7 @@ test('F20 immediately preceding summary default migrates, while customized summa
     const file=decodeURIComponent(new URL(url).pathname.split('/').at(-1));
     if(root && ['summarizer.md','summary-output.md','legacy-prompt-default-hashes.md'].includes(file))return {ok:true,text:()=>readPrompt(file)};
     return promptFetch(url,options);
-  }},stubs:{'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:()=>{},getDocFromServer:()=>{},setDoc:()=>{},onSnapshot:()=>{}},'db.js':{db:{}},'auth.js':{currentUid:()=> 'owner'},'state.js':{state:{}}}});
+  }},stubs:{'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:()=>{},getDocFromServer:()=>{},setDoc:()=>{},onSnapshot:()=>{},runTransaction(){},serverTimestamp(){}},'db.js':{db:{}},'auth.js':{currentUid:()=> 'owner'},'state.js':{state:{}}}});
   const settings=await use('settings.js');
   // This is the exact outgoing default whose hash the release adds to migrations.
   const old=await readFile(new URL('./fixtures/summary-before-f20.md',import.meta.url),'utf8');

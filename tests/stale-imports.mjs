@@ -33,7 +33,7 @@ test('F15 abandons imports older than one day once across repeated sidebar snaps
   h.snapshot();h.snapshot();await h.api.listSessions();await settle();
   assert.deepEqual(h.marked,['users/owner/sessions/abandoned']);
   assert.deepEqual(h.removed,['users/owner/sessions/abandoned']);
-  assert.equal(h.reads.length,5);
+  assert.equal(h.reads.length,6);
 });
 test('F15 preserves recent, pending timestamps and exact 24-hour imports while hiding them',async()=>{
   const h=await harness([{id:'recent',importing:true,createdAt:{seconds:(now-23*hour)/1000}},{id:'pending',importing:true,createdAt:null},{id:'boundary',importing:true,createdAt:{toMillis:()=>now-24*hour}},{id:'old',importing:true,createdAt:{seconds:(now-25*hour)/1000}},{id:'visible',title:'Ready'}]);

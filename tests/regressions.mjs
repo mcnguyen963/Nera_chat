@@ -112,6 +112,13 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     },
   };
   const stubs = {
+    'story-settings-store.js': {
+      preserveLegacyStorySeed:async()=>({}),
+      selectStorySettings:async sid=>{state.storySettingsId=sid;state.storySettings=sid ? {version:1,revision:1,values:Object.fromEntries(['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages'].map(k=>[k,state.settings[k]]))} : null;},
+      effectiveActiveSettings:()=>structuredClone({...state.settings,...(state.storySettings?.values ?? {})}),
+      saveStorySettings:async(sid,base,changes)=>{if(sid!==state.sessionId)throw Error('Story changed');const result={values:{...base,...changes}};state.storySettings=result;return result;},
+      ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},
+    },
     // The real pet controller is exercised independently in pets.mjs.
     'lore-store.js': {
       getLore:async () => calls.loreEntries ?? [],configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
@@ -370,7 +377,7 @@ test('New accounts have a persisted profile and partial profiles cannot inherit 
   assert.equal(s.apiKey, '');
 });
 
-test('Settings reload from Firestore, while quick model and thinking changes stay local', async () => {
+test('Settings reload from Firestore, and quick model and thinking choices save to the shared account', async () => {
   const h = await harness();
   h.calls.settingsDoc = {
     profiles: [
@@ -389,13 +396,14 @@ test('Settings reload from Firestore, while quick model and thinking changes sta
   h.el('quick-thinking').value = 'high';
   await h.fire('quick-thinking', 'change');
   assert.equal(h.calls.reads, 1);
-  assert.equal(h.calls.writes.length, 0);
+  assert.equal(h.calls.writes.length, 2);
   assert.equal(JSON.parse(h.localCache.get('roleplay-settings:test-user')).activeProfileId, 'second');
+  h.calls.settingsDoc=h.calls.writes.at(-1);
   assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
   assert.equal(h.calls.reads, 2);
   await h.settings.saveSettings({ ...h.state.settings, activeProfileId: 'second', modelId: 'model-b' });
-  assert.equal(h.calls.writes.length, 1);
-  h.calls.settingsDoc = h.calls.writes[0];
+  assert.equal(h.calls.writes.length, 3);
+  h.calls.settingsDoc = h.calls.writes.at(-1);
   assert.equal((await h.settings.loadSettings()).modelId, 'model-b');
   assert.equal(h.calls.reads, 3);
 });
@@ -1214,8 +1222,8 @@ test('B17 remote settings preserve uncaptured typing; Reload normalizes a clean 
  await h.document.dispatchEvent({type:'settings-changed'});await message.querySelectorAll('button').find(b=>b.id==='settings-reload-remote').click();assert.equal(h.el('set-narrator-prompt').value,'Remote prompt');h.calls.confirm=false;await h.fire('btn-close-settings');assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
 });
 test('B17 settings recovery during save keeps the local draft for review',async()=>{
- const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();await h.fire('nav-prompts');h.el('set-narrator-prompt').value='Keep this draft';h.state.settingsSource='cache';h.calls.settingsDoc={narratorSystemPrompt:'Server prompt'};
- await h.fire('btn-save-settings');assert.equal(h.el('set-narrator-prompt').value,'Keep this draft');assert.ok(h.el('settings-saved-msg').querySelectorAll('button').some(b=>b.id==='settings-reload-remote'));assert.equal(h.calls.writes.length,0);
+ const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();h.el('set-model').value='Keep this draft';h.state.settingsSource='cache';h.calls.settingsDoc={narratorSystemPrompt:'Server prompt'};
+ await h.fire('btn-save-settings');assert.equal(h.el('set-model').value,'Keep this draft');assert.ok(h.el('settings-saved-msg').querySelectorAll('button').some(b=>b.id==='settings-reload-remote'));assert.equal(h.calls.writes.length,0);
 });
 test('R6 online pending metadata does not claim offline and server metadata clears the label',async()=>{
  const h=await harness();await openImprovementChat(h);const cb=h.calls.sessionCallbacks.at(-1);h.el('context-label').textContent='Tokens';cb({id:'improvement',metadata:{hasPendingWrites:true},exists:()=>true,data:()=>({title:'Rename'})});assert.doesNotMatch(h.el('context-label').textContent,/offline/);h.el('context-label').textContent='Tokens · offline';cb({id:'improvement',metadata:{},exists:()=>true,data:()=>({title:'Rename'})});assert.doesNotMatch(h.el('context-label').textContent,/offline/);
@@ -1481,14 +1489,14 @@ test('Unsupported vibration is explained without disabling the synced setting', 
 });
 
 
-test('MAIN merge keeps rewrite settings editable and resettable with the Markdown default',async()=>{
- const h=await harness();(await h.use('ui/chat-view.js')).initChatView();const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+test('Story rewrite settings are editable and resettable with an explicit Markdown default',async()=>{
+ const h=await harness();h.state.sessionId='story';h.state.storySettings={values:{...h.state.settings}};(await h.use('ui/chat-view.js')).initChatView();const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();await h.fire('nav-prompts');
  const rewrite=await h.use('rewrite.js');await rewrite.loadRewriteDefaultPrompt();
  const def=h.el('set-rewrite-prompt').value;assert.equal(def,(await readFile(new URL('../system prompts/rewrite.md',import.meta.url),'utf8')).trim());assert.equal(h.el('set-rewrite-prompt').disabled,false);
  h.el('set-rewrite-n').value='2.5';await h.fire('btn-save-settings');assert.match(h.el('settings-saved-msg').textContent,/whole number/);
  h.el('set-rewrite-n').value='0';h.el('set-rewrite-prompt').value='My custom prompt';h.el('set-stream-vibration').value='speed';await h.fire('btn-save-settings');
- assert.equal(h.state.settings.rewriteRecentMessages,0);assert.equal(h.state.settings.rewriteSystemPrompt,'My custom prompt');assert.equal(h.state.settings.streamVibrationMode,'speed');
- await h.fire('btn-reset-rewrite-prompt');await rewrite.loadRewriteDefaultPrompt();assert.equal(h.el('set-rewrite-prompt').value,def);await h.fire('btn-save-settings');assert.equal(h.state.settings.rewriteSystemPrompt,null);
+ assert.equal(h.state.storySettings.values.rewriteRecentMessages,0);assert.equal(h.state.storySettings.values.rewriteSystemPrompt,'My custom prompt');assert.equal(h.state.settings.rewriteRecentMessages,10);assert.equal(h.state.settings.streamVibrationMode,'spaces');
+ await h.fire('btn-reset-rewrite-prompt');await rewrite.loadRewriteDefaultPrompt();assert.equal(h.el('set-rewrite-prompt').value,def);await h.fire('btn-save-settings');assert.equal(h.state.storySettings.values.rewriteSystemPrompt,def);
 });
 test('MAIN merge stops a rewrite during history loading without a model call',async()=>{
  const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
@@ -1625,4 +1633,23 @@ test('F8 a real unsaved conflict still requires a new append, then saves exactly
 test('F6 all summary application paths show lint warnings without gating acceptance',async()=>{
  const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');const h=await harness({sources:{'ui/chat-view.js':source+'\nexport {applySummaryResult as testApplySummaryResult};'}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
  chat.testApplySummaryResult({skipped:true,lintWarnings:[{line:1},{line:2}]});assert.ok(h.el('message-list').children.some(n=>n.textContent==='Summary has 2 suspect lines — review it in the summary editor.'));assert.equal(chat.memorySnapshot().session.memoryState?.paused,undefined);
+});
+
+for(const full of [false,true])test(`Manual ${full?'full-history':'normal'} summary Stop keeps the active checkpoint and discards unfinished output`,async()=>{
+ const h=await harness(),history=Array.from({length:12},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'Event '+i}));history.push({id:'old-summary',order:13,role:'summary',content:'Existing facts',coveredRange:{fromOrder:1,toOrder:4}});
+ const chat=await openImprovementChat(h,{activeSummaryMessageId:'old-summary',breakpointOrder:4},history);Object.assign(h.state.settings,{keepRecentMessagesAfterSummary:2,maxContextTokens:50000});
+ let entered;const ready=new Promise(resolve=>entered=resolve);h.calls.onRequest=()=>{entered();return new Promise(()=>{});};
+ const running=full ? h.document.dispatchEvent({type:'summarize-full'}) : h.fire('btn-summarize');await ready;
+ assert.equal(h.el('btn-stop').classList.contains('hidden'),false);await h.fire('btn-stop');await running;
+ assert.equal(h.state.busy,false);assert.equal(chat.memorySnapshot().session.activeSummaryMessageId,'old-summary');assert.equal(chat.memorySnapshot().session.breakpointOrder,4);assert.equal(h.calls.messages.length,0);assert.equal(h.calls.requests.length,1);
+});
+
+test('Stale scene confirmation opens carried values and dismissing makes no model or scene writes',async()=>{
+ const h=await harness(),raw='date: Day 1 · time: morning · place: Inn · present: Mira',history=[{id:'a',order:1,role:'assistant',content:'At the inn',scene:raw},{id:'b',order:2,role:'assistant',content:'Mira waits',sceneMeta:{kind:'carried',stale:true}},{id:'c',order:3,role:'assistant',content:'Mira continues',sceneMeta:{kind:'carried',stale:true}}];
+ await openImprovementChat(h,{memory:{scene:true}},history);const root=h.el('message-list'),notice=root.querySelector('.scene-stale-confirm');assert.ok(notice);
+ const before=JSON.stringify(h.calls.history);await notice.querySelectorAll('button').find(b=>b.textContent==='Confirm scene').click();
+ const latest=root.children.find(row=>row.dataset.messageId==='c');assert.equal(latest.querySelector('input').value,raw);await latest.querySelectorAll('button').find(b=>b.textContent==='Cancel').click();assert.equal(JSON.stringify(h.calls.history),before);assert.equal(h.calls.requests.length,0);
+ // A fresh render displays the confirmation again until explicitly dismissed.
+ h.calls.latestCallbacks.at(-1)({messages:history.map(m=>({...m,content:m.content+' '})),hasEarlier:false});
+ const dismiss=root.querySelector('.scene-stale-confirm').querySelectorAll('button').find(b=>b.textContent==='Dismiss');await dismiss.click();assert.equal(root.querySelector('.scene-stale-confirm'),null);assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
 });

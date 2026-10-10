@@ -18,7 +18,7 @@ function gateWrite(action) {
     const owner = args[0]?.uid ?? currentUid();
     const sid = typeof args[0] === 'object' ? args[0].id : args[0]; storyWrites.set(sid,(storyWrites.get(sid) ?? 0)+1);
     activeWrites++;
-    try { await waitForNarrator(); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); if(![commitExtractionImpl,copyLoreImpl,writeBackupImpl,deleteLoreTreesImpl].includes(action))await storyTransaction({id:sid,uid:owner},async tx=>tx.update(sessionRef({id:sid,uid:owner}),{loreRevision:increment(1)})); return await action({ id:sid,uid:owner },...args.slice(1)); }
+    try { await waitForNarrator(); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); return await action({ id:sid,uid:owner },...args.slice(1)); }
     finally { const remaining = storyWrites.get(sid)-1; if (remaining) storyWrites.set(sid,remaining); else { storyWrites.delete(sid); for (const resolve of storyWaiters.get(sid) ?? []) resolve(); storyWaiters.delete(sid); } if (--activeWrites === 0) { for (const resolve of writeWaiters) resolve(); writeWaiters.clear(); } }
   };
 }
@@ -29,7 +29,14 @@ function storyTransaction(sid,action,source = null) {
   return runTransaction(db,async tx => {
     const session=assertStory((await tx.get(sessionRef(sid))).data());
     if (source) assertStory((await tx.get(sessionRef(source))).data());
-    return action(tx,session);
+    let loreChanged=false,revisionWritten=false;
+    const tracked=Object.create(tx);tracked.get=tx.get.bind(tx);
+    for(const method of ['set','update','delete'])tracked[method]=(target,...args)=>{
+      if(target.path?.includes('/lore/'))loreChanged=true;
+      if(target.path===sessionRef(sid).path && args[0] && 'loreRevision' in args[0])revisionWritten=true;
+      return tx[method](target,...args);
+    };
+    return Promise.resolve(action(tracked,session)).then(result=>{if(loreChanged && !revisionWritten)tx.update(sessionRef(sid),{loreRevision:increment(1)});return result;});
   });
 }
 const clean = entry => {
@@ -196,7 +203,7 @@ async function deleteEntryImpl(sid,entry) {
     tx.delete(target);
   });return base.id;
 }
-async function mergeEntriesImpl(sid,source,target) {
+async function mergeEntriesImpl(sid,source,target,threadStatus=null) {
   await ensureBackupIndex(sid);const base=backupBase('merge','Merged '+source.name+' into '+target.name);
   await storyTransaction(sid,async tx => {
     const a=await tx.get(ref(sid,source.id)),b=await tx.get(ref(sid,target.id)),index=await tx.get(backupIndexRef(sid));
@@ -208,15 +215,31 @@ async function mergeEntriesImpl(sid,source,target) {
       if(s.text){if(!dest.text)dest.text=s.text;else dest.lines.push({id:newLoreId('ln'),text:'From '+from.name+': '+s.text,turn:null,when:null,src:null,by:'user',at:Date.now()});}
       dest.lines.push(...(s.lines ?? []).filter(l=>!dest.lines.some(x=>x.id===l.id)));into.sections[key]=dest;
     }
+    if(into.kind==='thread'){if(!['open','closed'].includes(threadStatus))throw new Error('Choose the surviving thread status.');into.status=threadStatus;into.statusSource=null;}
     guardSize(into);
     backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,[{id:source.id,...a.data()},{id:target.id,...b.data()}]);
     tx.update(ref(sid,target.id),{...into,updatedAt:serverTimestamp()});tx.delete(ref(sid,source.id));
   });return base.id;
 }
+async function reconcileBackgroundImpl(sid,entry,key,text,expectedText) {
+  if(typeof text!=='string')throw new Error('Enter replacement background text.');
+  await ensureBackupIndex(sid);const base=backupBase('reconcile','Reconciled '+entry.name+' · '+key);
+  await storyTransaction(sid,async tx=>{
+    const target=ref(sid,entry.id),saved=await tx.get(target),index=await tx.get(backupIndexRef(sid));
+    if(!saved.exists())throw new Error('This card was deleted.');
+    const data=saved.data(),section=data.sections[key];
+    if(!section || section.text!==expectedText)throw new Error('This background changed on another device. Reopen it and review.');
+    const previous={id:entry.id,...structuredClone(data)};
+    data.sections[key]={...section,text,origin:'user',kind:'canon',cutoff:null};guardSize(data);
+    backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,[previous]);
+    tx.update(target,{sections:data.sections,updatedAt:serverTimestamp()});
+  });return base.id;
+}
+export const reconcileBackground=gateWrite(reconcileBackgroundImpl);
 async function commitExtractionImpl(sid,changes,range) {
   return runTransaction(db,async tx=>{
     const target=sessionRef(sid),snap=await tx.get(target),session=assertStory(snap.data());
-    if(range.guard)assertExtractionSource(session,range.guard);else assertSource(session,range.expectedSource);
+    if(range.guard){assertExtractionSource(session,range.guard);if(range.guard.loreRevision!=null && (session.loreRevision ?? 0)!==range.guard.loreRevision)throw new Error('Lorebooks changed during the update. Retry memory extraction.');}else assertSource(session,range.expectedSource);
     const existing=new Map(),skipped=[],written=[];let notes=0;
     for(const id of new Set([...changes.appends,...changes.aliases,...changes.statusChanges].map(a=>a.entryId))) {
       if(changes.creates.some(e=>e.id===id))continue;

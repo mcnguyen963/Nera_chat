@@ -19,7 +19,7 @@ export function stop(sid) { inFlight.get(sid)?.abort(); }
 export function stopAll() { for (const controller of inFlight.values()) controller.abort(); }
 const emit = detail => document.dispatchEvent(new CustomEvent('memory-status',{ detail }));
 const editTime = value => value?.toMillis?.() ?? (typeof value?.seconds === 'number' ? value.seconds*1000+Math.floor((value.nanoseconds ?? 0)/1e6) : value instanceof Date ? value.getTime() : value ?? null);
-const stamp = messages => JSON.stringify(messages.map(m => ({ id:m.id,order:m.order,role:m.role,content:m.content })));
+const stamp = messages => JSON.stringify(messages.map(m => ({ id:m.id,order:m.order,role:m.role,content:m.content,scene:m.scene,sceneMeta:m.sceneMeta,revision:m.revision })));
 export function rangeUnchanged(range,messages,snapshot) { return stamp(messages.filter(m => range.messages.some(r => r.id === m.id))) === snapshot; }
 export function shouldSkipAutoSummary(mem, running, due) { return running || mem.autoUpdate && !!due; }
 export function maybeStartAfterTurn(sid) {
@@ -78,7 +78,7 @@ async function start(sid,range,manual) {
     range = dueRange(source,live.session.memoryState,mem,{ manual }); if (!range) return false;
     const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session).entries,messages:source,range,count:countTokens }); range = built.range;
     const snapshot = stamp(range.messages);
-    const guard={startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
+    const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
     const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
@@ -91,6 +91,7 @@ async function start(sid,range,manual) {
     if(!rangeUnchanged(range,latest.messages,snapshot))throw new StaleSourceError('Messages in this range were edited during the update.');
     const latestMem=normalizeMemory(latest.session.memory);
     if(!manual && !latestMem.autoUpdate)return false;
+    guard.loreRevision=latest.session.loreRevision ?? 0;
     const changes=applyOps(latest.entries,parsed.ops,{mem:latestMem,protagonist:mem.protagonist,sourceRevision:guard.startRevision,messages:latest.messages,session:latest.session});
     const skipped=[...parsed.skipped,...changes.skipped,...(parsed.adjusted ?? [])].map(note=>({...note,card:note.card ?? note.name ?? latest.entries.find(e=>e.id===note.entryId)?.name ?? ''}));
     const committed=await commitExtraction(sid,changes,{...range,guard,skipped});
