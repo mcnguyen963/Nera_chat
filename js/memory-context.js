@@ -68,6 +68,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     text=gapPrefix+text;contentCache.set(key,text);return text;
   };
   const selected = new Set(required), books = [], loaded = [], warnings = [];
+  // Inspection is device-local metadata; it never participates in request accounting.
+  const inspection = opts.includeInspection ? { sections:{}, messages:[] } : null;
   const contract = mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
   if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
   if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
@@ -79,7 +81,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   };
   // Keep the omission note with the first retained user input after the opening anchors.
   const gapUser=()=> { const first=raw.find(m=>selected.has(m.id) && !anchorIds.has(m.id)); return first?.role==='user' ? first : null; };
-  const render = () => {
+  const render = (inspect = false) => {
     const gap=gapInfo();
     const history=raw.filter(m=>selected.has(m.id)).map(m=>({id:m.id,role:m.role,content:contentFor(m,{gap:!!gap})}));
     if(gap && !gapUser()) history.splice(history.filter(m=>anchorIds.has(m.id) && m.id!==latest?.id).length,0,{role:'system',content:gap});
@@ -97,6 +99,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       if(reminder) history[i].content+='\n\n'+reminder;
       if(contract && mem.replyContract==='system') history.splice(i,0,{role:'system',content:contract});
     }
+    if (inspect) inspection.messages = history.flatMap((m,index) => m.id ? [{
+      id:m.id,order:byId.get(m.id)?.order,role:m.role,content:m.content,requestIndex:index+1,
+      source:anchorIds.has(m.id) ? 'Opening exchange' : m.id==='__memory_draft' ? 'Composer draft' : m.id==='__continuation' ? 'Continuation instruction' : m.id===latest?.id ? 'Latest user message' : 'Recent conversation',
+    }] : []);
     return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
   };
   const messageCosts=new Map();
@@ -162,6 +168,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     }
     skipped.push(...fit.skipped);
     if(fit.userLinesCut)warnings.push(`${fit.userLinesCut} user-written lore lines could not fit in the ${book} budget.`);
+    if (inspection && fit.text) inspection.sections[book] = text;
     if (fit.text && (book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
     for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds] });
   }
@@ -181,7 +188,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if (selected.has(m.id)) continue;
     selected.add(m.id); if (await cost() > limit) { selected.delete(m.id); break; }
   }
-  const apiMessages=render(),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);
+  const apiMessages=render(!!inspection),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);
   if(actual!==await cost()) {
     if(!accountingRetry) {
       // A tokenizer can recover from fallback estimates midway through assembly.
@@ -214,5 +221,6 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const gaps = []; for (const m of uncovered) { const turn = turns.turnById.get(m.id); const last = gaps.at(-1); if (last && turn <= last.toTurn+1) { last.toTurn = turn; last.toOrder = m.order; } else gaps.push({ fromTurn:turn,toTurn:turn,fromOrder:m.order,toOrder:m.order }); }
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
-  return { apiMessages,usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

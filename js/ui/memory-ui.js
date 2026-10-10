@@ -18,7 +18,7 @@ export function sheet(root,title,{ close = () => true, className = '', back } = 
     if (root.classList.contains('hidden') || document.querySelector('.memory-sub-sheet:not(.hidden)') && !root.classList.contains('memory-sub-sheet')) return;
     if (e.key === 'Escape') { e.preventDefault(); goBack(); }
     if (e.key !== 'Tab') return;
-    const all = [...dialog.querySelectorAll('button,input,select,textarea,[tabindex="0"]')].filter(e => !e.disabled && e.getClientRects().length);
+    const all = [...dialog.querySelectorAll('button,input,select,textarea,summary,[tabindex="0"]')].filter(e => !e.disabled && e.getClientRects().length);
     if (!all.length) { e.preventDefault(); dialog.focus(); return; }
     if (e.shiftKey && (document.activeElement === all[0] || document.activeElement === dialog)) { e.preventDefault(); all.at(-1).focus(); }
     else if (!e.shiftKey && document.activeElement === all.at(-1)) { e.preventDefault(); all[0].focus(); }

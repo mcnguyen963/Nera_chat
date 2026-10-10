@@ -847,6 +847,48 @@ test('context viewer includes composer draft and Copy request is the exact compu
   await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.match(h.calls.clipboard,/=== USER ===\nAsk Mira$/); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
 
+test('grouped context viewer lazily reveals exact request text and preserves navigation across refresh',async () => {
+  const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js');
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve=>setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
+  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'}, {id:'a',order:2,role:'assistant',content:'Opening'}],hasEarlier:false});
+  h.el('chat-input').value='<script>Draft as literal text</script>';
+  viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve=>setTimeout(resolve,0));
+  const root=h.el('context-viewer'),get=key=>root.querySelectorAll('details').find(d=>d.dataset.contextKey===key);
+  assert.equal(get('lorebooks').open,true);
+  for(const key of ['instructions','summary','book-characters','book-locations','book-facts','book-events','scene','conversation','updates','full-request']) assert.equal(get(key).open,false,key);
+  assert.equal(root.querySelectorAll('pre').length,0,'Long text is lazy');
+  const conversation=get('conversation');conversation.open=true;await conversation.dispatchEvent({type:'toggle'});
+  assert.equal(root.querySelectorAll('.context-turn-list').length,2);
+  const draft=root.querySelectorAll('details').find(d=>d.children[0]?.textContent?.includes('Composer draft'));
+  draft.open=true;await draft.dispatchEvent({type:'toggle'});
+  assert.equal(draft.querySelector('pre').textContent,'<script>Draft as literal text</script>');
+  root.querySelector('.memory-content').scrollTop=120;
+  root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='recent').scrollTop=35;
+  draft.querySelector('summary').focus();
+  await root.querySelectorAll('button').find(b=>b.textContent==='Refresh').click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(get('conversation').open,true);
+  assert.equal(get(draft.dataset.contextKey).open,true);
+  assert.equal(h.document.activeElement.dataset.focusKey,draft.dataset.contextKey);
+  assert.equal(root.querySelector('.memory-content').scrollTop,120);
+  assert.equal(root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='recent').scrollTop,35);
+  const full=get('full-request');full.open=true;await full.dispatchEvent({type:'toggle'});
+  const request=root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='request');
+  for(const d of request.querySelectorAll('details')) {d.open=true;await d.dispatchEvent({type:'toggle'});}
+  const built=await (await h.use('context-builder.js')).buildContextForRequest(chat.memorySnapshot().session,chat.memorySnapshot().settings,{messages:chat.memorySnapshot().messages,draftText:h.el('chat-input').value});
+  assert.deepEqual(request.querySelectorAll('pre').map(p=>p.textContent),Array.from(built.apiMessages,m=>m.content));
+  await root.querySelectorAll('button').find(b=>b.textContent==='Copy request as text').click();
+  assert.equal(h.calls.clipboard,built.apiMessages.map(m=>'=== '+m.role.toUpperCase()+' ===\n'+m.content).join('\n\n'));
+  assert.equal(h.calls.requests.length,0);
+  chat.setSession('other');await new Promise(resolve=>setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({id:'other',exists:()=>true,data:()=>({title:'Other'})});
+  h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+  await h.document.dispatchEvent({type:'session-changed'});await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(get('conversation').open,false);
+  assert.equal(get('lorebooks').open,true);
+  assert.equal(root.querySelector('.memory-content').scrollTop,0);
+});
+
 test('candidate summary must fit the full narrative request before its checkpoint activates',async () => {
   const h = await harness(), { runSummarization } = await h.use('summarizer.js');
   h.calls.response = 'oversized '.repeat(1000);
