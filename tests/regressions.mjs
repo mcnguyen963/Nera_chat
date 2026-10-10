@@ -75,7 +75,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
   const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, prompt:'Story',confirm: true, response: 'summary', responseData: null, streamLines: null };
   const localCache = new Map();
   const context = vm.createContext({
-    URL, console, structuredClone, document, TextDecoder, TextEncoder, AbortController, ...globals,
+    URL, Blob, console, structuredClone, document, TextDecoder, TextEncoder, AbortController, ...globals,
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } }, ...globals.navigator },
     requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
     localStorage: { getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
@@ -124,7 +124,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       getLore:async () => calls.loreEntries ?? [],configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
       subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
-      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async () => {}, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importLore: async () => 'backup', replaceLines: async () => 'backup',
+      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async () => 'backup', replaceLines: async () => 'backup',
     },
     'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
@@ -133,7 +133,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'auth.js': { currentUid: () => 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
+    'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
     'tokenizer.js': { countTokens: async (text) => text.length },
     'sessions.js': {
       subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
@@ -1724,4 +1724,39 @@ test('Continuation save retry uses the same overwrite and makes no model call; D
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save again').click();assert.equal(h.calls.requests.length,count);assert.equal(h.calls.history.at(-1).content,'Saved prefix.  \n\nNew passage.');assert.equal(h.calls.history.length,2);
  h.calls.overwriteMessage=async()=>{throw Error('offline');};await h.fire('btn-rewrite');await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Discard').click();
  assert.equal(h.el('btn-rewrite').disabled,false);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+});
+
+async function cardUI() {
+ const h=await harness(),l=await h.use('lore-lines.js'),f=await h.use('lore-format.js');
+ const card=l.makeEntry('characters','Mira'),other=l.makeEntry('characters','Other');card.sections.notes.text='Before';h.calls.loreEntries=[card,other];
+ await openImprovementChat(h);const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({entryId:card.id});await new Promise(r=>setImmediate(r));
+ return {h,l,f,lore,card,other,root:h.el('lorebook-overlay')};
+}
+const namedButton=(root,text)=>root.querySelectorAll('button').find(b=>b.textContent===text);
+test('single-card paste import previews explicit destination, honors rename, opens result and Undo uses captured story',async()=>{
+ const {h,f,card,other,root}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');
+ const incoming=structuredClone(card);incoming.name=other.name;incoming.sections.notes.text='<script>text only</script>';
+ dialog.querySelector('textarea').value=f.serializeCard(incoming,{format:'json',storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
+ assert.ok(dialog.querySelectorAll('pre').some(e=>e.textContent.includes('<script>text only</script>')));assert.equal(dialog.querySelector('select').value,card.id);assert.equal(dialog.querySelectorAll('select')[1].value,'replace');
+ await namedButton(dialog,'Import card').click();assert.equal(h.calls.cardImports.length,1);assert.equal(h.calls.cardImports[0][1].id,card.id);assert.equal(root.querySelector('.lore-editor').querySelector('h2').textContent,other.name);
+ h.state.sessionId='other-story';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();assert.equal(h.calls.cardRestores[0][0].id,'improvement');assert.equal(h.calls.cardRestores[0][0].uid,'test-user');
+});
+test('single-card transfers block unsaved editor changes and export defaults to Markdown',async()=>{
+ const {h,root}=await cardUI();await namedButton(root,'Export card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');assert.equal(dialog.querySelector('select').children[0].value,'md');await namedButton(dialog,'Cancel').click();
+ const section=root.querySelectorAll('.lore-section').at(-1).querySelector('textarea');section.value='Unsaved';await section.dispatchEvent({type:'input'});
+ await namedButton(root,'Import into this card…').click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);await namedButton(root,'Export card…').click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);assert.equal(h.calls.cardImports,undefined);
+});
+for(const change of ['story','account','destination','cancel'])test('single-card async file read cancels on '+change+' switch',async()=>{
+ const {h,f,lore,card,other,root}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet'),picker=dialog.querySelector('input');let finish;picker.files=[{size:100,text:()=>new Promise(r=>finish=r)}];const pending=picker.dispatchEvent({type:'change'});
+ if(change==='story')h.state.sessionId='another';if(change==='account')h.calls.uid='another';if(change==='destination')lore.openLorebooks({entryId:other.id});if(change==='cancel')await namedButton(dialog,'Cancel').click();
+ finish(f.serializeCard(card,{storyId:'improvement'}));await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
+});
+test('book list import requires an explicit choice for ambiguous name matches',async()=>{
+ const {h,f,lore,card,other,root}=await cardUI();other.aliases=[card.name];lore.openLorebooks({screen:'list',book:'characters'});await namedButton(root,'Import card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'different'});await namedButton(dialog,'Read pasted text').click();assert.equal(dialog.querySelector('select').value,'');assert.equal(namedButton(dialog,'Import card').disabled,true);assert.ok(dialog.querySelectorAll('p').some(e=>/Several cards match/.test(e.textContent)));
+ const select=dialog.querySelector('select');select.value='__new';await select.dispatchEvent({type:'change'});await namedButton(dialog,'Import card').click();assert.equal(h.calls.cardImports.length,1);assert.notEqual(h.calls.cardImports[0][1].id,card.id);
+});
+
+test('changing the import preview while a write is queued cancels its captured destination',async()=>{
+ const {h,f,root,card}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
+ let release;h.calls.onCardImport=()=>new Promise(r=>release=r);const pending=namedButton(dialog,'Import card').click();const mode=dialog.querySelectorAll('select')[1];mode.value='merge';await mode.dispatchEvent({type:'change'});release();await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {appHarness} from './app-harness.mjs';
 import { readFile } from 'node:fs/promises';
 
 const URL_FIRESTORE = 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -8,7 +9,7 @@ const card = lines => ({id:'mira',name:'Mira',sections:{notes:{text:'',lines}}})
 const note = (id,src) => ({id,src,text:id,by:'auto',at:1});
 async function setup(history, entry, { failHistory = false } = {}) {
   const sessionPath = 'users/u/sessions/s', docs = new Map([[sessionPath,{loreRevision:0}],[sessionPath+'/lore/mira',structuredClone(entry)],[sessionPath+'/loreMeta/backups',{groups:[]}]]);
-  const counts = {history:0, backups:0, loreWrites:0, loreWriteIds:[]}, controls={failCard:null}; let id=0;
+  const counts = {history:0, backups:0, loreWrites:0, loreWriteIds:[]}, controls={failCard:null,uid:'u',failCommit:false}; let id=0;
   const ref = (...parts) => ({path:parts.slice(1).join('/')});
   const snapshot = target => ({id:target.path.split('/').at(-1),exists:()=>docs.has(target.path),data:()=>structuredClone(docs.get(target.path))});
   function apply(method,target,value) {
@@ -23,11 +24,11 @@ async function setup(history, entry, { failHistory = false } = {}) {
     doc:ref, collection:ref, getDocFromServer:async target=>snapshot(target), getDocsFromServer:async()=>({docs:[]}),
     setDoc:async(target,value)=>apply('set',target,value), updateDoc:async(target,value)=>apply('update',target,value),deleteDoc:async target=>apply('delete',target),
     onSnapshot(){return ()=>{};}, arrayUnion:(...values)=>values, serverTimestamp:()=>1, Timestamp:class {}, increment:amount=>({increment:amount}),
-    runTransaction:async(_db,action)=> {const writes=[];const result=await action({get:async target=>{assert.equal(writes.length,0,'transaction reads precede writes');if(controls.failCard && target.path.endsWith('/lore/'+controls.failCard))throw new Error('offline');return snapshot(target);},set:(...args)=>writes.push(['set',...args]),update:(...args)=>writes.push(['update',...args]),delete:(...args)=>writes.push(['delete',...args])});for(const write of writes)apply(...write);return result;},
+    runTransaction:async(_db,action)=> {const writes=[];const result=await action({get:async target=>{assert.equal(writes.length,0,'transaction reads precede writes');if(controls.failCard && target.path.endsWith('/lore/'+controls.failCard))throw new Error('offline');return snapshot(target);},set:(...args)=>writes.push(['set',...args]),update:(...args)=>writes.push(['update',...args]),delete:(...args)=>writes.push(['delete',...args])});if(controls.failCommit)throw new Error('commit failed');for(const write of writes)apply(...write);return result;},
     writeBatch:()=>({set(){},delete(){},commit:async()=>{}}),
   };
   const stubs = {
-    [URL_FIRESTORE]:firestore,'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'},
+    [URL_FIRESTORE]:firestore,'db.js':{db:{}},'auth.js':{currentUid:()=> controls.uid},
     'continuity.js':{assertSource(){},noteNeedsReview(){return false;},sectionMeta(){return {};},assertExtractionSource(){}},
     'lore-lines.js':{newLoreId:()=> 'id'+ ++id, normalizeName:value=>String(value).toLowerCase()},
     'messages.js':{getMessages:async sid=>{assert.equal(sid,'s');counts.history++;if(failHistory)throw new Error('offline');return structuredClone(history);}},
@@ -152,4 +153,37 @@ test('E4 restore recognizes Admin SDK JSON timestamps in extraction state',async
   const session=h.docs.get(h.sessionPath);session.memoryState={lastUpdateAt:{_seconds:100,_nanoseconds:500000000}};h.docs.set(h.sessionPath,session);
   await h.api.restoreBackup('s',id,[]);
   assert.equal(h.docs.get(h.sessionPath).memoryState.rebuildFromOrder,300);
+});
+
+async function cardImportSetup() {
+ const use=appHarness(),f=await use('lore-format.js'),l=await use('lore-lines.js');
+ const entry=structuredClone(l.makeEntry('characters','Mira'));entry.id='mira';entry.createdAt=123;entry.sections.notes.lines=[{id:'old',text:'Before',turn:1,when:null,src:null,by:'user',at:1}];
+ const h=await setup([],entry),other=structuredClone(l.makeEntry('locations','Inn'));h.docs.set(h.sessionPath+'/lore/'+other.id,structuredClone(other));
+ const changed=structuredClone(entry);changed.name='Renamed';changed.sections.notes.lines=[];
+ const parsed=f.parseCard(f.serializeCard(changed,{format:'json',storyId:'s'}));
+ return {...h,f,entry,other,parsed};
+}
+test('card update atomically backs up one destination, advances revision, and Undo restores only it',async()=>{
+ const h=await cardImportSetup(),plan=h.f.planCardImport([h.entry,h.other],h.parsed,{targetId:h.entry.id,storyId:'s'});
+ const id=await h.api.importCard('s',plan);assert.equal(h.docs.get(h.sessionPath+'/lore/mira').name,'Renamed');assert.equal(h.docs.get(h.sessionPath+'/lore/mira').createdAt,123);assert.equal(h.docs.get(h.sessionPath).loreRevision,1);
+ assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);const backups=await h.api.loadBackupGroup('s',id);assert.equal(backups[0].entries.length,1);
+ await h.api.restoreBackup('s',id,[]);assert.equal(h.docs.get(h.sessionPath+'/lore/mira').name,'Mira');assert.equal(h.docs.get(h.sessionPath+'/lore/mira').sections.notes.lines.length,1);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});
+test('new card import assigns independent destination and Undo removes just the imported card',async()=>{
+ const h=await cardImportSetup(),plan=h.f.planCardImport([h.entry,h.other],h.parsed,{storyId:'s',loreRevision:0});assert.notEqual(plan.id,'mira');
+ const id=await h.api.importCard('s',plan);assert.ok(h.docs.has(h.sessionPath+'/lore/'+plan.id));await h.api.restoreBackup('s',id,[]);assert.equal(h.docs.has(h.sessionPath+'/lore/'+plan.id),false);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/mira'),h.entry);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});
+for(const action of ['changed','deleted','failed'])test('card import rejects '+action+' target without publishing backup or partial writes',async()=>{
+ const h=await cardImportSetup(),plan=h.f.planCardImport([h.entry],h.parsed,{targetId:'mira',storyId:'s'});
+ if(action==='changed')h.docs.get(h.sessionPath+'/lore/mira').name='Concurrent';if(action==='deleted')h.docs.delete(h.sessionPath+'/lore/mira');if(action==='failed')h.controls.failCommit=true;
+ await assert.rejects(h.api.importCard('s',plan),action==='failed' ? /commit failed/ : /Refresh the preview/);assert.equal(h.counts.backups,0);assert.equal(h.counts.loreWrites,0);assert.equal(h.docs.get(h.sessionPath).loreRevision,0);
+});
+test('card creation revision barrier prevents concurrent singleton creation',async()=>{
+ const h=await cardImportSetup(),plan=h.f.planCardImport([],h.parsed,{storyId:'s',loreRevision:0});h.docs.get(h.sessionPath).loreRevision=1;
+ await assert.rejects(h.api.importCard('s',plan),/Refresh the preview/);assert.equal(h.counts.loreWrites,0);
+});
+test('card import cancels stale navigation and queued account switches',async()=>{
+ const h=await cardImportSetup(),plan=h.f.planCardImport([h.entry],h.parsed,{targetId:'mira',storyId:'s'});
+ await assert.rejects(h.api.importCard('s',plan,{isCurrent:()=>false}),/cancelled/);
+ let release;h.api.configureLoreWrites(()=>new Promise(resolve=>release=resolve));const pending=h.api.importCard({id:'s',uid:'u'},plan);h.controls.uid='other';release();await assert.rejects(pending,/Account changed/);assert.equal(h.counts.loreWrites,0);assert.equal(h.counts.backups,0);
 });
