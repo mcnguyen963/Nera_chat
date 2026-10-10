@@ -1832,3 +1832,26 @@ test('core review requires explicit user review and coverage before persisting s
   assert.equal(e.coreReferences.length,1);assert.equal(core.resolveCore(e,e.coreReferences[0]).valid,true);assert.equal(h.calls.requests.length,0);
   e.sections.personality.text+=' Changed.';ui.renderCoreEditor(h.el('core-other'),e);assert.ok(h.el('core-other').querySelectorAll('p').some(p=>p.textContent.startsWith('Needs review')));
 });
+
+test('Mobile composer defers remote refreshes while typing, cancels blur/refocus, and sends latest draft',async()=>{
+  const jobs=new Map();let next=0;const tracker={drafts:[],continuations:0};
+  const original=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
+  const source=original.replace('computeContextUsage, normalizeAdDirective','computeContextUsage as actualUsage, normalizeAdDirective').replace('import {continuationTarget,','import {continuationTarget as actualTarget,')+`\nfunction computeContextUsage(...args){tracker.drafts.push(args[3].draftText);return actualUsage(...args);}\nfunction continuationTarget(...args){tracker.continuations++;return actualTarget(...args);}\n`;
+  const h=await harness({sources:{'ui/chat-view.js':source},globals:{tracker},timers:{setTimeout:(fn,ms)=>{jobs.set(++next,{fn,ms});return next;},clearTimeout:id=>jobs.delete(id)}});
+  const chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Opening.'}]);
+  await chat.updateIndicator();const previous=h.el('context-label').textContent;tracker.drafts.length=0;
+  h.document.activeElement=h.el('chat-input');await h.fire('chat-input','focus');
+  h.el('chat-input').value='First draft';await h.fire('chat-input','input');const continuations=tracker.continuations;
+  h.el('chat-input').value='Latest draft\nwith more text';await h.fire('chat-input','input');assert.equal(tracker.continuations,continuations);
+  await chat.updateIndicator();await h.document.dispatchEvent({type:'settings-changed'});
+  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Remote opening update.'}],hasEarlier:false});
+  await new Promise(r=>setImmediate(r));assert.equal(tracker.drafts.length,0);assert.equal(h.el('context-label').textContent,previous);
+  h.document.activeElement=null;await h.fire('chat-input','blur');assert.ok([...jobs.values()].some(j=>j.ms===0));
+  h.document.activeElement=h.el('chat-input');await h.fire('chat-input','focus');assert.ok(![...jobs.values()].some(j=>j.ms===0));
+  h.document.activeElement=null;await h.fire('chat-input','blur');for(const [id,j]of jobs){if(j.ms===0){jobs.delete(id);j.fn();}}
+  await new Promise(r=>setImmediate(r));assert.deepEqual(tracker.drafts,['Latest draft\nwith more text']);
+  h.document.activeElement=h.el('chat-input');h.el('chat-input').value='Exact latest action';await h.fire('chat-input','input');
+  h.calls.response='New reply.';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  assert.equal(h.calls.messages[0][1].content,'Exact latest action');assert.ok(h.calls.requests[0].messages.some(m=>m.role==='user'&&m.content==='Exact latest action'));
+  assert.match(h.el('context-label').title,/leave the message box/);
+});
