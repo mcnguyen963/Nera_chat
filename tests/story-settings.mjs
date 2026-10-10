@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
 import {appHarness} from './app-harness.mjs';
 import {promptFetch} from './prompt-files.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
@@ -70,12 +69,15 @@ test('Malformed streams, API rejection, and provider terminal reasons never offe
   await assert.rejects(api.chatCompletion({settings,messages:[]}),error=>{assert.equal(error.classification,classification);assert.equal(error.partial,undefined);if(classification==='provider_finish')assert.equal(error.finishReason,'content_filter');return true;});
  }
 });
-test('Supplied conversation replays unchanged without provider calls or input mutation',async()=>{
- const records=(await readFile(new URL('../investigate/save_conversation/ dev 2 2.jsonl',import.meta.url),'utf8')).trim().split(/\r?\n/).map(JSON.parse),messages=records.slice(1).map(r=>({...r.nera.message,content:r.mes})),before=JSON.stringify(messages),session=records[0].nera.session;
- const use=appHarness({stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected storage call');}},'tokenizer.js':{countTokens:async t=>Math.ceil(new TextEncoder().encode(t).length/4)}}});
- const settingsApi=await use('story-settings.js'),context=await use('context-builder.js');
- const built=await context.buildContextForRequest(session,{...account,...settingsApi.defaultStorySettings(),maxContextTokens:125000,maxResponseTokens:15000},{messages,loreEntries:records[0].nera.lore});
- assert.equal(messages.length,581);assert.equal(JSON.stringify(messages),before);assert.ok(built.apiMessages.length);assert.ok(built.usedTokens<=125000);
+test('Long conversation replays unchanged without provider calls or input mutation',async()=>{
+ // Generate the replay in the test: private investigate/ exports are absent from clean checkouts.
+ const messages=Array.from({length:581},(_,i)=>({id:'replay-'+i,order:i+1,role:i%2 ? 'assistant' : 'user',revision:0,narratorTurn:Math.floor(i/2)+1,
+  content:`Replay message ${i+1}: Mira explores the quiet archive.\n`+('She studies a map, records the route, and leaves the sealed door untouched. '.repeat(24))}));
+ const session={id:'replay',historyRevision:0,longTermPlan:'Mira decides when to open the archive door.',memory:{lorebooks:true,protagonist:'Mira'}},before=JSON.stringify({messages,session});let providerCalls=0;
+ const use=appHarness({stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected storage call');}},'llm-client.js':{chatCompletion:async()=>{providerCalls++;throw Error('Unexpected provider call');}},'tokenizer.js':{countTokens:async t=>Math.ceil(new TextEncoder().encode(t).length/4)}}});
+ const settingsApi=await use('story-settings.js'),context=await use('context-builder.js'),lore=await use('lore-lines.js'),entry=lore.makeEntry('characters','Mira');entry.sections.notes.text='Mira keeps the archive key.';const loreEntries=[entry],beforeLore=JSON.stringify(loreEntries);
+ const built=await context.buildContextForRequest(session,{...account,...settingsApi.defaultStorySettings(),maxContextTokens:125000,maxResponseTokens:15000},{messages,loreEntries});
+ assert.equal(messages.length,581);assert.equal(JSON.stringify({messages,session}),before);assert.equal(JSON.stringify(loreEntries),beforeLore);assert.equal(providerCalls,0);assert.ok(built.apiMessages.length);assert.ok(built.usedTokens<=125000);assert.ok(built.droppedCount>0);assert.ok(built.apiMessages.some(m=>m.content.includes('Replay message 581:')));
 });
 
 test('Active-story subscriptions replace prompts, ignore stale replies, and block failed loads',async()=>{
