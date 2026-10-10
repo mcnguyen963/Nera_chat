@@ -22,10 +22,17 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (opts.draftText?.trim() || opts.placeholderLatest) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '' });
   const byId=new Map(raw.map(m=>[m.id,m]));
   const turns = computeTurns(raw), current = mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
-  const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latest = raw.findLast(m => m.role === 'user');
+  const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latestUser = raw.findLast(m => m.role === 'user');
+  const latest=opts.continuationId ? {id:'__continuation',role:'user',content:prompts.continue} : latestUser;
+  if(opts.continuationId) {
+    const target=raw.find(m=>m.id===opts.continuationId && m.role==='assistant');
+    if(!target)throw new Error('The continuation target is missing from context.');
+    raw.push(latest);byId.set(latest.id,latest);
+  }
   const anchors = [firstUser,firstAssistant].filter(Boolean), anchorIds = new Set(anchors.map(m => m.id));
   const required = new Set(anchorIds);
   if (latest) required.add(latest.id);
+  if(opts.continuationId)required.add(opts.continuationId);
   if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
   let narrator = (settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
   const planOn=!!session.longTermPlan?.trim();
@@ -112,7 +119,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (await cost() > limit) throw new Error('The opening story, summary and latest user message exceed the context budget. Increase the context limit or shorten required content.');
   const candidates = raw.filter(m => m.order > checkpoint && !required.has(m.id));
   const target = Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
-  const recentRaw = raw.filter(m => m.order > checkpoint);
+  const recentRaw = raw.filter(m => m.id!=='__continuation' && m.order > checkpoint);
   let targetStart = Math.max(0,recentRaw.length-target);
   // Complete the first retained turn when it fits. Tight budgets fall back to a suffix.
   const targetTurn = turns.turnById.get(recentRaw[targetStart]?.id);
@@ -126,7 +133,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
   let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
   const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
-  const selection = selectEntries(filtered.entries,mem,latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).join('\n'));
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,raw.filter(m => m.role==='assistant' && !m.ooc && m.order < (latest?.order ?? Infinity)).slice(-2).map(m => readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).join('\n'));
   const skipped = [...filtered.skipped,...selection.skipped];
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
@@ -191,7 +198,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   }))).reduce((a,b) => a+b,0);
   blocks.push({ key:'anchor',label:'Opening exchange (historical background)',tokens:await messageCost(anchors.filter(m => m.id !== latest?.id)) });
   blocks.push({ key:'window',label:'Recent conversation',tokens:await messageCost(window),fromTurn:turns.turnById.get(window[0]?.id),toTurn:turns.turnById.get(window.at(-1)?.id),messages:window.length,mode:windowMode,step:mem.batchTurns,target:targetCount,retained:retainedTarget });
-  if (latest) blocks.push({ key:'latest',label:'Latest user message',tokens:await messageCost([latest]) });
+  if (latest) blocks.push({ key:'latest',label:opts.continuationId ? 'Temporary continuation instruction' : 'Latest user message',tokens:await messageCost([latest]) });
   if (memory) blocks.push({ key:'memory',label:'Memory block',tokens:mem.blockRole === 'user' && mem.memoryBlock && latest ? await count('<memory>\n'+memory+'\n</memory>\n\n'+contentFor(latest))-await count(contentFor(latest)) : await count(memory)+FRAME });
   if(reminder) blocks.push({key:'reminder',label:'Scene reminder',tokens:await count('\n\n'+reminder)});
   if(gapInfo()) {
@@ -200,9 +207,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     blocks.push({key:'gap',label:'Omitted turns marker',tokens});
   }
   blocks.push({key:'framing',label:'Request framing and section joins',tokens:actual-blocks.reduce((n,b)=>n+b.tokens,0)});
-  const uncovered = raw.filter(m => !selected.has(m.id) && m.order > checkpoint);
+  const uncovered = raw.filter(m => m.id!=='__continuation' && !selected.has(m.id) && m.order > checkpoint);
   const gaps = []; for (const m of uncovered) { const turn = turns.turnById.get(m.id); const last = gaps.at(-1); if (last && turn <= last.toTurn+1) { last.toTurn = turn; last.toOrder = m.order; } else gaps.push({ fromTurn:turn,toTurn:turn,fromOrder:m.order,toOrder:m.order }); }
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
-  return { apiMessages,usedTokens:actual,windowedCount:selected.size,droppedCount:uncovered.length,report:{ mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  return { apiMessages,usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

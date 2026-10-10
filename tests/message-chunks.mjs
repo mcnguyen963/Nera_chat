@@ -962,3 +962,18 @@ test('Copies and exports reject prompt changes between settings and parent reads
   await assert.rejects(mode==='copy' ? h.sessions.duplicateSession('s') : mode==='jsonl' ? h.transfer.serializeStory('s') : h.transfer.buildFullBackup('s'),/story changed while copying or exporting/);
  }
 });
+
+test('Continuation overwrite preserves turn and checkpoint through read, copy and native exports; edits clear it',async()=>{
+ const h=await setup();const original=await h.api.addMessage('s',{role:'assistant',content:'Prefix',thinking:'old'});
+ const checkpoint={contentOffset:6,thinkingOffset:3,before:{scene:null,sceneMeta:null,planThread:null,ooc:false,truncated:false,acceptance:null,reviewWarnings:[],sceneCandidate:null,responseDiagnostics:null}};
+ const parent=h.documents.get(h.sessionPath);const next=parent.nextNarratorTurn,order=parent.nextOrder;
+ parent.memoryState={extractedThroughOrder:original.order};
+ await h.api.overwriteMessage('s',original.id,{content:'Prefix\n\nPassage',thinking:'old\n\nnew',lastContinuation:checkpoint},original.order,{}, {historyRevision:parent.historyRevision});
+ const read=(await h.api.getMessages('s')).at(-1);assert.deepEqual(read.lastContinuation,checkpoint);assert.equal(read.narratorTurn,original.narratorTurn);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,next);assert.equal(h.documents.get(h.sessionPath).nextOrder,order);assert.ok(h.documents.get(h.sessionPath).memoryState.needsRebuild);
+ const copy=await h.sessions.duplicateSession('s');assert.deepEqual((await h.api.getMessages(copy)).at(-1).lastContinuation,checkpoint);
+ const jsonl=await h.transfer.serializeStory('s');const imported=await h.transfer.importSillyTavern({size:1000,name:'story.jsonl',text:async()=>jsonl.text});assert.deepEqual((await h.api.getMessages(imported)).at(-1).lastContinuation,checkpoint);
+ const backup=await h.transfer.buildFullBackup('s');const restored=await h.transfer.importSillyTavern({size:1000,name:'story.json',text:async()=>JSON.stringify(backup)});assert.deepEqual((await h.api.getMessages(restored)).at(-1).lastContinuation,checkpoint);
+ await h.api.editMessage('s',original.id,'Edited',original.order);assert.equal((await h.api.getMessages('s')).at(-1).lastContinuation,null);
+ await h.api.overwriteMessage('s',original.id,{content:'Prefix\n\nPassage',lastContinuation:checkpoint},original.order);
+ await h.api.updateMessageScene('s',original.id,original.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal((await h.api.getMessages('s')).at(-1).lastContinuation,null);
+});

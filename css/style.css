@@ -169,7 +169,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .composer textarea:focus { border: 0; outline: none; }
 .composer-box > textarea { grid-column: 1; grid-row: 1; min-width: 0; }
 .composer-row { grid-column: 1; grid-row: 2; display: flex; align-items: center; align-self: end; min-width: 0; gap: 8px; flex-wrap: nowrap; }
-.composer-action-column { --composer-button-size: 33px; width: var(--composer-button-size); grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: center; align-self: start; gap: 4px; }
+.composer-action-column { --composer-button-size: 56px; width: var(--composer-button-size); grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: center; align-self: start; gap: 4px; }
 .composer-chip { display: flex; align-items: center; gap: 7px; max-width: 75%; padding: 8px; background: transparent; border: 0; border-radius: 7px; color: #999; font-size: 11px; }
 .composer-chip:hover { background: #2a2a2a; }
 .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -177,7 +177,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .composer-spacer { flex: 1; }
 .composer-action { flex-shrink: 0; min-height: 36px; }
 .composer-action[hidden] { display: none; }
-#btn-rewrite, #btn-stop { width: var(--composer-button-size); min-width: 0; padding: 0 1px; font-size: 8px; white-space: nowrap; }
+#btn-rewrite, #btn-stop { width: var(--composer-button-size); min-width: 0; padding: 0 1px; font-size: 11px; min-height: 44px; white-space: nowrap; }
 .composer-row .composer-chip { min-width: 0; flex-shrink: 1; }
 @media (max-width: 720px) {
   .composer-row { gap: 4px; }
@@ -259,8 +259,8 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .composer { padding: 10px 14px calc(7px + var(--safe-bottom)); }
   .composer-box { padding: 15px 12px 6px; border-radius: 20px; }
   .composer textarea { font-size: 16px; }
-  .composer-action-column { --composer-button-size: 44px; }
-  #btn-rewrite { font-size: 10px; }
+  .composer-action-column { --composer-button-size: 56px; }
+  #btn-rewrite { font-size: 11px; }
   .composer-chip { padding: 10px 5px; min-height: 44px; }
   .composer-note { margin-top: 9px; font-size: 9px; }
   .settings-grid { grid-template-columns: 1fr; gap: 17px; }

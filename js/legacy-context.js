@@ -81,6 +81,9 @@ export async function buildLegacyContext(session, settings, opts = {}) {
     used += tokens + MESSAGE_FRAME_TOKENS;
   }
 
+  const temporary=opts.continuationId ? prompts.continue : '';
+  const temporaryTokens=temporary ? await countSystemTokensCached(temporary) : 0;
+  if(temporary) used+=temporaryTokens+MESSAGE_FRAME_TOKENS;
   const available = requestInputLimit(settings) - used;
   const contentFor = (m) => m.role === "user" ? normalizeAdDirective(m.content) : storyText(m.content);
   const raw = all.filter((m) => ["user", "assistant"].includes(m.role) && m.order < upToOrder && contentFor(m).trim())
@@ -93,6 +96,11 @@ export async function buildLegacyContext(session, settings, opts = {}) {
   const candidateIds = new Set(candidates.map((m) => m.id));
   const requiredIds = new Set(anchors.map((m) => m.id));
   if (latestUser) requiredIds.add(latestUser.id);
+  if(opts.continuationId) {
+    const target=raw.find(m=>m.id===opts.continuationId && m.role==='assistant');
+    if(!target)throw new Error('The continuation target is missing from context.');
+    requiredIds.add(target.id);
+  }
   const costs = new Map();
   for (const m of candidates) {
     const content = contentFor(m);
@@ -101,7 +109,7 @@ export async function buildLegacyContext(session, settings, opts = {}) {
   }
   const requiredCost = candidates.reduce((sum, m) => sum + (requiredIds.has(m.id) ? costs.get(m.id) : 0), 0);
   let exceedsInputLimit = requiredCost > available;
-  if (opts.requireLatestUser && (!latestUser || exceedsInputLimit)) {
+  if ((opts.requireLatestUser || opts.continuationId) && (!latestUser || exceedsInputLimit)) {
     throw new Error("The opening story and latest user message exceed the context budget. Increase the context limit or shorten one of those messages.");
   }
   const fixedUsed = used;
@@ -132,7 +140,7 @@ export async function buildLegacyContext(session, settings, opts = {}) {
       const tokens = await countSystemTokensCached(content);
       const cost = tokens + MESSAGE_FRAME_TOKENS;
       exceedsInputLimit = requiredCost + cost > available;
-      if (opts.requireLatestUser && exceedsInputLimit) {
+      if ((opts.requireLatestUser || opts.continuationId) && exceedsInputLimit) {
         throw new Error("The opening story, latest user message, and omitted turns marker exceed the context budget. Increase the context limit or shorten the required messages.");
       }
       selectWindow(cost);
@@ -173,6 +181,10 @@ export async function buildLegacyContext(session, settings, opts = {}) {
     entries.push(gapEntry);
   }
 
+  if(temporary) {
+    parts.push({role:'user',content:temporary});
+    entries.push({role:'user',content:temporary,tokens:temporaryTokens,source:'Temporary continuation instruction'});
+  }
   const totals = new Map();
   for (const entry of entries) totals.set(entry.source, (totals.get(entry.source) ?? 0) + entry.tokens);
   totals.set("Framing overhead", parts.length * MESSAGE_FRAME_TOKENS + REQUEST_FRAME_TOKENS);
