@@ -1,3 +1,4 @@
+import { fitCharacters } from './character-select.js';
 import { minOf, maxOf } from './math-utils.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
@@ -144,6 +145,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const recentLoreText = recentLoreMessages.map(m => stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)).join('\n');
   const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText);
   const skipped = [...filtered.skipped,...selection.skipped];
+  let characterSelectionReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
   if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
@@ -152,7 +154,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
+    let fit = book === 'characters' && mem.characterSelection
+      ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
+      : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
+    if (fit.selectionReport) characterSelectionReport = fit.selectionReport;
     const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;
     if (book === 'characters') chars = fit;
     else if (book === 'locations') places = fit;
@@ -164,9 +169,20 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       else if (text) books.pop();
       memory = beforeMemory;
       skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,reason:'over budget' })));
+      if (characterSelectionReport && book === 'characters') {
+        characterSelectionReport.fullFit = false;
+        for (const c of characterSelectionReport.characters) {
+          c.identity=false;c.full=false;c.text='';c.coreCoverage={personality:false,constraints:false,appearance:false};c.missingCoverage=['personality','constraints','appearance'];
+          for (const u of c.units) {u.selected=false;u.reason='overall request budget';for (const s of u.sources) {s.included=[];s.omitted=[{start:s.start,end:s.end,text:s.text}];}}
+        }
+      }
       fit = empty;
     }
     skipped.push(...fit.skipped);
+    if (fit.selectionReport) for (const c of fit.selectionReport.characters) {
+      if (c.missingCoverage.length) warnings.push(`${c.name}: missing core coverage (${c.missingCoverage.join(', ')}).`);
+      if (c.invalidCores.length) warnings.push(`${c.name}: ${c.invalidCores.length} core bundle(s) need review.`);
+    }
     if(fit.userLinesCut)warnings.push(`${fit.userLinesCut} user-written lore lines could not fit in the ${book} budget.`);
     if (inspection && fit.text) inspection.sections[book] = text;
     if (fit.text && (book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
@@ -222,5 +238,5 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
   if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
-  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

@@ -48,3 +48,9 @@ RULES
 - Leave out empty sections. Keep lines short and concrete.
 - Use "status": "closed" for resolved threads.
 - The output must be valid JSON: double quotes, no trailing commas.
+
+- Keep defining characterization and identifying appearance compact for user review, using only evidenced traits. Preserve essential behavioral/capability constraints, authority, character independence, knowledge boundaries and consequential relationship history. Obedience alone does not establish affection.
+- Separate played events from plans, invitations, predictions and open possibilities. Retain every conditional trajectory, including dependencies on actual childhood events; never invent traits or outcomes or convert a possible future into an established fact.
+- Preserve evidence and attribution, uncertainty, source-turn stamps, dates and resolved-thread status. Do not reopen resolved events. Keep durable information even when it is irrelevant to the current scene.
+- Keep each update note under 400 characters. Split only into independently meaningful notes, with conditions and negations accompanying the claims they qualify.
+- Never generate or approve core-reference metadata. Keep the existing section names and output format exactly.

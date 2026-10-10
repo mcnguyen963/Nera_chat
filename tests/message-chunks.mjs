@@ -977,3 +977,23 @@ test('Continuation overwrite preserves turn and checkpoint through read, copy an
  await h.api.overwriteMessage('s',original.id,{content:'Prefix\n\nPassage',lastContinuation:checkpoint},original.order);
  await h.api.updateMessageScene('s',original.id,original.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal((await h.api.getMessages('s')).at(-1).lastContinuation,null);
 });
+
+test('reviewed core references persist through writes, reorganization backups and history copies',async()=>{
+ const {appHarness}=await import('./app-harness.mjs'),use=appHarness(),core=await use('character-core.js'),l=await use('lore-lines.js'),h=await setup();
+ const a=await h.api.addMessage('s',{role:'assistant',content:'First.'}),b=await h.api.addMessage('s',{role:'assistant',content:'Second.'}),e=l.makeEntry('characters','Mira',{id:'mira'});
+ e.sections.appearance.text='Silver eyes.';e.sections.notes.lines=[{id:'old',text:'Cannot command the council.',by:'auto',src:a.order,turn:1,at:1,evidence:[{id:a.id,order:a.order,revision:0}]},{id:'future',text:'If invited, she may attend; she has not enrolled.',by:'auto',src:b.order,turn:2,at:2,evidence:[{id:b.id,order:b.order,revision:0}]}];
+ await h.lore.createEntry('s',e);const staged=structuredClone(e);staged.coreReferences=[core.reviewCore(staged,[core.coreSource(staged,'appearance')],['appearance']),core.reviewCore(staged,[core.coreSource(staged,'notes','future')],['constraints'])];await h.lore.saveEntry('s',staged,e);
+ const path=h.sessionPath+'/lore/mira',saved={id:'mira',...h.documents.get(path)};assert.equal(saved.coreReferences.length,2);assert.ok(core.resolveCore(saved,saved.coreReferences[1]).valid);
+ const copiedId=await h.sessions.duplicateSession('s',null,a.id),copied={id:'mira',...h.documents.get('users/u/sessions/'+copiedId+'/lore/mira')};
+ assert.ok(core.resolveCore(copied,copied.coreReferences[0]).valid);assert.equal(core.resolveCore(copied,copied.coreReferences[1]).valid,false);
+ const backup=await h.lore.replaceLines('s',[{entry:saved,sent:{notes:saved.sections.notes.lines},snapshot:{notes:['old','future']},sections:{notes:[{id:'merged',text:'Conditional invitation remains pending.',by:'reorganize',at:3}]}}],3);
+ const reorganized={id:'mira',...h.documents.get(path)};assert.equal(reorganized.coreReferences.length,2);assert.equal(core.resolveCore(reorganized,reorganized.coreReferences[1]).valid,false);
+ await h.lore.restoreBackup('s',backup,[]);const restored={id:'mira',...h.documents.get(path)};assert.ok(core.resolveCore(restored,restored.coreReferences[1]).valid);
+ const changed=structuredClone(restored);changed.sections.appearance.text='Blue eyes.';await h.lore.saveEntry('s',changed,restored);const edited={id:'mira',...h.documents.get(path)};assert.equal(core.resolveCore(edited,edited.coreReferences[0]).valid,false);
+});
+
+test('core edits preserve concurrent references and reject overlapping reference changes',async()=>{
+ const h=await setup(),e=loreEntry(),base=structuredClone(e);e.coreReferences=[{id:'remote',reviewed:true,coverage:['appearance'],sources:[]}];
+ const unchanged=structuredClone(base);unchanged.name='Renamed';assert.equal(h.lore.mergeEntryEdits(e,unchanged,base).coreReferences[0].id,'remote');
+ const changed=structuredClone(base);changed.coreReferences=[{id:'local'}];assert.throws(()=>h.lore.mergeEntryEdits(e,changed,base),/Core references changed/);
+});

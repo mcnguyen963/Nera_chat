@@ -1,3 +1,6 @@
+import { renderCoreEditor } from './character-core-editor.js';
+import { saveEntry } from '../lore-store.js';
+import { currentUid } from '../auth.js';
 import {effectiveActiveSettings} from '../story-settings-store.js';
 import {computeTurns} from '../turns.js';
 import {normalizeMemory, anyMemory} from '../memory-settings.js';
@@ -6,7 +9,7 @@ import {state} from '../state.js';
 import {buildContextForRequest} from '../context-builder.js';
 import {memorySnapshot, prepareMemorySnapshot} from './chat-view.js';
 import {lastRawAnswer, updateNow, isRunning} from '../memory-updater.js';
-import {node, button, sheet, copy, toast} from './memory-ui.js';
+import {node, button, sheet, subSheet, copy, toast} from './memory-ui.js';
 let open = false, version = 0, timer, viewedSession;
 const expanded = new Map(), scrollPositions = new Map();
 
@@ -145,6 +148,7 @@ async function render() {
           document.dispatchEvent(new CustomEvent('lorebooks', {detail:{entryId:e.entryId,book:e.book,newName:e.entryId ? null : e.name}}));
         }, 'lore-link'));
         card.append(node('p', included ? `Loaded · ${e.reason} · ${e.tokens.toLocaleString()} tokens within this book${e.linesCut ? ' · '+e.linesCut+' older lines not sent' : ''}${e.draft ? ' · draft' : ''}` : e.reason==='no card' ? 'In scene, no card' : 'Not loaded — '+e.reason, 'muted'));
+        if (!included && e.text) card.append(preview('skipped-'+e.entryId+'-'+(e.lineId ?? e.section),'Read excluded source text',e.text));
         if (e.reason.startsWith('card limit')) card.append(button('Raise limit', () => {
           closeViewer(); document.dispatchEvent(new CustomEvent('memory-settings', {detail:{focus:'mem-'+book+'-maxCards'}}));
         }, 'btn small'));
@@ -161,7 +165,15 @@ async function render() {
       if (sections[book]) bookGroup.append(preview('book-'+book+'-text', 'Read included '+label.toLowerCase(), sections[book]));
       lore.append(bookGroup);
     }
+    if (r.characterSelection) characterReport(lore,r.characterSelection,'next-character',live);
     body.append(lore);
+    if (live.sentContext) {
+      const sent=live.sentContext,section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString());
+      section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
+      if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
+      section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
+      body.append(section);
+    }
     const scene = group('scene', 'Current scene & memory');
     scene.append(node('p', r.scene ? r.scene.raw+' (from turn '+r.scene.fromTurn+')' : 'No current scene included.', 'muted'));
     for (const [key,label] of [['memory','Read assembled memory block'],['replyContract','Read reply contract'],['reminder','Read scene reminder']]) {
@@ -226,3 +238,32 @@ async function render() {
   }
 }
 function closeViewer() { document.querySelector('#context-viewer .settings-close')?.click(); }
+
+function characterReport(parent, report, prefix, live = null) {
+  const section=group(prefix,'Character coverage · '+(report.fullFit ? 'full cards fit' : 'fair allocation')+' · '+report.budget+' tokens');
+  for(const c of report.characters) {
+    const card=group(prefix+'-'+c.entryId,c.name+' · '+(c.identity ? 'identity included' : 'identity omitted'));
+    card.append(node('p', 'Core coverage: '+Object.entries(c.coreCoverage).map(([k,v])=>k+' '+(v ? 'included' : 'missing')).join(' · '),'muted'));
+    for(const b of c.invalidCores)card.append(node('p',b.reason,'memory-warning'));
+    if(live)card.append(button('Review core sources',()=>reviewCharacterCore(live,c.entryId),'btn small'));
+    card.append(preview(prefix+'-'+c.entryId+'-rendered','Read exact selected character text',c.text));
+    for(const u of c.units) {
+      const detail=group(prefix+'-'+c.entryId+'-'+u.id,(u.selected ? 'Selected' : 'Omitted or partly covered')+' · '+u.reason);
+      detail.append(node('p', 'Round '+u.round+' · current matches: '+(u.currentMatches.join(', ') || 'none')+' · recent matches: '+(u.recentMatches.join(', ') || 'none')+' · author preference: '+u.authorPreference+' · recency: '+u.recency,'muted'));
+      for(const [i,s] of u.sources.entries())for(const [kind,parts] of [['Included',s.included],['Omitted',s.omitted]])for(const [j,p] of parts.entries())detail.append(preview(prefix+'-'+c.entryId+'-'+u.id+'-'+i+'-'+kind+'-'+j,kind+' · '+s.section+' · source offsets '+p.start+'–'+p.end,p.text));
+      card.append(detail);
+    }
+    section.append(card);
+  }
+  parent.append(section);
+}
+function reviewCharacterCore(live, entryId) {
+  const base=live.entries.find(e=>e.id===entryId);if(!base)return;
+  const staged=structuredClone(base),source={id:live.session.id,uid:currentUid()},dialog=subSheet('Review core · '+base.name),body=node('div',null,'memory-content');
+  dialog.dialog.append(body);renderCoreEditor(body,staged,()=>{}, {messages:live.messages,session:live.session}).open=true;
+  body.append(button('Save reviewed references',async()=>{
+    if(state.sessionId!==source.id || currentUid()!==source.uid)throw new Error('Story or account changed; reopen core review.');
+    if(state.busy)throw new Error('Wait for the current reply or summary.');
+    await saveEntry(source,staged,base);dialog.hide();toast('Core references saved');void render();
+  },'btn primary'),button('Cancel',dialog.hide));
+}

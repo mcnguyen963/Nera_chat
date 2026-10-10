@@ -1,3 +1,5 @@
+import { resolveCore } from '../character-core.js';
+import { renderCoreEditor } from './character-core-editor.js';
 import { currentUid } from '../auth.js';
 import { maxOf } from '../math-utils.js';
 import {dismissRebuild} from '../session-memory.js';
@@ -131,7 +133,7 @@ function renderRail() {
   rail.append(button('Import & export',() => { if (!canLeave()) return; staged = base = null; screen = 'transfer'; renderShell(); }),button('Backups',() => { if (!canLeave()) return; staged = base = null; screen = 'backups'; renderShell(); }));
 }
 function needsReview(l) { return noteNeedsReview(l,live()?.messages ?? [],live()?.session ?? {}); }
-function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && (linesOf(e).some(needsReview) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
+function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && (linesOf(e).some(needsReview) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages:live()?.messages ?? [],session:live()?.session}).valid) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
 function badge(text,kind = '') { return node('span',text,'badge '+kind); }
 function renderList() {
   if (!list || ['transfer','backups'].includes(screen)) return;
@@ -237,7 +239,7 @@ function renderEditor() {
       for (const ln of expanded ? ordered : ordered.slice(-8)) {
         if (staged.kind === 'timeline' && ln.when !== date) { date = ln.when; if (date) lineList.append(node('p',date,'muted')); }
         const row = node('div',null,'line-row');
-        const lastSent = live()?.report?.loaded.find(e => e.entryId === staged.id);
+        const lastSent = (live()?.sentContext?.report ?? live()?.report)?.loaded.find(e => e.entryId === staged.id);
         if (lastSent && !lastSent.lineIds?.includes(ln.id)) { row.classList.add('dim'); row.title = 'Not sent last turn (book budget)'; }
         const stamp = node('span',[ln.turn != null ? 'T'+ln.turn : '',ln.when].filter(Boolean).join(' · '),'stamp'); stamp.title = ln.by === 'auto' ? 'Added by memory update · turn '+ln.turn : ln.by === 'user' ? 'Added by you' : ln.by === 'import' ? 'Imported' : 'Reorganized'; row.append(stamp,node('span',ln.text));
         if (needsReview(ln)) row.append(badge('Needs review','warn'));
@@ -247,6 +249,7 @@ function renderEditor() {
       }
     }; renderLines(); container.append(lineList,button('+ Add line',() => { const turns = computeTurns(live()?.messages ?? []), when = latestScene(live()?.messages ?? []).scene?.when ?? null; const ln = { id:newLoreId('ln'),text:'',turn:turns.lastTurn,when,src:null,by:'user',at:Date.now() }; section.lines.push(ln); renderLines(); const row = lineList.lastElementChild; if (row) editLine(ln,row,key,renderLines); },'btn small')); editor.append(container);
   }
+  if (book === 'characters') renderCoreEditor(editor,staged,()=>{}, {messages:live()?.messages ?? [],session:live()?.session});
   const footer = node('footer',null,'memory-actions'); footer.id = 'lore-editor-footer';
   const tokenLabel = node('span','','muted'); tokenLabel.title = 'Cards larger than the book budget are sent with only their newest lines.'; footer.append(tokenLabel);
   async function updateFooter() { const tokens = await countTokens(renderEntry(staged)), budget = normalizeMemory(live()?.session.memory).books[book].budget; if (version !== editorVersion) return; tokenLabel.textContent = `${tokens.toLocaleString()} / ${budget.toLocaleString()} tokens · ${linesOf(staged).length} lines`; tokenLabel.style.color = tokens>budget ? 'var(--danger)' : ''; if (new TextEncoder().encode(JSON.stringify(staged)).length > 700000) tokenLabel.textContent += ' · Too big to store much longer — reorganize it'; }

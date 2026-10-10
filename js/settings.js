@@ -72,6 +72,8 @@ export async function mergeDefaults(data) {
   for (const key of PROMPT_KEYS) {
     const saved=data?.[key];
     if (typeof saved!=='string' || saved===DEFAULT_SETTINGS[key]) {merged[key]=DEFAULT_SETTINGS[key];continue;}
+    // Management defaults are adopted explicitly through reset/edit controls.
+    if (key==='memoryExtractionPrompt' || key==='memoryReorganizePrompt') continue;
     const variants=new Set([saved,saved.replace(/\r\n/g,'\n').replace(/\n$/,'').trimEnd()]);
     for(const value of variants){
       const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));

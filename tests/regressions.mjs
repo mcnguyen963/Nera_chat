@@ -1808,3 +1808,27 @@ test('lore message lookback hydrates, stages and saves per story while rejecting
  h.el('mem-loreLookbackMessages').value='0';await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreLookbackMessages'],0);const count=h.calls.sessionWrites.length;
  for(const value of ['-1','1.5','not a number']){h.el('mem-loreLookbackMessages').value=value;await h.fire('btn-save-session');assert.match(h.el('settings-saved-msg').textContent,/whole number/);assert.equal(h.calls.sessionWrites.length,count);}
 });
+
+test('character selection captures the exact sent request and keeps its report after preview changes',async()=>{
+  const h=await harness(),lore=await h.use('lore-lines.js'),core=await h.use('character-core.js'),e=lore.makeEntry('characters','Mira',{id:'mira',alwaysLoad:true});
+  e.sections.personality.text='Independent; cannot command the council.';e.sections.appearance.text='Silver eyes.';e.sections.notes.text='Background '.repeat(100);e.coreReferences=[core.reviewCore(e,[core.coreSource(e,'personality'),core.coreSource(e,'appearance')])];h.calls.loreEntries=[e];
+  const chat=await openImprovementChat(h,{memory:{lorebooks:true,characterSelection:true,books:{characters:{budget:200,maxCards:8}}}},[{id:'user',order:1,role:'user',content:'Mira asks the council.'}]);
+  h.calls.response='A council reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+  assert.equal(h.calls.requests.length,1);const live=chat.memorySnapshot(),sent=JSON.parse(JSON.stringify(live.sentContext));assert.deepEqual(sent.requestBody,h.calls.requests[0]);assert.deepEqual(sent.apiMessages,h.calls.requests[0].messages);assert.ok(sent.report.characterSelection.characters[0].coreCoverage.constraints);
+  const original=JSON.stringify(sent);h.el('chat-input').value='A new draft with ribbons.';e.sections.personality.text='Edited after sending.';
+  const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(JSON.stringify(chat.memorySnapshot().sentContext),original);assert.equal(h.calls.requests.length,1);
+  const root=h.el('context-viewer'),last=root.querySelectorAll('details').find(d=>d.dataset.contextKey==='last-sent');assert.ok(last);assert.ok(last.querySelectorAll('summary').some(s=>s.textContent==='Read exact serialized request body'));
+  chat.setSession('other');assert.equal(chat.memorySnapshot()?.sentContext ?? null,null);
+});
+
+test('core review requires explicit user review and coverage before persisting source references',async()=>{
+  const h=await harness(),lore=await h.use('lore-lines.js'),core=await h.use('character-core.js'),ui=await h.use('ui/character-core-editor.js'),e=lore.makeEntry('characters','Mira');e.sections.personality.text='She is independent; cannot read minds.';
+  const parent=h.el('core-test');ui.renderCoreEditor(parent,e);const choose=parent.querySelector('select');choose.value=choose.children[0].value;await choose.dispatchEvent({type:'change'});
+  await parent.querySelectorAll('button').find(b=>b.textContent==='Add source to bundle').click();
+  const approve=()=>parent.querySelectorAll('button').find(b=>b.textContent==='Approve core bundle');await approve().click();assert.equal(e.coreReferences,undefined);
+  const labels=parent.querySelectorAll('label');labels.find(l=>l.textContent==='This bundle covers personality').querySelector('input').checked=true;labels.find(l=>l.textContent==='This bundle covers constraints').querySelector('input').checked=true;
+  labels.find(l=>l.textContent.startsWith('I reviewed the complete bundle')).querySelector('input').checked=true;await approve().click();
+  assert.equal(e.coreReferences.length,1);assert.equal(core.resolveCore(e,e.coreReferences[0]).valid,true);assert.equal(h.calls.requests.length,0);
+  e.sections.personality.text+=' Changed.';ui.renderCoreEditor(h.el('core-other'),e);assert.ok(h.el('core-other').querySelectorAll('p').some(p=>p.textContent.startsWith('Needs review')));
+});

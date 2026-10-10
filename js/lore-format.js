@@ -1,3 +1,4 @@
+import { validateCoreReferences } from './character-core.js';
 const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|<!-- nera-)/.test(l)?'\\'+l:l).join('\n');
 import { cardFingerprint } from './lore-card-state.js';
 import { sectionMeta } from './continuity.js';
@@ -21,6 +22,7 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
 }
 export function normalizeLoreEntry(e){
       if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
+      validateCoreReferences(e.coreReferences);
       const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
         const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
@@ -65,7 +67,7 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
     out.push('## '+(book === 'events' ? 'Events' : BOOK_LABELS[book]),'');
     for (const e of entries.filter(e => e.book === book)) {
       out.push('### '+(e.kind === 'thread' ? 'Thread: ' : '')+e.name);
-      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
+      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
       if (e.aliases?.length) out.push('aliases: '+JSON.stringify(e.aliases));
       if (e.alwaysLoad) out.push('always load: yes');
       if (e.kind === 'thread') out.push('status: '+e.status);
@@ -101,7 +103,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
         const value = JSON.parse(provenance[2]);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
         if (provenance[1] === 'entry') {
-          for (const prop of ['id','draft','createdFrom','statusSource','createdAt','updatedAt']) if (prop in value) entry[prop] = value[prop];
+          for (const prop of ['id','draft','createdFrom','statusSource','coreReferences','createdAt','updatedAt']) if (prop in value) entry[prop] = value[prop];
         } else if (provenance[1] === 'section') {
           for (const prop of ['origin','kind','cutoff','unavailable','sourceRevision']) if (prop in value) entry.sections[key][prop] = value[prop];
         } else if (entry.sections[key].lines.length && !noteMetadata.has(entry.sections[key].lines.at(-1))) noteMetadata.set(entry.sections[key].lines.at(-1),value);
@@ -132,6 +134,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
     } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(line.startsWith('\\')?line.slice(1):line) : '');
   }
   for (const e of entries) for (const s of Object.values(e.sections)) {
+    validateCoreReferences(e.coreReferences);
     s.text = s.text.trim();
     for (const line of s.lines) {
       const saved = noteMetadata.get(line);
@@ -162,6 +165,7 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
         if (clash) warnings.push({ line:1,reason:`name already used by ${clash.name}: ${alias}` });
         else if (![result.name,...result.aliases].some(n => normalizeName(n) === normalizeName(alias))) result.aliases.push(alias);
       }
+      if (source.coreReferences) result.coreReferences = [...new Map([...(result.coreReferences ?? []),...source.coreReferences].map(b=>[b.id,b])).values()];
       result.alwaysLoad ||= source.alwaysLoad;
       if (source.status === 'closed') result.status = 'closed';
       for (const [key,s] of Object.entries(source.sections)) {
@@ -193,6 +197,7 @@ export function validateCard(entry) {
   if (!Array.isArray(entry.aliases) || entry.aliases.some(a=>typeof a!=='string')) throw new Error('Aliases must be a list of names.');
   for (const key of ['alwaysLoad','draft']) if (entry[key]!=null && typeof entry[key]!=='boolean') throw new Error(key+' must be true or false.');
   if (entry.kind==='thread' && !['open','closed'].includes(entry.status)) throw new Error('Thread status must be open or closed.');
+  validateCoreReferences(entry.coreReferences);
   const ids=new Set();
   for (const [key,s] of Object.entries(entry.sections ?? {})) {
     if (!SECTION_KEYS[entry.book].includes(key)) throw new Error('Unsupported section: '+key);
@@ -213,7 +218,7 @@ function supportedCardFields(entry,warnings) {
     if(allowed.includes(key))return true;
     warnings.push({line:1,reason:`ignored unsupported field '${key}' in ${label}`});return false;
   }));
-  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource'],'card');
+  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','coreReferences'],'card');
   const note=l=>pick(l,['id','text','turn','when','src','by','at','evidence','sourceRevision','needsReview','origin','kind','cutoff'],'note');
   out.sections=Object.fromEntries(Object.entries(out.sections).map(([key,s])=>[key,{...pick(s,['text','lines','origin','kind','cutoff','unavailable','sourceRevision'],key),lines:s.lines.map(note)}]));
   if(out.statusSource)out.statusSource=note(out.statusSource);
@@ -272,10 +277,11 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   for(const prop of ['name','alwaysLoad','draft','status'])result[prop]=source[prop];
   result.statusSource=null;
   result.aliases=mode==='merge' && target ? [...new Map([...target.aliases,...source.aliases].map(n=>[normalizeName(n),n])).values()] : source.aliases;
+  if (source.coreReferences || target?.coreReferences) result.coreReferences = mode==='merge' ? [...new Map([...(target?.coreReferences ?? []),...(source.coreReferences ?? [])].map(b=>[b.id,b])).values()] : structuredClone(source.coreReferences ?? []);
   const changes=[],notes={added:[],edited:[],removed:[]};
   const targetNotes=new Map(Object.values(target?.sections ?? {}).flatMap(s=>s.lines).map(l=>[l.id,l]));
   const incomingSections=new Map(Object.entries(source.sections).flatMap(([key,s])=>s.lines.map(l=>[l.id,key])));
-  for(const prop of ['name','aliases','alwaysLoad','draft','status'])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
+  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences'])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
   for(const key of SECTION_KEYS[source.book]) {
     const incoming=source.sections[key],before=target?.sections[key] ?? makeEntry(source.book,'empty').sections[key];
     const next=incoming ? structuredClone(incoming) : {...before,text:'',lines:[],origin:'import',kind:'background',cutoff:null};

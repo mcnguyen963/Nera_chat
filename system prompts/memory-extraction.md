@@ -29,3 +29,8 @@ Rules:
 - [open]: a new unresolved goal, promise, mystery or threat, or progress on an open one. [closed]: an open thread that was resolved.
 - AUTHOR NOTE lines identify explicit author input.
 - No headings, no bullets, no explanations, no JSON.
+
+- Preserve newly established limitations, authority, capability constraints, knowledge boundaries, consequential relationship changes, promises and outcomes, even when they are not relevant to the current scene. Keep attribution and uncertainty.
+- Plans, invitations, predictions, conditional trajectories and possible outcomes remain future or uncertain; never record them as completed events. Childhood-dependent development must retain its dependency on actual childhood events. Obedience alone does not establish affection.
+- Keep each note under 400 characters. If several notes are needed, make each independently meaningful: repeat the conditions and negations with the claims they qualify.
+- Never generate or approve core-reference metadata. Source preservation belongs to memory management; local selection chooses what reaches a narrator request.

@@ -101,8 +101,9 @@ let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
 let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
 const memoryStories = new Map();
 let lastMemoryReport = null;
+let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
@@ -438,7 +439,7 @@ export function setSession(sessionId) {
   rememberMemoryStory();
   clearChatRetry();chatRetry=0;chatStatus='ok';
   clearTimeout(indicatorTimer);clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
-  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastProviderUsage = null;
+  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastSentContext = null; lastProviderUsage = null;
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -1308,7 +1309,10 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     startStreamUI(prefix);turnStream=streamState;
     let result,stopReason=null;
     try {
-      result=await chatCompletion({ settings,messages:built.apiMessages,allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
+      result=await chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
+        const requestBody=JSON.parse(serialized);
+        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now()});
+      },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
     } catch(error) {
       assertActive(token);
       if(!['transport_loss','timeout','cancelled'].includes(error.classification) || !error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
