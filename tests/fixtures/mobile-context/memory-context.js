@@ -76,12 +76,12 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
   let memory = '';
   const gapInfo=() => {
-    if(selectionState.size===raw.length)return '';
+    if(selected.size===raw.length)return '';
     const covered=!!summaryText && checkpoint>(anchors.at(-1)?.order ?? 0);
-    return covered ? (selectionState.omittedAfter > 0 ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : prompts.omittedTurns;
+    return covered ? (raw.some(m=>!selected.has(m.id) && m.order>checkpoint) ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : prompts.omittedTurns;
   };
   // Keep the omission note with the first retained user input after the opening anchors.
-  const gapUser=()=> { const first=raw[selectionState.first]; return first?.role==='user' ? first : null; };
+  const gapUser=()=> { const first=raw.find(m=>selected.has(m.id) && !anchorIds.has(m.id)); return first?.role==='user' ? first : null; };
   const render = (inspect = false) => {
     const gap=gapInfo();
     const history=raw.filter(m=>selected.has(m.id)).map(m=>({id:m.id,role:m.role,content:contentFor(m,{gap:!!gap})}));
@@ -106,31 +106,17 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     }] : []);
     return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
   };
-  // Plain costs are computed once. Only wrappers and directive joins change.
-  const indices=new Map(raw.map((m,i)=>[m.id,i])), plainCosts=new Map();
-  for(const m of raw) plainCosts.set(m.id,await count(contentFor(m))+FRAME);
-  let selectionState={total:0,size:0,omittedAfter:raw.filter(m=>m.order>checkpoint).length,first:Infinity};
-  const addSelection=m=>{
-    selectionState.total+=plainCosts.get(m.id);selectionState.size++;
-    if(m.order>checkpoint)selectionState.omittedAfter--;
-    if(!anchorIds.has(m.id))selectionState.first=Math.min(selectionState.first,indices.get(m.id));
-  };
-  for(const id of selected)addSelection(byId.get(id));
-  const requiredState={...selectionState};
   const messageCosts=new Map();
-  const costOf=async(m,gap)=>{const text=contentFor(m,{gap}),key=m.id+'|'+text;if(!messageCosts.has(key))messageCosts.set(key,await count(text)+FRAME);return messageCosts.get(key);};
+  const costOf=async(m,gap)=>{const key=m.id+'|'+contentFor(m,{gap});if(!messageCosts.has(key))messageCosts.set(key,await count(contentFor(m,{gap}))+FRAME);return messageCosts.get(key);};
   const cost=async()=>{
     const gap=gapInfo(),userMemory=memory && mem.memoryBlock && mem.blockRole==='user' && latest;
-    let total=FRAME+FRAME+await count([system,summaryText,...books].filter(Boolean).join('\n\n'))+selectionState.total;
-    const affected=new Set([...(gap ? anchors.map(m=>m.id) : []),gapUser()?.id,latest?.id].filter(Boolean));
-    for(const id of affected) {
+    let total=FRAME+FRAME+await count([system,summaryText,...books].filter(Boolean).join('\n\n'));
+    for(const id of selected) {
       const m=byId.get(id);
-      if(m.id!==latest?.id){total+=await costOf(m,!!gap)-plainCosts.get(id);continue;}
+      if(m.id!==latest?.id){total+=await costOf(m,!!gap);continue;}
       let content=contentFor(m,{gap:!!gap});
-      if(userMemory)content='<memory>\n'+memory+'\n</memory>\n\n'+content;
-      if(contract && mem.replyContract==='user')content+='\n\n'+contract;
-      if(reminder)content+='\n\n'+reminder;
-      total+=FRAME+await count(content)-plainCosts.get(id);
+      if(m.id===latest?.id){if(userMemory)content='<memory>\n'+memory+'\n</memory>\n\n'+content;if(contract && mem.replyContract==='user')content+='\n\n'+contract;if(reminder)content+='\n\n'+reminder;}
+      total+=FRAME+await count(content);
     }
     if(gap && !gapUser())total+=FRAME+await count(gap);
     if(memory && !userMemory)total+=FRAME+await count(memory);
@@ -147,8 +133,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   while (targetStart > 0 && turns.turnById.get(recentRaw[targetStart-1].id) === targetTurn) targetStart--;
   const targetIds = new Set(recentRaw.slice(targetStart).map(m => m.id));
   for (const m of [...candidates].reverse().filter(m => targetIds.has(m.id))) {
-    const before={...selectionState};selected.add(m.id);addSelection(m);
-    if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
+    selected.add(m.id);
+    if (await cost() > limit) { selected.delete(m.id); break; }
   }
   const targetCount = recentRaw.slice(targetStart).length, retainedTarget = recentRaw.slice(targetStart).filter(m => selected.has(m.id)).length;
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
@@ -204,28 +190,19 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   }
   if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
     const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];
-    const firstTurn=minOf(ts),lastTurn=maxOf(ts);
-    for(let k=Math.floor((firstTurn-1)/mem.batchTurns);k*mem.batchTurns+1<=lastTurn;k++)starts.push(k*mem.batchTurns+1);
-    // Every aligned trial is required messages plus a candidate suffix.
-    const alignedCandidates=[...candidates].sort((a,b)=>turns.turnById.get(a.id)-turns.turnById.get(b.id));
-    const suffixFirst=new Array(candidates.length+1).fill(Infinity);
-    const suffixTotal=new Array(candidates.length+1).fill(0),suffixAfter=new Array(candidates.length+1).fill(0);
-    for(let i=candidates.length-1;i>=0;i--){suffixFirst[i]=Math.min(suffixFirst[i+1],indices.get(alignedCandidates[i].id));suffixTotal[i]=suffixTotal[i+1]+plainCosts.get(alignedCandidates[i].id);suffixAfter[i]=suffixAfter[i+1]+(alignedCandidates[i].order>checkpoint ? 1 : 0);}
-    const earliestTarget=minOf(recentRaw.slice(targetStart).filter(m=>!required.has(m.id)).map(m=>turns.turnById.get(m.id)));
-    let index=0;
+    for(let k=Math.floor((minOf(ts)-1)/mem.batchTurns);k*mem.batchTurns+1<=maxOf(ts);k++)starts.push(k*mem.batchTurns+1);
     for (const start of starts) {
-      while(index<candidates.length && turns.turnById.get(alignedCandidates[index].id)<start)index++;
-      if(start>earliestTarget)continue;
-      const before=selectionState;
-      selectionState={total:requiredState.total+suffixTotal[index],size:requiredState.size+candidates.length-index,omittedAfter:requiredState.omittedAfter-suffixAfter[index],first:Math.min(requiredState.first,suffixFirst[index])};
-      if (await cost() <= limit) { for(let i=index;i<candidates.length;i++)selected.add(alignedCandidates[i].id);windowMode = 'block';break; }
-      selectionState=before;
+      const aligned = candidates.filter(m => turns.turnById.get(m.id) >= start);
+      if (!recentRaw.slice(targetStart).every(m => required.has(m.id) || aligned.some(a => a.id === m.id))) continue;
+      const before = new Set(selected); for (const m of aligned) selected.add(m.id);
+      if (await cost() <= limit) { windowMode = 'block'; break; }
+      selected.clear(); for (const id of before) selected.add(id);
     }
   }
   // Only after lore may additional older conversation use the remaining budget.
   if (!opts.onlyRequiredWindow && windowMode !== 'block') for (const m of [...candidates].reverse()) {
     if (selected.has(m.id)) continue;
-    const before={...selectionState};selected.add(m.id);addSelection(m);if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
+    selected.add(m.id); if (await cost() > limit) { selected.delete(m.id); break; }
   }
   const apiMessages=render(!!inspection),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);
   if(actual!==await cost()) {

@@ -1,3 +1,5 @@
+import {createComposerSizer} from './composer-size.js';
+import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
 import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
 import {maxOf} from '../math-utils.js';
@@ -74,7 +76,6 @@ function applyLocalChange(token,result,mutate) {
 let wasNearBottom = true;
 let lastProviderUsage = null;
 const memoryDeferrals=new Map(),summaryBackoff=new Map();
-let indicatorRun=0,indicatorTimer;
 let rewriteController = null, originalDraft = null;
 let editingState = null; // { id, ta } while a message is being edited inline
 const PAGE_SIZE = 100;
@@ -96,6 +97,7 @@ const pendingCacheWrites = new Set();
 const renderedMessages = new Map();
 
 const el = {};
+const sizeComposer=createComposerSizer({input:()=>el.input,frame:fn=>requestAnimationFrame(fn)});
 const dismissedStaleScenes=new Set();
 let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
 let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
@@ -252,6 +254,7 @@ export function initChatView() {
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
   el.contextLabel = document.getElementById("context-label");
+  el.contextLabel.title = indicatorHint;
   el.earlierBtn = document.createElement("button");
   el.earlierBtn.className = "btn earlier-messages";
   el.earlierBtn.type = "button";
@@ -296,12 +299,9 @@ export function initChatView() {
 
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
   // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
-  const autoGrow = () => {
-    el.input.style.height = "auto";
-    el.input.style.height = el.input.scrollHeight + "px";
-    clearTimeout(indicatorTimer);indicatorTimer=setTimeout(()=>void updateIndicator(),300);
-  };
-  el.input.addEventListener("input", autoGrow);
+  const autoGrow = () => sizeComposer();
+  el.input.addEventListener("input", () => { indicatorRefresh.invalidate(); autoGrow(); });
+  el.input.addEventListener("blur", () => indicatorRefresh.blur());
   window.addEventListener("resize", autoGrow);
   autoGrow();
 
@@ -309,6 +309,7 @@ export function initChatView() {
   // above it (iOS auto-scrolls the window on focus; app.js cancels that, and
   // this compensates inside the list if the user was scrolled deep).
   el.input.addEventListener("focus", () => {
+    indicatorRefresh.invalidate();
     requestAnimationFrame(() => alignFieldToKeyboard(el.composer));
   });
 
@@ -372,7 +373,7 @@ function initQuickControls() {
     el.popover.hidden = true;
   });
 
-  document.addEventListener('story-settings-changed',()=>{++indicatorRun;refreshContextIndicator();});
+  document.addEventListener('story-settings-changed',()=>{refreshContextIndicator();});
   document.addEventListener("settings-changed", refreshQuickChips);
   document.addEventListener("settings-changed", updateIndicator);
   refreshQuickChips();
@@ -438,7 +439,7 @@ export function setSession(sessionId) {
   }
   rememberMemoryStory();
   clearChatRetry();chatRetry=0;chatStatus='ok';
-  clearTimeout(indicatorTimer);clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
+  indicatorRefresh.invalidate();clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
   loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastSentContext = null; lastProviderUsage = null;
   msgUnsub?.();
   sessUnsub?.();
@@ -466,7 +467,7 @@ export function setSession(sessionId) {
   historyLoading = null;
   historyEpoch++;
   renderedMessages.clear();
-  ++indicatorRun;
+  indicatorRefresh.invalidate();
   el.list.innerHTML = "";
   el.contextFill.style.width = "0%";
   el.contextLabel.textContent = "No session selected";
@@ -514,7 +515,7 @@ function saveLocalCache(owner, sid, snapshot) {
 
 export async function prepareChatLogout() {
   void selectStorySettings(null);
-  cacheWritesPaused = true;clearChatRetry();
+  cacheWritesPaused = true;indicatorRefresh.invalidate();clearChatRetry();
   clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
   busyGate.active?.abort?.();
   rewriteController?.abort();
@@ -1061,16 +1062,27 @@ function showToast(text, ok) {
 
 // ---------- context indicator ----------
 
+const indicatorHint = 'Token count refreshes after you leave the message box.';
+const indicatorRefresh = createIndicatorRefresh({
+  focused: () => !!el.input && document.activeElement === el.input,
+  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value]),
+  compute: async () => {
+    if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
+    const source = session, settings = effectiveActiveSettings(), draftText = el.input.value;
+    const messages = !anyMemory(normalizeMemory(source.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory();
+    return computeContextUsage(source, settings, messages, { loreEntries, draftText });
+  },
+  apply: usage => { if (usage) applyIndicator(usage); },
+  onError: error => { if (el.contextLabel) el.contextLabel.textContent = error.message; },
+});
 export async function updateIndicator() {
-  if (!session || !state.settings || !latestReady) return;
-  const run = ++indicatorRun;
-  let usage;
-  try { const messages = !anyMemory(normalizeMemory(session.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory(); usage = await computeContextUsage(session,effectiveActiveSettings(),messages,{ loreEntries,draftText:el.input.value }); } catch (error) { if (run === indicatorRun) el.contextLabel.textContent = error.message; return; }
-  if (run !== indicatorRun) return; // a newer computation superseded this one
-
+  if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
+  return indicatorRefresh.request();
+}
+function applyIndicator(usage) {
   lastMemoryReport = usage.report;
   const estimated=tokenizer.tokenizerStatus?.()==='fallback';if(estimated && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
-  el.contextLabel.title = usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '';
+  el.contextLabel.title = indicatorHint + ' ' + (usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
   const allocated=usage.usedTokens;
   const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
   el.contextFill.style.width = Math.min(100, pct) + "%";
@@ -1120,24 +1132,24 @@ async function regenerateMessage(message) {
 }
 
 function setComposerText(text) {
-  el.input.value = text; el.input.style.height = 'auto';
-  el.input.style.height = el.input.scrollHeight + 'px'; el.input.scrollTop = el.input.scrollHeight;
+  el.input.value = text; indicatorRefresh.invalidate(); sizeComposer({scroll:true});
 }
 function clearOriginalDraft() {
   originalDraft = null;
-  if (el.restoreDraftBtn) el.restoreDraftBtn.hidden = true;
+  if (el.restoreDraftBtn && !el.restoreDraftBtn.hidden) el.restoreDraftBtn.hidden = true;
 }
 
 function updateRewriteControls() {
   if (!el.rewriteBtn) return;
   const empty=!el.input.value.trim();
   let eligible=false;
-  try { if(session) {continuationTarget(session,lastMessages);eligible=true;} } catch {}
-  el.rewriteBtn.textContent = rewriteController ? "Stop" : empty ? "Continue" : "Rewrite";
-  el.rewriteBtn.disabled = !rewriteController && (busy || state.busy || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))));
-  el.restoreDraftBtn.disabled = busy;
-  el.input.readOnly = !!rewriteController;
-  el.restoreDraftBtn.hidden = originalDraft === null;
+  try { if(empty && session) {continuationTarget(session,lastMessages);eligible=true;} } catch {}
+  const write=(node,key,value)=>{if(node[key]!==value)node[key]=value;};
+  write(el.rewriteBtn,'textContent', rewriteController ? "Stop" : empty ? "Continue" : "Rewrite");
+  write(el.rewriteBtn,'disabled', !rewriteController && (busy || state.busy || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))))));
+  write(el.restoreDraftBtn,'disabled',busy);
+  write(el.input,'readOnly',!!rewriteController);
+  write(el.restoreDraftBtn,'hidden',originalDraft === null);
 }
 
 async function handleContinue() {

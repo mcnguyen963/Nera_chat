@@ -1,3 +1,4 @@
+import {createTokenCounter} from './token-cache.js';
 // MAIN context builder frozen at fbcc95ad2498e24670d8daaf66f712e76f34dccf8787c5c3d00976ff13e03c64; golden fixtures verify wire parity. Prompt strings live in Markdown.
 import {prompts,renderPrompt} from "./system-prompts.js";
 const PLAN_THREAD_RECOVERY_RULE=" If, at the start of a turn, neither a <plan> block nor a <plan_thread> line appears anywhere in the visible conversation history, even though a plan seems to have been set earlier, treat that plan as lost from context. Its exact contents cannot be reconstructed; proceed with no active plan until the user sets a new one.";
@@ -23,7 +24,7 @@ export const REQUEST_FRAME_TOKENS = 8;
 
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
-const systemTokenCache = new Map();
+const countSystemTokensCached=createTokenCounter({count:countTokens,ready:tokenizerReady});
 
 const AD_DIRECTIVE_RULE = prompts.legacyAuthorDirection;
 
@@ -37,16 +38,6 @@ export function normalizeAdDirective(content) {
   }
   if (openings === 1) return content + "</ad>";
   return content;
-}
-
-async function countSystemTokensCached(text) {
-  let cached = systemTokenCache.get(text);
-  if (cached === undefined) {
-    if (systemTokenCache.size > 500) systemTokenCache.clear();
-    cached = await countTokens(text);
-    if (tokenizerReady()) systemTokenCache.set(text, cached);
-  }
-  return cached;
 }
 
 // Input must be cleaned story messages in order, as used by both builders.
