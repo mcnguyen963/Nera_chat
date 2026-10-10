@@ -1,3 +1,4 @@
+import { currentUid } from '../auth.js';
 import { maxOf } from '../math-utils.js';
 import {dismissRebuild} from '../session-memory.js';
 import {rebuildLabel} from '../memory-rebuild.js';
@@ -10,7 +11,7 @@ import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
 import * as store from '../lore-store.js';
 import { makeEntry, newLoreId, normalizeName, duplicateCards, STOPLIST, SECTION_KEYS } from '../lore-lines.js';
 import { sortLines, renderEntry, sectionLabel } from '../lore-select.js';
-import { BOOK_LABELS, detectFormat, fromMarkdown, fromJson, toMarkdown, toJson, planImport } from '../lore-format.js';
+import { BOOK_LABELS, detectFormat, fromMarkdown, fromJson, toMarkdown, toJson, planImport, serializeCard, parseCard, suggestCardDestination, planCardImport } from '../lore-format.js';
 import { LOREBOOK_TEMPLATE_MD, LOREBOOK_TEMPLATE_JSON, fillProtagonist } from '../memory-prompts.js';
 import { formatTurnsTranscript, computeTurns } from '../turns.js';
 import { latestScene } from '../scene.js';
@@ -135,7 +136,7 @@ function badge(text,kind = '') { return node('span',text,'badge '+kind); }
 function renderList() {
   if (!list || ['transfer','backups'].includes(screen)) return;
   list.replaceChildren(); list.append(button('‹ Books',() => { if (!canLeave()) return; staged = base = null; screen = 'books'; renderShell(); },'btn small mobile-back'));
-  list.append(node('h3',BOOK_LABELS[book]));
+  list.append(node('h3',BOOK_LABELS[book]),button('Import card…',()=>cardTransfer()));
   if (book === 'events') {
     const tabs = node('div',null,'segmented');
     tabs.append(button('Timeline',() => { const timeline = entries().find(e => e.kind === 'timeline'); if (timeline) openCard(timeline); else void newCard('Timeline','timeline'); }),button('Threads',() => { selected = null; staged = base = null; renderList(); })); list.append(tabs);
@@ -195,6 +196,7 @@ function renderEditor() {
   if (!editor || !staged) return;
   const version = ++editorVersion; editor.replaceChildren();
   editor.append(button('‹ '+BOOK_LABELS[book],() => { if (!canLeave()) return; staged = base = null; selected = null; screen = 'list'; renderShell(); },'btn small mobile-back'),node('h2',staged.name),node('p','','concurrent-notice muted'));
+  editor.append(button('Export card…',exportCard),button('Import into this card…',()=>cardTransfer(selected)));
   if (staged.draft) {
     const banner = node('div',null,'lore-banner'); banner.append(node('p',`This card was created by a memory update (turn ${linesOf(staged)[0]?.turn ?? '?'}). Check it's a new character, not someone you already have.`),button('Keep',async () => { if (state.busy) throw new Error('Wait for the current reply or summary.'); const original = entries().find(e => e.id === staged.id) ?? base; await store.saveEntry(sid,{ ...original,draft:false },original); base.draft = false; staged.draft = false; renderEditor(); toast('Saved'); }),button('Merge into…',mergeCard),button('Delete',deleteCard)); editor.append(banner);
   }
@@ -350,6 +352,77 @@ function renderTransfer() {
   editor.append(node('h3','Make lorebooks with an AI'),node('p','Protagonist: '+(protagonist || 'the main character'),'muted'));
   const prompt = () => fillProtagonist(format === 'md' ? LOREBOOK_TEMPLATE_MD : LOREBOOK_TEMPLATE_JSON,protagonist);
   editor.append(button('Copy prompt for an AI',async () => { await copy(prompt()); toast('Prompt copied'); })); const disclosure = node('details'); disclosure.append(node('summary','Show prompt'),node('pre',prompt())); editor.append(disclosure,node('p','1. Export this story (Settings → Import & export → Export current story), or export the transcript above.\n2. Paste the prompt and the file into an AI chat.\n3. Save its answer as a .md (or .json) file and import it here.','muted'));
+}
+// Capture the entire origin once; never derive a write destination from a file.
+function cardFlowContext() {
+  const source={id:sid,uid:currentUid()},nav=navigationId,key=navigationKey,selection=selected,originBook=book;
+  const isCurrent=()=>{try{return opened && sid===source.id && state.sessionId===source.id && currentUid()===source.uid && navigationId===nav && navigationKey===key && selected===selection && book===originBook;}catch{return false;}};
+  const check=()=>{if(!isCurrent())throw new Error('Navigation or account changed; card transfer cancelled.');};
+  return {source,isCurrent,check,originBook};
+}
+function exportCard() {
+  if(dirty()){toast('Save or discard your changes before exporting this card.');return;}
+  const ctx=cardFlowContext(),entry=entries().find(e=>e.id===selected);
+  if(!entry)throw new Error('This card was deleted.');
+  const s=subSheet('Export '+entry.name),body=node('div',null,'memory-content'),format=node('select');
+  for(const [value,label] of [['md','Markdown'],['json','JSON']]){const o=node('option',label);o.value=value;format.append(o);}
+  body.append(format,button('Export card',()=>{ctx.check();if(dirty())throw new Error('Save or discard your changes first.');const saved=entries().find(e=>e.id===entry.id);if(!saved)throw new Error('This card was deleted.');download(serializeCard(saved,{format:format.value,storyId:ctx.source.id,title:live()?.session.title ?? ''}),saved.name.replace(/[^\p{L}\p{N} _-]/gu,'')+'-card.'+format.value);s.hide();},'btn primary'),button('Cancel',s.hide));s.dialog.append(body);
+}
+function cardTransfer(explicitId=null) {
+  if(dirty()){toast('Save or discard your changes before importing a card.');return;}
+  const ctx=cardFlowContext();let cancelled=false;
+  const s=subSheet(explicitId ? 'Import into this card' : 'Import card',{close:()=>{cancelled=true;return true;}}),body=node('div',null,'memory-content');s.dialog.append(body);
+  const check=()=>{ctx.check();if(cancelled)throw new Error('Card import cancelled.');if(dirty())throw new Error('Save or discard your changes before importing.');};
+  const close=()=>{cancelled=true;s.hide();};
+  const picker=node('input');picker.type='file';picker.accept='.md,.markdown,.json,.txt';picker.className='hidden';
+  picker.addEventListener('change',async()=>{const file=picker.files[0];picker.value='';if(!file)return;try{check();if(file.size>2*1024*1024)throw new Error('The file is larger than 2 MB.');const text=await file.text();check();read(text);}catch(e){toast(e.message);}});
+  const pasted=field('Paste one card','',{textarea:true});pasted.input.rows=12;
+  body.append(picker,button('Choose file…',()=>{check();picker.click();}),pasted.wrap,button('Read pasted text',()=>{check();read(pasted.input.value);},'btn primary'),button('Cancel',close));
+  function read(text) {
+    check();const parsed=parseCard(text,{protagonist:normalizeMemory(live()?.session.memory).protagonist});
+    if(parsed.entry.book!==ctx.originBook)throw new Error('This file belongs to '+BOOK_LABELS[parsed.entry.book]+'. Open that book to import it.');
+    body.replaceChildren();
+    const destination=node('select'),mode=node('select'),conflict=node('select'),preview=node('div'),suggestion=suggestCardDestination(entries(),parsed,ctx.source.id);
+    const option=(select,value,label)=>{const o=node('option',label);o.value=value;select.append(o);};
+    if(explicitId){const target=entries().find(e=>e.id===explicitId);if(!target)throw new Error('This card was deleted.');option(destination,target.id,'Update '+target.name);destination.value=target.id;destination.disabled=true;}
+    else {
+      option(destination,'','Choose a destination…');
+      if(parsed.entry.kind!=='timeline' || !entries().some(e=>e.kind==='timeline'))option(destination,'__new','Create new card');
+      for(const e of entries().filter(e=>e.book===parsed.entry.book && e.kind===parsed.entry.kind))option(destination,e.id,'Update existing card: '+e.name+' · '+e.id);
+      if(suggestion.suggestedId)destination.value=suggestion.suggestedId;
+      else if(!suggestion.matches.length && parsed.entry.kind!=='timeline')destination.value='__new';
+      if(suggestion.matches.length>1)body.append(node('p','Several cards match. Choose the destination explicitly.','memory-warning'));
+    }
+    option(mode,'replace','Replace card');option(mode,'merge','Merge into card');mode.value='replace';
+    for(const [v,label] of [['file','Use file'],['mine','Keep mine'],['both','Keep both']])option(conflict,v,label);
+    conflict.value='file';
+    for(const [label,input] of [['Destination',destination],['Mode',mode],['Conflicting section text',conflict]]){const l=node('label',label);l.append(input);body.append(l);}
+    let plan=null;
+    const save=button('Import card',async b=>{
+      check();if(state.busy || reorganizing.size)throw new Error('Wait for the current reply or memory action.');if(!plan)throw new Error('Choose a destination and review the preview.');
+      b.disabled=true;
+      try {
+        const reviewed=plan,backup=await store.importCard(ctx.source,reviewed,{isCurrent:()=>ctx.isCurrent() && !cancelled && !dirty() && plan===reviewed});
+        const showResult=ctx.isCurrent() && !cancelled && plan===reviewed;close();if(showResult){staged=base=null;openCard(reviewed.data);}
+        toast('Imported '+reviewed.data.name+'.','Undo',async()=>{if(currentUid()!==ctx.source.uid)throw new Error('Account changed; Undo cancelled.');await store.restoreBackup(ctx.source,backup,[]);if(opened && sid===ctx.source.id){staged=base=null;selected=null;screen='list';renderShell();}toast('Restored');});
+      } catch(e) {toast(e.message);body.append(button('Refresh preview',async()=>{check();const fresh=await store.getLore(ctx.source);check();refresh(fresh);}));}
+      finally {b.disabled=false;}
+    },'btn primary');
+    function refresh(fresh=null) {
+      check();preview.replaceChildren();plan=null;save.disabled=true;
+      if(!destination.value){preview.append(node('p','Choose Create new card or Update existing card.'));return;}
+      try {
+        plan=planCardImport(Array.isArray(fresh) ? fresh : entries(),parsed,{targetId:destination.value==='__new' ? null : destination.value,storyId:ctx.source.id,mode:mode.value,conflict:conflict.value,loreRevision:live()?.session.loreRevision ?? 0});
+        preview.append(node('h3',plan.preview.destination+' · '+mode.selectedOptions[0].textContent));
+        for(const w of plan.preview.warnings)preview.append(node('p','Line '+w.line+': '+w.reason,'memory-warning'));
+        for(const c of plan.preview.changes){preview.append(node('h4',c.field),node('pre','Before: '+(typeof c.before==='string' ? c.before : JSON.stringify(c.before))+'\nAfter: '+(typeof c.after==='string' ? c.after : JSON.stringify(c.after))));}
+        for(const [kind,notes] of Object.entries(plan.preview.notes)){preview.append(node('h4',kind+' notes · '+notes.length));for(const n of notes)preview.append(node('pre',n.section+' · '+[n.turn!=null ? 'T'+n.turn : '',n.when].filter(Boolean).join(' · ')+'\n'+(n.before ? 'Before: '+n.before.text+'\nAfter: ' : '')+n.text));}
+        const detail=node('details');detail.append(node('summary','Resulting card'),node('pre',serializeCard(plan.data,{storyId:ctx.source.id})));preview.append(detail);save.disabled=false;
+      }catch(e){preview.append(node('p',e.message,'memory-warning'));}
+    }
+    for(const input of [destination,mode,conflict])input.addEventListener('change',refresh);
+    body.append(preview,button('Cancel',close),save);refresh();
+  }
 }
 async function renderBackups() {
   const sourceSid=sid,sourceNavigation=navigationId,sourceList=list,sourceEditor=editor;

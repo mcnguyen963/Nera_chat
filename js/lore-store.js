@@ -1,3 +1,4 @@
+import { cardFingerprint } from './lore-card-state.js';
 import { minOf, maxOf } from './math-utils.js';
 import { limitSkippedNotes } from './memory-skipped.js';
 import { assertStory } from './errors.js';
@@ -300,6 +301,30 @@ async function importLoreImpl(sid,plan,_existing) {
     for(const w of batch)if(w.delete)tx.delete(ref(sid,w.id));else tx.set(ref(sid,w.id),{...clean(w.data),createdAt:clean(w.data).createdAt ?? serverTimestamp(),updatedAt:serverTimestamp()});
   });return base.id;
 }
+// The preview is the authority for the destination. Imported IDs never select a write path.
+async function importCardImpl(sid,plan,{isCurrent=()=>true}={}) {
+  const check=()=>{if (!isCurrent() || sid.uid!==currentUid()) throw new Error('Navigation or account changed; card import cancelled.');};
+  check();guardSize(plan.data);
+  if(!plan.expected && plan.data.kind==='timeline'){const cards=await getLore(sid);check();if(cards.some(e=>e.kind==='timeline'))throw new Error('A Timeline already exists. Choose Update existing card and refresh the preview.');}
+  if(!plan.id || plan.id.includes('/') || plan.data.id!==plan.id)throw new Error('Invalid card destination.');
+  await ensureBackupIndex(sid);check();
+  const base=backupBase('card-import','Imported '+plan.data.name);
+  await storyTransaction(sid,async(tx,session)=>{
+    check();
+    const saved=await tx.get(ref(sid,plan.id)),index=await tx.get(backupIndexRef(sid));
+    const current=saved.exists() ? {id:plan.id,...saved.data()} : null;
+    if(cardFingerprint(current)!==(plan.expected ?? 'null'))throw new Error('This card changed or was deleted after the preview. Refresh the preview before importing.');
+    // A revision barrier also guards creation of the singleton Timeline.
+    if(!current && (session.loreRevision ?? 0)!==plan.loreRevision)throw new Error('Lorebooks changed after the preview. Refresh the preview before creating this card.');
+    if(current && (current.book!==plan.data.book || current.kind!==plan.data.kind))throw new Error('Incompatible card destination.');
+    check();
+    const data=clean(plan.data);guardSize(data);
+    backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,current ? [current] : [],current ? [] : [plan.id]);
+    tx.set(ref(sid,plan.id),{...data,createdAt:current?.createdAt ?? serverTimestamp(),updatedAt:serverTimestamp()});
+  });
+  return base.id;
+}
+export const importCard=gateWrite(importCardImpl);
 async function copyLoreImpl(src,dst,maxOrder) {
   assertStory((await getDocFromServer(sessionRef(src))).data());
   const snap = await getDocsFromServer(root(src,'lore'));
