@@ -58,6 +58,10 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     const warnings=[];
     if(retained<target.length) warnings.push(`Recent window reduced from ${target.length} to ${retained} messages to fit the request budget.`);
     if(result.exceedsInputLimit) warnings.push('The request exceeds the input limit.');
+    if (opts.includeInspection) result.inspection = {
+      sections:{system:result.entries[0].content,summary:result.entries.find(e=>e.source==='Active story summary')?.content ?? '',gap:result.entries.find(e=>e.source==='Omitted turns marker')?.content ?? ''},
+      messages:result.entries.flatMap((e,requestIndex)=>e.role!=='system' ? [{...e,requestIndex,source:e.id==='__legacy_draft' ? 'Composer draft' : e.source}] : []),
+    };
     return {...result,report:{mode:'legacy',totals:{input:result.usedTokens,reserved:settings.maxResponseTokens,max:requestInputLimit(settings)},blocks:result.contributions.map(c=>({key:c.source.toLowerCase().replace(/[^a-z]+/g,'-'),label:c.source,tokens:c.tokens})),loaded:[],skipped:[],scene:null,gap:null,gaps:[],warnings}};
   }
   return buildMemoryContext(session, settings, { ...opts, messages }, {
