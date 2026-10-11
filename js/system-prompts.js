@@ -35,6 +35,7 @@ const files = {
   "memoryExtractionOutput": "memory-extraction-output.md",
   "plan": "fixed-author-plan.md",
   "summaryOutput": "summary-output.md",
+  "summaryContinuity": "summary-continuity.md",
   "historicalSummary": "historical-summary.md",
   "openingExchange": "opening-exchange.md",
   "memoryHeader": "memory-header.md",

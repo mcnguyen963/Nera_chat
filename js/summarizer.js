@@ -1,7 +1,7 @@
 import {memoryActive,normalizeMemory} from './memory-settings.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts, renderPrompt } from './system-prompts.js';
-import { CONTINUITY_RULE, summarySource } from './continuity.js';
+import { summarySource } from './continuity.js';
 import { computeTurns, formatTurnsTranscript } from './turns.js';
 import { isAcceptedTurn, lastUserOrderOf } from './turn-review.js';
 // Rolling summarization (spec §8). The new summary always folds in the old summary
@@ -29,8 +29,8 @@ function summarizerSettings(settings, outputCapacity) {
   const maxResponseTokens = Math.min(
     settings.summarizerMaxTokens ?? 20000, outputCapacity
   );
-  // Summaries need their output budget for facts, not the chat profile's thinking.
-  return { ...settings, maxResponseTokens, reasoning: { ...settings.reasoning, enabled: false } };
+  // Use the selected connection's reasoning settings for summaries as well.
+  return { ...settings, maxResponseTokens };
 }
 
 export function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
@@ -98,7 +98,7 @@ async function runSummary(session,settings,opts) {
   const chunkLimit = settings.summarizerChunkTokens ?? CHUNK_TOKEN_BUDGET_DEFAULT;
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
-  const summaryPrompt = (settings.summarizerSystemPrompt || '')+(memoryActive(normalizeMemory(session.memory)) ? '\n\n'+CONTINUITY_RULE : '');
+  const summaryPrompt = (settings.summarizerSystemPrompt || '')+(memoryActive(normalizeMemory(session.memory)) ? '\n\n'+prompts.summaryContinuity : '');
   const detailDirective = '\n\n'+renderPrompt(prompts.summaryOutput, { MAX_OUTPUT_TOKENS: requestSettings.maxResponseTokens });
 
   let content = null;

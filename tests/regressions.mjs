@@ -655,7 +655,7 @@ test('Summarizer preserves configured output limits above the default', async ()
   assert.ok(h.calls.requests.every(request => request.max_tokens === 100000));
 });
 
-test('Summarizer disables chat reasoning on every request', async () => {
+test('Summarizer preserves chat reasoning within its effective output budget', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
   await runSummarization({ id: 's' }, {
@@ -664,7 +664,7 @@ test('Summarizer disables chat reasoning on every request', async () => {
     keepRecentMessagesAfterSummary: 0,
   }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'A new event'})) });
   assert.equal(h.calls.requests.length, 1);
-  assert.equal(h.calls.requests[0].reasoning, undefined);
+  assert.deepEqual(h.calls.requests[0].reasoning, {max_tokens:Math.min(20000,h.calls.requests[0].max_tokens-1)});
 });
 
 test('Incomplete streamed replies are rejected', async () => {
