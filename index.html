@@ -10,6 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Nera Chat</title>
   <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/glass.css" />
 </head>
 <body>
 
@@ -58,9 +59,9 @@
 
   <!-- App shell -->
   <div id="app" class="app hidden">
-    <aside id="sidebar" class="sidebar">
+    <aside id="sidebar" class="sidebar" inert aria-label="Stories">
       <div class="sidebar-header">
-        <a class="brand" href="./" aria-label="Nera Chat home"><span class="brand-pet" aria-hidden="true"></span> Nera<span class="brand-dot">Chat</span></a>
+        <a class="brand" href="./" aria-label="Nera Chat home"><span class="brand-pet" aria-hidden="true"></span> Nera<span class="brand-dot">Chat</span></a><button id="btn-sidebar-close" type="button" class="btn" data-icon="close" aria-label="Close stories">Close</button>
       </div>
       <button id="btn-new-session" class="btn new-session" title="New session"><span aria-hidden="true">＋</span> New story <span class="new-arrow" aria-hidden="true">↗</span></button>
       <div class="sidebar-label">Your stories</div>
@@ -76,39 +77,30 @@
 
     <main class="main">
       <header class="top-bar">
-        <button id="btn-sidebar-toggle" class="btn icon-btn" aria-label="Toggle stories menu" aria-expanded="false" aria-controls="sidebar">
+        <button id="btn-sidebar-toggle" class="btn icon-btn" data-icon="stories" aria-label="Stories" aria-expanded="false" aria-controls="sidebar">
           <span class="hamburger"><span></span><span></span><span></span></span>
         </button>
-        <span id="top-bar-title" class="top-bar-title">Your next story</span>
-        <nav class="tab-bar" aria-label="Workspace">
-          <button class="tab active" data-tab="chat">Conversation</button>
-          <button class="tab" data-tab="settings">Settings</button>
-        </nav>
-      </header>
-
-      <!-- Chat tab -->
-      <section id="chat-tab" class="chat-tab">
-        <div class="chat-toolbar">
-          <div id="context-indicator" role="button" tabindex="0" class="context-indicator" title="Tokens that would be sent next turn / context budget">
-            <span class="context-caption">Context</span><div class="context-bar"><div id="context-fill" class="context-fill"></div><div id="context-threshold" class="context-threshold"></div></div>
-            <span id="context-label" class="muted">—</span>
-          </div>
-          <button id="btn-memory" class="btn small memory-chip hidden" type="button">Memory</button>
-          <button id="btn-summarize" class="btn small">Summarize</button>
-          <div class="top-menu-wrap">
-            <button id="btn-top-menu" class="btn small top-menu-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
-            <div id="top-menu" class="top-menu" hidden>
-              <button class="top-menu-item" data-action="sessions">Sessions</button>
-              <button class="top-menu-item" data-action="chat">Chat</button>
-              <button class="top-menu-item" data-action="settings">Settings</button>
-              <button class="top-menu-item" data-action="lorebooks">Lorebooks</button>
-              <button class="top-menu-item" data-action="sync-chat">Sync latest data</button>
-              <button class="top-menu-item" data-action="context-details">Context details</button>
-              <button class="top-menu-item" data-action="summarize-full">Summarize full history</button>
-              <button class="top-menu-item" data-action="reset-summary">Reset summary checkpoint</button>
-            </div>
+        <span id="top-bar-title" hidden>Your next story</span>
+        <button id="context-indicator" type="button" class="context-indicator" aria-label="View context" aria-describedby="context-label" title="View context">
+          <svg class="context-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="context-track" cx="18" cy="18" r="14"/><circle id="context-fill" class="context-fill" cx="18" cy="18" r="14" pathLength="100"/></svg>
+          <span id="context-threshold" hidden></span><span id="context-label" class="sr-only">No session selected</span>
+        </button>
+        <div class="top-menu-wrap">
+          <button id="btn-top-menu" type="button" class="btn icon-btn" data-icon="more" aria-label="More" aria-haspopup="dialog" aria-expanded="false" aria-controls="top-menu">More</button>
+          <div id="top-menu" class="top-menu" role="dialog" aria-modal="true" aria-label="More actions" hidden>
+            <button class="top-menu-item" data-action="settings">Settings</button>
+            <button id="btn-memory" class="top-menu-item memory-chip hidden" type="button">Memory</button>
+            <button id="btn-summarize" class="top-menu-item" type="button">Summarize</button>
+            <button class="top-menu-item" data-action="lorebooks">Lorebooks</button>
+            <button class="top-menu-item" data-action="sync-chat">Sync latest data</button>
+            <button class="top-menu-item" data-action="context-details">Context details</button>
+            <button class="top-menu-item" data-action="summarize-full">Summarize full history</button>
+            <button class="top-menu-item" data-action="reset-summary">Reset summary checkpoint</button>
           </div>
         </div>
+      </header>
+
+      <section id="chat-tab" class="chat-tab">
         <div id="welcome" class="welcome">
           <div class="brand-mark welcome-mark"><span class="brand-pet welcome-pet" aria-hidden="true"></span><span id="chat-pet" hidden></span></div>
           <p class="eyebrow">A LITTLE IMAGINATION. ENDLESS POSSIBILITY.</p>
@@ -122,42 +114,37 @@
           </div>
         </div>
         <div id="message-list" class="message-list" aria-label="Conversation"></div>
-        <form id="composer" class="composer">
+        <form id="composer" autocomplete="off"></form>
+        <div id="composer-shell" class="composer">
+          <button id="floating-copy" type="button" class="btn floating-copy" data-icon="copy" aria-label="Copy message being read" hidden>Copy</button>
           <div id="composer-box" class="composer-box">
-            <textarea id="chat-input" placeholder="Where shall we begin?" aria-label="Your message" rows="1"></textarea>
+            <textarea id="chat-input" form="composer" autocomplete="off" inputmode="text" enterkeyhint="enter" autocapitalize="sentences" spellcheck="true" placeholder="Where shall we begin?" aria-label="Your message" rows="1"></textarea>
             <div class="composer-row">
-              <button type="button" id="btn-model-chip" class="composer-chip" aria-haspopup="true">
-                <span class="model-dot" aria-hidden="true"></span><span id="chip-model" class="chip-label">Model</span><span aria-hidden="true">⌄</span>
-              </button>
-              <span class="composer-spacer"></span>
-              <button type="button" id="btn-restore-draft" class="btn small composer-action" hidden>Restore original</button>
-            </div>
-            <div class="composer-action-column">
-              <button type="submit" id="btn-send" class="composer-send" aria-label="Send"><span aria-hidden="true">↑</span></button>
-              <button type="button" id="btn-stop" class="btn small composer-action hidden">Stop</button>
-              <button type="button" id="btn-rewrite" class="btn small composer-action" disabled>Rewrite</button>
-            </div>
-            <div id="composer-popover" class="composer-popover" hidden>
-              <label class="popover-field">Connection profile
-                <select id="quick-profile"></select>
+              <label class="composer-select composer-model">
+                <select id="quick-profile" aria-label="Model"></select>
+                <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
-              <label class="popover-field">Thinking
-                <select id="quick-thinking">
+              <label class="composer-select composer-thinking">
+                <select id="quick-thinking" aria-label="Thinking">
                   <option value="off">Off</option>
-                  <option value="none">none</option>
-                  <option value="minimal">minimal</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
-                  <option value="max">max</option>
-                  <option value="max_tokens">max_tokens mode</option>
+                  <option value="none">None</option>
+                  <option value="minimal">Minimal</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">XHigh</option>
+                  <option value="max">Max</option>
+                  <option value="max_tokens">Token budget</option>
                 </select>
+                <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
+              <button type="button" id="btn-restore-draft" class="btn composer-action" data-icon="restore" aria-label="Restore original" hidden>Restore original</button>
+              <button type="button" id="btn-rewrite" class="btn composer-action" data-icon="rewrite" aria-label="Rewrite" disabled>Rewrite</button>
+              <button type="submit" form="composer" id="btn-send" class="composer-send" data-icon="send" aria-label="Send">Send</button>
+              <button type="button" id="btn-stop" class="btn composer-action hidden" data-icon="stop" aria-label="Stop generation">Stop</button>
             </div>
           </div>
-          <p class="composer-note">Your imagination leads the way.</p>
-        </form>
+        </div>
       </section>
 
       <!-- Settings popup -->
@@ -169,10 +156,10 @@
             <div id="settings-footer" class="settings-footer">
               <button id="btn-reset-settings" class="btn" type="button"><span class="settings-label-long">Reset defaults</span><span class="settings-label-short">Defaults</span></button>
               <span id="settings-saved-msg" role="status" aria-live="polite"></span>
-              <button id="btn-save-settings" class="btn primary" type="button"><span class="settings-label-long">Save settings</span><span class="settings-label-short">Save</span></button>
-              <button id="btn-save-session" class="btn primary hidden" type="button"><span class="settings-label-long">Save session</span><span class="settings-label-short">Save</span></button>
+              <button data-icon="save" aria-label="Save settings" id="btn-save-settings" class="btn primary" type="button"><span class="settings-label-long">Save settings</span><span class="settings-label-short">Save</span></button>
+              <button data-icon="save" aria-label="Save session" id="btn-save-session" class="btn primary hidden" type="button"><span class="settings-label-long">Save session</span><span class="settings-label-short">Save</span></button>
             </div>
-            <button id="btn-close-settings" class="settings-close" type="button" aria-label="Close settings">×</button>
+            <button data-icon="close" id="btn-close-settings" class="settings-close" type="button" aria-label="Close settings">×</button>
           </header>
           <div class="settings-body">
             <nav class="settings-rail" aria-label="Settings categories">

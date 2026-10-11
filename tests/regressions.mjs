@@ -144,6 +144,24 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     },
     'import-export.js': {exportAllStories:async()=>{}, importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
+      getMessageForEdit:async (...args) => {
+        (calls.editReads ??= []).push(args);
+        if (calls.getMessageForEdit) return calls.getMessageForEdit(...args);
+        return structuredClone((calls.serverHistory ?? calls.history ?? []).find(message => message.id === args[1]));
+      },
+      editMessage:async (...args) => {
+        (calls.edits ??= []).push(args);
+        if (calls.editMessage) return calls.editMessage(...args);
+        const [sid, id, content, order, metadata] = args;
+        const base = (calls.serverHistory ?? calls.history).find(message => message.id === id);
+        if (metadata.expectedRevision !== (base.revision ?? 0)) throw Object.assign(new Error('This message was edited elsewhere.'), {name:'MessageEditConflict', currentMessage:base});
+        const replacement = {...base, content, order, revision:(base.revision ?? 0)+1};
+        calls.history = calls.history.map(message => message.id === id ? replacement : message);
+        const historyRevision = (calls.historyRevision ?? 0)+1;
+        calls.historyRevision = historyRevision;
+        const session = {...calls.sessionDocs[sid], historyRevision}; calls.sessionDocs[sid] = session;
+        return {replacement, session, historyRevision};
+      },
       HistoryConflict:class HistoryConflict extends Error {},
       findSavedMessage:async(...args)=>{(calls.saveLookups ??= []).push(args);return calls.findSavedMessage?.(...args) ?? null;},
       ensureContinuityMetadata:async () => {},
@@ -235,7 +253,7 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   assert.equal(h.state.settings.autoSummarizationEnabled, true);
   assert.equal(h.state.settings.profiles.length, 2);
   assert.equal(h.state.settings.profiles.find(p => p.id === copyId).modelId, 'model-b');
-  assert.match(h.el('chip-model').textContent, /model-a/);
+  assert.match(h.el('quick-profile').selectedOptions[0].textContent, /model-a/);
   const { buildRequestBody } = await h.use('llm-client.js');
   const body = buildRequestBody(h.state.settings, []);
   assert.equal(body.temperature, 0.7);
@@ -252,6 +270,41 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   h.el('quick-thinking').value = 'high';
   await h.fire('quick-thinking', 'change');
   assert.equal(h.settings.activeProfile(h.state.settings).reasoning.effort, 'high');
+});
+
+test('Inline model and thinking selectors restore per-profile choices and recover after failed saves', async () => {
+  const h = await harness();
+  h.calls.settingsDoc = {
+    profiles: [
+      {id:'first',name:'First',modelId:'model-a',reasoning:{enabled:true,mode:'effort',effort:'low'}},
+      {id:'second',name:'Second',modelId:'model-b',reasoning:{enabled:false,mode:'effort',effort:'medium'}},
+    ],
+    activeProfileId:'first',
+  };
+  h.state.settings = await h.settings.loadSettings();
+  (await h.use('ui/chat-view.js')).initChatView();
+  assert.equal(h.el('quick-thinking').value,'low');
+  h.el('quick-profile').value='second'; await h.fire('quick-profile','change');
+  assert.equal(h.el('quick-thinking').value,'off');
+  h.el('quick-thinking').value='max_tokens'; await h.fire('quick-thinking','change');
+  assert.equal(h.settings.activeProfile(h.state.settings).reasoning.mode,'max_tokens');
+  assert.equal(h.settings.activeProfile(h.state.settings).reasoning.enabled,true);
+  h.el('quick-thinking').value='none'; await h.fire('quick-thinking','change');
+  assert.equal(h.settings.activeProfile(h.state.settings).reasoning.effort,'none');
+  assert.equal(h.settings.activeProfile(h.state.settings).reasoning.enabled,true);
+  h.el('quick-thinking').value='off'; await h.fire('quick-thinking','change');
+  assert.equal(h.settings.activeProfile(h.state.settings).reasoning.enabled,false);
+  h.el('quick-profile').value='first'; await h.fire('quick-profile','change');
+  assert.equal(h.el('quick-thinking').value,'low');
+  assert.equal(h.el('quick-profile').selectedOptions[0].textContent,'model-a · First');
+  h.calls.fail=true;
+  h.el('quick-thinking').value='high'; await h.fire('quick-thinking','change');
+  assert.equal(h.el('quick-thinking').value,'low');
+  assert.equal(h.state.settings.reasoning.effort,'low');
+  h.el('quick-profile').value='second'; await h.fire('quick-profile','change');
+  assert.equal(h.el('quick-profile').value,'first');
+  assert.equal(h.el('quick-thinking').value,'low');
+  assert.equal(h.state.settings.modelId,'model-a');
 });
 
 test('Invalid sampling and failed saves preserve the popup draft and live settings', async () => {
@@ -393,6 +446,8 @@ test('Settings reload from Firestore, and quick model and thinking choices save 
   h.el('quick-profile').value = 'second';
   await h.fire('quick-profile', 'change');
   assert.equal(h.state.settings.modelId, 'model-b');
+  assert.equal(h.el('quick-profile').selectedOptions[0].textContent, 'model-b · Second');
+  assert.equal(h.el('quick-thinking').value, 'off');
   h.el('quick-thinking').value = 'high';
   await h.fire('quick-thinking', 'change');
   assert.equal(h.calls.reads, 1);
@@ -729,7 +784,7 @@ test('Opening a chat uses the chunked message subscription', async () => {
   assert.deepEqual(h.calls.subscriptions, ['story']);
 });
 
-test('message actions keep consistent order and create copies through the selected message', async () => {
+test('message header actions keep consistent order and create copies through the selected message', async () => {
   for (const role of ['user', 'assistant']) {
     const h = await harness();
     const chat = await h.use('ui/chat-view.js');
@@ -741,10 +796,17 @@ test('message actions keep consistent order and create copies through the select
       messages: [{ id: 'chosen-message', order: 7, role, content: 'Chosen turn' }], hasEarlier: false,
     });
     const message = h.el('message-list').children.find((node) => node.dataset.messageId === 'chosen-message');
-    const actions = message.children[0].children[1].children;
+    const header = message.querySelector('.msg-meta');
+    const controls = header.querySelector('.msg-actions');
+    assert.ok(controls);
+    assert.equal(controls.parentNode, header);
+    assert.equal(message.children.some(node => node.matches('.msg-actions')), false);
+    assert.equal(controls.children[0].dataset.icon, 'copy');
+    assert.equal(message.querySelector('.msg-content').textContent, 'Chosen turn');
+    const actions = controls.querySelector('.message-menu-panel').children;
     assert.deepEqual(Array.from(actions, (button) => button.textContent), role === 'assistant'
-      ? ['Create copy', 'Copy', 'Edit', 'Delete', 'Regenerate']
-      : ['Create copy', 'Copy', 'Edit', 'Delete', 'Retry reply']);
+      ? ['Create story copy', 'Edit', 'Delete', 'Regenerate']
+      : ['Create story copy', 'Edit', 'Delete', 'Retry reply']);
     const click = { type: 'click', stopPropagation() {} };
     h.state.busy = true;
     await actions[0].dispatchEvent(click);
@@ -1202,7 +1264,7 @@ test('main adaptation: mobile editor grows with text and releases the fixed bubb
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Long message'}],hasEarlier:false});
  const bubble=h.el('message-list').children.find(node=>node.dataset.messageId==='u');
- await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Edit').click();
+ await bubble.querySelector('.message-menu-panel').children.find(button=>button.textContent==='Edit').click();
  const editor=bubble.querySelector('.msg-editor');assert.equal(editor.style.height,'900px');assert.equal(bubble.style.height,'');
  editor.scrollHeight=1100;await editor.dispatchEvent({type:'input'});assert.equal(editor.style.height,'1100px');
  await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Cancel').click();
@@ -1854,4 +1916,67 @@ test('Mobile composer defers remote refreshes while typing, cancels blur/refocus
   h.calls.response='New reply.';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
   assert.equal(h.calls.messages[0][1].content,'Exact latest action');assert.ok(h.calls.requests[0].messages.some(m=>m.role==='user'&&m.content==='Exact latest action'));
   assert.match(h.el('context-label').title,/leave the message box/);
+});
+
+async function oldMessageEditor({read, save}={}) {
+  const h=await harness(), chat=await h.use('ui/chat-view.js');
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve=>setTimeout(resolve,0));
+  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:2})});
+  h.calls.latestCallbacks.at(-1)({messages:[{id:'old',role:'user',order:1,content:'Cached old turn',revision:0},{id:'last',role:'assistant',order:200,content:'Newest reply'}],hasEarlier:true});
+  h.calls.serverHistory=[{id:'old',role:'user',order:1,content:'Current server turn',revision:2},{id:'last',role:'assistant',order:200,content:'Newest reply'}];
+  if(read)h.calls.getMessageForEdit=read;
+  if(save)h.calls.editMessage=save;
+  const list=h.el('message-list');list.scrollHeight=2000;list.clientHeight=500;list.scrollTop=280;
+  const bubble=list.children.find(node=>node.dataset.messageId==='old');
+  const pending=bubble.querySelector('.message-menu-panel').children.find(button=>button.textContent==='Edit').click();
+  return {h,chat,bubble,pending};
+}
+
+test('Old cached message editors load server content/revision and save without clearing cache or signing out',async()=>{
+  const {h,bubble,pending}=await oldMessageEditor();await pending;
+  const editor=bubble.querySelector('.msg-editor');assert.equal(editor.value,'Current server turn');
+  assert.equal(bubble.querySelector('.msg-actions').parentNode,bubble);
+  assert.equal(bubble.querySelector('.msg-meta').querySelector('.message-copy'),null);
+  assert.deepEqual(h.calls.editReads,[['story','old',1]]);assert.equal(h.el('message-list').scrollTop,280);
+  editor.value='My corrected turn';await bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Save').click();
+  assert.equal(h.calls.edits[0][4].expectedRevision,2);
+  assert.equal(h.el('message-list').children.find(node=>node.dataset.messageId==='old').querySelector('.msg-content').textContent,'My corrected turn');
+  assert.equal(h.state.busy,false);
+});
+
+test('Old-message Save failure stays visible beside the editor and keeps the draft for retry',async()=>{
+  const {h,bubble,pending}=await oldMessageEditor({save:async()=>{throw Error('write denied');}});await pending;
+  const editor=bubble.querySelector('.msg-editor');editor.value='Keep my draft';
+  const save=bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Save');await save.click();
+  assert.equal(editor.value,'Keep my draft');assert.match(bubble.querySelector('.msg-edit-status').textContent,/write denied.*draft is kept/);
+  assert.equal(save.disabled,false);assert.equal(h.state.busy,false);assert.equal(h.el('message-list').scrollTop,280);
+  h.calls.editMessage=null;await save.click();assert.equal(h.el('message-list').children.find(node=>node.dataset.messageId==='old').querySelector('.msg-editor'),null);
+});
+
+for(const choice of ['Use latest','Keep my draft over latest'])test(`Concurrent old-message edit requires review and preserves draft: ${choice}`,async()=>{
+  const {h,bubble,pending}=await oldMessageEditor();await pending;
+  const editor=bubble.querySelector('.msg-editor');editor.value='My draft';
+  h.calls.serverHistory[0]={...h.calls.serverHistory[0],revision:3,content:'Changed by another device'};
+  const save=bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Save');await save.click();
+  assert.equal(editor.value,'My draft');assert.equal(save.disabled,true);
+  assert.match(bubble.querySelector('.msg-edit-status').textContent,/draft is kept/);
+  await bubble.querySelector('.msg-edit-status').children.find(button=>button.textContent===choice).click();
+  assert.equal(editor.value,choice==='Use latest' ? 'Changed by another device' : 'My draft');
+  assert.equal(save.disabled,false);await save.click();assert.equal(h.calls.edits.at(-1)[4].expectedRevision,3);
+});
+
+test('A failed initial editor read preserves a subsequently typed draft and requires review of newer content',async()=>{
+  const {h,bubble,pending}=await oldMessageEditor({read:async()=>{throw Error('offline');}});await pending;
+  const editor=bubble.querySelector('.msg-editor');editor.value='Draft after failed read';
+  h.calls.getMessageForEdit=null;
+  const save=bubble.querySelector('.msg-actions').children.find(button=>button.textContent==='Save');await save.click();
+  assert.equal(editor.value,'Draft after failed read');assert.equal(save.disabled,true);assert.equal(h.calls.edits,undefined);
+  assert.ok(bubble.querySelector('.msg-edit-status').querySelector('details'));
+});
+
+test('Late old-message editor reads cannot mutate another story with a copied message ID',async()=>{
+  let resolve;const read=new Promise(done=>{resolve=done;});
+  const {h,chat,pending}=await oldMessageEditor({read:()=>read});
+  chat.setSession('other');h.el('message-list').replaceChildren();resolve({id:'old',role:'user',order:1,revision:9,content:'Old story server value'});await pending;
+  assert.equal(h.state.sessionId,'other');assert.equal(h.el('message-list').querySelector('.msg-editor'),null);assert.equal(h.calls.edits,undefined);
 });

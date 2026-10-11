@@ -207,7 +207,7 @@ export function initPetView() {
   observer?.observe(document.getElementById("chat-tab"), { attributes: true, attributeFilter: ["class", "hidden"] });
   const app = document.getElementById("app");
   if (app) observer?.observe(app, { attributes: true, attributeFilter: ["class", "hidden"] });
-  document.querySelectorAll("#top-menu, #composer-popover").forEach((node) =>
+  document.querySelectorAll("#top-menu").forEach((node) =>
     observer?.observe(node, { attributes: true, attributeFilter: ["hidden"] }));
   syncPetSettings();
 }
@@ -341,7 +341,7 @@ function isSuspended() {
   return document.hidden || document.body.classList.contains("settings-open") ||
     document.body.classList.contains("sidebar-open") || document.getElementById("app")?.classList.contains("hidden") ||
     document.getElementById("chat-tab")?.classList.contains("hidden") ||
-    document.getElementById("top-menu")?.hidden === false || document.getElementById("composer-popover")?.hidden === false;
+    document.getElementById("top-menu")?.hidden === false;
 }
 function updateVisibility() {
   if (!root) return;
@@ -398,7 +398,7 @@ function measureGeometry() {
   const collect = (selector) => [...document.querySelectorAll(selector)]
     .filter((node) => !layer.contains(node) && !node.closest("[hidden], .hidden") && node.getClientRects().length)
     .map((node) => rectBox(node.getBoundingClientRect()));
-  const controls = collect(".main button, .main input, .main select, .main textarea, .main a, .main summary, #top-menu:not([hidden]), #composer-popover:not([hidden]), .top-bar-title, .context-indicator");
+  const controls = collect(".main button, .main input, .main select, .main textarea, .main a, .main summary, #top-menu:not([hidden]), .top-bar-title, .context-indicator");
   const text = [];
   const candidatesText = textObserver ? visibleText : document.querySelectorAll(TEXT_OBSTACLES);
   for (const node of candidatesText) {

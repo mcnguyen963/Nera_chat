@@ -1,3 +1,5 @@
+import {routeTopMenu} from './ui/menu-routing.js';
+import {initIcons} from './ui/icons.js';
 import {initVersion} from './version.js';
 import {installErrorHandlers,friendlyError} from './errors.js';
 import {toast} from './ui/memory-ui.js';
@@ -17,7 +19,6 @@ const el = {
   loginScreen: document.getElementById("login-screen"),
   app: document.getElementById("app"),
   loginForm: document.getElementById("login-form"),
-  tabs: document.querySelectorAll(".tab"),
   chatTab: document.getElementById("chat-tab"),
   sidebarToggle: document.getElementById("btn-sidebar-toggle"),
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
@@ -26,12 +27,20 @@ const el = {
 };
 
 let appInitialized = false;
+// Portal the menu outside the blurred header: a backdrop filter would otherwise
+// make the phone's fixed bottom sheet relative to the 52px header.
+el.app.append(el.topMenu);
+const menuBackdrop = document.createElement('div');
+menuBackdrop.className = 'top-menu-backdrop'; menuBackdrop.hidden = true;
+el.app.append(menuBackdrop);
+menuBackdrop.addEventListener('click', () => setTopMenuOpen(false));
 
 // Keep the app at the *visual* viewport height so the iOS keyboard never
 // hides the composer (100dvh alone is unreliable on iOS). iOS also pushes
 // the whole page up when an input is focused; undo that push so the app
 // stays glued to the top of the keyboard instead of floating above it.
 initViewport();
+initIcons();
 installErrorHandlers({show:toast});
 initVersion();
 
@@ -41,11 +50,18 @@ function setSidebarOpen(open) {
   el.app?.classList.toggle("sidebar-open", open);
   if (el.sidebarBackdrop) el.sidebarBackdrop.hidden = !open;
   el.sidebarToggle?.setAttribute("aria-expanded", String(open));
+  const drawer = document.getElementById('sidebar');
+  if (drawer) drawer.inert = !open;
+  document.querySelector('.main').inert = open;
+  if (open) document.getElementById('btn-sidebar-close')?.focus({preventScroll:true});
+  else if (drawer?.contains(document.activeElement)) el.sidebarToggle?.focus({preventScroll:true});
+  document.dispatchEvent(new CustomEvent('ui-surface-change'));
 }
 
 el.sidebarToggle?.addEventListener("click", () =>
   setSidebarOpen(!document.body.classList.contains("sidebar-open"))
 );
+document.getElementById('btn-sidebar-close')?.addEventListener('click', () => setSidebarOpen(false));
 el.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false));
 document.addEventListener("sidebar:close", () => setSidebarOpen(false));
 
@@ -53,14 +69,17 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setSidebarOpen(false);
     setTopMenuOpen(false);
-    const popover = document.getElementById("composer-popover");
-    if (popover) popover.hidden = true;
   }
 });
 
 // ---------- compact top menu (mobile) ----------
 function setTopMenuOpen(open) {
   if (el.topMenu) el.topMenu.hidden = !open;
+  menuBackdrop.hidden = !open;
+  el.topMenuBtn?.setAttribute('aria-expanded', String(open));
+  if (open) el.topMenu?.querySelector('button:not(:disabled):not(.hidden)')?.focus();
+  else if (el.topMenu?.contains(document.activeElement)) el.topMenuBtn?.focus({preventScroll:true});
+  document.dispatchEvent(new CustomEvent('ui-surface-change'));
 }
 
 el.topMenuBtn?.addEventListener("click", () =>
@@ -69,25 +88,28 @@ el.topMenuBtn?.addEventListener("click", () =>
 
 el.topMenu?.addEventListener("click", (e) => {
   const item = e.target.closest(".top-menu-item");
-  if (!item) return;
+  if (!item || item.disabled) return;
   setTopMenuOpen(false);
-  if (item.dataset.action === "sessions") {
-    setSidebarOpen(true);
-  } else if (item.dataset.action === "settings") {
-    openSettingsPopup(el.topMenuBtn);
-  } else if (item.dataset.action === 'lorebooks' || item.dataset.action === 'context-details') {
-    document.dispatchEvent(new CustomEvent(item.dataset.action));
-  } else if (item.dataset.action === "summarize-full" || item.dataset.action === "reset-summary" || item.dataset.action === "sync-chat") {
-    document.dispatchEvent(new CustomEvent(item.dataset.action));
-  } else {
-    // Reuse the existing tab logic; the tab buttons are just CSS-hidden.
-    document.querySelector(`.tab[data-tab="${item.dataset.action}"]`)?.click();
-  }
+  routeTopMenu(item.dataset.action, {
+    settings: () => openSettingsPopup(el.topMenuBtn),
+    dispatch: name => document.dispatchEvent(new CustomEvent(name)),
+  });
+}, true);
+
+// Keep keyboard navigation inside an open drawer or actions sheet.
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Tab') return;
+  const root = document.body.classList.contains('sidebar-open') ? document.getElementById('sidebar') : !el.topMenu.hidden ? el.topMenu : null;
+  if (!root) return;
+  const items = [...root.querySelectorAll('button, a, [tabindex="0"]')].filter(n => !n.disabled && n.getClientRects().length);
+  const first = items[0], last = items.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
 });
 
 // Close the menu when tapping anywhere else.
 document.addEventListener("click", (e) => {
-  if (el.topMenu && !el.topMenu.hidden && !e.target.closest(".top-menu-wrap")) {
+  if (el.topMenu && !el.topMenu.hidden && !e.target.closest(".top-menu-wrap") && !el.topMenu.contains(e.target)) {
     setTopMenuOpen(false);
   }
 });
@@ -246,21 +268,4 @@ async function enterApp() {
   initContextViewer();
   watchSettings();
   document.getElementById("account-email").textContent = currentUserInfo()?.email ?? "";
-  wireTabs();
-}
-
-function wireTabs() {
-  el.tabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      if (tab.dataset.tab === "settings") {
-        openSettingsPopup(tab);
-        document.dispatchEvent(new CustomEvent("sidebar:close"));
-        return;
-      }
-      el.tabs.forEach((t) => t.classList.toggle("active", t === tab));
-      const name = tab.dataset.tab;
-      el.chatTab.classList.toggle("hidden", name !== "chat");
-      document.dispatchEvent(new CustomEvent("sidebar:close"));
-    });
-  });
 }

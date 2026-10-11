@@ -21,6 +21,14 @@ export class HistoryConflict extends Error {
     super(message); this.name = 'HistoryConflict';
   }
 }
+export class MessageEditConflict extends Error {
+  constructor(message) {
+    super('This message was edited elsewhere. Your draft is kept; review the latest version before saving.');
+    this.name = 'MessageEditConflict';
+    this.currentMessage = message;
+  }
+}
+
 function assertReplySource(session, expected) {
   if (expected && 'historyRevision' in expected && (session?.historyRevision ?? 0) !== expected.historyRevision) throw new HistoryConflict();
   assertSource(session, expected);
@@ -297,9 +305,9 @@ export async function getMessage(sessionId, messageId) {
   return (await getMessages(sessionId)).find((message) => message.id === messageId) ?? null;
 }
 
-async function findChunk(sessionId, messageId, order) {
+async function findChunk(sessionId, messageId, order, owner = currentUid()) {
   const snap = await getDocsFromServer(query(
-    chunksCol(sessionId), where("firstOrder", "<=", order), orderBy("firstOrder", "desc"), limit(1)
+    chunksCol(sessionId, owner), where("firstOrder", "<=", order), orderBy("firstOrder", "desc"), limit(1)
   ));
   const chunk = snap.docs[0];
   if (!chunk || chunk.data().lastOrder < order ||
@@ -307,6 +315,16 @@ async function findChunk(sessionId, messageId, order) {
     throw new Error("Message not found.");
   }
   return chunk;
+}
+
+// Refresh one bounded chunk when opening an editor. The latest-message
+// subscription does not cover old turns restored from the device cache.
+export async function getMessageForEdit(sessionId, messageId, order) {
+  const owner = currentUid();
+  await ensureChunked(sessionId);
+  const chunk = await findChunk(sessionId, messageId, order, owner);
+  if (owner !== currentUid()) throw new Error('Account changed while opening the message.');
+  return chunk.data().messages.find(message => message.id === messageId);
 }
 
 async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}, expectedSource = null, requireLatestReply = false, deletingMessage = false) {
@@ -417,7 +435,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
 export async function editMessage(sessionId, messageId, content, order, metadata = {}) {
   const { expectedRevision,...replacementMetadata } = metadata;
   const tokenCount = await countTokens(content);
-  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new Error('This message was edited elsewhere. Reopen it before saving.'); return { ...message,content,lastContinuation:null,truncated:false,...(message.acceptance==='pending' ? {scene:message.sceneCandidate?.scene ?? message.scene,sceneMeta:message.sceneCandidate?.sceneMeta ?? message.sceneMeta,sceneCandidate:null,acceptance:'accepted'} : {}),reviewWarnings:[],...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
+  const result = await changeMessage(sessionId, messageId, order, (message) => { if (expectedRevision != null && revisionOf(message) !== expectedRevision) throw new MessageEditConflict(message); return { ...message,content,lastContinuation:null,truncated:false,...(message.acceptance==='pending' ? {scene:message.sceneCandidate?.scene ?? message.scene,sceneMeta:message.sceneCandidate?.sceneMeta ?? message.sceneMeta,sceneCandidate:null,acceptance:'accepted'} : {}),reviewWarnings:[],...replacementMetadata,tokenCount,editedAt:Timestamp.now() }; });
   return { tokenCount,...result };
 }
 

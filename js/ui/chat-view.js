@@ -1,4 +1,7 @@
-import {createComposerSizer} from './composer-size.js';
+import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
+import {messageMenu, initMessageMenus} from './message-menu.js';
+import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
+import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
 import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
@@ -97,6 +100,7 @@ const pendingCacheWrites = new Set();
 const renderedMessages = new Map();
 
 const el = {};
+let refreshFloatingCopy = () => {};
 const sizeComposer=createComposerSizer({input:()=>el.input,frame:fn=>requestAnimationFrame(fn)});
 const dismissedStaleScenes=new Set();
 let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
@@ -213,7 +217,6 @@ export function initChatView() {
   document.addEventListener('scene-preference', () => { invalidateRenderedMessages(); renderMessages(lastMessages); });
   const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
   document.getElementById('context-indicator')?.addEventListener('click', openViewer);
-  document.getElementById('context-indicator')?.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openViewer(); } });
   document.getElementById('btn-memory')?.addEventListener('click', () => document.dispatchEvent(new CustomEvent(session?.memory?.autoUpdate && session?.memoryState?.extractedThroughOrder==null ? 'memory-settings' : 'lorebooks')));
   document.addEventListener('lorebook-visibility', e => { managerOpen = e.detail.open;document.getElementById('btn-memory')?.setAttribute('aria-expanded',String(managerOpen)); syncLore(); });
   document.addEventListener('memory-status', e => {
@@ -298,8 +301,12 @@ export function initChatView() {
   document.addEventListener("reset-summary", handleResetSummary);
 
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
-  // (max-height: min(40vh, 240px)) — beyond the cap the textarea scrolls.
-  const autoGrow = () => sizeComposer();
+  // (max-height: min(35% of the visual viewport, 240px)) — beyond the cap the textarea scrolls.
+  const measureComposer = observeComposerInset({
+    shell:document.getElementById('composer-shell'), style:document.getElementById('chat-tab').style,
+    onResize:() => { if (wasNearBottom) scrollToEnd(); else clampListScroll(); },
+  });
+  const autoGrow = () => { sizeComposer(); measureComposer(); };
   el.input.addEventListener("input", () => { indicatorRefresh.invalidate(); autoGrow(); });
   el.input.addEventListener("blur", () => indicatorRefresh.blur());
   window.addEventListener("resize", autoGrow);
@@ -310,7 +317,7 @@ export function initChatView() {
   // this compensates inside the list if the user was scrolled deep).
   el.input.addEventListener("focus", () => {
     indicatorRefresh.invalidate();
-    requestAnimationFrame(() => alignFieldToKeyboard(el.composer));
+    requestAnimationFrame(() => alignFieldToKeyboard(document.getElementById("composer-box")));
   });
 
   document.querySelectorAll("[data-starter]").forEach((button) => {
@@ -323,22 +330,19 @@ export function initChatView() {
   document.getElementById("btn-welcome-new")?.addEventListener("click", () => {
     document.getElementById("btn-new-session")?.click();
   });
+  initMessageMenus();
+  refreshFloatingCopy = initFloatingCopy({list:el.list, button:document.getElementById('floating-copy'), editing:()=>!!editingState, onError:error=>showToast(error,false)}) || (()=>{});
   updateWelcome();
   initQuickControls();
   initPetView();
 }
 
-// ---------- quick model / thinking chips (composer) ----------
+// ---------- inline model / thinking selectors (composer) ----------
 
 // Model selection and reasoning are shared account preferences.
 function initQuickControls() {
-  el.chipModel = document.getElementById("btn-model-chip");
-  el.chipModelLabel = document.getElementById("chip-model");
-  el.popover = document.getElementById("composer-popover");
   el.quickProfile = document.getElementById("quick-profile");
   el.quickThinking = document.getElementById("quick-thinking");
-
-  el.chipModel.addEventListener("click", () => toggleQuickPopover());
 
   el.quickProfile.addEventListener("change", async () => {
     const s = structuredClone(state.settings);
@@ -346,7 +350,7 @@ function initQuickControls() {
     s.activeProfileId = el.quickProfile.value;
     normalizeProfiles(s);
     mirrorFromActiveProfile(s); // load the chosen profile's connection fields
-    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickChips();}
+    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
   });
 
   el.quickThinking.addEventListener("change", async () => {
@@ -362,33 +366,13 @@ function initQuickControls() {
     }
     normalizeProfiles(s);
     mirrorToActiveProfile(s);
-    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickChips();}
-  });
-
-  // Close when tapping anywhere outside the popover and the chip.
-  document.addEventListener("click", (e) => {
-    if (el.popover.hidden) return;
-    if (el.popover.contains(e.target)) return;
-    if (el.chipModel.contains(e.target)) return;
-    el.popover.hidden = true;
+    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
   });
 
   document.addEventListener('story-settings-changed',()=>{refreshContextIndicator();});
-  document.addEventListener("settings-changed", refreshQuickChips);
+  document.addEventListener("settings-changed", refreshQuickControls);
   document.addEventListener("settings-changed", updateIndicator);
-  refreshQuickChips();
-}
-
-function toggleQuickPopover() {
-  if (el.popover.hidden) {
-    const s = state.settings;
-    if (s) normalizeProfiles(s);
-    fillQuickProfileSelect(s);
-    el.quickThinking.value = quickThinkingValue(s);
-    el.popover.hidden = false;
-  } else {
-    el.popover.hidden = true;
-  }
+  refreshQuickControls();
 }
 
 function fillQuickProfileSelect(s) {
@@ -397,7 +381,7 @@ function fillQuickProfileSelect(s) {
     ...s.profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.id;
-      o.textContent = p.name;
+      o.textContent = `${p.modelId || 'No model'} · ${p.name}`;
       return o;
     })
   );
@@ -410,16 +394,17 @@ function quickThinkingValue(s) {
   return r.mode === "max_tokens" ? "max_tokens" : r.effort ?? "medium";
 }
 
-function refreshQuickChips() {
+function refreshQuickControls() {
   const s = state.settings;
   if (!s) return;
   normalizeProfiles(s);
   const p = activeProfile(s);
   fillQuickProfileSelect(s);
   el.quickThinking.value = quickThinkingValue(s);
-  el.chipModelLabel.textContent = p?.name
+  el.quickProfile.title = p?.name
     ? `${p.name} · ${s.modelId || "no model"}`
     : s.modelId || "Model not set";
+  el.quickThinking.title = `Thinking: ${quickThinkingValue(s)}`;
 }
 
 export function setSession(sessionId) {
@@ -469,8 +454,12 @@ export function setSession(sessionId) {
   renderedMessages.clear();
   indicatorRefresh.invalidate();
   el.list.innerHTML = "";
-  el.contextFill.style.width = "0%";
+  const emptyRing = contextRingPresentation({used:0, max:0});
+  el.contextFill.style.strokeDasharray = emptyRing.dash;
+  el.contextFill.style.stroke = emptyRing.color;
   el.contextLabel.textContent = "No session selected";
+  document.getElementById('context-indicator').setAttribute('aria-label', 'View context: No session selected');
+  document.getElementById('context-indicator').title = 'No session selected';
   document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session: null } }));
   updateWelcome();
   updateMemoryChip();
@@ -478,6 +467,7 @@ export function setSession(sessionId) {
   const unsavedVersion=unsavedRevisions.get(unsavedKey(owner,sessionId)) ?? 0;
   void loadUnsavedReply(owner,sessionId).then(reply=>{if(reply && (unsavedRevisions.get(unsavedKey(owner,sessionId)) ?? 0)===unsavedVersion && !unsavedReplies.has(unsavedKey(owner,sessionId)))unsavedReplies.set(unsavedKey(owner,sessionId),reply);if(state.sessionId===sessionId && currentUid()===owner)renderUnsavedReply();});
   el.contextLabel.textContent = "Loading chat…";
+  document.getElementById('context-indicator').setAttribute('aria-label', 'View context: Loading chat');
   if (cachedHistory) {
     restoreCachedChat(sessionId, cachedHistory);
     subscribeChat(sessionId);
@@ -630,7 +620,7 @@ let lastMessages = [];
 
 function mergeMessages(existing, incoming) {
   const byId = new Map(existing.map((m) => [m.id, m]));
-  for (const m of incoming) byId.set(m.id, m);
+  for (const m of incoming) { const previous = byId.get(m.id); if (!previous || (m.revision ?? 0) >= (previous.revision ?? 0)) byId.set(m.id, m); }
   return [...byId.values()].sort((a, b) => a.order - b.order);
 }
 
@@ -820,9 +810,9 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   meta.appendChild(label);
 
   const actions = document.createElement("span");
-  actions.className = "msg-actions";
+  actions.className = "msg-actions msg-header-actions";
   if (m.role === "user" || m.role === "assistant") {
-    const createCopy = actionBtn("Create copy", "create-copy", async () => {
+    const createCopy = actionBtn("Create story copy", "create-copy", async () => {
       if (busy || state.busy || createCopy.disabled) return;
       const sourceId = state.sessionId;
       createCopy.disabled = true;
@@ -836,13 +826,13 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
         showTransientError("Copy failed: " + (error.message || error));
       } finally {
         createCopy.disabled = false;
-        createCopy.textContent = "Create copy";
+        createCopy.textContent = "Create story copy";
       }
     });
     createCopy.title = "Create a new session with settings and all messages through this message";
     actions.appendChild(createCopy);
   }
-  actions.appendChild(actionBtn("Copy", "copy", () => copyText(m.content)));
+
   if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
   }
@@ -864,7 +854,6 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
       void regenerateMessage(m);
     }));
   }
-  meta.appendChild(actions);
   wrap.appendChild(meta);
 
   if (m.role === "assistant" && m.thinking) {
@@ -911,7 +900,14 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
       row.append(field, save, actionBtn('Cancel', () => row.replaceWith(chip))); chip.replaceWith(row); field.focus();
     }); wrap.append(chip);
   }
-  attachHoldToCopy(wrap, () => m.content);
+  const copy = actionBtn('Copy', 'copy message-copy', () => copyDisplayedMessage(wrap, copy).catch(error=>showToast(error,false)));
+  setIcon(copy, 'copy', 'Copy');
+  copy.addEventListener('pointerdown', event => event.preventDefault());
+  const menu = messageMenu([...actions.children]);
+  actions.replaceChildren(copy, menu);
+  meta.appendChild(actions);
+  wrap.dataset.copyReady = 'true';
+  attachHoldToCopy(wrap, () => content.innerText ?? content.textContent);
   return wrap;
 }
 
@@ -919,6 +915,7 @@ function actionBtn(text, cls, onClick) {
   // Tolerate a 2-arg call: actionBtn("Edit", () => …) — callback shifts into `cls`.
   if (typeof cls === "function") { onClick = cls; cls = null; }
   const b = document.createElement("button");
+  b.type = "button";
   b.textContent = text;
   if (cls) b.className = cls;
   b.addEventListener("click", (e) => { e.stopPropagation(); return onClick?.(); });
@@ -943,65 +940,104 @@ function isFolded(m) {
 }
 const isActiveSummary = m => m.role === 'summary' && m.id === session?.activeSummaryMessageId;
 
-function startEdit(m, wrap) {
+async function startEdit(m, wrap) {
   if (busy) return;
   const contentEl = wrap.querySelector(".msg-content");
-  if (!contentEl || editingState) return; // one edit at a time
-  const wrapRect = wrap.getBoundingClientRect();
-  const contentRect = contentEl.getBoundingClientRect();
-  const meta = wrap.querySelector(".msg-meta");
-  const actions = wrap.querySelector(".msg-actions");
+  if (!contentEl || editingState) return;
+  const source = {sid:state.sessionId, owner:currentUid(), epoch:historyEpoch};
+  const wrapRect = wrap.getBoundingClientRect(), contentRect = contentEl.getBoundingClientRect();
+  const meta = wrap.querySelector(".msg-meta"), actions = wrap.querySelector(".msg-actions");
   const scrollTop = el.list.scrollTop;
-  // Match the original bubble and text area before focusing. Changing either
-  // size here makes the conversation jump, especially with the phone keyboard.
   wrap.style.width = wrapRect.width + "px";
-  wrap.style.height = wrapRect.height + "px";
+  wrap.style.height = "";
   meta.style.height = meta.getBoundingClientRect().height + "px";
+  wrap.classList.add('editing');
   const ta = document.createElement("textarea");
-  ta.className = "msg-editor";
-  ta.value = m.content;
-  ta.rows = 1;
-  ta.style.height = contentRect.height + "px";
-
+  ta.className = "msg-editor"; ta.value = m.content; ta.rows = 1;
+  ta.setAttribute('aria-label', 'Edit message');
+  ta.setAttribute('autocomplete', 'off'); ta.setAttribute('inputmode', 'text');
+  ta.setAttribute('enterkeyhint', 'enter'); ta.setAttribute('autocapitalize', 'sentences');
+  ta.spellcheck = true; ta.style.height = contentRect.height + "px";
+  const status = document.createElement('div'); status.className = 'msg-edit-status';
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const editor = editingState = {id:m.id, ta, base:m, ready:false};
+  const active = () => editingState === editor && source.sid === state.sessionId && source.owner === currentUid() && source.epoch === historyEpoch;
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.max(contentRect.height, ta.scrollHeight) + 'px'; };
+  const rememberFresh = fresh => {
+    lastMessages = lastMessages.map(item => item.id === fresh.id ? fresh : item);
+    if (!sameRenderedMessage(m, fresh)) {
+      historyMessages = null; historyRevision = null; historyCache.delete(source.owner+':'+source.sid);
+    }
+    queueCacheSave();
+  };
   const finish = () => {
-    editingState = null;clearOriginalDraft();
+    if (!active()) return;
+    editingState = null; clearOriginalDraft();
     const top = wrap.getBoundingClientRect().top;
-    const entry = renderedMessages.get(m.id);
-    if (entry) entry.message = null;
+    const entry = renderedMessages.get(m.id); if (entry) entry.message = null;
     renderMessages(lastMessages);
     const next = renderedMessages.get(m.id)?.node;
     if (next) el.list.scrollTop += next.getBoundingClientRect().top - top;
+    refreshFloatingCopy(); void updateIndicator();
+  };
+  const loadLatest = async () => {
+    save.disabled = true; ta.readOnly = true; status.textContent = 'Loading latest message…';
+    try {
+      const fresh = await messagesApi.getMessageForEdit(source.sid, m.id, m.order);
+      if (!active()) return false;
+      if (!fresh) throw new Error('This message was deleted. Cancel to return to the conversation.');
+      // A draft typed after a failed read must not silently overwrite a change.
+      if (ta.value !== editor.base.content && fresh.content !== editor.base.content) { conflict(fresh); return false; }
+      if (ta.value === editor.base.content) ta.value = fresh.content;
+      editor.base = fresh; editor.ready = true; rememberFresh(fresh);
+      status.textContent = fresh.content !== m.content ? 'Latest version loaded.' : '';
+      fit(); return true;
+    } catch (error) {
+      if (active()) status.textContent = friendlyError(error) + ' Your draft is kept. Save will retry loading.';
+      return false;
+    } finally { if (active()) { save.disabled = !editor.ready && status.querySelector('details') !== null; ta.readOnly = false; } }
+  };
+  const conflict = fresh => {
+    editor.ready = false; rememberFresh(fresh);
+    status.textContent = 'This message changed while you were editing. Your draft is kept.';
+    const preview = document.createElement('details'), heading = document.createElement('summary'), body = document.createElement('div');
+    heading.textContent = 'Latest saved version'; body.className = 'msg-edit-latest'; body.textContent = fresh.content; preview.append(heading, body);
+    const useLatest = actionBtn('Use latest', () => { editor.base = fresh; editor.ready = true; ta.value = fresh.content; status.replaceChildren(); save.disabled = false; fit(); ta.focus({preventScroll:true}); });
+    const keepDraft = actionBtn('Keep my draft over latest', () => { editor.base = fresh; editor.ready = true; status.textContent = 'Your draft is ready to replace the latest version. Press Save to confirm.'; save.disabled = false; });
+    status.append(preview, useLatest, keepDraft); save.disabled = true;
   };
   const save = actionBtn("Save", "small", async () => {
-    const text=ta.value,token=acquireBusy('edit');if(!token){showTransientInfo('Wait for the current reply to finish.');return;}
-    save.disabled = true;
-    cancel.disabled = true;
+    if (!active() || save.disabled) return;
+    if (!editor.ready && !await loadLatest()) return;
+    if (!active()) return;
+    const token = acquireBusy('edit');
+    if (!token) { status.textContent = 'Wait for the current reply to finish.'; return; }
+    save.disabled = true; cancel.disabled = true; status.textContent = 'Saving…';
+    let conflicted = false;
     try {
-      const result=await messagesApi.editMessage(token.sid,m.id,text,m.order,{expectedRevision:m.revision ?? 0});
-      applyLocalChange(token,result,list=>list.map(x=>x.id===m.id ? result.replacement : x));
+      const result = await messagesApi.editMessage(source.sid, m.id, ta.value, editor.base.order, {expectedRevision:editor.base.revision ?? 0});
+      applyLocalChange(token, result, list => list.map(item => item.id === m.id ? result.replacement : item));
       finish();
-    } catch (e) {
-      if(e instanceof StaleTurn)return;
-      showTransientError(e);
+    } catch (error) {
+      if (!active()) return;
+      if (error.name === 'MessageEditConflict' && error.currentMessage) { conflict(error.currentMessage); conflicted = true; }
+      else status.textContent = friendlyError(error) + ' Your draft is kept. Try Save again.';
     } finally {
-      save.disabled = false;
-      cancel.disabled=false;releaseBusy(token);
+      if (active()) { save.disabled = conflicted; cancel.disabled = false; }
+      releaseBusy(token);
     }
   });
   const cancel = actionBtn("Cancel", "small", finish);
   save.classList.add("btn"); cancel.classList.add("btn");
-  actions.replaceChildren(save, cancel);
-  contentEl.replaceWith(ta);
-  const fit = () => {
-    if (ta.scrollHeight <= ta.clientHeight) return;
-    wrap.style.height = '';
-    ta.style.height = Math.max(contentRect.height, ta.scrollHeight) + 'px';
-  };
+  // Keep editor saving and feedback together below the draft.
+  actions.classList.remove('msg-header-actions');
+  wrap.appendChild(actions);
+  actions.replaceChildren(save, cancel); contentEl.replaceWith(ta);
+  wrap.insertBefore(status, actions);
   fit(); ta.addEventListener('input', fit);
-  editingState = { id: m.id, ta };
-  updateRewriteControls();
-  ta.focus({ preventScroll: true });
-  el.list.scrollTop = scrollTop;
+  refreshFloatingCopy(); updateRewriteControls();
+  ta.focus({preventScroll:true}); el.list.scrollTop = scrollTop;
+  await loadLatest();
 }
 
 // ---------- hold-to-copy ----------
@@ -1056,6 +1092,7 @@ function showToast(text, ok) {
   const t = document.createElement("div");
   t.className = "toast" + (ok ? "" : " error");
   t.textContent = text;
+  t.setAttribute('role', 'status');
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 2000);
 }
@@ -1083,9 +1120,9 @@ function applyIndicator(usage) {
   lastMemoryReport = usage.report;
   const estimated=tokenizer.tokenizerStatus?.()==='fallback';if(estimated && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
   el.contextLabel.title = indicatorHint + ' ' + (usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
-  const allocated=usage.usedTokens;
-  const pct = usage.max > 0 ? (allocated / usage.max) * 100 : 0;
-  el.contextFill.style.width = Math.min(100, pct) + "%";
+  const ring = contextRingPresentation({used:usage.usedTokens, max:usage.max});
+  el.contextFill.style.strokeDasharray = ring.dash;
+  el.contextFill.style.stroke = ring.color;
   el.contextFill.classList.toggle("over", usage.overThreshold);
   el.contextThreshold.style.left =
     (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
@@ -1096,6 +1133,9 @@ function applyIndicator(usage) {
     (estimated ? ' · estimate (tokenizer unavailable)' : '') +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "") +
     (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
+  const indicator = document.getElementById('context-indicator');
+  indicator.setAttribute('aria-label', 'View context: ' + el.contextLabel.textContent + '. ' + el.contextLabel.title);
+  indicator.title = el.contextLabel.textContent + '. ' + el.contextLabel.title;
   updateMemoryChip();
 }
 export const refreshContextIndicator = updateIndicator;
@@ -1145,7 +1185,8 @@ function updateRewriteControls() {
   let eligible=false;
   try { if(empty && session) {continuationTarget(session,lastMessages);eligible=true;} } catch {}
   const write=(node,key,value)=>{if(node[key]!==value)node[key]=value;};
-  write(el.rewriteBtn,'textContent', rewriteController ? "Stop" : empty ? "Continue" : "Rewrite");
+  const presentation = rewritePresentation({rewriting:!!rewriteController, empty});
+  setIcon(el.rewriteBtn, presentation.icon, presentation.label);
   write(el.rewriteBtn,'disabled', !rewriteController && (busy || state.busy || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))))));
   write(el.restoreDraftBtn,'disabled',busy);
   write(el.input,'readOnly',!!rewriteController);

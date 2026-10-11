@@ -116,7 +116,7 @@ async function harness({ mobile = false, reduced = false, intersection = true } 
   const composer = node('composer'); composer.rect = { x: 0, y: 600, width: mobile ? 390 : 1000, height: 150 };
   main.rect = { x: 0, y: 0, width: mobile ? 390 : 1000, height: 750 };
   list.rect = { x: 0, y: 70, width: mobile ? 390 : 1000, height: 530 };
-  node('chat-input'); node('chat-pet'); node('top-menu').hidden = true; node('composer-popover').hidden = true;
+  node('chat-input'); node('chat-pet'); node('top-menu').hidden = true;
   document.getElementById = (id) => ids.get(id) ?? null;
   document.createElement = () => new Element();
   document.querySelector = (selector) => selector === '.main' ? main : selector.includes('welcome-mark') ? welcomeMark : selector.includes('welcome-default') ? logo : null;

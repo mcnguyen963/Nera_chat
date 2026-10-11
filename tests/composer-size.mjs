@@ -12,3 +12,17 @@ test('Composer batches typing, restore, starter and rewrite sizing; skips unchan
   field.clientWidth=150;field.scrollHeight=60;resize();flush();assert.equal(field.style.height,'60px');
   field.value='restore';resize({scroll:true});field.value='latest rewrite';resize({scroll:true});assert.equal(frames.length,1);flush();assert.equal(field.style.height,'60px');
 });
+
+test('Floating composer reserves actual growth and shrinkage without repeated writes or scroll changes',async()=>{
+  const {observeComposerInset}=await appHarness()('ui/composer-size.js');
+  const frames=[],writes=[];let height=100,callback,resizeCount=0;
+  class Observer { constructor(fn){callback=fn;} observe(node){assert.equal(node,shell);} }
+  const shell={getBoundingClientRect:()=>({height})};
+  const schedule=observeComposerInset({shell,style:{setProperty:(name,value)=>writes.push([name,value])},onResize:()=>resizeCount++,frame:fn=>frames.push(fn),Observer});
+  callback();schedule();assert.equal(frames.length,1);frames.shift()();
+  assert.deepEqual(writes,[['--composer-height','100px']]);
+  height=240;callback();callback();frames.shift()();assert.equal(writes.at(-1)[1],'240px');
+  height=96;callback();frames.shift()();assert.equal(writes.at(-1)[1],'96px');
+  callback();frames.shift()();assert.equal(resizeCount,3);
+  height=0;callback();frames.shift()();assert.equal(writes.length,3);
+});
