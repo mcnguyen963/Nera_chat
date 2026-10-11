@@ -997,3 +997,14 @@ test('core edits preserve concurrent references and reject overlapping reference
  const unchanged=structuredClone(base);unchanged.name='Renamed';assert.equal(h.lore.mergeEntryEdits(e,unchanged,base).coreReferences[0].id,'remote');
  const changed=structuredClone(base);changed.coreReferences=[{id:'local'}];assert.throws(()=>h.lore.mergeEntryEdits(e,changed,base),/Core references changed/);
 });
+
+test('Opening an old-message editor reads its authoritative bounded chunk without loading the story',async()=>{
+  const h=await setup(800);await h.api.ensureContinuityMetadata('s');
+  const before=h.reads.documents;
+  const message=await h.api.getMessageForEdit('s','m1',1);
+  assert.equal(message.content,'event 1');assert.equal(message.revision,0);
+  assert.equal(h.reads.documents-before,1);
+  await h.api.editMessage('s','m1','Server edit',1,{expectedRevision:0});
+  const fresh=await h.api.getMessageForEdit('s','m1',1);assert.equal(fresh.content,'Server edit');assert.equal(fresh.revision,1);
+  await assert.rejects(h.api.editMessage('s','m1','Stale draft',1,{expectedRevision:0}),error=>error.name==='MessageEditConflict' && error.currentMessage.content==='Server edit');
+});

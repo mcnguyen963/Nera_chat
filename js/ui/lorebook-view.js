@@ -175,7 +175,7 @@ function renderRows(rows) {
 }
 async function newCard(prefill = '',kind = 'card') {
   if (!canLeave()) return;
-  const s = subSheet('+ New '+(book === 'facts' ? 'topic' : book === 'events' && kind !== 'timeline' ? 'thread' : 'card'));
+  const s = subSheet('+ New '+(book === 'facts' ? 'topic' : book === 'events' && kind !== 'timeline' ? 'thread' : 'card'),{compact:true});
   const name = field('Name',prefill), status = node('p','','memory-warning');
   const body = node('div',null,'memory-content'); body.append(name.wrap,status);
   const save = button('Create',async () => {
@@ -367,7 +367,7 @@ function exportCard() {
   if(dirty()){toast('Save or discard your changes before exporting this card.');return;}
   const ctx=cardFlowContext(),entry=entries().find(e=>e.id===selected);
   if(!entry)throw new Error('This card was deleted.');
-  const s=subSheet('Export '+entry.name),body=node('div',null,'memory-content'),format=node('select');
+  const s=subSheet('Export '+entry.name,{compact:true}),body=node('div',null,'memory-content'),format=node('select');
   for(const [value,label] of [['md','Markdown'],['json','JSON']]){const o=node('option',label);o.value=value;format.append(o);}
   body.append(format,button('Export card',()=>{ctx.check();if(dirty())throw new Error('Save or discard your changes first.');const saved=entries().find(e=>e.id===entry.id);if(!saved)throw new Error('This card was deleted.');download(serializeCard(saved,{format:format.value,storyId:ctx.source.id,title:live()?.session.title ?? ''}),saved.name.replace(/[^\p{L}\p{N} _-]/gu,'')+'-card.'+format.value);s.hide();},'btn primary'),button('Cancel',s.hide));s.dialog.append(body);
 }
@@ -532,7 +532,7 @@ function renderNameChips(parent) {
     for (const [index,name] of [staged.name,...staged.aliases].entries()) {
       const chip = node('span',null,'lore-name-chip'); chip.draggable = true;
       const edit = button(name,() => {
-        const dialog = subSheet('Edit name'), body = node('div',null,'memory-content'), f = field(index ? 'Other name' : 'Main name',name); f.input.maxLength=60;
+        const dialog = subSheet('Edit name',{compact:true}), body = node('div',null,'memory-content'), f = field(index ? 'Other name' : 'Main name',name); f.input.maxLength=60;
         body.append(f.wrap,button('Save',() => { const value=f.input.value.trim(); if (!value) return; if (index) staged.aliases[index-1]=value; else staged.name=value; dialog.hide(); render(); },'btn primary'),button('Cancel',dialog.hide)); dialog.dialog.append(body);
       },'lore-link'); edit.addEventListener('keydown',e => { if (e.altKey && ['ArrowLeft','ArrowRight'].includes(e.key)) { e.preventDefault(); move(index,index+(e.key === 'ArrowLeft' ? -1 : 1)); } }); chip.append(edit);
       if (index) chip.append(button('×',() => { staged.aliases.splice(index-1,1); render(); },'btn small'));

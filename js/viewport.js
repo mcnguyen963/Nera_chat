@@ -4,28 +4,50 @@ export function viewportVars(viewport) {
   return { height: viewport.height + "px", offsetTop: Math.max(0, viewport.offsetTop || 0) + "px" };
 }
 
+// A focused field alone does not imply a software keyboard (hardware keyboards
+// and browser toolbar resizes must retain the device's bottom safe area).
+export function keyboardVisible({height, layoutHeight, baselineHeight, focused, wasOpen = false}) {
+  const loss = Math.max(layoutHeight || 0, baselineHeight || 0) - height;
+  return (focused || wasOpen) && loss > 140;
+}
+
 export function initViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
   const ios = /iP(hone|ad|od)/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const style = document.documentElement.style;
+  let baseline = vv.height, width = window.innerWidth, keyboard = false, queued = false;
   const sync = () => {
+    queued = false;
     const vars = viewportVars(vv);
-    style.setProperty("--app-offset-top", vars && ios ? vars.offsetTop : "0px");
-    style.setProperty("--app-viewport-transform", vars && ios ? `translateY(${vars.offsetTop})` : "none");
-    if (!vars) return; // Pinch zoom must not shrink the layout.
+    if (!vars) return; // Pinch zoom must not shrink or reposition the layout.
+    if (Math.abs(window.innerWidth - width) > 80) {
+      width = window.innerWidth;
+      baseline = Math.max(window.innerHeight, document.documentElement.clientHeight);
+    }
+    const focused = !!document.activeElement?.matches?.('textarea, input:not([type=checkbox]):not([type=radio]), [contenteditable=true]');
+    keyboard = keyboardVisible({height:vv.height, layoutHeight:window.innerHeight, baselineHeight:baseline, focused, wasOpen:keyboard});
+    if (!keyboard) baseline = vv.height;
+    style.setProperty("--app-offset-top", ios ? vars.offsetTop : "0px");
+    style.setProperty("--app-viewport-transform", ios ? `translateY(${vars.offsetTop})` : "none");
     style.setProperty("--app-height", vars.height);
-    if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+    style.setProperty("--composer-safe-bottom", keyboard ? "0px" : "var(--safe-bottom)");
+    document.documentElement.dataset.keyboard = keyboard ? 'open' : 'closed';
+    // Only undo keyboard focus panning, never normal browser toolbar scrolling.
+    if (keyboard && ios && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0);
   };
-  vv.addEventListener("resize", sync);
-  vv.addEventListener("scroll", sync);
-  window.addEventListener("scroll", sync, { passive: true });
-  window.addEventListener("pageshow", sync);
+  const schedule = () => { if (!queued) { queued = true; requestAnimationFrame(sync); } };
+  vv.addEventListener("resize", schedule);
+  vv.addEventListener("scroll", schedule);
+  window.addEventListener("resize", schedule);
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("pageshow", schedule);
+  document.addEventListener('focusin', schedule);
   let settleTimer;
   document.addEventListener("focusout", () => {
     clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => requestAnimationFrame(sync), 350);
+    settleTimer = setTimeout(schedule, 350);
   });
   sync();
 }

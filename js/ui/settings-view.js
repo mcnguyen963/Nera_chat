@@ -1,3 +1,4 @@
+import {setIcon} from './icons.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
 import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings} from '../story-settings.js';
 import {loadRewriteDefaultPrompt} from '../rewrite.js';
@@ -168,7 +169,7 @@ function closeSettingsPopup() {
   set("set-session-title", ""); set("set-session-plan", "");
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
   clearMessage();
-  opener?.focus?.();
+  opener?.focus?.({preventScroll:true});
   return true;
 }
 
@@ -208,7 +209,7 @@ function showPanel(name) {
   }
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
-  el.save.textContent=name==='prompts' ? 'Save story prompts' : 'Save shared settings';
+  setIcon(el.save, 'save', name==='prompts' ? 'Save story prompts' : 'Save shared settings');
   const promptHeading=document.querySelector('[data-panel="prompts"] h2');if(promptHeading)promptHeading.textContent='Prompts · '+(sessionOriginal.title || 'current story');
   if(name==='prompts' && state.sessionId)void getSession(state.sessionId).then(s=>{if(panel==='prompts' && promptHeading)promptHeading.textContent='Prompts · '+(s?.title ?? 'Select a story');}).catch(error=>feedback(error.message,true));
   el.footer.classList.toggle("hidden", !global && !["story", "memory"].includes(name));
