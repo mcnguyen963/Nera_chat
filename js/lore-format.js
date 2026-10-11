@@ -27,7 +27,7 @@ export function normalizeLoreEntry(e){
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
         const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
         if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');
-        return [key,{...section,text:String(section.text ?? ''),...sectionMeta({...section,kind:section.kind ?? 'background',origin:section.origin ?? 'import'},normalized),lines:(section.lines ?? []).map(l=>typeof l==='string' ? importedLine(l) : {...importedLine(l),...l})}];
+        return [key,{...section,text:String(section.text ?? ''),...sectionMeta({...section,kind:section.kind ?? 'background',origin:section.origin ?? 'import'},normalized),lines:(section.lines ?? []).map(l=>typeof l==='string' ? importedLine(l) : typeof l?.id==='string' && typeof l.text==='string' ? {...l} : {...importedLine(l),...l})}];
       }));return normalized;
 }
 
@@ -141,6 +141,9 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
       if (!saved) { line.by = 'user'; continue; }
       const visible = { text:line.text,turn:line.turn,when:line.when };
       const unchanged = saved.text === visible.text && (saved.turn ?? null) === visible.turn && (saved.when ?? null) === visible.when;
+      // Exported provenance is exact; extra parser defaults would invalidate
+      // reviewed core fingerprints even when no visible text changed.
+      if(unchanged)for(const prop of Object.keys(line))if(!(prop in saved) && !(prop in visible))delete line[prop];
       Object.assign(line,saved,visible);
       if (!unchanged) Object.assign(line,{by:'user',at:Date.now(),src:null,evidence:[],sourceRevision:0,needsReview:false,kind:'canon',origin:'user',cutoff:null});
     }
@@ -148,16 +151,24 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
   if (!books.length) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
   return { entries,warnings,books,story,format:'md' };
 }
-export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'mine',now = Date.now() } = {}) {
+export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'mine',now = Date.now(),book = null,loreRevision = null } = {}) {
+  if (!['merge','replace'].includes(mode) || !['mine','file','both'].includes(conflict)) throw new Error('Choose a supported import mode and conflict choice.');
+  if (book != null) {
+    if (!BOOK_LABELS[book]) throw new Error('Unsupported lorebook category.');
+    if (!parsed.books.includes(book)) throw new Error('This file does not contain '+BOOK_LABELS[book]+'.');
+    parsed = {...parsed,books:[book],entries:parsed.entries.filter(e=>e.book===book)};
+  }
+  const statsFor = () => ({new:0,merged:0,unchanged:0,removed:0,cards:[],events:0,open:0,closed:0});
   const writes = [], warnings = [...parsed.warnings], preview = { books:{},conflicts:0,warnings,format:parsed.format };
+  for (const key of parsed.books) preview.books[key] = statsFor();
   const working = structuredClone(existingEntries);
-  if (mode === 'replace') { for (const e of existingEntries.filter(e => parsed.books.includes(e.book))) writes.push({ id:e.id,delete:true }); for (let i=working.length-1;i>=0;i--) if (parsed.books.includes(working[i].book)) working.splice(i,1); }
+  if (mode === 'replace') { for (const e of existingEntries.filter(e => parsed.books.includes(e.book))) { writes.push({ id:e.id,delete:true }); preview.books[e.book].removed++; preview.books[e.book].cards.push({name:e.name,type:'removed'}); } for (let i=working.length-1;i>=0;i--) if (parsed.books.includes(working[i].book)) working.splice(i,1); }
   for (const source of parsed.entries) {
     const names = [source.name,...source.aliases].map(normalizeName);
     const target = working.find(e => e.book === source.book && (source.kind === 'timeline' ? e.kind === 'timeline' : e.kind === source.kind && [e.name,...e.aliases].some(n => names.includes(normalizeName(n)))));
-    const stats = preview.books[source.book] ??= { new:0,merged:0,unchanged:0,cards:[],events:0,open:0,closed:0 };
+    const stats = preview.books[source.book] ??= statsFor();
     let result, type;
-    if (!target) { result = structuredClone(source); result.id = newLoreId(); result.draft = false; result.createdFrom = 'import'; type = 'new'; working.push(result); }
+    if (!target) { result = structuredClone(source); result.id = newLoreId(); if(!book){result.draft = false; result.createdFrom = 'import';} type = 'new'; working.push(result); }
     else {
       result = target; const before = JSON.stringify(target);
       for (const alias of source.aliases) {
@@ -170,16 +181,18 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
       if (source.status === 'closed') result.status = 'closed';
       for (const [key,s] of Object.entries(source.sections)) {
         const dest = result.sections[key];
-        if (s.text && dest.text !== s.text) { if (!dest.text) Object.assign(dest,{ ...s,lines:dest.lines }); else { preview.conflicts++; if (conflict === 'file') Object.assign(dest,{ ...s,lines:dest.lines }); else if (conflict === 'both') { dest.lines.push({ id:newLoreId('ln'),text:s.text,turn:s.cutoff?.turn ?? null,when:s.cutoff?.when ?? null,src:null,by:'import',at:now,origin:s.origin,kind:s.kind,cutoff:s.cutoff }); } } }
+        if (s.text && dest.text !== s.text) { if (!dest.text) Object.assign(dest,{ ...s,lines:dest.lines }); else { preview.conflicts++; if (conflict === 'file') Object.assign(dest,{ ...s,lines:dest.lines }); else if (conflict === 'both' && !dest.lines.some(l=>normalizeName(l.text)===normalizeName(s.text))) { dest.lines.push({ id:newLoreId('ln'),text:s.text,turn:s.cutoff?.turn ?? null,when:s.cutoff?.when ?? null,src:null,by:'import',at:now,origin:s.origin,kind:s.kind,cutoff:s.cutoff }); } } }
         for (const l of s.lines) if (!dest.lines.some(x => normalizeName(x.text) === normalizeName(l.text))) dest.lines.push({ ...l,id:newLoreId('ln') });
       }
       type = before === JSON.stringify(result) ? 'unchanged' : 'merged';
     }
-    if (type === 'new') for (const s of Object.values(result.sections)) for (const l of s.lines) Object.assign(l,{ id:newLoreId('ln') });
+    // Note IDs are local to a card. Scoped book copies keep them so provenance
+    // references and reviewed core fingerprints survive the round trip.
+    if (type === 'new' && !book) for (const s of Object.values(result.sections)) for (const l of s.lines) Object.assign(l,{ id:newLoreId('ln') });
     stats[type]++; stats.cards.push({ name:result.name,type }); if (result.kind === 'timeline') stats.events += result.sections.text.lines.length; if (result.kind === 'thread') stats[result.status === 'closed' ? 'closed' : 'open']++;
     if (type !== 'unchanged') { const previous = writes.findIndex(w => w.id === result.id && !w.delete); const write = { id:result.id,data:structuredClone(result) }; if (previous >= 0) writes[previous] = write; else writes.push(write); }
   }
-  return { preview,writes };
+  return { preview,writes,...(book ? {book,loreRevision} : {}) };
 }
 
 // Single-card files have one authoritative entry; book exports remain supported.

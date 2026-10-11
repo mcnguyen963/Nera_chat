@@ -103,7 +103,7 @@ export function openLorebooks(options = {}) {
     view.hide();
   }
   opened = true; navigationId = newLoreId('nav'); navigationDepth = 0; navigationKey = null; sid = state.sessionId; book = options.book ?? 'characters'; filter = options.filter ?? 'all'; selected = null; staged = base = null; search = ''; screen = options.screen ?? 'books'; newPrefill = options.newName; pendingEntryId = options.entryId ?? null;
-  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go && window.history.state?.neraLore?.id===navigationId) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
+  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go && window.history.state?.neraLore?.id===navigationId) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'book-transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
   document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:true } }));
   prepareDeletedHistory(); renderShell();
   if (options.entryId) { const e = entries().find(e => e.id === options.entryId); if (e) { book = e.book; openCard(e); } }
@@ -120,7 +120,7 @@ function renderShell() {
   rail = node('nav',null,'lore-rail'); rail.setAttribute('aria-label','Lorebooks');
   const columns = node('div',null,'lore-columns');columns.id='lorebook-columns'; list = node('div',null,'lore-list'); editor = node('div',null,'lore-editor');
   columns.append(rail,list,editor); body.append(columns); renderRail();
-  if (screen === 'transfer') renderTransfer(); else if (screen === 'backups') void renderBackups().catch(error=>toast(error)); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
+  if (screen === 'transfer' || screen === 'book-transfer') renderTransfer(screen === 'book-transfer' ? book : null); else if (screen === 'backups') void renderBackups().catch(error=>toast(error)); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
 }
 function renderRail() {
   if (!rail) return; rail.replaceChildren();
@@ -136,9 +136,9 @@ function needsReview(l) { return noteNeedsReview(l,live()?.messages ?? [],live()
 function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && (linesOf(e).some(needsReview) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages:live()?.messages ?? [],session:live()?.session}).valid) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
 function badge(text,kind = '') { return node('span',text,'badge '+kind); }
 function renderList() {
-  if (!list || ['transfer','backups'].includes(screen)) return;
+  if (!list || ['transfer','book-transfer','backups'].includes(screen)) return;
   list.replaceChildren(); list.append(button('‹ Books',() => { if (!canLeave()) return; staged = base = null; screen = 'books'; renderShell(); },'btn small mobile-back'));
-  list.append(node('h3',BOOK_LABELS[book]),button('Import card…',()=>cardTransfer()));
+  list.append(node('h3',BOOK_LABELS[book]),button('Import card…',()=>cardTransfer()),button('Import book…',()=>{if(!canLeave())return;staged=base=null;selected=null;screen='book-transfer';renderShell();}),button('Export book…',exportBook));
   if (book === 'events') {
     const tabs = node('div',null,'segmented');
     tabs.append(button('Timeline',() => { const timeline = entries().find(e => e.kind === 'timeline'); if (timeline) openCard(timeline); else void newCard('Timeline','timeline'); }),button('Threads',() => { selected = null; staged = base = null; renderList(); })); list.append(tabs);
@@ -315,20 +315,26 @@ async function mergeCard() {
   const status=node('select');for(const value of ['open','closed']){const o=node('option',value);o.value=value;status.append(o);}status.value=source.status ?? 'open';if(source.kind==='thread')body.append(node('p','Choose the surviving thread status.'),status);
   const render = () => { results.replaceChildren(); for (const target of entries().filter(e => e.book === source.book && e.kind === source.kind && e.id !== source.id && normSearch(e.name).includes(normSearch(search.input.value)))) results.append(button(target.name,async () => { if (!confirm(`Merge '${source.name}' into '${target.name}'? Its notes move over and '${source.name}' becomes another name for ${target.name}.`)) return; const backup = await store.mergeEntries(sid,source,target,source.kind==='thread' ? status.value : null); s.hide(); staged = base = null; openCard(target); await undoAction(backup,'Merged into '+target.name+'.'); })); }; search.input.addEventListener('input',render); body.append(search.wrap,results); s.dialog.append(body); render();
 }
-function renderTransfer() {
-  list.replaceChildren(); editor.replaceChildren(); list.append(button('‹ Books',() => { screen = 'books'; renderShell(); },'btn mobile-back'),node('h2','Import & export'));
+function renderTransfer(scope = null) {
+  const ctx=cardFlowContext();
+  const originEntries=()=>memorySnapshot(ctx.source.id)?.entries ?? [];
+  const undo=(backup,text)=>toast(text,backup ? 'Undo' : undefined,async()=>{if(currentUid()!==ctx.source.uid)throw new Error('Account changed; Undo cancelled.');await store.restoreBackup(ctx.source,backup,[],{book:scope});toast('Restored');});
+  list.replaceChildren(); editor.replaceChildren(); list.append(button('‹ Books',() => { screen = 'books'; renderShell(); },'btn mobile-back'),node('h2',scope ? 'Import '+BOOK_LABELS[scope] : 'Import & export'));
   let format = getPref('nera.lore.format') === 'json' ? 'json' : 'md';
   const segmented = node('div',null,'segmented'), md = button('Markdown',() => changeFormat('md')), json = button('JSON',() => changeFormat('json')); segmented.append(md,json); list.append(segmented);
   function changeFormat(value) { format = value; setPref('nera.lore.format',value); md.classList.toggle('selected',value === 'md'); json.classList.toggle('selected',value === 'json'); picker.accept = value === 'md' ? '.md,.markdown,.txt' : '.json'; }
   const checks = {};
+  if(!scope) {
   editor.append(node('h3','Export'));
   for (const [key,label] of Object.entries(BOOK_LABELS)) { const f = field(label,'',{ type:'checkbox' }); f.input.checked = true; checks[key] = f.input; editor.append(f.wrap); }
   editor.append(button('Export lorebooks',() => { const title = live()?.session.title ?? 'story', books = Object.keys(checks).filter(k => checks[k].checked), text = format === 'md' ? toMarkdown(entries(),{ title,books }) : toJson(entries(),{ title,books }); download(text,title.replace(/[^\p{L}\p{N} _-]/gu,'')+'-lorebooks-'+new Date().toISOString().slice(0,10)+'.'+(format === 'md' ? 'md' : 'json')); }),button('Export transcript for lorebooks (.txt)',async () => { const snapshot = await prepareMemorySnapshot(); download(formatTurnsTranscript(snapshot.messages,computeTurns(snapshot.messages),{ title:snapshot.session.title,protagonist:normalizeMemory(snapshot.session.memory).protagonist }),snapshot.session.title+'-transcript.txt'); }));
-  editor.append(node('h3','Import'));
-  const mode = node('select'), conflict = node('select'); for (const [value,label] of [['merge','Add and merge — keeps everything you have'],['replace','Replace the books in the file — a backup is made first']]) { const o = node('option',label); o.value = value; mode.append(o); }
+  }
+  editor.append(node('h3','Import'),node('p',scope ? 'Transfers the entire category, including cards hidden by filters. Replace affects only '+BOOK_LABELS[scope]+'.' : 'Choose the books to transfer.','muted'));
+  const mode = node('select'), conflict = node('select'); for (const [value,label] of [['merge','Add and merge — keeps everything you have'],['replace',scope ? 'Replace this category — a backup is made first' : 'Replace the books in the file — a backup is made first']]) { const o = node('option',label); o.value = value; mode.append(o); }
   for (const [value,label] of [['mine','Keep mine'],['file',"Use the file's"],['both','Keep both']]) { const o = node('option',label); o.value = value; conflict.append(o); }
+  mode.value='merge';conflict.value='mine';
   const modeLabel = node('label','Mode'); modeLabel.append(mode); const conflictLabel = node('label',"When my text and the file's text differ:"); conflictLabel.append(conflict); editor.append(modeLabel,conflictLabel);
-  const picker = node('input'); picker.type = 'file'; picker.className = 'hidden'; picker.addEventListener('change',async () => { const file = picker.files[0]; picker.value = ''; if (!file) return; if (file.size>2*1024*1024) { toast('The file is larger than 2 MB. Split it by book.'); return; } await readImport(await file.text()); }); editor.append(picker,button('Choose file…',() => picker.click()),button('Paste text',() => {
+  const picker = node('input'); picker.type = 'file'; picker.className = 'hidden'; picker.addEventListener('change',async () => { const file = picker.files[0]; picker.value = ''; if (!file) return; if (file.size>2*1024*1024) { toast('The file is larger than 2 MB. Split it by book.'); return; } try{ctx.check();await readImport(await file.text());}catch(error){toast(error);} }); editor.append(picker,button('Choose file…',() => picker.click()),button('Paste text',() => {
     const s = subSheet('Paste lorebooks'), body = node('div',null,'memory-content'), text = field('Lorebooks','',{ textarea:true }); text.input.rows = 16;
     body.append(text.wrap,button('Read',async () => { if (await readImport(text.input.value)) s.hide(); },'btn primary'),button('Cancel',s.hide)); s.dialog.append(body);
   }));
@@ -336,21 +342,34 @@ function renderTransfer() {
   async function readImport(text) {
     if(new TextEncoder().encode(text).length>2*1024*1024){toast('The file is larger than 2 MB. Split it by book.');return false;}
     try {
-      const detected = detectFormat(text), parsed = detected === 'json' ? fromJson(text) : fromMarkdown(text,{ protagonist:normalizeMemory(live()?.session.memory).protagonist });
-      let plan = planImport(entries(),parsed,{ mode:mode.value,conflict:conflict.value });
-      const s = subSheet('IMPORT PREVIEW · Read as '+(detected === 'md' ? 'Markdown' : 'JSON')), body = node('div',null,'memory-content');
+      ctx.check();
+      const snapshot=await prepareMemorySnapshot();ctx.check();
+      const detected = detectFormat(text), parsed = detected === 'json' ? fromJson(text) : fromMarkdown(text,{ protagonist:normalizeMemory(snapshot.session.memory).protagonist });
+      const reviewedMode=mode.value,reviewedConflict=conflict.value,revision=snapshot.session.loreRevision ?? 0;
+      const fingerprint=JSON.stringify(snapshot.entries);
+      const plan = planImport(snapshot.entries,parsed,{mode:reviewedMode,conflict:reviewedConflict,book:scope,loreRevision:revision});
+      let cancelled=false;
+      const s = subSheet('IMPORT PREVIEW · Read as '+(detected === 'md' ? 'Markdown' : 'JSON'),{close:()=>{cancelled=true;return true;}}), body = node('div',null,'memory-content');
       for (const [key,stats] of Object.entries(plan.preview.books)) {
-        const d = node('details'); d.append(node('summary',BOOK_LABELS[key]+': '+stats.new+' new · '+stats.merged+' merged · '+stats.unchanged+' unchanged'+(key === 'events' ? ` · ${stats.events} events · ${stats.open} open threads · ${stats.closed} closed` : ''))); for (const card of stats.cards) d.append(node('p',card.name+' · '+card.type,'muted')); body.append(d);
+        const d = node('details');d.open=stats.removed>0; d.append(node('summary',BOOK_LABELS[key]+': '+stats.new+' new · '+stats.merged+' merged · '+stats.unchanged+' unchanged · '+stats.removed+' removed'+(key === 'events' ? ` · ${stats.events} events · ${stats.open} open threads · ${stats.closed} closed` : ''))); for (const card of stats.cards) d.append(node('p',card.name+' · '+card.type,'muted')); body.append(d);
       }
       if (plan.preview.conflicts) body.append(node('p',`Your text conflicts: ${plan.preview.conflicts} (${conflict.selectedOptions[0].textContent})`,'muted'));
       for (const w of plan.preview.warnings) body.append(node('p',`Line ${w.line}: ${w.reason}`,'memory-warning'));
-      body.append(button('Cancel',s.hide),button('Import',async b => { if (state.busy) { toast('Wait for the current reply or summary.'); return; } b.disabled = true;
-        // Replan after the preview so newly arrived notes are never lost.
-        plan = planImport(entries(),parsed,{ mode:mode.value,conflict:conflict.value }); const backup = await store.importLore(sid,plan,entries()); s.hide();
-        const stats = plan.preview.books; await undoAction(backup,`Imported ${stats.characters?.new ?? 0} characters, ${stats.locations?.new ?? 0} places, ${stats.facts?.new ?? 0} facts, ${stats.events?.events ?? 0} events.`);
+      const valid=()=>!cancelled && ctx.isCurrent() && mode.value===reviewedMode && conflict.value===reviewedConflict;
+      body.append(button('Cancel',s.hide),button('Refresh preview',async()=>{s.hide();await readImport(text);}),button('Import',async b => {
+        if (state.busy) { toast('Wait for the current reply or summary.'); return; }
+        ctx.check();
+        if(!valid() || JSON.stringify(originEntries())!==fingerprint || (memorySnapshot(ctx.source.id)?.session.loreRevision ?? 0)!==revision)throw new Error('Lorebooks or import choices changed. Refresh the preview before importing.');
+        try {
+          const backup = await store.importLore(ctx.source,plan,snapshot.entries,{isCurrent:valid,book:scope,loreRevision:revision});
+          s.hide();undo(backup,'Imported '+(scope ? BOOK_LABELS[scope] : 'lorebooks')+'.');
+        } catch(error) {
+          if(error.backupId){s.hide();undo(error.backupId,error.message);}else throw error;
+        }
       },'btn primary')); s.dialog.append(body); return true;
     } catch (e) { toast(e.message); return false; }
   }
+  if(scope)return;
   const protagonist = normalizeMemory(live()?.session.memory).protagonist;
   editor.append(node('h3','Make lorebooks with an AI'),node('p','Protagonist: '+(protagonist || 'the main character'),'muted'));
   const prompt = () => fillProtagonist(format === 'md' ? LOREBOOK_TEMPLATE_MD : LOREBOOK_TEMPLATE_JSON,protagonist);
@@ -362,6 +381,19 @@ function cardFlowContext() {
   const isCurrent=()=>{try{return opened && sid===source.id && state.sessionId===source.id && currentUid()===source.uid && navigationId===nav && navigationKey===key && selected===selection && book===originBook;}catch{return false;}};
   const check=()=>{if(!isCurrent())throw new Error('Navigation or account changed; card transfer cancelled.');};
   return {source,isCurrent,check,originBook};
+}
+function exportBook() {
+  const ctx=cardFlowContext(),category=ctx.originBook;
+  const s=subSheet('Export '+BOOK_LABELS[category],{compact:true}),body=node('div',null,'memory-content'),format=node('select');
+  for(const [value,label] of [['md','Markdown'],['json','JSON']]){const o=node('option',label);o.value=value;format.append(o);}
+  format.value=getPref('nera.lore.format')==='json' ? 'json' : 'md';
+  format.addEventListener('change',()=>setPref('nera.lore.format',format.value));
+  body.append(node('p','Exports the entire category, including cards hidden by filters.','muted'),format,button('Export book',async()=>{
+    ctx.check();const snapshot=await prepareMemorySnapshot();ctx.check();
+    const title=snapshot.session.title ?? 'story',options={title,books:[category],includeEmpty:true};
+    const text=format.value==='md' ? toMarkdown(snapshot.entries,options) : toJson(snapshot.entries,options);
+    download(text,title.replace(/[^\p{L}\p{N} _-]/gu,'')+'-'+category+'-'+new Date().toISOString().slice(0,10)+'.'+format.value,format.value==='json' ? 'application/json' : 'text/markdown');s.hide();
+  },'btn primary'),button('Cancel',s.hide));s.dialog.append(body);
 }
 function exportCard() {
   if(dirty()){toast('Save or discard your changes before exporting this card.');return;}
