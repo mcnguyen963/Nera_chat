@@ -12,7 +12,7 @@ import {
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
 import { ensureChunked, ensureContinuityMetadata } from "./messages.js";
-import { packMessages, chunkId, chunkRecord, chunkBytes } from "./message-chunks.js";
+import { packMessages, chunkId, chunkRecord, chunkBytes, summaryLookup } from "./message-chunks.js";
 
 // Every session lives under users/{uid}/sessions/... so each user's chat history
 // is isolated — enforced both by path scoping and by Firestore rules.
@@ -52,7 +52,7 @@ export async function createSession(title, { importing = false } = {}) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     longTermPlan: "",
-    historyRevision:0,continuityVersion:2,nextNarratorTurn:1,loreRevision:0,
+    historyRevision:0,continuityVersion:2,lookupVersion:1,...summaryLookup([]),nextNarratorTurn:1,loreRevision:0,
     activeSummaryMessageId: null,
     breakpointOrder: 0,
     nextOrder: 0, // transactionally incremented per added message; messages start at order 1
@@ -196,7 +196,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     updatedAt: serverTimestamp(),
     nextOrder: selected.at(-1)?.order ?? 0,
     nextNarratorTurn:Math.max(0,maxOf(selected.map(m => m.narratorTurn ?? 0)))+(selected.at(-1)?.role === "user" ? 0 : 1),
-    storageVersion: 2,
+    storageVersion: 2,lookupVersion:1,...summaryLookup(selected),
     activeChunkId: last ? chunkId(last[0].order) : null,
     activeChunkBytes: last ? chunkBytes(last) : 0,
     activeChunkCount: last?.length ?? 0,

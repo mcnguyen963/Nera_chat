@@ -67,7 +67,7 @@ async function setup(legacyCount = 0) {
       for (const c of constraints.filter((item) => item.kind === 'where')) {
         paths = paths.filter((path) => {
           const value = documents.get(path)[c.field];
-          return c.op === '<' ? value < c.value : c.op === '<=' ? value <= c.value : c.op === '>=' ? value >= c.value : value > c.value;
+          return c.op === '==' ? value === c.value : c.op === '<' ? value < c.value : c.op === '<=' ? value <= c.value : c.op === '>=' ? value >= c.value : value > c.value;
         });
       }
       const sort = constraints.find((item) => item.kind === 'orderBy');
@@ -139,7 +139,7 @@ async function setup(legacyCount = 0) {
     if (modules.has(path)) return modules.get(path);
     const stub = path.startsWith('https:') ? firestore : {
       'db.js': { db: {} },
-      'auth.js': { currentUid: () => 'u' },
+      'auth.js': { currentUid: () => fault.owner ?? 'u' },
       'tokenizer.js': { countTokens: async (content) => content.length },
     }[path];
     const module = stub
@@ -451,11 +451,15 @@ test('stable narrator turns survive deletion, regeneration and copies through a 
   const id = await h.sessions.duplicateSession('s',null,u2.id);
   const reply = await h.api.addMessage(id,{ role:'assistant',content:'Copy reply' }); assert.equal(reply.narratorTurn,u2.narratorTurn);
 });
-test('concurrent chunk edits retain both devices changes and increment history revisions',async () => {
+test('concurrent chunk edits reject stale discovery and retain both changes after retry',async () => {
   const h = await setup();
   const a = await h.api.addMessage('s',{ role:'user',content:'A' }), b = await h.api.addMessage('s',{ role:'assistant',content:'B' });
   const before = h.documents.get(h.sessionPath).historyRevision;
-  await Promise.all([h.api.editMessage('s',a.id,'Device one',a.order),h.api.editMessage('s',b.id,'Device two',b.order)]);
+  const results = await Promise.allSettled([h.api.editMessage('s',a.id,'Device one',a.order),h.api.editMessage('s',b.id,'Device two',b.order)]);
+  for (const [i,result] of results.entries()) if (result.status === 'rejected') {
+    assert.equal(result.reason.name,'HistoryConflict');
+    const m = [a,b][i]; await h.api.editMessage('s',m.id,['Device one','Device two'][i],m.order);
+  }
   const messages = await h.api.getMessages('s'); assert.deepEqual(messages.map(m => m.content),['Device one','Device two']); assert.ok(messages.every(m => m.revision === 1)); assert.equal(h.documents.get(h.sessionPath).historyRevision,before+2);
   await assert.rejects(h.api.editMessage('s',a.id,'Stale local edit',a.order,{ expectedRevision:0 }),/edited elsewhere/);
 });
@@ -1007,4 +1011,134 @@ test('Opening an old-message editor reads its authoritative bounded chunk withou
   await h.api.editMessage('s','m1','Server edit',1,{expectedRevision:0});
   const fresh=await h.api.getMessageForEdit('s','m1',1);assert.equal(fresh.content,'Server edit');assert.equal(fresh.revision,1);
   await assert.rejects(h.api.editMessage('s','m1','Stale draft',1,{expectedRevision:0}),error=>error.name==='MessageEditConflict' && error.currentMessage.content==='Server edit');
+});
+
+
+for (const operation of ['edit','delete','overwrite']) test(`Recent ${operation} reads stay bounded at 100 and 10000 messages`,async()=>{
+  const counts=[];
+  for (const size of [100,10000]) {
+    const h=await setup();
+    const items=Array.from({length:size},(_,i)=>({id:'m'+(i+1),role:i%2 ? 'assistant' : 'user',content:'Turn '+i}));
+    items[50]={id:'summary',role:'summary',content:'Earlier events',coveredRange:{toOrder:50}};
+    await h.api.addMessagesBulk('s',items);
+    await h.sessions.updateSession('s',{activeSummaryMessageId:'summary',breakpointOrder:50});
+    await h.api.ensureContinuityMetadata('s');
+    const before=h.reads.documents;
+    const result=operation==='edit' ? await h.api.editMessage('s','m'+size,'Edited',size) : operation==='delete' ? await h.api.deleteMessage('s','m'+size,size) : await h.api.overwriteMessage('s','m'+size,{content:'Replacement'},size);
+    counts.push(h.reads.documents-before);
+    assert.equal(result.session.activeSummaryMessageId,'summary');assert.equal(result.session.breakpointOrder,50);
+    assert.equal(result.summaryReset,false);
+  }
+  assert.equal(counts[0],counts[1]);assert.ok(counts[0]<=6,JSON.stringify(counts));
+});
+
+test('Lookup backfill is resumable, preserves content/revisions, and saves await completion',async()=>{
+  const h=await setup();legacyContinuityChunks(h);
+  await h.api.ensureContinuityMetadata('s');
+  const parent=h.documents.get(h.sessionPath);delete parent.lookupVersion;
+  const originals=new Map();
+  for(const [path,chunk] of h.documents)if(path.includes('/messageChunks/')) {
+    originals.set(path,structuredClone(chunk.messages));
+    delete chunk.lookupVersion;delete chunk.hasLiveSummary;delete chunk.lastNarrativeOrder;
+  }
+  // Load another module instance through a second story to avoid the readiness cache.
+  const newPath='users/u/sessions/backfill';
+  h.documents.set(newPath,structuredClone(parent));
+  for(const [path,messages]of originals){const data=structuredClone(h.documents.get(path));h.documents.set(path.replace(h.sessionPath,newPath),data);}
+  h.fault.failAt=h.transactions.length+3;
+  await assert.rejects(h.api.ensureContinuityMetadata('backfill'),/Injected transaction failure/);
+  assert.equal(h.documents.get(newPath).lookupVersion,undefined);
+  const completed=structuredClone(h.documents.get(newPath+'/messageChunks/legacy1'));
+  await h.api.editMessage('backfill','old60','Edited after backfill',60);
+  assert.deepEqual(h.documents.get(newPath+'/messageChunks/legacy1'),completed);
+  assert.equal(h.documents.get(newPath).lookupVersion,1);
+  assert.equal(h.documents.get(newPath).historyRevision,(parent.historyRevision ?? 0)+1);
+  for(const [path,messages]of originals)if(!path.endsWith('/legacy60'))assert.deepEqual(h.documents.get(path.replace(h.sessionPath,newPath)).messages,messages);
+});
+
+test('Lookup metadata follows split, retirement, empty chunks, bulk import and prefix copy',async()=>{
+  const h=await setup();await h.api.addMessagesBulk('s',[
+    {id:'u',role:'user',content:'Start'}, {id:'a',role:'assistant',content:'Reply'},
+    {id:'s',role:'summary',content:'Known',coveredRange:{toOrder:2}},
+  ]);
+  let parent=h.documents.get(h.sessionPath);assert.equal(parent.summaryCoverageOrder,2);assert.equal(parent.summaryCoverageUnknown,false);
+  const id=await h.sessions.duplicateSession('s',null,'u');
+  const copied=h.documents.get('users/u/sessions/'+id);assert.equal(copied.summaryCoverageOrder,0);assert.equal(copied.lookupVersion,1);
+  await h.api.editMessage('s','u','x'.repeat(260000),1);
+  let chunks=[...h.documents].filter(([p])=>p.includes('/sessions/s/messageChunks/')).map(([,c])=>c);
+  assert.ok(chunks.length>1);
+  assert.ok(chunks.every(c=>c.hasLiveSummary===c.messages.some(m=>m.role==='summary'&&!m.retired)));
+  assert.equal(h.documents.get(h.sessionPath).summaryCoverageOrder,0);
+  await h.api.deleteMessage('s','u',1);
+  await h.api.deleteMessage('s','a',2);
+  const empty=[...h.documents].find(([p,c])=>p.includes('/sessions/s/messageChunks/')&&!c.count)[1];
+  assert.equal(empty.hasLiveSummary,false);assert.equal(empty.lastNarrativeOrder,0);
+});
+
+for(const mutation of ['append','checkpoint','account'])test(`Discovery rejects concurrent ${mutation} without saving the edit`,async()=>{
+  const h=await setup();const a=await h.api.addMessage('s',{role:'assistant',content:'Original'});
+  let changed=false;
+  h.fault.onServerRead=path=>{if(!changed&&path===h.sessionPath+'/messageChunks'){
+    changed=true;
+    if(mutation==='account')h.fault.owner='other';
+    else if(mutation==='checkpoint')h.documents.get(h.sessionPath).breakpointOrder=5;
+    else {h.documents.get(h.sessionPath).historyRevision++;h.documents.get(h.sessionPath).nextOrder++;}
+  }};
+  await assert.rejects(h.api.editMessage('s',a.id,'Should not save',a.order),/changed|cancelled/);
+  const chunk=[...h.documents].find(([p])=>p.includes('/messageChunks/'))[1];assert.equal(chunk.messages[0].content,'Original');
+});
+
+test('Latest assistant deletion ignores summary-only and empty trailing chunks, older deletion does not reset turns',async()=>{
+  const h=await setup();await h.api.addMessagesBulk('s',Array.from({length:200},(_,i)=>({id:'m'+(i+1),role:i%2 ? 'assistant' : 'user',content:'Turn'})));
+  await h.api.addMessage('s',{role:'summary',content:'Summary',coveredRange:{toOrder:50}});
+  const empty=h.sessionPath+'/messageChunks/empty';h.documents.set(empty,{firstOrder:202,lastOrder:202,count:0,messages:[],lookupVersion:1,hasLiveSummary:false,lastNarrativeOrder:0});
+  const before=h.documents.get(h.sessionPath).nextNarratorTurn;
+  await h.api.deleteMessage('s','m2',2);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,before);
+  const reply=(await h.api.getMessageForEdit('s','m200',200));
+  const reads=h.reads.documents;await h.api.deleteMessage('s','m200',200);
+  assert.ok(h.reads.documents-reads<=6);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,reply.narratorTurn);
+});
+
+
+test('Covered edits read summary chunks only as unrelated history grows',async()=>{
+  const counts=[];
+  for(const size of [100,10000]) {
+    const h=await setup();const items=Array.from({length:size},(_,i)=>({id:'m'+(i+1),role:i%2 ? 'assistant':'user',content:'Turn'}));
+    items[2]={id:'early',role:'summary',content:'Safe earlier',coveredRange:{toOrder:2}};
+    await h.api.addMessagesBulk('s',items);
+    await h.api.addMessage('s',{role:'summary',content:'Current',coveredRange:{toOrder:size}},{id:'active',sessionUpdate:{activeSummaryMessageId:'active',breakpointOrder:size}});
+    await h.api.ensureContinuityMetadata('s');const before=h.reads.documents;
+    const result=await h.api.editMessage('s','m4','Corrected',4);counts.push(h.reads.documents-before);
+    assert.equal(result.session.activeSummaryMessageId,'early');assert.equal(result.session.summaryCoverageOrder,2);
+    const activeChunk=h.documents.get(h.sessionPath+'/messageChunks/'+result.session.activeChunkId);
+    assert.equal(result.session.activeChunkBytes,activeChunk.byteSize);
+  }
+  assert.equal(counts[0],counts[1]);assert.ok(counts[0]<=7,JSON.stringify(counts));
+});
+
+test('Retired summary edit/delete skips unrelated live summaries, unknown coverage stays conservative',async()=>{
+  const h=await setup();await h.api.addMessagesBulk('s',Array.from({length:1000},(_,i)=>({id:'m'+(i+1),role:'user',content:'Turn'})));
+  const retired=await h.api.addMessage('s',{role:'summary',content:'Retired',retired:true});
+  for(let i=0;i<4;i++)await h.api.addMessage('s',{role:'summary',content:'x'.repeat(200000),coveredRange:{toOrder:500}});
+  await h.api.ensureContinuityMetadata('s');
+  let before=h.reads.documents;await h.api.editMessage('s',retired.id,'Edited retired',retired.order);assert.ok(h.reads.documents-before<=4);
+  before=h.reads.documents;await h.api.deleteMessage('s',retired.id,retired.order);assert.ok(h.reads.documents-before<=4);
+  await h.api.addMessage('s',{role:'summary',content:'Unknown coverage'},{id:'unknown'});
+  assert.equal(h.documents.get(h.sessionPath).summaryCoverageUnknown,true);
+  await h.api.editMessage('s','m1000','Corrected recent',1000);
+  assert.equal(h.documents.get(h.sessionPath).summaryCoverageUnknown,false);
+  assert.equal((await h.api.getMessages('s')).find(m=>m.id==='unknown').retired,true);
+});
+
+test('Lookup backfill refuses publication after concurrent history or account changes',async()=>{
+  for(const mutation of ['history','account']){
+    const h=await setup();legacyContinuityChunks(h);
+    const parent=h.documents.get(h.sessionPath);parent.continuityVersion=2;
+    let fired=false;
+    h.fault.beforeCommit=()=>{if(!fired){fired=true;if(mutation==='account')h.fault.owner='other';else parent.historyRevision=(parent.historyRevision ?? 0)+1;}};
+    await assert.rejects(h.api.ensureContinuityMetadata('s'),/changed/);
+    assert.equal(parent.lookupVersion,undefined);
+    assert.equal(h.documents.get(h.sessionPath+'/messageChunks/legacy1').messages[0].content,'old 1');
+    if(mutation==='history')assert.equal(h.documents.get(h.sessionPath+'/messageChunks/legacy1').lookupVersion,undefined);
+  }
 });
