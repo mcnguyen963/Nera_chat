@@ -542,6 +542,9 @@ function restoreCachedChat(sessionId, saved) {
 function subscribeChat(sessionId) {
   const owner = currentUid();
   msgUnsub?.();sessUnsub?.();
+  void messagesApi.ensureContinuityMetadata(sessionId).catch(error => {
+    if (state.sessionId === sessionId && currentUid() === owner) showTransientError(error);
+  });
   const reconnect=error=>{if(state.sessionId!==sessionId || currentUid()!==owner || cacheWritesPaused)return;chatStatus='reconnecting';msgUnsub?.();sessUnsub?.();void updateIndicator();if(chatRetryTimer)return;if(chatRetry===0)showTransientError(error);const delay=[2000,5000,15000,60000][Math.min(chatRetry++,3)];chatRetryTimer=setTimeout(()=>{chatRetryTimer=null;if(state.sessionId===sessionId && currentUid()===owner && !cacheWritesPaused)subscribeChat(sessionId);},delay);};
 
   sessUnsub = onSnapshot(
@@ -844,7 +847,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
     const result = await messagesApi.deleteMessage(token.sid, m.id, m.order);
     applyLocalChange(token,result,list=>list.filter(item=>item.id!==m.id));
     renderMessages(lastMessages.filter((item) => item.id !== m.id));
-    await reconcileDeletedMemory();
+    reconcileDeletedMemory(m);
     });
   }));
   if (retry) actions.appendChild(actionBtn('Retry reply', 'retry', () => retryReply(m)));
@@ -981,7 +984,8 @@ async function startEdit(m, wrap) {
     refreshFloatingCopy(); void updateIndicator();
   };
   const loadLatest = async () => {
-    save.disabled = true; ta.readOnly = true; status.textContent = 'Loading latest message…';
+    // Keep the field editable after gesture-time focus so iOS keeps its keyboard.
+    save.disabled = true; status.textContent = 'Loading latest message…';
     try {
       const fresh = await messagesApi.getMessageForEdit(source.sid, m.id, m.order);
       if (!active()) return false;
@@ -995,7 +999,7 @@ async function startEdit(m, wrap) {
     } catch (error) {
       if (active()) status.textContent = friendlyError(error) + ' Your draft is kept. Save will retry loading.';
       return false;
-    } finally { if (active()) { save.disabled = !editor.ready && status.querySelector('details') !== null; ta.readOnly = false; } }
+    } finally { if (active()) { save.disabled = !editor.ready && status.querySelector('details') !== null; } }
   };
   const conflict = fresh => {
     editor.ready = false; rememberFresh(fresh);
@@ -1821,11 +1825,16 @@ function showTransientError(text) {
   setTimeout(() => { div.remove(); clampListScroll(); }, 10000);
 }
 
-async function reconcileDeletedMemory() {
+function reconcileDeletedMemory(deleted) {
   if (!session || !normalizeMemory(session.memory).autoUpdate && !loreEntries.length) return;
-  const messages = await ensureHistory(), orders = new Set(messages.filter(m => m.role === 'assistant').map(m => m.order));
-
-  const count = loreEntries.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.filter(l => l.src != null && l.src<=Math.max(0,maxOf(messages.map(m=>m.order))) && !orders.has(l.src)).length,0),0);
+  const messages = historyMessages;
+  const orders = messages ? new Set(messages.filter(m => m.role === 'assistant').map(m => m.order)) : null;
+  const lastOrder = messages ? Math.max(0,maxOf(messages.map(m => m.order))) : 0;
+  const fromDeletedTurn = line => line.src != null && (
+    deleted?.role === 'assistant' && line.src === deleted.order ||
+    orders && line.src <= lastOrder && !orders.has(line.src)
+  );
+  const count = loreEntries.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.filter(fromDeletedTurn).length,0),0);
   if (count) document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: `${count} memory notes came from deleted turns.`, action: 'Review', event: 'lorebooks', options: { filter: 'deleted' } } }));
   rememberMemoryStory();
 }

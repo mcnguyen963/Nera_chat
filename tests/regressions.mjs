@@ -1980,3 +1980,27 @@ test('Late old-message editor reads cannot mutate another story with a copied me
   chat.setSession('other');h.el('message-list').replaceChildren();resolve({id:'old',role:'user',order:1,revision:9,content:'Old story server value'});await pending;
   assert.equal(h.state.sessionId,'other');assert.equal(h.el('message-list').querySelector('.msg-editor'),null);assert.equal(h.calls.edits,undefined);
 });
+
+
+test('Edit focuses an editable field synchronously and keeps it editable during the server refresh',async()=>{
+  let resolve;const server=new Promise(done=>{resolve=done;});
+  const {h,bubble,pending}=await oldMessageEditor({read:()=>server});
+  const editor=bubble.querySelector('.msg-editor');
+  assert.equal(h.document.activeElement,editor);assert.notEqual(editor.readOnly,true);
+  editor.value='Typed while loading';
+  resolve({id:'old',role:'user',order:1,revision:0,content:'Cached old turn'});await pending;
+  assert.equal(editor.value,'Typed while loading');assert.equal(h.document.activeElement,editor);assert.notEqual(editor.readOnly,true);
+});
+
+test('Deleted-turn lore warning completes without loading full history',async()=>{
+  const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
+  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:2})});
+  h.calls.latestCallbacks.at(-1)({messages:[{id:'a',role:'assistant',order:200,content:'Delete me'}],hasEarlier:true});
+  await h.document.dispatchEvent({type:'lorebook-visibility',detail:{open:true}});
+  h.calls.loreCallbacks.at(-1)([{id:'mira',book:'characters',name:'Mira',sections:{notes:{text:'',lines:[{id:'note',text:'A fact',src:200}]}}}]);
+  const before=h.calls.historyReads ?? 0;
+  let warning;h.document.addEventListener('memory-toast',event=>{warning=event.detail;});
+  const bubble=h.el('message-list').children.find(n=>n.dataset.messageId==='a');
+  await bubble.querySelector('.message-menu-panel').children.find(b=>b.textContent==='Delete').click();
+  assert.equal(h.calls.historyReads ?? 0,before);assert.equal(h.state.busy,false);assert.match(warning.text,/1 memory notes/);
+});

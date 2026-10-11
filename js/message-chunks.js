@@ -40,6 +40,25 @@ export function chunkId(firstOrder) {
   return `chunk_${String(firstOrder).padStart(12, "0")}`;
 }
 
-export function chunkRecord(messages, firstOrder = messages[0].order, lastOrder = messages.at(-1).order) {
-  return { firstOrder, lastOrder, count: messages.length, byteSize: chunkBytes(messages), messages };
+export function chunkRecord(messages, firstOrder = messages[0]?.order ?? 0, lastOrder = messages.at(-1)?.order ?? firstOrder) {
+  return { ...lookupRecord(messages), firstOrder, lastOrder, count: messages.length, byteSize: chunkBytes(messages), messages };
+}
+
+// Lookup bounds are conservative: an unknown cutoff always requires discovery.
+export function summaryLookup(messages) {
+  let summaryCoverageOrder = 0, summaryCoverageUnknown = false;
+  for (const m of messages) if (m.role === 'summary' && !m.retired) {
+    const cutoff = m.coveredRange?.toOrder ?? m.coveredRange?.to;
+    if (!Number.isSafeInteger(cutoff) || cutoff < 0) summaryCoverageUnknown = true;
+    else summaryCoverageOrder = Math.max(summaryCoverageOrder, cutoff);
+  }
+  return { summaryCoverageOrder, summaryCoverageUnknown };
+}
+
+export function lookupRecord(messages) {
+  return {
+    lookupVersion: 1,
+    hasLiveSummary: messages.some(m => m.role === 'summary' && !m.retired),
+    lastNarrativeOrder: messages.reduce((n,m) => ['user','assistant'].includes(m.role) ? Math.max(n,m.order) : n,0),
+  };
 }
