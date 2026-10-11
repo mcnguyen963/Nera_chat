@@ -174,11 +174,13 @@ async function render() {
       lore.append(bookGroup);
     }
     if (r.characterSelection) characterReport(lore,r.characterSelection,'next-character',live);
+    if(r.recordSelection)recordReport(lore,r.recordSelection,'next-records');
     body.append(lore);
     if (live.sentContext) {
       const sent=live.sentContext,section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString());
       section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
+      if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
       section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
       body.append(section);
     }
@@ -246,6 +248,18 @@ async function render() {
   }
 }
 function closeViewer() { document.querySelector('#context-viewer .settings-close')?.click(); }
+
+function recordReport(parent,books,prefix) {
+  const root=group(prefix,'Selected lorebook records');
+  for(const [book,report] of Object.entries(books)) {
+    const section=group(prefix+'-'+book,book+' · '+report.budget+' tokens');
+    for(const entry of report.entries){
+      const card=group(prefix+'-'+entry.entryId,entry.name);
+      card.append(preview(prefix+'-'+entry.entryId+'-text','Exact selected text',entry.text));
+      for(const r of entry.records){const detail=group(prefix+'-'+entry.entryId+'-'+r.id,(r.selected?'Selected':'Omitted')+' · '+r.category+' · '+r.reason);detail.append(node('p','Current matches: '+(r.currentMatches.join(', ')||'none')+' · recent matches: '+(r.recentMatches.join(', ')||'none')+' · related subjects: '+((r.linkedSubjects ?? []).map(s=>s.name).join(', ')||r.linked.join(', ')||'none'),'muted'));for(const [i,s] of r.sources.entries())detail.append(preview(prefix+'-'+entry.entryId+'-'+r.id+'-'+i,s.section+' · offsets '+s.start+'–'+s.end,s.text));card.append(detail);}section.append(card);
+    }root.append(section);
+  }parent.append(root);
+}
 
 function characterReport(parent, report, prefix, live = null) {
   const section=group(prefix,'Character coverage · '+(report.fullFit ? 'full cards fit' : 'fair allocation')+' · '+report.budget+' tokens');

@@ -91,7 +91,8 @@ export async function serializeStory(sessionId) {
   if (!session) throw new Error("No active session to export.");
   assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
   const msgs = await getMessages(sessionId);
-  const lore = await getLore(sessionId);
+  let lore;
+  try{lore=await getLore(sessionId);}catch(error){if(error.code==='lore-read-changed')assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));throw error;}
   assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));
   if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');
 

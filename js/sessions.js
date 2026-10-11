@@ -1,3 +1,4 @@
+import * as loreStore from './lore-store.js';
 import {writeInitialStorySettings,ensureStorySettings} from './story-settings-store.js';
 import {assertSnapshotRevisions} from './story-settings.js';
 import { maxOf } from './math-utils.js';
@@ -102,6 +103,8 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
         await batch.commit();
       }
     }
+    await loreStore.deleteRecordGenerations?.({id:sessionId,uid:owner});
+    if(snap.exists() && snap.data().loreSchemaVersion===3)await updateDoc(target,{loreGenerationsDeleted:true});
     // The tombstone stays until every subtree sweep has completed.
     await deleteDoc(target);
   });
@@ -204,6 +207,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     breakpointOrder: hasSummary ? source.breakpointOrder ?? 0 : 0,
   };
 
+  if(source.loreSchemaVersion===3){data.loreGeneration=newId('generation');data.loreMigration={active:false};}
   if (source.memoryState) {
     const lastAssistant = selected.filter(m => m.role === 'assistant').at(-1)?.order ?? 0;
     data.memoryState = { ...source.memoryState, extractedThroughOrder: source.memoryState.extractedThroughOrder == null ? null : Math.min(source.memoryState.extractedThroughOrder, lastAssistant), failureStreak: 0, paused: false, lastError: null };
