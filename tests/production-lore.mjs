@@ -187,3 +187,37 @@ test('card import cancels stale navigation and queued account switches',async()=
  await assert.rejects(h.api.importCard('s',plan,{isCurrent:()=>false}),/cancelled/);
  let release;h.api.configureLoreWrites(()=>new Promise(resolve=>release=resolve));const pending=h.api.importCard({id:'s',uid:'u'},plan);h.controls.uid='other';release();await assert.rejects(pending,/Account changed/);assert.equal(h.counts.loreWrites,0);assert.equal(h.counts.backups,0);
 });
+
+async function scopedSetup(){const h=await cardImportSetup();return {...h,plan:h.f.planImport([h.entry,h.other],h.f.fromJson(h.f.toJson([{...h.entry,name:'Mira new'}])),{book:'characters',mode:'replace',loreRevision:0})};}
+test('scoped replace backup and Undo preserve other categories',async()=>{
+ const h=await scopedSetup(),id=await h.api.importLore({id:'s',uid:'u'},h.plan,[],{book:'characters'});
+ assert.equal(h.docs.has(h.sessionPath+'/lore/mira'),false);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);await h.api.restoreBackup({id:'s',uid:'u'},id,[],{book:'characters'});assert.deepEqual({id:'mira',...h.docs.get(h.sessionPath+'/lore/mira')},h.entry);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});
+for(const change of ['revision','navigation','scope','account','moved'])test('scoped import rejects '+change+' before lore writes',async()=>{
+ const h=await scopedSetup(),options={book:'characters'};
+ if(change==='revision')h.docs.get(h.sessionPath).loreRevision=1;
+ if(change==='navigation')options.isCurrent=()=>false;
+ if(change==='scope')options.book='facts';
+ if(change==='account')h.controls.uid='another';
+ if(change==='moved')h.docs.get(h.sessionPath+'/lore/mira').book='facts';
+ await assert.rejects(h.api.importLore({id:'s',uid:'u'},h.plan,[],options),/changed|cancelled|Invalid|category/);assert.equal(h.counts.loreWrites,0);assert.equal(h.counts.backups,0);
+});
+for(const failure of ['offline','revision','navigation','account'])test('scoped multi-batch import reports partial '+failure+' and retains recoverable backup',async()=>{
+ const h=await scopedSetup(),original=structuredClone(h.entry);
+ const writes=[{id:'mira',data:{...h.entry,name:'Changed'}},...Array.from({length:6},(_,i)=>({id:'new'+i,data:{...h.entry,id:'new'+i,name:'New '+i}}))];const plan={book:'characters',loreRevision:0,writes};
+ const options={isCurrent:()=>{if(h.counts.loreWrites===3){if(failure==='offline')h.controls.failCard='new2';if(failure==='revision')h.docs.get(h.sessionPath).loreRevision=50;if(failure==='account')h.controls.uid='another';if(failure==='navigation')return false;}return true;}};
+ let err;try{await h.api.importLore({id:'s',uid:'u'},plan,[],options);}catch(e){err=e;}assert.equal(err.completed,3);assert.match(err.message,/partially completed/);assert.ok(err.backupId);assert.equal(h.counts.loreWrites,3);h.controls.uid='u';h.controls.failCard=null;
+ const group=await h.api.loadBackupGroup('s',err.backupId);assert.equal(group.flatMap(b=>b.createdIds).length,2);await h.api.restoreBackup({id:'s',uid:'u'},err.backupId,[],{book:'characters'});assert.deepEqual({id:'mira',...h.docs.get(h.sessionPath+'/lore/mira')},original);assert.equal(h.docs.has(h.sessionPath+'/lore/new0'),false);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});
+test('scoped successful multiple batches advance the expected revision and cancel queued account switches',async()=>{
+ const h=await scopedSetup(),writes=Array.from({length:7},(_,i)=>({id:'new'+i,data:{...h.entry,id:'new'+i}}));await h.api.importLore('s',{book:'characters',loreRevision:0,writes},[]);assert.equal(h.docs.get(h.sessionPath).loreRevision,3);assert.equal(h.counts.loreWrites,7);
+ let release;h.api.configureLoreWrites(()=>new Promise(r=>release=r));const pending=h.api.importLore({id:'s',uid:'u'},h.plan,[]);h.controls.uid='another';release();await assert.rejects(pending,/Account changed/);assert.equal(h.counts.loreWrites,7);
+});
+test('unchanged scoped previews still check the server revision',async()=>{
+ const h=await scopedSetup();h.docs.get(h.sessionPath).loreRevision=1;await assert.rejects(h.api.importLore('s',{book:'characters',loreRevision:0,writes:[]},[]),/Refresh the preview/);assert.equal(h.counts.backups,0);
+});
+for(const change of ['account','category'])test('scoped Undo rejects changed '+change+' without touching another category',async()=>{
+ const h=await scopedSetup(),id=await h.api.importLore({id:'s',uid:'u'},h.plan,[]);const created=h.plan.writes.find(w=>!w.delete).id;
+ if(change==='account')h.controls.uid='another';else h.docs.get(h.sessionPath+'/lore/'+created).book='facts';const before=structuredClone(h.docs.get(h.sessionPath+'/lore/'+created));
+ await assert.rejects(h.api.restoreBackup({id:'s',uid:'u'},id,[],{book:'characters'}),/changed|cancelled/);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+created),before);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});

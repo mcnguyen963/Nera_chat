@@ -181,7 +181,9 @@ function lostSource(current,restored) {
   }
   return lost;
 }
-async function restoreBackupImpl(sid,id,_currentEntries) {
+async function restoreBackupImpl(sid,id,_currentEntries,{book=null,isCurrent=()=>true}={}) {
+  const check=()=>{if(sid.uid!==currentUid() || !isCurrent())throw new Error('Account or navigation changed; Undo cancelled.');};
+  check();
   const group=await loadBackupGroup(sid,id);
   if(!group.length)throw new Error('Backup not found.');
   const saved=new Map(group.flatMap(b=>b.entries).map(e=>[e.id,e.data])),created=new Set(group.flatMap(b=>b.createdIds ?? []));
@@ -190,6 +192,8 @@ async function restoreBackupImpl(sid,id,_currentEntries) {
   for(const [sequence,cardId] of ids.entries())await storyTransaction(sid,async(tx,session)=>{
     const target=ref(sid,cardId),current=await tx.get(target),index=await tx.get(backupIndexRef(sid));
     const restored=saved.get(cardId),currentData=current.data();
+    check();
+    if(book && (restored && restored.book!==book || current.exists() && currentData.book!==book))throw new Error('Backup destination changed category; Undo cancelled.');
     if(restored)guardSize(restored);
     backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,current.exists() ? [{id:cardId,...current.data()}] : [],!current.exists() && restored ? [cardId] : [],sequence);
     if(restored)tx.set(target,clean({id:cardId,...restored}));else tx.delete(target);
@@ -295,16 +299,44 @@ async function replaceLinesImpl(sid,previews,snapshotAt) {
     guardSize(data); tx.update(target,fields);
   }); return backup;
 }
-async function importLoreImpl(sid,plan,_existing) {
-  await ensureBackupIndex(sid);const base=backupBase('import','Imported lorebooks');
+async function importLoreImpl(sid,plan,_existing,{isCurrent=()=>true,book=plan.book,loreRevision=plan.loreRevision}={}) {
+  const scoped=book!=null;
+  const check=()=>{if(sid.uid!==currentUid() || !isCurrent())throw new Error('Navigation or account changed; import cancelled. Refresh the preview.');};
+  check();
+  if(scoped && (!['characters','locations','facts','events'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
   const writes=[...new Map(plan.writes.map(w=>[w.id,w])).values()];
-  // Three before/after maximum-size cards plus their backup fit in one request.
-  for(let i=0;i<writes.length;i+=3)await storyTransaction(sid,async tx=>{
-    const batch=writes.slice(i,i+3),cards=await Promise.all(batch.map(w=>tx.get(ref(sid,w.id)))),index=await tx.get(backupIndexRef(sid));
-    for(const w of batch)if(!w.delete)guardSize(w.data);
-    backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,cards.filter(d=>d.exists()).map(d=>({id:d.id,...d.data()})),batch.filter((w,n)=>!w.delete && !cards[n].exists()).map(w=>w.id),i);
-    for(const w of batch)if(w.delete)tx.delete(ref(sid,w.id));else tx.set(ref(sid,w.id),{...clean(w.data),createdAt:clean(w.data).createdAt ?? serverTimestamp(),updatedAt:serverTimestamp()});
-  });return base.id;
+  for(const w of writes) {
+    if(!w.id || w.id.includes('/') || !w.delete && (w.data.id!==w.id || scoped && w.data.book!==book))throw new Error('Invalid import destination or category.');
+    if(!w.delete)guardSize(w.data);
+  }
+  if(!writes.length){
+    if(scoped)await storyTransaction(sid,async(_tx,session)=>{check();if((session.loreRevision ?? 0)!==loreRevision)throw new Error('Lorebooks changed after the preview. Refresh the preview before importing.');});
+    return null;
+  }
+  await ensureBackupIndex(sid);check();
+  const base=backupBase('import',scoped ? 'Imported '+book : 'Imported lorebooks');
+  let expectedRevision=loreRevision,completed=0;
+  try {
+    // Three before/after maximum-size cards plus their backup fit in one request.
+    for(let i=0;i<writes.length;i+=3) {
+      check();
+      const revision=await storyTransaction(sid,async(tx,session)=>{
+        check();
+        if(scoped && (session.loreRevision ?? 0)!==expectedRevision)throw new Error('Lorebooks changed after the preview. Refresh the preview before importing.');
+        const batch=writes.slice(i,i+3),cards=await Promise.all(batch.map(w=>tx.get(ref(sid,w.id)))),index=await tx.get(backupIndexRef(sid));
+        for(const card of cards)if(scoped && card.exists() && card.data().book!==book)throw new Error('A destination moved to another category. Refresh the preview.');
+        check();
+        backupInTransaction(tx,sid,index.data() ?? {groups:[]},base,cards.filter(d=>d.exists()).map(d=>({id:d.id,...d.data()})),batch.filter((w,n)=>!w.delete && !cards[n].exists()).map(w=>w.id),i);
+        for(const w of batch)if(w.delete)tx.delete(ref(sid,w.id));else tx.set(ref(sid,w.id),{...clean(w.data),createdAt:clean(w.data).createdAt ?? serverTimestamp(),updatedAt:serverTimestamp()});
+        return (session.loreRevision ?? 0)+1;
+      });
+      expectedRevision=revision;completed+=Math.min(3,writes.length-i);
+    }
+  } catch(error) {
+    if(!completed)throw error;
+    throw Object.assign(new Error('Import partially completed: '+completed+' of '+writes.length+' card changes saved. The backup is retained; Undo or Backups can restore them. '+error.message,{cause:error}),{backupId:base.id,completed});
+  }
+  return base.id;
 }
 // The preview is the authority for the destination. Imported IDs never select a write path.
 async function importCardImpl(sid,plan,{isCurrent=()=>true}={}) {

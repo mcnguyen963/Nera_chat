@@ -124,7 +124,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       getLore:async () => {calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
       subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
-      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async () => 'backup', replaceLines: async () => 'backup',
+      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
     },
     'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
@@ -2113,4 +2113,49 @@ test('save-first Send preserves newer subscription metadata at the committed his
     if(result.role==='user')h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({...result.session,title:'Newer title'})});
   };
   await send();assert.equal(h.calls.sessionReads,before.story);assert.equal(h.calls.requests.length,1);assert.equal(chat.memorySnapshot().session.title,'Newer title');
+});
+
+async function bookPreview({book='characters',mode='merge',empty=false}={}) {
+ const ctx=await cardUI(),{h,f,l,lore,root}=ctx;
+ const fact=l.makeEntry('facts','World'),closed=l.makeEntry('events','Closed quest',{kind:'thread',status:'closed'}),timeline=l.makeEntry('events','Timeline',{kind:'timeline'});
+ h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ lore.openLorebooks({screen:'list',book});await namedButton(root,'Import book…').click();
+ const selects=root.querySelectorAll('select');assert.equal(selects[0].value,'merge');assert.equal(selects[1].value,'mine');selects[0].value=mode;
+ await namedButton(root,'Paste text').click();const paste=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);paste.querySelector('textarea').value=f.toJson(empty?[]:h.calls.loreEntries,{books:empty?[book]:undefined});await namedButton(paste,'Read').click();
+ return {...ctx,preview:h.document.body.querySelectorAll('.memory-sub-sheet').at(-1)};
+}
+for(const book of ['characters','locations','facts','events'])test('category action previews only '+book+' and uses captured destination',async()=>{
+ const {h,preview}=await bookPreview({book,mode:'replace'});assert.equal(preview.querySelectorAll('summary').length,1);await namedButton(preview,'Import').click();assert.equal(h.calls.bookImports.length,1);const [origin,plan,,guard]=h.calls.bookImports[0];assert.equal(origin.id,'improvement');assert.equal(origin.uid,'test-user');assert.equal(plan.book,book);assert.equal(guard.book,book);assert.ok(plan.writes.every(w=>w.delete || w.data.book===book));
+ const ctx=await bookPreview({book,mode:'replace',empty:true});assert.ok(ctx.preview.querySelector('summary').textContent.includes('0 new'));if(book==='characters')assert.ok(ctx.preview.querySelector('summary').textContent.includes('2 removed'));
+});
+for(const change of ['lore','choices','story','account','category','close'])test('book preview rejects '+change+' changes',async()=>{
+ const {h,lore,root,preview}=await bookPreview();const importButton=namedButton(preview,'Import');
+ if(change==='lore'){h.calls.loreEntries[0].name='Changed';for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);}
+ if(change==='choices')root.querySelectorAll('select')[0].value='replace';
+ if(change==='story')h.state.sessionId='another';
+ if(change==='account')h.calls.uid='another';
+ if(change==='category')lore.openLorebooks({screen:'list',book:'facts'});
+ if(change==='close')await namedButton(preview,'Cancel').click();
+ await importButton.click();assert.equal(h.calls.bookImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/changed|cancelled/);
+});
+test('book Undo uses captured story and category after navigating away',async()=>{
+ const {h,lore,preview}=await bookPreview();await namedButton(preview,'Import').click();lore.openLorebooks({screen:'list',book:'facts'});h.state.sessionId='another';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();assert.equal(h.calls.cardRestores[0][0].id,'improvement');assert.equal(h.calls.cardRestores[0][3].book,'characters');
+});
+for(const book of ['characters','locations','facts','events'])for(const format of ['md','json'])test('Export book includes hidden '+book+' cards in '+format,async()=>{
+ const {h,l,f,lore,root,card,other}=await cardUI(),exports=[];
+ const timeline=l.makeEntry('events','Timeline',{kind:'timeline'}),closed=l.makeEntry('events','Closed',{kind:'thread',status:'closed'}),open=l.makeEntry('events','Open',{kind:'thread',status:'open'}),fact=l.makeEntry('facts','World'),place=l.makeEntry('locations','Inn');
+ h.calls.loreEntries=[card,other,timeline,closed,open,fact,place];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ lore.openLorebooks({screen:'list',book,filter:'always'});const search=root.querySelector('input');search.value='No match';await search.dispatchEvent({type:'input'});
+ const create=h.document.createElement;h.document.createElement=tag=>{const e=create(tag);if(tag==='a')e.click=async()=>exports.push({name:e.download,text:await (await fetch(e.href)).text()});return e;};
+ await namedButton(root,'Export book…').click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);const select=dialog.querySelector('select');select.value=format;await select.dispatchEvent({type:'change'});await namedButton(dialog,'Export book').click();await new Promise(r=>setImmediate(r));
+ assert.equal(exports.length,1);assert.match(exports[0].name,new RegExp('-'+book+'-.*\\.'+format+'$'));const parsed=format==='md'?f.fromMarkdown(exports[0].text):f.fromJson(exports[0].text);assert.deepEqual(Array.from(parsed.entries,e=>e.name).sort(),h.calls.loreEntries.filter(e=>e.book===book).map(e=>e.name).sort());
+});
+test('queued category import cancels when navigation changes before store execution',async()=>{
+ const {h,lore,preview}=await bookPreview({mode:'replace'});let release;h.calls.onBookImport=()=>new Promise(r=>release=r);const pending=namedButton(preview,'Import').click();lore.openLorebooks({screen:'list',book:'facts'});release();await pending;assert.equal(h.calls.bookImports,undefined);
+});
+test('partial category import exposes Undo with originating account and category',async()=>{
+ const {h,preview}=await bookPreview();h.calls.onBookImport=()=>{throw Object.assign(new Error('Import partially completed; backup retained.'),{backupId:'partial'});};await namedButton(preview,'Import').click();assert.match(h.document.body.querySelector('.toast').textContent,/partially completed/);await namedButton(h.document.body.querySelector('.toast'),'Undo').click();assert.equal(h.calls.cardRestores[0][1],'partial');assert.equal(h.calls.cardRestores[0][3].book,'characters');
+});
+test('Refresh book preview reviews updated choices before writing',async()=>{
+ const {h,root,preview}=await bookPreview();root.querySelectorAll('select')[0].value='replace';await namedButton(preview,'Refresh preview').click();const fresh=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);assert.match(fresh.querySelector('summary').textContent,/2 removed/);await namedButton(fresh,'Import').click();assert.equal(h.calls.bookImports.length,1);assert.equal(h.calls.bookImports[0][1].writes.filter(w=>w.delete).length,2);
 });
