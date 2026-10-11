@@ -54,6 +54,7 @@ function clearChatRetry(){clearTimeout(chatRetryTimer);chatRetryTimer=null;}
 let msgUnsub = null;
 let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
+let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
 let tokenizerWarned=false;
@@ -140,29 +141,66 @@ function syncLore() {
     void updateIndicator();
   },error=>{if(currentUid()!==owner || state.sessionId!==sid)return;fail(error);loreUnsub?.();loreUnsub=null;loreSessionId=null;loreStatus='error';updateMemoryChip();clearTimeout(loreRetryTimer);const delay=[2000,5000,15000,60000][Math.min(loreRetry++,3)];loreRetryTimer=setTimeout(()=>{if(state.sessionId===sid && currentUid()===owner)syncLore();},delay);if(loreRetry===1)showTransientError('Could not load lorebooks: '+error.message+' Retrying…');});
 }
+// Fields that can change the context or the caches needed to build it.
+function preparationKey(story) {
+  return JSON.stringify([story?.historyRevision ?? 0,story?.loreRevision ?? 0,
+    story?.storySettingsRevision ?? 0,story?.longTermPlan,story?.allowLlmPlanUpdates,
+    story?.activeSummaryMessageId,story?.breakpointOrder,story?.memory,story?.memoryState]);
+}
 async function reconcileStory(token = null) {
   const sid = state.sessionId, owner = currentUid();
+  const check = () => {
+    if (token) assertActive(token);
+    if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while reconciling.');
+  };
   if (!sid) throw new Error('Open a story first.');
-  await messagesApi.ensureContinuityMetadata(sid);
-  const fresh = await getSessionFromServer(sid);
-  if (token) assertActive(token);
-  if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while reconciling.');
-  if (!fresh) throw new Error('Story no longer exists.');
+  await messagesApi.ensureContinuityMetadata(sid);check();
+  const version = sessionSnapshotVersion;
+  const fresh = await getSessionFromServer(sid);check();
+  if (!fresh || fresh.deleting) throw new Error('Story no longer exists.');
+  // A listener may have advanced while the server read was in flight.
+  const newer = session && (sessionSnapshotVersion !== version ||
+    (session.historyRevision ?? 0) > (fresh.historyRevision ?? 0));
+  return prepareStoryDocument(newer ? session : fresh,token);
+}
+async function prepareStoryDocument(fresh,token = null) {
+  const sid = state.sessionId, owner = currentUid(), key = preparationKey(fresh);
+  const check = () => {
+    if (token) assertActive(token);
+    if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while loading.');
+    if (preparationKey(session) !== key) throw new Error('Story changed while preparing the reply. Refresh and retry.');
+  };
+  if (!fresh || fresh.deleting) throw new Error('Story no longer exists.');
   session = fresh;
   if (historyRevision !== (fresh.historyRevision ?? 0)) historyMessages = null;
   syncLore();
   if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate) {
-    try {await loreReady;} catch {syncLore();await loreReady;}
-    if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) { const entries = await getLore(sid); if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Story changed while loading lorebooks.'); loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0; }
+    try {await loreReady;check();} catch {check();syncLore();await loreReady;check();}
+    if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) {
+      const entries = await getLore(sid);check();
+      loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0;
+    }
   }
-  if (token) assertActive(token);
-  await ensureHistory(true);
-  if (token) assertActive(token);
-  if(fresh.memory?.autoUpdate && fresh.memoryState?.extractedThroughOrder==null && computeTurns(historyMessages).lastTurn<=normalizeMemory(fresh.memory).lagTurns){await updateSession(sid,{'memoryState.extractedThroughOrder':0});if(currentUid()!==owner || state.sessionId!==sid)throw new Error('Story changed while setting memory start.');session={...session,memoryState:{...session.memoryState,extractedThroughOrder:0}};}
-  if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while loading.');
+  check();
+  await ensureHistory(true);check();
+  if(fresh.memory?.autoUpdate && fresh.memoryState?.extractedThroughOrder==null && computeTurns(historyMessages).lastTurn<=normalizeMemory(fresh.memory).lagTurns){
+    await updateSession(sid,{'memoryState.extractedThroughOrder':0});
+    if(token)assertActive(token);
+    if(currentUid()!==owner || state.sessionId!==sid)throw new Error('Story changed while setting memory start.');
+    // Do not overwrite memory state supplied by a newer subscription.
+    if(preparationKey(session)===key)session={...session,memoryState:{...session.memoryState,extractedThroughOrder:0}};
+    else if(preparationKey(session)!==preparationKey({...fresh,memoryState:{...fresh.memoryState,extractedThroughOrder:0}}))throw new Error('Story changed while setting memory start. Refresh and retry.');
+  }
   rememberMemoryStory();
   return memorySnapshot();
 }
+function validateSavedStorySettings() {
+  if(state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed ||
+    state.storySettings.revision !== (session.storySettingsRevision ?? 0)) {
+    throw new Error('Story prompts changed or have not loaded. Your message was saved. Refresh the story and use Retry reply.');
+  }
+}
+
 function updateMemoryChip() {
   const chip = document.getElementById('btn-memory'); if (!chip) return;chip.setAttribute('aria-controls','lorebook-overlay');chip.setAttribute('aria-expanded',String(managerOpen));
   const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
@@ -558,6 +596,7 @@ function subscribeChat(sessionId) {
       if(!snap.exists() || snap.data().deleting){const deletedId=state.sessionId;forgetChatSession(deletedId);session=null;const clear=()=>{if(state.sessionId===deletedId){setSession(null);showTransientInfo('This story was deleted.');}};if(busy){busyGate.active?.abort?.();document.addEventListener('turn-finished',clear,{once:true});}else clear();return;}
       const previous = session;
       if (snap.exists() && (snap.data().historyRevision ?? 0) < (previous?.historyRevision ?? 0)) return;
+      sessionSnapshotVersion++;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       if (historyRevision !== (session?.historyRevision ?? 0)) historyMessages = null;
       if (!session || !previous ||
@@ -1289,7 +1328,7 @@ async function handleSend(e) {
   e.preventDefault();
   if (busy || !session || editingState) return;
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply before sending another turn.');return;}
-  const requestedSessionId = state.sessionId;
+  const requestedSessionId = state.sessionId, requestedOwner = currentUid();
   const draft = el.input.value;
   let saved = false;
   const text = draft.trim();
@@ -1300,16 +1339,17 @@ async function handleSend(e) {
     return;
   }
   if (loreWritesPending()) await waitForLoreWrites();
-  if (busy || !session || requestedSessionId !== state.sessionId) return;
+  if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
   const token=acquireBusy('send');if(!token)return;
   try {
-    await reconcileStory();assertActive(token);
-    const baseHistory=historyMessages,baseRevision=historyRevision;
+    const baseHistory=historyMessages,baseRevision=historyRevision,baseSession=session;
+    const snapshotVersion=sessionSnapshotVersion;
     const userResult = await messagesApi.addMessage(session.id, { role: "user", content: text });
     const {session:committedUserSession,message:resultMessage,...flatUserMessage}=userResult;
     const userMsg=resultMessage ?? flatUserMessage;
     saved = true;
-    if(el.input.value===draft)setComposerText('');
+    if(requestedOwner!==currentUid())throw new StaleTurn('Account changed; this action was cancelled.');
+    if(busyGate.stillActive(token) && el.input.value===draft)setComposerText('');
     assertActive(token);
     // Bridge until the snapshot arrives so the context build includes the user turn
     // without re-reading the collection from Firestore.
@@ -1318,17 +1358,23 @@ async function handleSend(e) {
         { ...userMsg,role:"user",content:text },
       ]);
     }
-    session = committedUserSession ?? { ...session,historyRevision:userMsg.historyRevision };
-    historyRevision = userMsg.historyRevision;
-    historyMessages=bridgeHistory(baseHistory,baseRevision,userMsg);
-    if(!historyMessages){historyRevision=null;await ensureHistory(true);assertActive(token);}
-    // Explicitly pass the bridged cache: opts.messages keeps buildContextForRequest
-    // off the racy getMessages() fallback, which would hit the watch cache and
-    // potentially miss the just-committed user message.
-    await runAssistantTurn({messages:historyMessages,reconciled:true},token);
+    const committed = committedUserSession ?? { ...baseSession,historyRevision:userMsg.historyRevision };
+    const raced = sessionSnapshotVersion !== snapshotVersion &&
+      JSON.stringify(session)!==JSON.stringify(baseSession) && preparationKey(session)!==preparationKey(committed);
+    if(raced) {
+      await reconcileStory(token);assertActive(token);
+    } else {
+      historyMessages=bridgeHistory(baseHistory,baseRevision,userMsg);
+      historyRevision=historyMessages ? userMsg.historyRevision : null;
+      const authoritative = sessionSnapshotVersion!==snapshotVersion && preparationKey(session)===preparationKey(committed) ? session : committed;
+      await prepareStoryDocument(authoritative,token);assertActive(token);
+    }
+    if(historyMessages.filter(m=>m.id===userMsg.id).length!==1)throw new Error('The saved message is missing from current history. Refresh the story and use Retry reply.');
+    validateSavedStorySettings();
+    await runAssistantTurn({messages:historyMessages,reconciled:true,savedUserId:userMsg.id},token);
   } catch (err) {
-    if (!saved && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
-    if(!(err instanceof StaleTurn))showTransientError(err);
+    if (!saved && requestedOwner===currentUid() && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
+    if(!(err instanceof StaleTurn) && requestedOwner===currentUid() && requestedSessionId===state.sessionId)showTransientError(err);
   } finally {
     releaseBusy(token);
   }
@@ -1338,7 +1384,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply first.');return;}
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
-  const settings = effectiveActiveSettings(), sid = state.sessionId;
+  let settings = effectiveActiveSettings();
+  const sid = state.sessionId;
   if (!settings) {if(ownsToken)releaseBusy(token);return;}
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const vibration=createStreamVibration(settings.streamVibrationMode ?? 'spaces');
@@ -1350,6 +1397,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
       if (latest?.role !== 'user' || latest.id !== opts.expectLatestUserId) throw new Error('The latest story turn changed. Review it before retrying.');
     }
+    if(opts.savedUserId){validateSavedStorySettings();settings=effectiveActiveSettings();}
     if(!settings.modelId || !settings.apiKey)throw new Error('Set your API key and Model ID in Settings first.');
     let sourceMessages = structuredClone(historyMessages);
     let prefix=null;
@@ -1363,6 +1411,11 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     if(settings._storySettingsRevision!=null)sourceSession.storySettingsRevision=settings._storySettingsRevision;
     let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
+    if(opts.savedUserId){
+      validateSavedStorySettings();
+      if(preparationKey(session)!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
+        throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
+    }
     startStreamUI(prefix);turnStream=streamState;
     let result,stopReason=null;
     try {
