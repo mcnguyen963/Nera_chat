@@ -148,6 +148,14 @@ async function render() {
           document.dispatchEvent(new CustomEvent('lorebooks', {detail:{entryId:e.entryId,book:e.book,newName:e.entryId ? null : e.name}}));
         }, 'lore-link'));
         card.append(node('p', included ? `Loaded · ${e.reason} · ${e.tokens.toLocaleString()} tokens within this book${e.linesCut ? ' · '+e.linesCut+' older lines not sent' : ''}${e.draft ? ' · draft' : ''}` : e.reason==='no card' ? 'In scene, no card' : 'Not loaded — '+e.reason, 'muted'));
+        if (e.ranking) {
+          const {rank,priorityReason,mention} = e.ranking;
+          const role = mention?.role === 'assistant' ? 'narrator' : mention?.role;
+          const explanation = priorityReason === 'recent mention' ? `recent ${role ? role+' ' : ''}mention`
+            : priorityReason === 'mentioned' ? `current ${role ? role+' ' : ''}input mention` : priorityReason;
+          card.append(node('p', `Rank ${rank} · ${explanation}${mention ? ` · message ${mention.messageId ?? '?'} (order ${mention.order}, offset ${mention.offset})` : ''}`, 'muted'));
+        }
+        if (!included && e.reason.includes('over budget')) card.append(node('p', 'Excluded by token budget.', 'muted'));
         if (!included && e.text) card.append(preview('skipped-'+e.entryId+'-'+(e.lineId ?? e.section),'Read excluded source text',e.text));
         if (e.reason.startsWith('card limit')) card.append(button('Raise limit', () => {
           closeViewer(); document.dispatchEvent(new CustomEvent('memory-settings', {detail:{focus:'mem-'+book+'-maxCards'}}));

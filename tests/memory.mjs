@@ -572,7 +572,7 @@ test('B7 mention overlaps use identical NFC offsets across paragraphs and whites
   assert.deepEqual(plain(select.findMentions('Kael\n\n\n\nsaw Lady Violet',index,'characters')),[kael.id,violet.id]);
   assert.deepEqual(plain(select.findMentions('Intro\n\n\n\n\n\n\n\nKael saw Lady Violet',index,'characters')),[kael.id,violet.id]);
   const selected=select.selectEntries([kael,violet],normalizeMemory({lorebooks:true}),'Kael\n\n\n\nsaw Lady Violet',null);
-  assert.deepEqual(plain(selected.selected.characters.map(x=>x.entry.id)),[kael.id,violet.id]);
+  assert.deepEqual(plain(selected.selected.characters.map(x=>x.entry.id)),[violet.id,kael.id]);
   assert.deepEqual(plain(select.findMentions('lady\n\tVIOLET greeted KAEL',index,'characters')),[violet.id]);
   kael.aliases=['The Argent'];
   assert.deepEqual(plain(select.findMentions('THE\n\nARGENT',select.buildLoreIndex([kael]),'characters')),[kael.id]);

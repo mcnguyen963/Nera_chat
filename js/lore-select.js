@@ -22,7 +22,7 @@ export function buildLoreIndex(entries) {
   }
   return index;
 }
-export function findMentions(text, index, book) {
+export function findMentionOccurrences(text, index, book) {
   const matches = [], nfc = String(text).normalize('NFC');
   for (const term of index[book] ?? []) {
     // All matches share offsets in the same string; allow names across whitespace.
@@ -30,11 +30,14 @@ export function findMentions(text, index, book) {
     const re = new RegExp('(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',term.firstName ? 'gu' : 'giu');
     for (const m of nfc.matchAll(re)) matches.push({ id:term.entryId, start:m.index, end:m.index+m[0].length });
   }
-  matches.sort((a,b) => (b.end-b.start)-(a.end-a.start)||a.start-b.start);
+  matches.sort((a,b) => (b.end-b.start)-(a.end-a.start)||a.start-b.start||stableId(a.id,b.id));
   const chosen = [];
   for (const m of matches) if (!chosen.some(c => m.start < c.end && c.start < m.end)) chosen.push(m);
   chosen.sort((a,b) => a.start-b.start);
-  return [...new Set(chosen.map(m => m.id))];
+  return chosen;
+}
+export function findMentions(text, index, book) {
+  return [...new Set(findMentionOccurrences(text,index,book).map(m => m.id))];
 }
 export function resolveScene(scene, index) {
   const characters = [], unmatched = [], ambiguous = [];
@@ -52,29 +55,71 @@ export function resolveScene(scene, index) {
   if (!place && scene?.place) place = [...index.locations].sort((a,b) => b.normTerm.length-a.normTerm.length).find(t => new RegExp('(?<![\\p{L}\\p{N}])'+escapeRegex(t.normTerm)+'(?![\\p{L}\\p{N}])','iu').test(normalizeName(scene.place)))?.entryId;
   return { characters:[...new Set(characters)], place:place ?? null, unmatched, ambiguous };
 }
-export function selectEntries(entries, mem, text, scene, recentText = '') {
+const stableId = (a,b) => a < b ? -1 : a > b ? 1 : 0;
+const newestNote = entry => Math.max(0,maxOf(Object.values(entry.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))));
+const compareMention = (a,b) => !a ? (b ? 1 : 0) : !b ? -1 : b.order-a.order || b.offset-a.offset;
+// Structured sources preserve message boundaries. Legacy text is one synthetic message.
+export function selectEntries(entries, mem, text, scene, recentText = '', sources = {}) {
   const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
+  const asList = value => value == null ? [] : Array.isArray(value) ? value : [value];
+  const recent = sources.recent == null ? [{id:'__lore_recent',order:0,role:null,content:recentText}] : asList(sources.recent);
+  const current = sources.current == null ? [{id:'__lore_current',order:recent.reduce((order,m)=>Math.max(order,m.order ?? 0),0)+1,role:'user',content:text}] : asList(sources.current);
   for (const book of ['characters','locations','facts','events']) {
     selected[book] = [];
-    const list = entries.filter(e => e.book === book);
+    const list = [...new Map(entries.filter(e => e.book === book).map(e => [e.id,e])).values()];
     if (!mem.lorebooks || !mem.books[book].on) { for (const e of list) skipped.push({ entryId:e.id, book, name:e.name, reason:'book off' }); continue; }
-    const add = (id,reason) => { const entry = list.find(e => e.id === id); if (entry && !selected[book].some(x => x.entry.id === id)) selected[book].push({ entry, reason }); };
-    if(book==='facts'){const mentioned=new Set(findMentions(text+' '+(scene?.raw ?? ''),index,book));for(const e of [...list].sort((a,b)=>Number(b.alwaysLoad)-Number(a.alwaysLoad) || Number(mentioned.has(b.id))-Number(mentioned.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))))add(e.id,e.alwaysLoad?'always':mentioned.has(e.id)?'mentioned':'recent');}
-    else if (book === 'events') {
-      for (const id of findMentions(text,index,book)) if(list.find(e=>e.id===id)?.kind==='thread')add(id,'mentioned');
-      for (const id of findMentions(recentText,index,book)) if(list.find(e=>e.id===id)?.kind==='thread')add(id,'recent mention');
-      for (const e of list.filter(e => e.kind === 'thread' && e.status !== 'closed').sort((a,b) => Math.max(0,maxOf(Object.values(b.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s => (s.lines ?? []).map(l => l.at ?? 0)))))) add(e.id,'open thread');
-      for (const e of list.filter(e => e.kind === 'timeline')) add(e.id,'timeline');
-    } else {
-      for (const e of list.filter(e => e.alwaysLoad)) add(e.id,'always');
-      const always=selected[book].length;
-      const pc=book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));if(pc)add(pc.id,'protagonist');
-      if (book === 'locations' && resolved.place) add(resolved.place,'current place');
-      if (book === 'characters') for (const id of resolved.characters) add(id,'in scene');
-      for (const id of findMentions(text,index,book)) add(id,'mentioned');
-      for (const id of findMentions(recentText,index,book)) add(id,'recent mention');
-      const cap=always+(pc && !pc.alwaysLoad ? 1 : 0)+mem.books[book].maxCards;
-      for (const x of selected[book].splice(cap)) skipped.push({ entryId:x.entry.id, book, name:x.entry.name, reason:`card limit (${mem.books[book].maxCards}) reached` });
+    const evidence = messages => {
+      const hits = new Map();
+      for (const m of messages) for (const hit of findMentionOccurrences(m.content ?? '',index,book)) {
+        const mention = {messageId:m.id ?? null,order:m.order ?? 0,role:m.role ?? null,offset:hit.start};
+        if (!hits.has(hit.id) || compareMention(mention,hits.get(hit.id)) < 0) hits.set(hit.id,mention);
+      }
+      return hits;
+    };
+    const currentHits = evidence(current), recentHits = evidence(recent), latestHits = evidence([...recent,...current]);
+    const sceneHits = new Set(findMentions(scene?.raw ?? '',index,book));
+    const candidates = new Map();
+    const add = (entry,priority,reason) => {
+      if (!candidates.has(entry.id) || candidates.get(entry.id).priority > priority)
+        candidates.set(entry.id,{entry,reason,priority,mention:latestHits.get(entry.id) ?? null});
+    };
+    const pc = book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));
+    for (const e of list) {
+      if (book === 'events') {
+        if (e.kind === 'thread') {
+          if (currentHits.has(e.id)) add(e,0,'mentioned');
+          if (recentHits.has(e.id)) add(e,1,'recent mention');
+          if (e.status !== 'closed') add(e,2,'open thread');
+        } else if (e.kind === 'timeline') add(e,3,'timeline');
+        continue;
+      }
+      if (e.alwaysLoad) add(e,0,'always');
+      if (book === 'characters') {
+        if (e.id === pc?.id) add(e,1,'protagonist');
+        if (resolved.characters.includes(e.id)) add(e,2,'in scene');
+        if (currentHits.has(e.id)) add(e,3,'mentioned');
+        if (recentHits.has(e.id)) add(e,4,'recent mention');
+      } else {
+        if (book === 'locations' && e.id === resolved.place) add(e,1,'current place');
+        if (book === 'facts' && sceneHits.has(e.id)) add(e,1,'mentioned');
+        if (currentHits.has(e.id)) add(e,2,'mentioned');
+        if (recentHits.has(e.id)) add(e,3,'recent mention');
+        if (book === 'facts') add(e,4,'recent');
+      }
+    }
+    const ranked = [...candidates.values()].sort((a,b) => a.priority-b.priority ||
+      ((book==='facts' && a.priority===4 || book==='events' && a.priority===2)
+        ? newestNote(b.entry)-newestNote(a.entry) : compareMention(a.mention,b.mention)) || stableId(a.entry.id,b.entry.id));
+    let optional = 0;
+    for (const [i,item] of ranked.entries()) {
+      const {entry,reason,mention} = item;
+      const priorityReason = book==='facts' && item.priority===1 ? 'scene mention'
+        : book==='facts' && item.priority===4 ? 'other facts' : reason;
+      const ranking = {rank:i+1,priorityReason,mention};
+      const reserved = entry.alwaysLoad || entry.id===pc?.id;
+      if (['characters','locations'].includes(book) && !reserved && optional++ >= mem.books[book].maxCards)
+        skipped.push({entryId:entry.id,book,name:entry.name,reason:`card limit (${mem.books[book].maxCards}) reached`,ranking});
+      else selected[book].push({entry,reason,ranking});
     }
   }
   if (mem.lorebooks && mem.books.characters.on) for (const name of resolved.unmatched) skipped.push({ entryId:null, book:'characters', name, reason:'no card' });
@@ -105,7 +150,7 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
   for (const item of selected) {
     const base = renderEntry(item.entry,new Set(),protagonist,{provenance});
     const tokens = await count(base+'\n');
-    if (used+tokens > cap) { skipped.push({ entryId:item.entry.id, book:item.entry.book, name:item.entry.name, reason:'over budget' }); continue; }
+    if (used+tokens > cap) { skipped.push({ entryId:item.entry.id, book:item.entry.book, name:item.entry.name, ranking:item.ranking, reason:'over budget' }); continue; }
     included.push({ ...item, lineIds:new Set(), tokens, queue:sortLines(Object.values(item.entry.sections).flatMap(s => s.lines ?? [])).reverse().sort((a,b)=>Number(b.by==='user')-Number(a.by==='user')), stopped:false }); used += tokens;
   }
   const add = async e => {
@@ -128,7 +173,7 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
     const candidates=[...included].reverse();
     const victim=candidates.find(e=>Object.values(e.entry.sections).some(s=>(s.lines ?? []).some(l=>e.lineIds.has(l.id) && l.by!=='user'))) ?? candidates.find(e=>e.lineIds.size);
     if (victim) { const oldest = sortLines(Object.values(victim.entry.sections).flatMap(s => s.lines ?? []).filter(l => victim.lineIds.has(l.id) && (l.by!=='user' || !Object.values(victim.entry.sections).some(s=>(s.lines ?? []).some(n=>victim.lineIds.has(n.id) && n.by!=='user')))))[0]; victim.lineIds.delete(oldest.id); }
-    else { const e = included.pop(); skipped.push({ entryId:e.entry.id, book:e.entry.book, name:e.entry.name, reason:'over budget' }); }
+    else { const e = included.pop(); skipped.push({ entryId:e.entry.id, book:e.entry.book, name:e.entry.name, ranking:e.ranking, reason:'over budget' }); }
     text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist,{provenance})).join('\n\n'); actual = await count(text);
   }
   for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist,{provenance})); }

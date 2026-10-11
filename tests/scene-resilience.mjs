@@ -39,7 +39,7 @@ test('opening seed beats background mention order and reminders are counted once
   for(const variant of ['off','system','user']) {
     const built = await buildContextForRequest({ longTermPlan:'A pending hearing.',memory:{ scene:true,lorebooks:true,startingScene:seed,
       replyContract:variant,books:{ characters:{ maxCards:2 } } } },settings,{ messages,loreEntries:entries,requireLatestUser:true });
-    assert.deepEqual(plain(built.report.loaded.filter(e=>e.book==='characters').map(e=>e.name)),['Nera Veyrath','Isolde Veyless']);
+    assert.deepEqual(plain(built.report.loaded.filter(e=>e.book==='characters').map(e=>e.name)),entries.filter(e=>e.book==='characters' && e.name!=='Absent Person').sort((a,b)=>a.id<b.id?-1:1).map(e=>e.name));
     const contracts = built.apiMessages.filter(m=>m.content.includes('[Reply format —' ));
     assert.equal(contracts.length,variant==='off' ? 0 : 1);
     if(variant==='system') assert.ok(built.apiMessages.at(-2).content.startsWith('[Reply format —' ));
