@@ -7,7 +7,18 @@ test('management defaults protect constraints, future conditions and author cont
  e.sections.bond.lines=[{id:'mine',text:'AUTHOR_WRITTEN_NOTE remains unchanged.',by:'user',turn:1},{id:'scribe',text:'If the council invites her next winter, she may attend; she has not enrolled.',by:'auto',turn:1,when:'Day 1',src:2,evidence:[{id:'a',revision:0,order:2}]}];
  const messages=[{id:'u',role:'user',order:1,content:'Isolde asks the council about an invitation.'},{id:'a',role:'assistant',order:2,content:'The council might invite her next winter.'}],mem=m.normalizeMemory({lorebooks:true,batchTurns:2,lagTurns:0}),settings={maxContextTokens:20000},before=JSON.stringify(e);
  const range=t.dueRange(messages,{extractedThroughOrder:0},mem,{manual:true});const extraction=await p.buildExtractionMessages({settings,mem,entries:[e],messages,range,count:async t=>t.length});const reorganize=p.buildReorganizeMessages({settings,mem,entries:[e]});
- for(const text of [extraction.messages[0].content,reorganize[0].content,p.LOREBOOK_TEMPLATE_MD,p.LOREBOOK_TEMPLATE_JSON]) {assert.match(text,/knowledge boundaries/);assert.match(text,/conditions|conditional/);assert.match(text,/400 characters/);assert.match(text,/Never generate or approve core-reference metadata/);}
+ // Management and conversion prompts have different contracts. Check each one's
+ // current protections without requiring identical wording across all defaults.
+ for(const text of [extraction.messages[0].content,reorganize[0].content]) {
+   assert.match(text,/Keep player-action qualifiers exact/);
+   assert.match(text,/Preserve intentions and attempts as intentions and attempts, not completed events/);
+   assert.match(text,/NPC beliefs, rumors, evidence, suspicions, intentions, and plans distinct/);
+ }
+ assert.match(extraction.messages[0].content,/Keep each note under 400 characters/);
+ assert.match(extraction.messages[0].content,/A plan, hope, threat, rumor or claim is not a completed event/);
+ assert.match(reorganize[0].content,/Preserve every distinct claim and qualifier/);
+ assert.match(reorganize[0].content,/Apply explicit corrections or established changes only within their scope/);
+ for(const text of [p.LOREBOOK_TEMPLATE_MD,p.LOREBOOK_TEMPLATE_JSON]) {assert.match(text,/knowledge boundaries/);assert.match(text,/conditions|conditional/);assert.match(text,/400 characters/);assert.match(text,/Never generate or approve core-reference metadata/);}
  assert.match(extraction.messages[0].content,/Never write personality notes/);assert.match(extraction.messages[0].content,/T<number> \[char\] NAME \| SECTION: note/);
  assert.match(reorganize[0].content,/never repeat or change the author's text/);assert.match(reorganize[0].content,/Merge only equivalent claims/);assert.match(reorganize[1].content,/AUTHOR_WRITTEN_NOTE remains unchanged/);assert.ok(reorganize[1].content.includes(author));assert.ok(reorganize[1].content.includes(e.sections.bond.lines[1].text));assert.equal(JSON.stringify(e),before);
  const parsed=l.parseMemoryLines('T1 [char] Isolde | bond: If invited next winter, she may attend; she has not enrolled.',{reorganize:true,allowPersonality:true,entries:[e],mem,protagonist:'Nera'});assert.equal(parsed.ops.length,1);assert.equal(parsed.ops[0].text,'If invited next winter, she may attend; she has not enrolled.');
