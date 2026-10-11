@@ -1,3 +1,4 @@
+import { fitRecords, relevantSubjects, recordUnits } from './lore-record-select.js';
 import { fitCharacters } from './character-select.js';
 import { minOf, maxOf } from './math-utils.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
@@ -158,8 +159,14 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
-  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
   const skipped = [...filtered.skipped,...selection.skipped];
+  const recordMode=session.loreSchemaVersion===3;
+  const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
+  if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
+    if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
+  }
+  const recordReports={};
   let characterSelectionReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
@@ -169,10 +176,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = book === 'characters' && mem.characterSelection
+    let fit = recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
       ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
       : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
     if (fit.selectionReport) characterSelectionReport = fit.selectionReport;
+    if(fit.recordReport){recordReports[book]=fit.recordReport;for(const entry of fit.recordReport.entries)for(const record of entry.records)if(!record.selected&&(record.core||record.pinned))warnings.push(entry.name+': '+record.reason+'; '+(record.pinned?'pinned record':'approved core')+' omitted.');}
     const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;
     if (book === 'characters') chars = fit;
     else if (book === 'locations') places = fit;
@@ -262,5 +270,5 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
   if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
-  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

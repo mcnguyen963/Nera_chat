@@ -1,9 +1,44 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Per-user chat history: a user can only touch their own session tree.
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function story(uid, sid) { return get(/databases/$(database)/documents/users/$(uid)/sessions/$(sid)).data; }
+    function nextStory(uid, sid) { return getAfter(/databases/$(database)/documents/users/$(uid)/sessions/$(sid)).data; }
+    function locked(s) { return s.get('loreMigration', {}).get('active', false) && s.loreMigration.expiresAt > request.time.toMillis(); }
+    match /users/{uid} { allow read, write: if owner(uid); }
+    match /users/{uid}/{tree}/{document=**} {
+      allow read, write: if owner(uid) && tree != 'sessions';
+    }
+    match /users/{uid}/sessions/{sid} {
+      allow read, create: if owner(uid);
+      allow update: if owner(uid) && (resource.data.get('loreSchemaVersion', 2) != 3
+        || request.resource.data.get('loreSchemaVersion', 2) == 3
+        || (locked(resource.data) && resource.data.loreMigration.get('rollback', false)));
+      allow delete: if owner(uid) && (resource.data.get('loreSchemaVersion', 2) != 3 || resource.data.get('loreGenerationsDeleted', false));
+      match /{tree}/{document=**} {
+        allow read: if owner(uid);
+        allow write: if owner(uid) && tree != 'lore' && tree != 'loreV3';
+      }
+      match /lore/{id} {
+        allow read: if owner(uid);
+        allow delete: if owner(uid) && (story(uid,sid).get('deleting', false)
+          || (story(uid,sid).get('loreSchemaVersion',2) != 3 && !locked(story(uid,sid)))
+          || (locked(story(uid,sid)) && story(uid,sid).loreMigration.get('rollback',false)
+            && nextStory(uid,sid).get('loreSchemaVersion',2) != 3 && !locked(nextStory(uid,sid))));
+        allow create, update: if owner(uid) && (
+          (story(uid,sid).get('loreSchemaVersion',2) != 3 && !locked(story(uid,sid)))
+          || (locked(story(uid,sid)) && story(uid,sid).loreMigration.get('rollback',false)
+            && request.resource.data.get('loreRollbackGeneration','') == story(uid,sid).loreMigration.id
+            && request.resource.data.get('loreWriteVersion',0) == (resource == null ? 1 : resource.data.get('loreWriteVersion',0) + 1)));
+      }
+      match /loreV3/{generation} {
+        allow read, write: if owner(uid);
+        match /entries/{id} {
+          allow read, delete: if owner(uid);
+          allow create, update: if owner(uid) && request.resource.data.schemaVersion == 3
+            && request.resource.data.subject is map && request.resource.data.sources is list && request.resource.data.records is list;
+        }
+      }
     }
   }
 }
