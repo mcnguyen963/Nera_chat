@@ -103,7 +103,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     increment:n=>({increment:n}),serverTimestamp:()=>0,runTransaction:async(_db,run)=>run({get:async()=>({exists:()=>true,data:()=>calls.sessionDocs?.[state.sessionId] ?? {}}),update:(_ref,patch)=>calls.sessionWrites.push([state.sessionId,patch])}),
     doc: (...args) => args, collection() {},
     query: (...args) => { calls.queries.push(args); return args; },
-    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback, onError) => {if(ref?.[3]!=='settings')(calls.sessionErrors ??= []).push(onError); (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(snap => { if (ref?.[3] !== 'settings' && snap.exists()) { calls.sessionDocs ??= {}; calls.sessionDocs[snap.id] = { id:snap.id,...snap.data(),historyRevision:calls.historyRevision ?? snap.data().historyRevision ?? 0 }; } return callback(snap); }); return () => {}; },
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback, onError) => {if(ref?.[3]!=='settings')(calls.sessionErrors ??= []).push(onError); (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(snap => { if (ref?.[3] !== 'settings' && snap.exists()) { calls.sessionDocs ??= {}; calls.sessionDocs[snap.id] = { id:snap.id,storySettingsRevision:1,...snap.data(),historyRevision:calls.historyRevision ?? snap.data().historyRevision ?? 0 }; } return callback(snap); }); return () => {}; },
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
@@ -121,7 +121,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     },
     // The real pet controller is exercised independently in pets.mjs.
     'lore-store.js': {
-      getLore:async () => calls.loreEntries ?? [],configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
+      getLore:async () => {calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
       subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
       saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async () => 'backup', replaceLines: async () => 'backup',
@@ -166,7 +166,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       findSavedMessage:async(...args)=>{(calls.saveLookups ??= []).push(args);return calls.findSavedMessage?.(...args) ?? null;},
       ensureContinuityMetadata:async () => {},
       getMessages:async () => { const read = calls.historyReads = (calls.historyReads ?? 0)+1; const result = structuredClone(calls.serverHistory ?? calls.history ?? []); await calls.onHistoryRead?.(read); return result; }, getCheckpointMessages: async () => [], newMessageId: () => 'summary-id',
-      addMessage:async (...args) => { if (calls.addMessage) return calls.addMessage(...args); if(args[1].role==='assistant' && args[2]?.expectedSource?.historyRevision !== undefined && args[2].expectedSource.historyRevision !== (calls.historyRevision ?? 0)) throw Object.assign(new Error('History changed'),{name:'HistoryConflict'}); calls.messages.push(args); const result = { ...args[1],id:args[1].role==='summary' && args[2]?.id ? args[2].id : calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) Object.assign(calls.sessionDocs[args[0]],args[2]?.sessionUpdate ?? {},{historyRevision:result.historyRevision}); calls.history = [...(calls.history ?? []),result]; result.session={id:args[0],...(calls.sessionDocs?.[args[0]] ?? {}),historyRevision:result.historyRevision};return result; },
+      addMessage:async (...args) => { await calls.onMessageSave?.(...args); if (calls.addMessage) return calls.addMessage(...args); if(args[1].role==='assistant' && args[2]?.expectedSource?.historyRevision !== undefined && args[2].expectedSource.historyRevision !== (calls.historyRevision ?? 0)) throw Object.assign(new Error('History changed'),{name:'HistoryConflict'}); calls.messages.push(args); const result = { ...args[1],id:args[1].role==='summary' && args[2]?.id ? args[2].id : calls.messageOrder ? 'message-'+(++calls.messageOrder) : 'summary-id',order:calls.messageOrder ?? 1,tokenCount:args[1]?.content?.length ?? 0,historyRevision:(calls.historyRevision ?? 0)+1 }; calls.historyRevision = result.historyRevision; if (calls.sessionDocs?.[args[0]]) Object.assign(calls.sessionDocs[args[0]],args[2]?.sessionUpdate ?? {},{historyRevision:result.historyRevision}); calls.history = [...(calls.history ?? []),structuredClone(result)]; result.session={id:args[0],...(calls.sessionDocs?.[args[0]] ?? {}),historyRevision:result.historyRevision};const committed=structuredClone(result);await calls.onMessageSaved?.(committed);return committed; },
       overwriteMessage:async (...args) => {
         if(calls.overwriteMessage)return calls.overwriteMessage(...args);
         const [sid,id,message,_order,partial={},expectedSource]=args;
@@ -1225,15 +1225,15 @@ test('U4 rendered message comparison tracks scene/review fields and memoizes tur
  const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.notEqual(chat.turnsFor(list),chat.turnsFor([...list]));
 });
 
-test('Final twenty-turn replay keeps narration plus maintenance at two calls and reconciles the session once per send',async()=>{
+test('Final twenty-turn replay keeps narration plus maintenance at two calls and uses no separate reconciliation read on ordinary sends',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js');Object.assign(h.state.settings,{modelId:'test',apiKey:'fixture-key',narratorSystemPrompt:'Narrate.',streaming:false,maxContextTokens:50000,maxResponseTokens:2000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:2});
- const scene='date: Day 1 · time: night · place: Inn · present: Mira';h.calls.messageOrder=2;h.calls.sessionDocs={story:{id:'story',title:'Story',memory:{scene:true,sceneFallback:true,autoUpdate:true},memoryState:{extractedThroughOrder:0},historyRevision:0}};
+ const scene='date: Day 1 · time: night · place: Inn · present: Mira';h.calls.messageOrder=2;h.calls.sessionDocs={story:{id:'story',title:'Story',storySettingsRevision:1,memory:{scene:true,sceneFallback:true,autoUpdate:true},memoryState:{extractedThroughOrder:0},historyRevision:0}};
  chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>h.calls.sessionDocs.story});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene}],hasEarlier:false});
  const rows=[];let totalCalls=0;for(let turn=0;turn<20;turn++){
   const before=h.calls.requests.length,memoryBefore=h.calls.memoryStarts ?? 0,readsBefore=h.calls.sessionReads ?? 0;h.calls.memoryDue=turn%2===0;
   h.calls.onRequest=()=>{const body=h.calls.requests.at(-1);h.calls.response=body.response_format ? JSON.stringify({date:'Day 1',time:'night',place:'Inn',present:['Mira'],planThread:null}) : body.messages.at(-1).content.includes('New events to fold in:') ? 'Mira remains at the inn.' : 'Mira waits by the door.'+(turn%3 ? '\n<scene>'+scene+'</scene>' : '');};
   h.el('chat-input').value='Continue '+turn;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
-  const calls=h.calls.requests.length-before+(h.calls.memoryStarts ?? 0)-memoryBefore;assert.ok(calls>=1 && calls<=2,'Turn '+turn+': '+calls+' calls');totalCalls+=calls;rows.push({turn:turn+1,modelRequests:h.calls.requests.length-before,memoryJobs:(h.calls.memoryStarts ?? 0)-memoryBefore,totalCalls:calls,reconcileReads:(h.calls.sessionReads ?? 0)-readsBefore});assert.equal(h.state.busy,false);assert.equal((h.calls.sessionReads ?? 0)-readsBefore,1);
+  const calls=h.calls.requests.length-before+(h.calls.memoryStarts ?? 0)-memoryBefore;assert.ok(calls>=1 && calls<=2,'Turn '+turn+': '+calls+' calls');totalCalls+=calls;rows.push({turn:turn+1,modelRequests:h.calls.requests.length-before,memoryJobs:(h.calls.memoryStarts ?? 0)-memoryBefore,totalCalls:calls,reconcileReads:(h.calls.sessionReads ?? 0)-readsBefore});assert.equal(h.state.busy,false);assert.equal((h.calls.sessionReads ?? 0)-readsBefore,0);
  }
  assert.ok(totalCalls>20);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,20);await writeFile('/tmp/nera-twenty-turns.json',JSON.stringify({simulated:true,rows,totalCalls},null,2));
 });
@@ -2003,4 +2003,114 @@ test('Deleted-turn lore warning completes without loading full history',async()=
   const bubble=h.el('message-list').children.find(n=>n.dataset.messageId==='a');
   await bubble.querySelector('.message-menu-panel').children.find(b=>b.textContent==='Delete').click();
   assert.equal(h.calls.historyReads ?? 0,before);assert.equal(h.state.busy,false);assert.match(warning.text,/1 memory notes/);
+});
+
+async function sendFixture({memory = {lorebooks:true}} = {}) {
+  const h=await harness();
+  const chat=await openImprovementChat(h,{storySettingsRevision:1,memory,loreRevision:1,historyRevision:0},[
+    {id:'opening',role:'user',content:'Opening',order:1}]);
+  await chat.prepareMemorySnapshot();
+  h.calls.messageOrder=1;
+  const before={story:h.calls.sessionReads ?? 0,history:h.calls.historyReads ?? 0,lore:h.calls.loreReads ?? 0};
+  return {h,chat,before,send:async()=>{h.el('chat-input').value='Saved action';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});}};
+}
+test('save-first Send uses valid history and lore without separate reads',async()=>{
+  const {h,before,send}=await sendFixture();await send();
+  assert.equal(h.calls.sessionReads,before.story);assert.equal(h.calls.historyReads,before.history);assert.equal(h.calls.loreReads,before.lore);
+  assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.calls.requests.length,1);
+  assert.equal(h.calls.requests[0].messages.filter(m=>m.content==='Saved action').length,1);
+});
+for(const affected of ['history','lore'])test('save-first Send refreshes only outdated '+affected,async()=>{
+  const {h,before,send}=await sendFixture();
+  if(affected==='history'){
+    h.calls.historyRevision=2;h.calls.sessionDocs.improvement.historyRevision=2;
+    h.calls.history[0].content='Current remote opening';
+  }else{
+    h.calls.sessionDocs.improvement.loreRevision=2;
+    h.calls.loreEntries=[{id:'current-fact',name:'Current fact',book:'facts',alwaysLoad:true,sections:{text:{text:'Silver cloak',lines:[]}}}];
+  }
+  await send();assert.equal(h.calls.sessionReads,before.story);assert.equal(h.calls.historyReads,before.history+(affected==='history'?1:0));assert.equal(h.calls.loreReads,before.lore+(affected==='lore'?1:0));
+  assert.equal(h.calls.requests.length,1);assert.equal(h.calls.requests[0].messages.filter(m=>m.content==='Saved action').length,1);
+  if(affected==='history')assert.ok(h.calls.requests[0].messages.some(m=>m.content==='Current remote opening'));
+  else assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Silver cloak')));
+});
+test('save-first Send keeps the saved user when prompt revision or cache refresh fails, and Retry adds no user',async()=>{
+  for(const failure of ['prompts','history','lore']){
+    const {h,chat,send}=await sendFixture();
+    if(failure==='prompts')h.calls.sessionDocs.improvement.storySettingsRevision=2;
+    if(failure==='history'){h.calls.historyRevision=2;h.calls.onHistoryRead=()=>{throw Error('History offline');};}
+    if(failure==='lore'){h.calls.sessionDocs.improvement.loreRevision=2;h.calls.onLoreRead=()=>{throw Error('Lore offline');};}
+    await send();assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.el('chat-input').value,'');assert.equal(h.state.busy,false);
+    assert.ok(h.el('message-list').querySelectorAll('button').some(b=>b.textContent==='Retry reply'));
+    h.calls.onHistoryRead=null;h.calls.onLoreRead=null;
+    if(failure==='prompts')h.state.storySettings.revision=2;
+    await chat.prepareMemorySnapshot();
+    await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+    assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.calls.requests.length,1);
+  }
+});
+test('save-first Send reconciles a newer subscription during saving without rolling it back',async()=>{
+  const {h,chat,before,send}=await sendFixture();
+  h.calls.onMessageSaved=async result=>{
+    if(result.role!=='user')return;
+    h.calls.historyRevision=result.historyRevision+1;
+    const fresh={...result.session,historyRevision:h.calls.historyRevision,longTermPlan:'New remote plan'};
+    h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>fresh});
+  };
+  await send();assert.equal(h.calls.sessionReads,before.story+1);assert.equal(h.calls.requests.length,1);
+  assert.match(h.calls.requests[0].messages[0].content,/New remote plan/);assert.equal(chat.memorySnapshot().session.longTermPlan,'New remote plan');
+  assert.equal(h.calls.requests[0].messages.filter(m=>m.content==='Saved action').length,1);
+});
+test('save-first Send ignores late save after story switch or account switch or deletion',async()=>{
+  for(const change of ['story','account','delete']){
+    const {h,chat,send}=await sendFixture();
+    h.calls.onMessageSaved=async result=>{
+      if(result.role!=='user')return;
+      if(change==='story'){h.state.sessionId='other';h.el('chat-input').value='Other draft';}
+      if(change==='account')h.calls.uid='other-user';
+      if(change==='delete')h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>false});
+    };
+    await send();assert.equal(h.calls.requests.length,0);assert.equal(h.state.busy,false);
+    if(change==='story')assert.equal(h.el('chat-input').value,'Other draft');
+  }
+});
+test('save-first cold history loads after saving and failed save preserves draft',async()=>{
+  for(const fail of [false,true]){
+    const h=await harness();await openImprovementChat(h,{storySettingsRevision:1},[{id:'old',role:'user',order:1,content:'Old'}]);
+    h.state.settings.autoSummarizationEnabled=false;
+    h.calls.onMessageSave=(_sid,message)=>{if(message.role==='user' && fail)throw Error('Save denied');};
+    let preparationReads;h.calls.onRequest=()=>{preparationReads=h.calls.historyReads;};
+    h.el('chat-input').value='  Raw draft  ';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+    assert.equal(h.calls.sessionReads ?? 0,0);assert.equal(h.calls.requests.length,fail?0:1);assert.equal(h.state.busy,false);
+    if(fail)assert.equal(h.el('chat-input').value,'  Raw draft  ');else {assert.ok(preparationReads>=1);assert.equal(h.calls.requests[0].messages.filter(m=>m.content==='Raw draft').length,1);}
+  }
+});
+test('save-first Send uses settings changed during cache preparation and blocks a concurrent story change',async()=>{
+  for(const change of ['settings','story']){
+    const {h,send}=await sendFixture();h.calls.sessionDocs.improvement.loreRevision=2;
+    h.calls.onLoreRead=()=>{
+      if(change==='settings')h.state.settings.modelId='updated-model';
+      else {
+        const fresh={...h.calls.sessionDocs.improvement,longTermPlan:'Changed during lore read'};
+        h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>fresh});
+      }
+    };
+    await send();assert.equal(h.state.busy,false);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);
+    assert.equal(h.calls.requests.length,change==='settings'?1:0);
+    if(change==='settings')assert.equal(h.calls.requests[0].model,'updated-model');
+  }
+});
+test('save-first Send preserves automatic memory-start initialization',async()=>{
+  const h=await harness();const chat=await openImprovementChat(h,{storySettingsRevision:1,memory:{autoUpdate:true,lagTurns:2},memoryState:{}},[]);
+  let pointer;h.calls.onRequest=()=>{pointer=chat.memorySnapshot().session.memoryState.extractedThroughOrder;};
+  h.el('chat-input').value='Start';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  assert.ok(h.calls.sessionWrites.some(([,patch])=>patch['memoryState.extractedThroughOrder']===0));
+  assert.equal(pointer,0);assert.equal(h.calls.requests.length,1);
+});
+test('save-first Send preserves newer subscription metadata at the committed history revision',async()=>{
+  const {h,chat,before,send}=await sendFixture();
+  h.calls.onMessageSaved=result=>{
+    if(result.role==='user')h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({...result.session,title:'Newer title'})});
+  };
+  await send();assert.equal(h.calls.sessionReads,before.story);assert.equal(h.calls.requests.length,1);assert.equal(chat.memorySnapshot().session.title,'Newer title');
 });
