@@ -11,7 +11,8 @@ async function builders(){
 const history=n=>Array.from({length:n},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',narratorTurn:Math.floor(i/2)+1,content:(i%5===0?'<OOC>note</OOC> ':'')+'Story '+i+' '+('varied text. '.repeat(i%7+1)),...(i%2?{scene:'date: Day 1 · time: night · place: Inn · present: Mira',planThread:'Preserve the map.'}:{})}));
 const settings={narratorSystemPrompt:'Narrate.',maxResponseTokens:100,keepRecentMessagesAfterSummary:5};
 const deps={count,adRule:'Author directives.',normalizeAd:s=>s};
-async function outcome(build,session,settings,opts,deps){try{return JSON.parse(JSON.stringify(await build(session,settings,opts,deps)));}catch(e){return {error:e.message};}}
+// Ranking evidence is intentionally new; this frozen fixture checks request/history accounting.
+async function outcome(build,session,settings,opts,deps){try{return JSON.parse(JSON.stringify(await build(session,settings,opts,deps),(key,value)=>key==='ranking' ? undefined : value));}catch(e){return {error:e.message};}}
 test('Frozen builder parity: summaries, budgets, lore, aligned windows, directives and continuations',async()=>{
   const b=await builders();
   const entries=['facts','events','characters','locations'].map(book=>{

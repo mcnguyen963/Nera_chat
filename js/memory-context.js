@@ -156,8 +156,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
   const recentLoreMessages = mem.loreLookbackMessages > 0
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
-  const recentLoreText = recentLoreMessages.map(m => stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)).join('\n');
-  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText);
+  const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
+  const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
   const skipped = [...filtered.skipped,...selection.skipped];
   let characterSelectionReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
@@ -182,7 +183,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       else if (book === 'locations') places = empty;
       else if (text) books.pop();
       memory = beforeMemory;
-      skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,reason:'over budget' })));
+      skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,ranking:e.ranking,reason:'over budget' })));
       if (characterSelectionReport && book === 'characters') {
         characterSelectionReport.fullFit = false;
         for (const c of characterSelectionReport.characters) {
@@ -200,7 +201,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if(fit.userLinesCut)warnings.push(`${fit.userLinesCut} user-written lore lines could not fit in the ${book} budget.`);
     if (inspection && fit.text) inspection.sections[book] = text;
     if (fit.text && (book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
-    for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds] });
+    for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,ranking:e.ranking,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds] });
   }
   if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
     const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];

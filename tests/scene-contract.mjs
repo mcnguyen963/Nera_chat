@@ -80,7 +80,7 @@ test('a saved labeled scene round trip feeds the next request and missing scenes
     { id:'a1',order:2,role:'assistant',content:'Krail waits.',scene:extractScene('Krail waits.\n<scene>'+labeled+'</scene>') },
     { id:'u2',order:3,role:'user',content:'Continue.' }];
   const result = await buildContextForRequest(session,settings,{ messages:plain(history),loreEntries:entries,requireLatestUser:true });
-  assert.deepEqual(plain(result.report.loaded.filter(x => x.book==='characters').map(x => x.name)),names);
+  assert.deepEqual(plain(result.report.loaded.filter(x => x.book==='characters').map(x => x.name)).sort(),[...names].sort());
   assert.equal(result.report.scene.place,'West Reception Room');
   assert.equal(result.report.loaded.find(x => x.book==='locations').name,'West Reception Room');
   assert.ok(!result.report.loaded.some(x => x.name==='unknown'));

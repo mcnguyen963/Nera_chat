@@ -100,7 +100,7 @@ export async function fitCharacters(selected, budget, count, {protagonist='',cur
     const coverage=new Set(r.chosen.flatMap(u=>u.coverage));
     const rendered=r.identity ? renderCharacterSelection(r.entry,r.chosen,protagonist) : '';
     if(r.identity)included.push({...r,lineIds,linesSent:lineIds.size,linesCut:total-lineIds.size,tokens:await count(rendered)});
-    else skipped.push({entryId:r.entry.id,book:'characters',name:r.entry.name,reason:'identity over budget'});
+    else skipped.push({entryId:r.entry.id,book:'characters',name:r.entry.name,ranking:r.ranking,reason:'identity over budget'});
     report.push({entryId:r.entry.id,name:r.entry.name,identity:r.identity,full:fullFit,coreCoverage:{personality:coverage.has('personality'),constraints:coverage.has('constraints'),appearance:coverage.has('appearance')},missingCoverage:['personality','constraints','appearance'].filter(k=>!coverage.has(k)),invalidCores:r.invalid,text:rendered,units:r.units.map(u=>({id:u.id,round:u.round,selected:chosen.has(u.id),reason:chosen.has(u.id) ? u.reason : r.identity ? 'unit over budget' : 'identity over budget',currentMatches:u.current,recentMatches:u.recent,authorPreference:u.author,recency:u.recency,sources:u.sources.map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end,text:s.text,...sourceCoverage(s,r.chosen)}))}))});
   }
   const userLinesCut=records.reduce((n,r)=>n+Object.values(r.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user' && !included.find(i=>i.entry.id===r.entry.id)?.lineIds.has(l.id)).length,0);

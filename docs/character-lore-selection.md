@@ -1,8 +1,23 @@
 # Character lore selection
 
-Enable **Fair local character lore selection (opt-in)** in a story's Memory settings. Existing stories remain disabled. Card limits, always-load cards, protagonist handling, scene matching and message lookback keep their existing behavior.
+Enable **Fair local character lore selection (opt-in)** in a story's Memory settings. Existing stories remain disabled. Both character fitters use the same ranked candidate list, card limits and token budgets. Always-load cards and the protagonist remain exempt from optional card counts.
 
 When full cards fit, their rendering is unchanged. Otherwise the character budget is shared in rounds: identities, cores, valid state, literal action/context matches, relationships and additional characterization, then background. Each character gets one fitting unit per pass; an oversized unit does not block smaller units. World facts and events still allocate before characters, and locations after them. Required and recent conversation retains its existing reservation. Both the book ceiling and total request limit apply.
+
+## Card admission in each lorebook
+
+Each book ranks independently before fitting cards into its budget:
+
+| Book | Highest to lowest priority |
+| --- | --- |
+| Characters | Always-load, protagonist, present in scene, current input, recent mentions |
+| Locations | Always-load, current scene location, current input, recent mentions |
+| World facts | Always-load, scene-text mentions, current input, recent mentions, other facts |
+| Events & threads | Threads in current input, recently mentioned threads, other open threads, Timeline |
+
+Within a priority group, the newest message wins, then its last recognized name or alias occurrence, then stable card ID. User and narrator messages have equal weight; repeated mentions add no weight. Scene-present characters use this same mention evidence, so the order of the scene's present list does not decide admission. Unmentioned facts and open threads use newest lore-note timestamps, then stable ID. Mentioned closed threads remain closed and eligible. Timeline keeps its special detail allocation.
+
+Character and location card limits apply after ranking. World facts and events have token budgets without additional card limits. Oversized candidates may be skipped so smaller cards fit. Ranking determines admission; admitted cards continue sharing detail tokens through their existing allocation rules. Reports attach per-book rank, priority reason and latest mention evidence to loaded and excluded candidates, distinguishing card limits from token budgets.
 
 ## Review a compact core
 
