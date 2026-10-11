@@ -878,9 +878,10 @@ test('legacy stories attach no lore listener and memory stories attach exactly o
   callback({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ autoUpdate:true },memoryState:{ failureStreak:1 } }) }); assert.equal(h.calls.loreSubscriptions,1);
 });
 test('chat turn ledger gives a due or running update priority over auto-summary, while legacy still summarizes',async () => {
+  // The harness counts characters as tokens; keep scheduling coverage independent of the default prompt's size.
   for (const mode of ['due','running','legacy']) {
     const h=await harness(), chat=await h.use('ui/chat-view.js');
-    Object.assign(h.state.settings,{ narratorSystemPrompt:'Narrate.',modelId:'model',apiKey:'test-key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0 });
+    Object.assign(h.state.settings,{ narratorSystemPrompt:'Narrate.',summarizerSystemPrompt:'Summarize the established events.',modelId:'model',apiKey:'test-key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0 });
     h.calls.memoryDue=mode === 'due'; h.calls.memoryRunning=mode === 'running'; h.calls.messageOrder=4; h.calls.response='A complete reply.';
     chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
     h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',...(mode !== 'legacy' ? { memory:{ autoUpdate:true },memoryState:{ extractedThroughOrder:0 } } : {}) }) });
@@ -1664,7 +1665,8 @@ test('F10 a dropped stream can be kept as truncated without scene recovery',asyn
 for(const mode of ['turn-already-stopped','summary-user-stop','summary-network-error'])test('F9 '+mode,async()=>{
  const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
  const h=await harness({sources:{'ui/chat-view.js':source+'\nexport const testSummaryBackoff=sid=>summaryBackoff.get(sid);'}}),chat=await h.use('ui/chat-view.js');
- Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',modelId:'model',apiKey:'key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0});
+ // Use a small explicit prompt so cancellation/backoff tests reach the summary request with the character-count tokenizer.
+ Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',summarizerSystemPrompt:'Summarize the established events.',modelId:'model',apiKey:'key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0});
  h.calls.messageOrder=4;chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
  h.calls.latestCallbacks.at(-1)({messages:[{id:'u1',order:1,role:'user',content:'Opening',tokenCount:7},{id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5},{id:'u2',order:3,role:'user',content:'Next',tokenCount:4},{id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6}],hasEarlier:false});
