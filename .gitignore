@@ -6,6 +6,25 @@ register.html
 .private/
 .secret/
 investigate/
+data/
+
+# Legacy planning/data locations stay local-only if recreated.
+/docs/
+/production-reports/
+/starting/
+/default_prompt
+/Asterfall_Future_Canon_Academy_Revised.md
+/RELEASE.md
+/RELEASE_IMPLEMENTATION.md
+/improvePlan.md
+/improveProgress.md
+/main-adaptation.md
+/memory-update-review.md
+/memory.md
+/message-storage.md
+/rewrite_default_prompt.md
+/roleplay-chat-app-spec.md
+/roleplay-migration-guide.md
 
 # OS / download artifacts
 .DS_Store
