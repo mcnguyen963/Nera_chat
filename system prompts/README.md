@@ -28,6 +28,6 @@ Before changing a saved default, append its outgoing trimmed-text SHA-256 and se
 
 Keep the placeholders present in each template. Runtime facts, lore and transcripts remain data; do not add explanatory prose to registered prompt files unless it should reach the model. The unused `empty-plan.md` is no longer registered. `system-prompts.js` is the authoritative registry, and deployment checks require every registered file.
 
-See [RELEASE.md](../RELEASE.md) for publication and owner acceptance steps. Local tests establish request assembly, not model compliance or live Firebase behavior.
+Local tests establish request assembly, not model compliance or live Firebase behavior.
 
 MAIN's Rewrite default is preserved in `rewrite.md`, loaded by `js/rewrite.js` with `cache: 'no-cache'`. A saved custom rewrite prompt still overrides it.
