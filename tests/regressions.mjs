@@ -84,6 +84,10 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
     prompt:()=>calls.prompt,
     setTimeout: timers?.setTimeout ?? (() => {}), clearTimeout: timers?.clearTimeout ?? (() => {}), confirm: message => { (calls.confirmations ??= []).push(message);return calls.confirmResponses?.length ? calls.confirmResponses.shift() : calls.confirm; },
     fetch: async (_url, options) => {
+      if (options?.method === 'GET') {
+        (calls.modelRequests ??= []).push({ url: _url, options });
+        return calls.modelFetch ? calls.modelFetch(options.signal) : { ok: true, json: async () => ({ data: calls.models ?? [] }) };
+      }
       if (_url instanceof URL && _url.protocol === 'file:') {
         if (legacyNarratorHashes && _url.pathname.endsWith('/legacy-prompt-default-hashes.md')) return { ok:true, text:async () => legacyNarratorHashes.split(/\s+/).filter(Boolean).map(hash=>`narratorSystemPrompt ${hash}`).join("\n") };
         return promptFetch(_url, options);
@@ -2160,4 +2164,48 @@ test('partial category import exposes Undo with originating account and category
 });
 test('Refresh book preview reviews updated choices before writing',async()=>{
  const {h,root,preview}=await bookPreview();root.querySelectorAll('select')[0].value='replace';await namedButton(preview,'Refresh preview').click();const fresh=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);assert.match(fresh.querySelector('summary').textContent,/2 removed/);await namedButton(fresh,'Import').click();assert.equal(h.calls.bookImports.length,1);assert.equal(h.calls.bookImports[0][1].writes.filter(w=>w.delete).length,2);
+});
+
+test('model discovery selection stays in the profile draft until explicit Save settings', async () => {
+  const h = await harness();
+  (await h.use('ui/chat-view.js')).initChatView();
+  const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
+  const liveModel = h.state.settings.modelId, reads = h.calls.reads;
+  h.el('set-endpoint').value = 'https://host/custom/chat/completions?foo=bar';
+  h.el('set-apikey').value = 'draft-key';
+  h.calls.models = [{ id: 'provider/selected', name: 'Selected' }];
+  await h.fire('btn-fetch-models');
+  assert.equal(h.calls.modelRequests[0].url, 'https://host/custom/models?foo=bar');
+  assert.equal(h.calls.modelRequests[0].options.headers.Authorization, 'Bearer draft-key');
+  h.el('model-list').value = 'provider/selected'; await h.fire('model-list');
+  assert.equal(h.el('set-model').value, 'provider/selected');
+  assert.equal(h.state.settings.modelId, liveModel);
+  assert.equal(h.calls.reads, reads); assert.equal(h.calls.writes.length, 0);
+  await h.fire('btn-profile-copy');
+  assert.equal(h.el('set-model').value, 'provider/selected');
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes.length, 1);
+  assert.equal(h.calls.writes[0].profiles[0].modelId, 'provider/selected');
+  assert.equal(h.state.settings.modelId, 'provider/selected');
+  assert.equal(h.state.settings.apiKey, 'draft-key');
+});
+
+test('settings profile switch, defaults, close and reload cancel model discovery', async () => {
+  for (const action of ['profile', 'defaults', 'close', 'reload']) {
+    const h = await harness(), view = await h.use('ui/settings-view.js');
+    view.initSettingsView(); view.openSettingsPopup();
+    let resolve, signal;
+    h.calls.modelFetch = captured => { signal = captured; return new Promise(done => { resolve = done; }); };
+    const pending = h.fire('btn-fetch-models');
+    if (action === 'profile') await h.fire('set-profiles', 'change');
+    if (action === 'defaults') await h.fire('btn-reset-settings');
+    if (action === 'close') await h.fire('btn-close-settings');
+    if (action === 'reload') await h.document.dispatchEvent({ type: 'settings-changed' });
+    assert.equal(signal.aborted, true, action);
+    resolve({ ok: true, json: async () => ({ data: [{ id: 'stale' }] }) });
+    await pending;
+    assert.equal(h.el('model-picker').hidden, true, action);
+    assert.equal(h.el('btn-fetch-models').disabled, false, action);
+    assert.equal(h.el('model-status').textContent, '', action);
+  }
 });

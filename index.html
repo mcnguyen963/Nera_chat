@@ -183,7 +183,16 @@
                 <div class="settings-grid">
                   <label>Endpoint URL<input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" /></label>
                   <label>API key<input type="password" id="set-apikey" autocomplete="off" /></label>
-                  <label>Model ID<input type="text" id="set-model" placeholder="e.g. anthropic/claude-3.5-sonnet" /></label>
+                  <div class="model-control">
+                    <label for="set-model">Model ID</label>
+                    <div class="model-input-row"><input type="text" id="set-model" placeholder="e.g. anthropic/claude-3.5-sonnet" /><button type="button" id="btn-fetch-models" class="btn small" aria-controls="model-picker" aria-expanded="false">Fetch models</button></div>
+                    <div id="model-picker" hidden>
+                      <label for="model-search">Search models</label><input id="model-search" type="search" autocomplete="off" aria-controls="model-list" />
+                      <label for="model-list">Available models</label><select id="model-list" size="6" aria-describedby="model-status"></select>
+                      <small>Choose a model by clicking it, or use arrow keys and Enter.</small>
+                    </div>
+                    <p id="model-status" class="muted" role="status" aria-live="polite" aria-atomic="true"></p>
+                  </div>
                   <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-reasoning-enabled" aria-controls="thinking-options" /> Thinking enabled</label>
                 </div>
                 <div id="thinking-options" class="settings-grid hidden">
