@@ -1,4 +1,5 @@
 import {setIcon} from './icons.js';
+import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
 import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings} from '../story-settings.js';
 import {loadRewriteDefaultPrompt} from '../rewrite.js';
@@ -30,6 +31,7 @@ const contextFields = {
 };
 const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
 let draft;
+let modelPicker;
 let original;
 let promptStoryId=null,promptBase=null;
 let panel = "model";
@@ -47,6 +49,11 @@ const raw = (id) => input(id).value;
 const set = (id, value) => { input(id).value = String(value ?? ""); };
 
 export function initSettingsView() {
+  modelPicker = initModelPicker({
+    button: input('btn-fetch-models'), picker: input('model-picker'), search: input('model-search'),
+    list: input('model-list'), status: input('model-status'), model: input('set-model'),
+    endpoint: input('set-endpoint'), apiKey: input('set-apikey'), onSelect: capture,
+  });
   input('stream-vibration-help').hidden=vibrationSupport()==='unsupported' ? false : true;
   input('btn-reset-rewrite-prompt').addEventListener('click',()=>{draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;renderRewritePrompt();clearMessage();});
   const openLore = (options = {}) => { if (closeSettingsPopup() !== false) document.dispatchEvent(new CustomEvent('lorebooks', { detail: options })); };
@@ -162,6 +169,7 @@ function closeSettingsPopup() {
   if (saving) return false;
   capture();
   if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
+  modelPicker?.reset();
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
@@ -257,6 +265,7 @@ function renderRewritePrompt() {
   });
 }
 function renderProfile() {
+  modelPicker?.reset();
   el.profiles.replaceChildren(...draft.profiles.map((profile) => {
     const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; return option;
   }));

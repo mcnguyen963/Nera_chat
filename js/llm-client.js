@@ -3,6 +3,59 @@
 // - delta.reasoning -> collapsible "thinking" pane, becomes message.thinking.
 //                      Stored for reference but NEVER re-sent in context (spec §6/§7).
 
+export function modelsEndpoint(endpoint) {
+  let url;
+  try { url = new URL(String(endpoint).trim()); } catch { throw new Error('Enter a valid endpoint URL to fetch models.'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Enter an http or https endpoint URL.');
+  if (!/\/chat\/completions\/?$/.test(url.pathname))
+    throw new Error('Automatic discovery is unavailable for endpoints without /chat/completions. Enter Model ID manually.');
+  url.pathname = url.pathname.replace(/\/chat\/completions\/?$/, '/models');
+  return url.href;
+}
+
+export function normalizeModels(response) {
+  if (!Array.isArray(response?.data)) throw new Error('Malformed model listing: expected a data array.');
+  const models = new Map();
+  for (const entry of response.data) {
+    if (typeof entry?.id !== 'string' || !entry.id.trim() || models.has(entry.id)) continue;
+    models.set(entry.id, { id: entry.id, name: typeof entry.name === 'string' ? entry.name.trim() : '' });
+  }
+  return [...models.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+export async function fetchModels({ endpoint, apiKey }, { signal } = {}) {
+  const url = modelsEndpoint(endpoint);
+  const controller = new AbortController();
+  const cancel = () => controller.abort(signal.reason);
+  let timer, rejectAbort;
+  const aborted = new Promise((_, reject) => {
+    rejectAbort = () => reject(new Error(controller.signal.reason === 'timeout'
+      ? 'Fetching models timed out after 30 seconds. Try again.' : 'Model discovery cancelled.'));
+    controller.signal.addEventListener('abort', rejectAbort, { once: true });
+  });
+  if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
+  timer = setTimeout(() => controller.abort('timeout'), 30000);
+  try {
+    if (controller.signal.aborted) { rejectAbort(); return await aborted; }
+    const request = async () => {
+      let response;
+      try {
+        response = await fetch(url, { method: 'GET', headers: apiKey?.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}, signal: controller.signal });
+      } catch { throw new Error('Could not fetch models. Check the connection and whether the provider allows browser requests.'); }
+      if (response.status === 401 || response.status === 403) throw new Error('Model discovery authentication failed. Check the API key and access permissions.');
+      if (!response.ok) throw new Error(`Model listing unavailable (HTTP ${response.status}). Enter Model ID manually or try again.`);
+      let data;
+      try { data = await response.json(); } catch { throw new Error('Malformed model listing: expected JSON.'); }
+      return normalizeModels(data);
+    };
+    return await Promise.race([request(), aborted]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    controller.signal.removeEventListener('abort', rejectAbort);
+  }
+}
+
 export function buildRequestBody(settings, messages) {
   const body = {
     model: settings.modelId,

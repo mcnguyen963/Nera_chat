@@ -304,6 +304,16 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .settings-panel .checkbox-label input { margin: 0; }
 .settings-panel .checkbox-label input { width: 20px; height: 20px; flex: none; }
 .settings-panel input:not([type="checkbox"]), .settings-panel select { min-height: 44px; }
+.model-control { min-width: 0; }
+.model-input-row { display: flex; align-items: center; gap: 8px; }
+.model-input-row input { flex: 1; min-width: 0; width: 0; }
+.model-input-row .btn { flex: none; white-space: nowrap; min-height: 44px; }
+#model-picker { margin-top: 12px; }
+#model-picker[hidden] { display: none; }
+#model-picker input, #model-picker select { width: 100%; }
+#model-list { height: 160px; overflow: auto; }
+#model-status { margin: 8px 0 0; overflow-wrap: anywhere; }
+#model-status:empty { display: none; }
 .settings-panel textarea { min-height: 240px; }
 .settings-panel .disclosure-toggle { margin: 0 0 14px; padding: 4px 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
 .settings-panel .disclosure-toggle:hover { background: transparent; }
