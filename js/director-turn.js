@@ -1,7 +1,7 @@
 import { classifyUserInput } from './scene.js';
 import { requestSource, assertSource } from './continuity.js';
 import { validateDirectorState, seedDirectorState, parseDirectorContract, playerStopBoundary, assertDirectorBoundary } from './director-state.js';
-import { buildDirectorContext, directorTaskSettings } from './director-context.js';
+import { buildDirectorContext, directorTaskSettings, directorOutputOptions } from './director-context.js';
 import { getDirectorTurn, savePendingDirectorTurn } from './director-store.js';
 import { chatCompletion } from './llm-client.js';
 export async function prepareDirectorTurn(session,settings,messages,entries,opts={},hooks={}) {
@@ -33,7 +33,8 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const source=requestSource(session),built=await buildDirectorContext(session,settings,messages.filter(m=>m.order<(opts.upToOrder ?? Infinity)),entries,before,{continuation:!!opts.continuationId});
   check();hooks.onContext?.(built);
   const started=Date.now();
-  const result=await chatCompletion({settings:directorTaskSettings(settings),messages:built.apiMessages,signal:hooks.signal,onRequest:hooks.onRequest});
+  const task=directorTaskSettings(settings);
+  const result=await chatCompletion({settings:task,messages:built.apiMessages,...directorOutputOptions(task),signal:hooks.signal,onRequest:hooks.onRequest});
   check();
   if(result.finishReason==='length' || !result.content?.trim())throw new Error('Director output was incomplete. Raise its output limit or retry.');
   const parsed=parseDirectorContract(result.content,before,built.entries);

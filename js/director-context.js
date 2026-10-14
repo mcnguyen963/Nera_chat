@@ -8,6 +8,11 @@ import { selectEntries, renderEntry } from './lore-select.js';
 import { recordUnits } from './lore-record-select.js';
 import { countTokens } from './tokenizer.js';
 import { requestInputLimit, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from './request-budget.js';
+export const DIRECTOR_RESPONSE_FORMAT=Object.freeze({type:'json_object'});
+export function directorOutputOptions(settings) {
+  return {responseFormat:DIRECTOR_RESPONSE_FORMAT,
+    ...(/^https:\/\/openrouter\.ai\//i.test(settings.endpoint) ? {provider:{require_parameters:true}} : {})};
+}
 export function directorTaskSettings(settings) {
   if (!settings.directorProfileId) throw new Error('Choose a Director connection profile in story settings.');
   const task=memoryTaskSettings(settings,{updateProfileId:settings.directorProfileId,updateMaxTokens:settings.directorMaxOutputTokens});
@@ -49,7 +54,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const planOmitted=authorPlanTokens>authorPlanLimit;
   const base={state:live,player:mem.protagonist || null,playerBoundary:continuation?null:playerStopBoundary(latest.content),entityIndex:index,controlLore:control,fixedAuthorPlan:planOmitted ? '' : authorPlan,fixedAuthorPlanStatus:planOmitted ? 'omitted; full plan remains in Narrator context' : 'complete',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
   const planGuard=planOmitted ? '\nThe full fixed author plan is omitted from this small context and remains with the Narrator. Omission does not remove its constraints or authorize planned future events. Use the live ledger, selected control lore and explicit player action. When a transition depends on unavailable plan details, keep it unresolved and stop before that transition; do not guess. The author can place essential current constraints in the live ledger or control lore.' : '';
-  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'user',content:latest.content}];
+  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];
   const total=async()=>REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
   const limit=requestInputLimit(directorTaskSettings(settings));
   while(await total()>limit && control.length)control.pop();

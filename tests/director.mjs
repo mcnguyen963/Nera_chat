@@ -6,6 +6,26 @@ const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
+test('Director serializes JSON mode and requires OpenRouter format support while preserving price limits',async()=>{
+ const requests=[];let saved=0;
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_sid,t)=>{saved++;return t;}}},globals:{fetch:async(url,opts)=>{
+  if(url instanceof URL&&url.protocol==='file:'){const {promptFetch}=await import('./prompt-files.mjs');return promptFetch(url);}
+  requests.push(JSON.parse(opts.body));return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(contract({}))},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
+ }}});
+ const api=await use('director-turn.js'),config={...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',activeProfileId:'small',apiKey:'fake-key',maxOutputPrice:.4};
+ await api.prepareDirectorTurn({id:'s',directorState:state},config,[{id:'a',role:'assistant',order:1,content:'Lysia speaks in story prose.'},{id:'u',role:'user',order:2,content:'I wait.'}],[]);
+ assert.equal(requests.length,1);assert.equal(saved,1);const body=requests[0];
+ assert.deepEqual(body.response_format,{type:'json_object'});assert.equal(body.provider.require_parameters,true);assert.equal(body.provider.max_price.completion,.4);
+ assert.equal(body.messages.at(-2).role,'system');assert.match(body.messages.at(-2).content,/not examples of your output/);assert.equal(body.messages.at(-1).content,'I wait.');
+ const options=(await use('director-context.js')).directorOutputOptions({endpoint:'http://local.test/v1/chat/completions'});
+ assert.equal(options.provider,undefined);assert.equal(options.responseFormat.type,'json_object');
+});
+test('Narrator prose returned as a Director result never saves state or triggers a repair request',async()=>{
+ let calls=0,saves=0;const session={id:'s',directorState:structuredClone(state)},before=JSON.stringify(session);
+ const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{saves++;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:'Lysia sets her cup down. "Yes. Today, this bench. Tomorrow at 16:00 is the paperwork."',finishReason:'stop'};}}}})('director-turn.js');
+ await assert.rejects(api.prepareDirectorTurn(session,settings,[{id:'u',role:'user',order:1,content:'Confirm both appointments.'}],[]),/invalid JSON/);
+ assert.equal(calls,1);assert.equal(saves,0);assert.equal(JSON.stringify(session),before);
+});
 test('A large entity catalog retains every identity without crowding out current control lore',async()=>{
  const use=appHarness({stubs:{'tokenizer.js':tokens}}),api=await use('director-context.js'),lore=await use('lore-lines.js');
  const entries=Array.from({length:134},(_,i)=>{const e=lore.makeEntry(i<82?'characters':'locations','Established subject '+i);e.sections[Object.keys(e.sections)[0]].text='An established subject with a long background and many descriptive details. '.repeat(15);return e;});
