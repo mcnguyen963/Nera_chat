@@ -1,7 +1,7 @@
 // Pure sprite, gesture, and geometry helpers shared by the pet view and tests.
 const animation = (row, frames = 6, fps = 6) => ({ row, frames, fps });
 export function petAnimations(file) {
-  const lilith = /^lilith\.(webp|png)$/i.test(file);
+  const lilith = /^(?:lilith|lillith-v2)\.(webp|png)$/i.test(file);
   return {
     idle: animation(0, 6, 5), right: animation(1, 8, 10), left: animation(2, 8, 10),
     wave: animation(3, 4), jump: animation(4, 5, 8), yawn: animation(5, 8, 5),
