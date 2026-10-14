@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { appHarness } from './app-harness.mjs';
 
 const api = await appHarness()('scene-parser.js');
-const template = 'date: DATE · time: TIME OF DAY · place: PLACE · present: FULL NAME, FULL NAME';
+const template = 'date: DATE · time: TIME · place: PLACE · present: FULL NAME, FULL NAME';
 const valid = 'date: October 738 · time: evening · place: Hall · present: Mira';
 const tag = text => `<scene>${text}</scene>`;
 
