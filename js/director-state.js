@@ -1,5 +1,5 @@
 import { latestScene, parseScene, sceneLine } from './scene.js';
-import { parseStoryDate } from './story-calendar.js';
+import { parseStoryDate, parseClock } from './story-calendar.js';
 export const DIRECTOR_VERSION = 1;
 const groups = ['decisions','threads','commitments'];
 const statuses = ['open','active','waiting','ready','closed','cancelled'];
@@ -42,6 +42,11 @@ export function seedDirectorState(session, messages, entries = []) {
   const match = saved?.time?.match(/^(?:hour\s*)?(\d{1,2})$/i);
   const hour = match && Number(match[1]) >= 1 && Number(match[1]) <= 24 ? Number(match[1]) : null;
   return validateDirectorState({version:1,scene:{date,hour,location:saved?.place ?? null,present:saved?.present ?? []},event:null,decisions:[],commitments:[],threads:entries.filter(e=>e.book==='events' && e.kind==='thread' && e.status!=='closed').map(e=>({id:'lore:'+e.id,text:e.name,status:'open',source:e.id,trigger:''}))});
+}
+export function directorClockNeedsReview(session,messages,state,upToOrder=Infinity) {
+  if(state.scene.hour!==null)return null;
+  const time=latestScene(messages,upToOrder,session.memory?.startingScene).scene?.time;
+  return time && parseClock(time)!==null ? time : null;
 }
 export function parseDirectorContract(content, before, entries = []) {
   let raw;

@@ -6,6 +6,14 @@ const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
+test('Importing a minute clock requires a reviewed game hour before any Director call',async()=>{
+ let calls=0,saves=0;const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_sid,t)=>{saves++;return t;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify(contract({})),finishReason:'stop'};}}}}),api=await use('director-turn.js'),states=await use('director-state.js');
+ const history=[{id:'a',role:'assistant',order:1,content:'Lysia waits at the bench.',scene:'date: 21/10/738 · time: 15:45 · place: Inn · present: Nera, Isolde',sceneMeta:{kind:'manual'}},{id:'u',role:'user',order:2,content:'I ask about tomorrow.'}],session={id:'s',memory:{scene:true}};
+ const seeded=states.seedDirectorState(session,history);assert.equal(seeded.scene.hour,null);
+ await assert.rejects(api.prepareDirectorTurn(session,settings,history,[]),/Story clock is 15:45/);assert.equal(calls,0);assert.equal(saves,0);
+ await api.prepareDirectorTurn({...session,directorState:{...seeded,scene:{...seeded.scene,hour:16}}},settings,history,[]);assert.equal(calls,1);assert.equal(saves,1);
+ assert.equal(states.directorClockNeedsReview(session,[{...history[0],scene:'date: 21/10/738 · time: Hour 16 · place: Inn · present: Nera'}],seeded),null);
+});
 test('Director reasoning exhaustion points to its own output setting without retries or state saves',async()=>{
  for(const finishReason of ['length','MAX_TOKENS','max_output_tokens']){
   let calls=0,saves=0;const error=Object.assign(new Error('Raise Max response tokens.'),{classification:'malformed_response',finishReason});

@@ -104,3 +104,12 @@ test('Director review catches past player claims inside NPC dialogue while prese
  assert.equal(api.lintDirectorHistory('Dara says, "I am still hurt that you concealed the letter for two days."').length,0);
  assert.equal(api.lintPlayerAgency('Dara says, "You looked at me across this table."','Nera').length,0);
 });
+test('Director review flags an implicit player response after a new NPC request without treating a request alone as compliance',async()=>{
+ const api=await appHarness()('turn-review.js');
+ const captured='"Say it back to me the way you would say it if I were a clerk," she says. She listens while you put both appointments in order. When you finish she nods.';
+ assert.equal(api.lintDirectorResponseBoundary(captured).length,1);
+ assert.equal(api.lintDirectorResponseBoundary('“Tell me,” she says. You answer her and she nods.').length,1);
+ assert.equal(api.lintDirectorResponseBoundary('“Tell me,” she says, and waits for your answer.').length,0);
+ assert.equal(api.lintDirectorResponseBoundary('“I asked you here today. Tomorrow is separate,” she says. She waits.').length,0);
+ assert.equal(api.lintDirectorResponseBoundary('She reads the page. “You answer the clerk tomorrow,” she says.').length,0);
+});

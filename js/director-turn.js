@@ -1,6 +1,6 @@
 import { classifyUserInput } from './scene.js';
 import { requestSource, assertSource } from './continuity.js';
-import { validateDirectorState, seedDirectorState, parseDirectorContract, playerStopBoundary, assertDirectorBoundary } from './director-state.js';
+import { validateDirectorState, seedDirectorState, parseDirectorContract, playerStopBoundary, assertDirectorBoundary, directorClockNeedsReview } from './director-state.js';
 import { buildDirectorContext, directorTaskSettings, directorOutputOptions } from './director-context.js';
 import { getDirectorTurn, savePendingDirectorTurn } from './director-store.js';
 import { chatCompletion } from './llm-client.js';
@@ -29,6 +29,8 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   let before=session.directorState ? validateDirectorState(session.directorState) : seedDirectorState(session,messages,entries);
   let previousCheckpoint=session.directorCheckpoint ?? null;
   if(opts.replan && target?.directorTurnId){const old=await getDirectorTurn(session.id,target.directorTurnId);if(!old)throw new Error('Original Director state is missing.');before=old.before;previousCheckpoint=old.previousCheckpoint ?? null;let steps=0;while(previousCheckpoint && steps++<100){const prior=await getDirectorTurn(session.id,previousCheckpoint);check();if(!prior || prior.assistantId!==target.id)break;before=prior.before;previousCheckpoint=prior.previousCheckpoint ?? null;}}
+  const importedClock=directorClockNeedsReview(session,messages,before,opts.upToOrder ?? Infinity);
+  if(importedClock)throw new Error('Story clock is '+importedClock+'. Director mode uses game hours 1–24. Choose a game hour in live state settings before continuing, or use Classic to keep minute precision.');
   if(opts.continuationId && !finishing && before.decisions.some(i=>!['closed','cancelled'].includes(i.status)))return {contract:{action:'wait',objective:'Respond to the pending player decision before continuing.'}};
   const source=requestSource(session),built=await buildDirectorContext(session,settings,messages.filter(m=>m.order<(opts.upToOrder ?? Infinity)),entries,before,{continuation:!!opts.continuationId});
   check();hooks.onContext?.(built);

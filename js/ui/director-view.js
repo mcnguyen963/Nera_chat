@@ -1,7 +1,7 @@
 import { state } from '../state.js';
 import { currentUid } from '../auth.js';
 import { requestSource } from '../continuity.js';
-import { seedDirectorState, validateDirectorState } from '../director-state.js';
+import { seedDirectorState, validateDirectorState, directorClockNeedsReview } from '../director-state.js';
 import { resetDirectorState, discardPendingDirector } from '../director-store.js';
 import * as chat from './chat-view.js';
 const {prepareMemorySnapshot,syncChatData}=chat;
@@ -16,6 +16,8 @@ export async function openDirectorState() {
     const guard=()=>{if(sid!==state.sessionId || uid!==currentUid() || state.busy)throw new Error('Story changed or another action is running. Reopen live state.');};
     const field=(label,value,tag='input')=>{const wrap=node('label',label),input=node(tag);input.value=value ?? '';if(tag==='textarea')input.rows=3;wrap.append(input);body.append(wrap);return input;};
     body.append(node('p',live.session.directorNeedsReview?'History changed. Review and save the current state before continuing.':'Changes apply to this story. Older promises can be added below.','muted'));
+    const importedClock=directorClockNeedsReview(live.session,live.messages,value);
+    if(importedClock)body.append(node('p','Story clock: '+importedClock+'. Choose a game hour below before using Director mode. Classic keeps minute precision.','muted'));
     const date=field('Date (day/month/year; empty means unknown)',value.scene.date),hour=field('Game hour (1–24; empty means unknown)',value.scene.hour),location=field('Location',value.scene.location),present=field('Present characters (one full name per line)',value.scene.present.join('\n'),'textarea');
     const event=field('Current event',value.event?.name),phase=field('Event phase',value.event?.phase);
     const read=[];
