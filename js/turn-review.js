@@ -42,3 +42,20 @@ export function lintUnestablishedTime(text, { prior = null,userText = '' } = {})
   return /\b(?:all (?:morning|afternoon|evening)|(?:morning|afternoon|evening) (?:light|sun)|(?:it is|it's|now) (?:early |late )?(?:morning|afternoon|evening|night)|midday is coming)\b/i.test(prose)
     ? ['Narration introduces a current time while the scene clock is unknown.'] : [];
 }
+
+// NPC quotations can conceal the same agency problem as narrator prose.
+// These are review hints, not proof that a claim is false: older history may
+// support it. Keep clearly uncertain motive interpretations distinct.
+export function lintDirectorHistory(text,{userText=''}={}) {
+  const normalize=value=>String(value).toLowerCase().replace(/\bi\b/g,'you').replace(/\bmy\b/g,'your').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim();
+  const authorized=normalize(userText),quotes=String(text??'').match(/“[^”]*(?:”|$)|"[^"]*(?:"|$)/g)??[];
+  const physical=/\byou\s+(?:looked|stood|sat|put|placed|held|carried|took)\b/gi;
+  const motive=/\byou\s+(?:decided|thought|wanted)\b/i;
+  const uncertain=/\b(?:I (?:think|suspect)|it felt|I (?:cannot|can't|don't) know|maybe|perhaps|might|seems|seemed)\b/i;
+  const repetition=/\byou (?:said|told|asked)\b[\s\S]{0,80}\b(?:before|yesterday|days? ago|twice a day)\b/i;
+  for(const quote of quotes) {
+    if([...quote.matchAll(physical)].some(m=>!authorized.includes(normalize(m[0]))) || motive.test(quote)&&!uncertain.test(quote) || repetition.test(quote))
+      return ['NPC dialogue recalls player actions or interprets past motives; verify those claims against the story history.'];
+  }
+  return [];
+}

@@ -3,18 +3,18 @@ import {db} from './db.js';
 import {currentUid} from './auth.js';
 import {state} from './state.js';
 import {assertStory} from './errors.js';
-import {STORY_SETTINGS_VERSION,explicitStorySettings,defaultStorySettings,resolveStorySettings,mergeStorySettings,pickStorySettings} from './story-settings.js';
+import {STORY_SETTINGS_VERSION,migrateStorySettings,defaultStorySettings,resolveStorySettings,mergeStorySettings,pickStorySettings} from './story-settings.js';
 const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySettings','current');
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
-const cache=new Map();let unsubscribe=null,epoch=0;
-function readDocument(data){if(![1,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:explicitStorySettings(data.values)};}
+const cache=new Map();let unsubscribe=null,epoch=0,snapshotRun=0;
+async function readDocument(data){if(![1,2,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
 export async function preserveLegacyStorySeed(accountSettings) {
   const uid=currentUid(),ref=seedRef(uid);
   return runTransaction(db,async tx=>{
     const saved=await tx.get(ref);
     if(saved.exists())return saved.data().values;
-    const values=explicitStorySettings(accountSettings);
+    const values=await migrateStorySettings(accountSettings);
     tx.set(ref,{version:STORY_SETTINGS_VERSION,values,createdAt:serverTimestamp()});
     return values;
   });
@@ -23,16 +23,16 @@ export async function ensureStorySettings(sid,uid=currentUid()) {
   const ref=target(sid,uid);
   const result=await runTransaction(db,async tx=>{
     const session=assertStory((await tx.get(parent(sid,uid))).data()),saved=await tx.get(ref);
-    if(saved.exists()){const data=readDocument(saved.data());if(data.revision!==(session.storySettingsRevision ?? 0))throw new Error('Story settings revisions disagree. Reload and review before generating.');return data;}
+    if(saved.exists()){const data=await readDocument(saved.data());if(data.revision!==(session.storySettingsRevision ?? 0))throw new Error('Story settings revisions disagree. Reload and review before generating.');return data;}
     const seed=await tx.get(seedRef(uid));
     if(!seed.exists())throw new Error('Story prompt migration has not loaded from the server. Reload before generating.');
-    const result={version:STORY_SETTINGS_VERSION,revision:1,values:explicitStorySettings(seed.data().values)};
+    const result={version:STORY_SETTINGS_VERSION,revision:1,values:await migrateStorySettings(seed.data().values)};
     tx.set(ref,result);tx.update(parent(sid,uid),{storySettingsRevision:1});return result;
   });
   cache.set(uid+':'+sid,result);return structuredClone(result);
 }
 export async function writeInitialStorySettings(sid,values=defaultStorySettings(),uid=currentUid()) {
-  const result={version:STORY_SETTINGS_VERSION,revision:1,values:explicitStorySettings(values)};
+  const result={version:STORY_SETTINGS_VERSION,revision:1,values:await migrateStorySettings(values)};
   await runTransaction(db,async tx=>{
     assertStory((await tx.get(parent(sid,uid))).data());
     tx.set(target(sid,uid),result);tx.update(parent(sid,uid),{storySettingsRevision:1});
@@ -44,7 +44,7 @@ export async function saveStorySettings(sid,base,changes) {
   const result=await runTransaction(db,async tx=>{
     const session=assertStory((await tx.get(parent(sid,uid))).data()),saved=await tx.get(target(sid,uid));
     if(!saved.exists())throw new Error('Story settings have not loaded. Reload before saving.');
-    const current=readDocument(saved.data()),allowed=pickStorySettings(changes);
+    const current=await readDocument(saved.data()),allowed=pickStorySettings(changes);
     if(current.revision!==(session.storySettingsRevision ?? 0))throw new Error('Story settings revisions disagree. Reload and review before saving.');
     const values=mergeStorySettings(current.values,base,allowed);
     if(!Object.keys(allowed).length)return current;
@@ -68,11 +68,12 @@ export async function selectStorySettings(sid) {
     const loaded=await ensureStorySettings(sid,uid);
     if(run!==epoch || uid!==currentUid() || state.sessionId!==sid)return;
     state.storySettings=loaded;emit();
-    unsubscribe=onSnapshot(target(sid,uid),snap=>{
+    unsubscribe=onSnapshot(target(sid,uid),async snap=>{
       if(run!==epoch || uid!==currentUid() || snap.metadata?.fromCache || snap.metadata?.hasPendingWrites)return;
+      const delivery=++snapshotRun;
       if(!snap.exists()){state.storySettings=null;state.storySettingsLoadFailed=true;emit();return;}
-      let data;try{data=readDocument(snap.data());}catch{state.storySettings=null;state.storySettingsLoadFailed=true;emit();return;}cache.set(uid+':'+sid,data);state.storySettings=data;state.storySettingsLoadFailed=false;emit();
-    },()=>{if(run===epoch){state.storySettingsLoadFailed=true;state.storySettings=null;emit();}});
+      let data;try{data=await readDocument(snap.data());}catch{if(delivery===snapshotRun && run===epoch){state.storySettings=null;state.storySettingsLoadFailed=true;emit();}return;}if(delivery!==snapshotRun || run!==epoch || uid!==currentUid() || state.sessionId!==sid)return;cache.set(uid+':'+sid,data);state.storySettings=data;state.storySettingsLoadFailed=false;emit();
+    },()=>{if(run===epoch){++snapshotRun;state.storySettingsLoadFailed=true;state.storySettings=null;emit();}});
   }catch(error){if(run===epoch){state.storySettingsLoadFailed=true;emit();}throw error;}
 }
 export function effectiveActiveSettings() {

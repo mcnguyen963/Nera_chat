@@ -81,7 +81,7 @@ export function initSettingsView() {
   });
   document.querySelectorAll("[data-settings-panel]").forEach((button) =>
     button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
-  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);clearMessage();}));
+  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);if(button.dataset.resetPrompt==='directorNarratorSystemPrompt'){draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();}clearMessage();}));
   for(const id of ['set-reasoning-maxtokens','set-max-resp'])input(id).addEventListener('input',syncOptionalControls);
   el.profiles.addEventListener("change", () => {
     capture();
@@ -118,6 +118,7 @@ export function initSettingsView() {
   input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
   document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
   input('btn-director-state').addEventListener('click',openDirectorState);
+  input('btn-review-director-narrator').addEventListener('click',()=>{capture();draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();feedback('Instructions reviewed. Save story prompts to apply.');});
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
@@ -244,10 +245,16 @@ function renderAll() {
   for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;directorProfiles.append(option);}
   if(draft.directorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.directorProfileId)){const missing=document.createElement('option');missing.value=draft.directorProfileId;missing.textContent='Missing profile — choose another';directorProfiles.append(missing);}directorProfiles.value=draft.directorProfileId ?? '';
   set("set-narrator-prompt", draft.narratorSystemPrompt);
+  set("set-director-narrator-prompt",draft.directorNarratorSystemPrompt ?? directorDefaults.directorNarratorSystemPrompt);renderNarratorReview();
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
   set("set-memory-update-prompt", draft.memoryExtractionPrompt);
   set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
   set('set-rewrite-n',draft.rewriteRecentMessages ?? 10);set('set-stream-vibration',draft.streamVibrationMode ?? 'spaces');renderRewritePrompt();
+}
+function renderNarratorReview() {
+  const pending=draft.directorNarratorPromptNeedsReview===true;
+  input('director-narrator-review').classList.toggle('hidden',!pending);
+  input('btn-review-director-narrator').classList.toggle('hidden',!pending);
 }
 function renderRewritePrompt() {
   const request = ++rewritePromptRequest;
@@ -358,6 +365,8 @@ function capture() {
   draft.narrationMode=raw('set-narration-mode') || 'classic';draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
   for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5]])draft[key]=Number(raw(id) || fallback);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
+  draft.directorNarratorSystemPrompt=raw("set-director-narrator-prompt");
+  draft.directorNarratorPromptNeedsReview ??= false;
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
   draft.memoryExtractionPrompt = raw("set-memory-update-prompt");
   draft.memoryReorganizePrompt = raw("set-memory-reorganize-prompt");
@@ -387,6 +396,7 @@ function resetPanel() {
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.rewriteRecentMessages=DEFAULT_SETTINGS.rewriteRecentMessages;draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;set('set-rewrite-n',draft.rewriteRecentMessages);renderRewritePrompt();
+    draft.directorNarratorSystemPrompt=defaultStorySettings().directorNarratorSystemPrompt;draft.directorNarratorPromptNeedsReview=false;set('set-director-narrator-prompt',draft.directorNarratorSystemPrompt);renderNarratorReview();
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
     draft.memoryExtractionPrompt = DEFAULT_SETTINGS.memoryExtractionPrompt;
@@ -468,6 +478,7 @@ async function handleSaveSettings() {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
       if(state.busy)throw new Error('Finish the current reply before saving story settings.');
       if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
+      validated.directorNarratorPromptNeedsReview=false;
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
       promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;
     }

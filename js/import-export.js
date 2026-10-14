@@ -1,7 +1,7 @@
 import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
 import { validateDirectorState } from './director-state.js';
 import {ensureStorySettings,writeInitialStorySettings,preserveLegacyStorySeed} from './story-settings-store.js';
-import {assertSnapshotRevisions,explicitStorySettings} from './story-settings.js';
+import {assertSnapshotRevisions,migrateStorySettings} from './story-settings.js';
 import {state} from './state.js';
 import { maxOf } from './math-utils.js';
 import * as sessionsApi from './sessions.js';
@@ -66,7 +66,7 @@ export async function importSillyTavern(file) {
   const sessionId=await createSession(title || file.name.replace(/\.jsonl$/i,'') || 'Imported chat',{importing:true});
   try {
     const importedSettings=metadata?.storySettings?.values ?? metadata?.storySettings;
-    const values=importedSettings ? explicitStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
+    const values=importedSettings ? await migrateStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
     await writeInitialStorySettings(sessionId,values);
     await addMessagesBulk(sessionId,messages);
     // Importing a full V3 backup explicitly creates a new selective story.

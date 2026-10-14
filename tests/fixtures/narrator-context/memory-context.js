@@ -1,0 +1,298 @@
+import { directorScene } from './director-state.js';
+import { narratorDirectorContract } from './director-context.js';
+import { parseScene } from './scene.js';
+import { selectScheduledPlan, fitScheduledPlan, validatePlanJump, planJumpInstruction } from './scheduled-plan.js';
+import { fitRecords, relevantSubjects, recordUnits } from './lore-record-select.js';
+import { fitCharacters } from './character-select.js';
+import { minOf, maxOf } from './math-utils.js';
+import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
+import { normalizeMemory, memoryActive } from './memory-settings.js';
+import { SCENE_RULE, latestScene, sceneTimeline, readSceneOutput } from './scene.js';
+import { modernSceneReminder } from './story-calendar.js';
+import { replyContract } from './reply-contract.js';
+import { computeTurns } from './turns.js';
+import { selectEntries, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
+import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
+import { CONTINUITY_RULE, usableLore, revisionOf, effectivelyPaused } from './continuity.js';
+import {MESSAGE_FRAME_TOKENS as FRAME,requestInputLimit} from './request-budget.js';
+import { stripTurnStamps } from './story-text.js';
+function stripOcc(content) {
+  const cleaned=content.replace(/<\s*(?:OOC|OCC)\b[^>]*>[\s\S]*?<\/\s*(?:OOC|OCC)\s*>/gi,'').replace(/<\s*(?:OOC|OCC)\b[^>]*>[^\n]*|<\/\s*(?:OOC|OCC)\s*>/gi,'');
+  return cleaned.trim() ? cleaned : content;
+}
+// Memory mode uses additive message costs and renders the final wire request once.
+export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd, accountingRetry = false }) {
+  const director=settings.narrationMode==='director', turn=opts.directorTurn;
+  const mem = normalizeMemory(session.memory);
+  if(director){mem.scene=true;mem.calendar={mode:'legacy',anchor:null};mem.lorebooks=true;}
+  const limit = requestInputLimit(settings);
+  if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
+  const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
+  const raw = [...new Map(all.filter(m => !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId) && ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
+  if (opts.draftText?.trim() || opts.placeholderLatest || opts.draftPlanJump) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '',...(opts.draftPlanJump ? {planJump:opts.draftPlanJump} : {}) });
+  const byId=new Map(raw.map(m=>[m.id,m]));
+  const turns = computeTurns(raw), current = director && (turn?.after || session.directorState) ? {scene:parseScene(directorScene(turn?.after ?? session.directorState)),missingStreak:0} : mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
+  const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latestUser = raw.findLast(m => m.role === 'user');
+  const latest=opts.continuationId ? {id:'__continuation',role:'user',content:prompts.continue} : latestUser;
+  if(opts.continuationId) {
+    const target=raw.find(m=>m.id===opts.continuationId && m.role==='assistant');
+    if(!target)throw new Error('The continuation target is missing from context.');
+    raw.push(latest);byId.set(latest.id,latest);
+  }
+  const jump = !opts.continuationId && raw.at(-1)?.id===latest?.id && latest?.planJump ? validatePlanJump(latest.planJump) : null;
+  const anchors = [firstUser,firstAssistant].filter(Boolean), anchorIds = new Set(anchors.map(m => m.id));
+  const required = new Set(anchorIds);
+  if (latest) required.add(latest.id);
+  if(opts.continuationId)required.add(opts.continuationId);
+  if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
+  let narrator = (settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
+  const planOn=!!session.longTermPlan?.trim();
+  if(director)narrator+='\n\n'+(turn ? narratorDirectorContract(turn) : prompts.directorNarrator+'\nNarrator preview is provisional until the Director produces a contract.');
+  const system=[narrator,adRule,CONTINUITY_RULE,planInjectionBlock(session.longTermPlan),!director && planOn ? prompts.planThread : '',!director && mem.scene ? SCENE_RULE(mem.protagonist,mem.calendar) : ''].filter(Boolean).join('\n\n');
+  const reminder=!director && mem.scene ? (mem.calendar.mode==='modern' ? modernSceneReminder(mem.calendar,current.scene,planOn) : planOn ? prompts.sceneReminderPlan : prompts.sceneReminder) : '';
+  const blocks=[{key:'system',label:'Instructions and fixed author plan',tokens:await count(system)+FRAME}];
+  let summaryText='';
+  let summary = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upTo ? all.find(m => m.id === session.activeSummaryMessageId && !m.needsReview) : null;
+
+  const checkpoint = summary ? (summary.coveredRange?.toOrder ?? session.breakpointOrder ?? 0) : 0;
+  if (summary) {
+    // Render old summaries without changing their persisted provenance or content.
+    const narratorSummary = stripTurnStamps(summary.content
+      .replace(/^#{1,4}\s*Last established situation.*$/gmi, () => renderLoreLabel('oldSummarySituation'))
+      .replace(/\*\*Last established situation[^*]*\*\*:?/gi, () => renderLoreLabel('oldSummarySituation'))
+    );
+    const content = renderPrompt(prompts.historicalSummary, { SUMMARY: narratorSummary });
+    summaryText=content; blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content) });
+  }
+  const timeline=mem.scene ? sceneTimeline(raw,{startingScene:mem.startingScene}) : new Map();
+  const contentCache=new Map();
+  const contentFor = (m,{gap=false}={}) => {
+    const gapPrefix=gap && gapUser()?.id===m.id ? gapInfo()+'\n\n' : '';
+    const key=m.id+'|'+gap+'|'+gapPrefix;if(contentCache.has(key))return contentCache.get(key);
+    let text = m.role === 'assistant' ? readSceneOutput(normalizeAd(m.content),{sceneEnabled:mem.scene}).clean : normalizeAd(m.content);
+    if (m.role === 'assistant' && mem.scene && !m.ooc) {
+      if (!director && session.longTermPlan?.trim() && m.planThread) text+='\n<plan_thread>'+m.planThread+'</plan_thread>';
+      const effective=timeline.get(m.id)?.effective;
+      if (effective) text+='\n<scene>'+effective+'</scene>';
+    }
+    if (m.id === latest?.id && jump) text+='\n\n'+(director ? 'Author-confirmed time skip from '+jump.from+' toward '+jump.to+'. Realize only the segment allowed by the Director contract.' : planJumpInstruction(jump));
+    if (m.id !== latest?.id) text=stripOcc(text);
+    if (gap && anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{CONTENT:text});
+    text=gapPrefix+text;contentCache.set(key,text);return text;
+  };
+  const selected = new Set(required), books = [], loaded = [], warnings = [];
+  // Inspection is device-local metadata; it never participates in request accounting.
+  const inspection = opts.includeInspection ? { sections:{}, messages:[] } : null;
+  const contract = !director && mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
+  if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
+  if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
+  let memory = '';
+  const gapInfo=() => {
+    if(selectionState.size===raw.length)return '';
+    const covered=!!summaryText && checkpoint>(anchors.at(-1)?.order ?? 0);
+    return covered ? (selectionState.omittedAfter > 0 ? prompts.omittedTurnsPartial : prompts.omittedTurnsSummary) : prompts.omittedTurns;
+  };
+  // Keep the omission note with the first retained user input after the opening anchors.
+  const gapUser=()=> { const first=raw[selectionState.first]; return first?.role==='user' ? first : null; };
+  const render = (inspect = false) => {
+    const gap=gapInfo();
+    const history=raw.filter(m=>selected.has(m.id)).map(m=>({id:m.id,role:m.role,content:contentFor(m,{gap:!!gap})}));
+    if(gap && !gapUser()) history.splice(history.filter(m=>anchorIds.has(m.id) && m.id!==latest?.id).length,0,{role:'system',content:gap});
+    const userMemory=memory && mem.memoryBlock && mem.blockRole==='user' && latest;
+    if(memory && !userMemory) {
+      const li=history.findIndex(m=>m.id===latest?.id);
+      let at=Math.min(Math.max(0,history.length-mem.blockDepth),li<0 ? history.length : li);
+      while(at<history.length && history[at].role!=='user') at++;
+      history.splice(at,0,{role:'system',content:memory});
+    }
+    if(latest) {
+      const i=history.findIndex(m=>m.id===latest.id);
+      if(userMemory) history[i].content='<memory>\n'+memory+'\n</memory>\n\n'+history[i].content;
+      if(contract && mem.replyContract==='user') history[i].content+='\n\n'+contract;
+      if(reminder) history[i].content+='\n\n'+reminder;
+      if(contract && mem.replyContract==='system') history.splice(i,0,{role:'system',content:contract});
+    }
+    if (inspect) inspection.messages = history.flatMap((m,index) => m.id ? [{
+      id:m.id,order:byId.get(m.id)?.order,role:m.role,content:m.content,requestIndex:index+1,
+      source:anchorIds.has(m.id) ? 'Opening exchange' : m.id==='__memory_draft' ? 'Composer draft' : m.id==='__continuation' ? 'Continuation instruction' : m.id===latest?.id ? 'Latest user message' : 'Recent conversation',
+    }] : []);
+    return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
+  };
+  // Plain costs are computed once. Only wrappers and directive joins change.
+  const indices=new Map(raw.map((m,i)=>[m.id,i])), plainCosts=new Map();
+  for(const m of raw) plainCosts.set(m.id,await count(contentFor(m))+FRAME);
+  let selectionState={total:0,size:0,omittedAfter:raw.filter(m=>m.order>checkpoint).length,first:Infinity};
+  const addSelection=m=>{
+    selectionState.total+=plainCosts.get(m.id);selectionState.size++;
+    if(m.order>checkpoint)selectionState.omittedAfter--;
+    if(!anchorIds.has(m.id))selectionState.first=Math.min(selectionState.first,indices.get(m.id));
+  };
+  for(const id of selected)addSelection(byId.get(id));
+  const requiredState={...selectionState};
+  const messageCosts=new Map();
+  const costOf=async(m,gap)=>{const text=contentFor(m,{gap}),key=m.id+'|'+text;if(!messageCosts.has(key))messageCosts.set(key,await count(text)+FRAME);return messageCosts.get(key);};
+  const cost=async()=>{
+    const gap=gapInfo(),userMemory=memory && mem.memoryBlock && mem.blockRole==='user' && latest;
+    let total=FRAME+FRAME+await count([system,summaryText,...books].filter(Boolean).join('\n\n'))+selectionState.total;
+    const affected=new Set([...(gap ? anchors.map(m=>m.id) : []),gapUser()?.id,latest?.id].filter(Boolean));
+    for(const id of affected) {
+      const m=byId.get(id);
+      if(m.id!==latest?.id){total+=await costOf(m,!!gap)-plainCosts.get(id);continue;}
+      let content=contentFor(m,{gap:!!gap});
+      if(userMemory)content='<memory>\n'+memory+'\n</memory>\n\n'+content;
+      if(contract && mem.replyContract==='user')content+='\n\n'+contract;
+      if(reminder)content+='\n\n'+reminder;
+      total+=FRAME+await count(content)-plainCosts.get(id);
+    }
+    if(gap && !gapUser())total+=FRAME+await count(gap);
+    if(memory && !userMemory)total+=FRAME+await count(memory);
+    if(contract && mem.replyContract==='system' && latest)total+=FRAME+await count(contract);
+    return total;
+  };
+  if (await cost() > limit) throw new Error('The opening story, summary and latest user message exceed the context budget. Increase the context limit or shorten required content.');
+  const candidates = raw.filter(m => m.order > checkpoint && !required.has(m.id));
+  const target = Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
+  const recentRaw = raw.filter(m => m.id!=='__continuation' && m.order > checkpoint);
+  let targetStart = Math.max(0,recentRaw.length-target);
+  // Complete the first retained turn when it fits. Tight budgets fall back to a suffix.
+  const targetTurn = turns.turnById.get(recentRaw[targetStart]?.id);
+  while (targetStart > 0 && turns.turnById.get(recentRaw[targetStart-1].id) === targetTurn) targetStart--;
+  const targetIds = new Set(recentRaw.slice(targetStart).map(m => m.id));
+  for (const m of [...candidates].reverse().filter(m => targetIds.has(m.id))) {
+    const before={...selectionState};selected.add(m.id);addSelection(m);
+    if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
+  }
+  const targetCount = recentRaw.slice(targetStart).length, retainedTarget = recentRaw.slice(targetStart).filter(m => selected.has(m.id)).length;
+  if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
+  let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
+  const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
+  const recentLoreMessages = mem.loreLookbackMessages > 0
+    ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
+  const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
+  const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
+  if(turn){
+    for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');const list=selection.selected[entry.book];if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);continue;}if(list){const existing=list.find(i=>i.entry.id===id);if(existing)list.splice(list.indexOf(existing),1);list.unshift({entry,reason:'Director selection'});}}
+  }
+  if(turn)for(const book of ['characters','locations']){const list=selection.selected[book],priority=item=>['always','protagonist','in scene','current place','pinned record'].includes(item.reason)?0:turn.contract.requiredMemoryIds.includes(item.entry.id)?1:item.reason==='Director selection'?2:3;list.sort((a,b)=>priority(a)-priority(b));const overflow=list.splice(mem.books[book].maxCards);selection.skipped.push(...overflow.map(i=>({entryId:i.entry.id,book,name:i.entry.name,reason:'card limit after Director ranking'})));}
+  const scheduled = mem.lorebooks && mem.books.plan.on
+    ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)
+    : {selected:[],warnings:[],skipped:filtered.entries.filter(e=>e.book==='plan').map(e=>({entryId:e.id,book:'plan',name:e.name,reason:'book off'}))};
+  selection.selected.plan=[...(selection.selected.plan ?? []),...scheduled.selected.filter(i=>!(selection.selected.plan ?? []).some(x=>x.entry.id===i.entry.id))];warnings.push(...scheduled.warnings);
+  const skipped = [...filtered.skipped,...selection.skipped,...scheduled.skipped];
+  const recordMode=session.loreSchemaVersion===3;
+  const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
+  if(turn && recordAnchors)for(const id of turn.contract.memoryIds)recordAnchors.add(id);
+  if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
+    if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
+  }
+  const recordReports={};
+  let characterSelectionReport = null;
+  const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
+  const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
+  if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
+  for (const book of ['plan','facts','events','characters','locations']) {
+    if (!selection.selected[book].length) continue;
+    const beforeMemory = memory;
+    const header = book === 'plan' ? '' : book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
+    const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
+    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
+      ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
+      : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
+    if (fit.selectionReport) characterSelectionReport = fit.selectionReport;
+    if(fit.recordReport){recordReports[book]=fit.recordReport;for(const entry of fit.recordReport.entries)for(const record of entry.records)if(!record.selected&&(record.core||record.pinned))warnings.push(entry.name+': '+record.reason+'; '+(record.pinned?'pinned record':'approved core')+' omitted.');}
+    const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;
+    if (book === 'characters') chars = fit;
+    else if (book === 'locations') places = fit;
+    if (book === 'characters' || book === 'locations') memory = memoryText();
+    else if (text) books.push(text);
+    if (await cost() > limit) {
+      if (book === 'characters') chars = empty;
+      else if (book === 'locations') places = empty;
+      else if (text) books.pop();
+      memory = beforeMemory;
+      skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,ranking:e.ranking,...(book==='plan' ? {phaseId:e.phaseId,phaseTitle:e.phaseTitle} : {}),reason:'over budget' })));
+      if(book==='plan')warnings.push('Scheduled plan omitted for the overall request budget.');
+      if (characterSelectionReport && book === 'characters') {
+        characterSelectionReport.fullFit = false;
+        for (const c of characterSelectionReport.characters) {
+          c.identity=false;c.full=false;c.text='';c.coreCoverage={personality:false,constraints:false,appearance:false};c.missingCoverage=['personality','constraints','appearance'];
+          for (const u of c.units) {u.selected=false;u.reason='overall request budget';for (const s of u.sources) {s.included=[];s.omitted=[{start:s.start,end:s.end,text:s.text}];}}
+        }
+      }
+      fit = empty;
+    }
+    skipped.push(...fit.skipped);
+    if(book==='plan' && fit.skipped.length)warnings.push(`${fit.skipped.length} scheduled plan phase(s) omitted for budget. Review Plan in the context viewer.`);
+    if (fit.selectionReport) for (const c of fit.selectionReport.characters) {
+      if (c.missingCoverage.length) warnings.push(`${c.name}: missing core coverage (${c.missingCoverage.join(', ')}).`);
+      if (c.invalidCores.length) warnings.push(`${c.name}: ${c.invalidCores.length} core bundle(s) need review.`);
+    }
+    if(fit.userLinesCut)warnings.push(`${fit.userLinesCut} user-written lore lines could not fit in the ${book} budget.`);
+    if (inspection && fit.text) inspection.sections[book] = text;
+    if (fit.text && (book === 'plan' || book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
+    for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,ranking:e.ranking,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds],...(book==='plan' ? {phaseId:e.phaseId,phaseTitle:e.phaseTitle} : {}) });
+  }
+  if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
+    const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];
+    const firstTurn=minOf(ts),lastTurn=maxOf(ts);
+    for(let k=Math.floor((firstTurn-1)/mem.batchTurns);k*mem.batchTurns+1<=lastTurn;k++)starts.push(k*mem.batchTurns+1);
+    // Every aligned trial is required messages plus a candidate suffix.
+    const alignedCandidates=[...candidates].sort((a,b)=>turns.turnById.get(a.id)-turns.turnById.get(b.id));
+    const suffixFirst=new Array(candidates.length+1).fill(Infinity);
+    const suffixTotal=new Array(candidates.length+1).fill(0),suffixAfter=new Array(candidates.length+1).fill(0);
+    for(let i=candidates.length-1;i>=0;i--){suffixFirst[i]=Math.min(suffixFirst[i+1],indices.get(alignedCandidates[i].id));suffixTotal[i]=suffixTotal[i+1]+plainCosts.get(alignedCandidates[i].id);suffixAfter[i]=suffixAfter[i+1]+(alignedCandidates[i].order>checkpoint ? 1 : 0);}
+    const earliestTarget=minOf(recentRaw.slice(targetStart).filter(m=>!required.has(m.id)).map(m=>turns.turnById.get(m.id)));
+    let index=0;
+    for (const start of starts) {
+      while(index<candidates.length && turns.turnById.get(alignedCandidates[index].id)<start)index++;
+      if(start>earliestTarget)continue;
+      const before=selectionState;
+      selectionState={total:requiredState.total+suffixTotal[index],size:requiredState.size+candidates.length-index,omittedAfter:requiredState.omittedAfter-suffixAfter[index],first:Math.min(requiredState.first,suffixFirst[index])};
+      if (await cost() <= limit) { for(let i=index;i<candidates.length;i++)selected.add(alignedCandidates[i].id);windowMode = 'block';break; }
+      selectionState=before;
+    }
+  }
+  // Only after lore may additional older conversation use the remaining budget.
+  if (!opts.onlyRequiredWindow && windowMode !== 'block') for (const m of [...candidates].reverse()) {
+    if (selected.has(m.id)) continue;
+    const before={...selectionState};selected.add(m.id);addSelection(m);if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
+  }
+  const apiMessages=render(!!inspection),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);
+  if(actual!==await cost()) {
+    if(!accountingRetry) {
+      // A tokenizer can recover from fallback estimates midway through assembly.
+      // Rebuild every local part cost once using the now-current counter.
+      const rebuilt=await buildMemoryContext(session,settings,opts,{count,adRule,normalizeAd,accountingRetry:true});
+      rebuilt.report.warnings.unshift('Token counts changed during context assembly; the request was rebuilt once.');
+      return rebuilt;
+    }
+    warnings.push('Token counts remained inconsistent after rebuilding; the final rendered request count is used.');
+  }
+  if (actual > limit) throw new Error('The fully rendered request exceeds the context budget.');
+  const window = raw.filter(m => selected.has(m.id) && !anchorIds.has(m.id) && m.id !== latest?.id);
+  const messageCost = async ms => (await Promise.all(ms.map(async m => {
+    let text=contentFor(m,{gap:!!gapInfo()});
+    if(gapInfo() && gapUser()?.id===m.id) text=text.slice((gapInfo()+'\n\n').length);
+    return await count(text)+FRAME;
+  }))).reduce((a,b) => a+b,0);
+  blocks.push({ key:'anchor',label:'Opening exchange (historical background)',tokens:await messageCost(anchors.filter(m => m.id !== latest?.id)) });
+  blocks.push({ key:'window',label:'Recent conversation',tokens:await messageCost(window),fromTurn:turns.turnById.get(window[0]?.id),toTurn:turns.turnById.get(window.at(-1)?.id),messages:window.length,mode:windowMode,step:mem.batchTurns,target:targetCount,retained:retainedTarget });
+  if (latest) blocks.push({ key:'latest',label:opts.continuationId ? 'Temporary continuation instruction' : 'Latest user message',tokens:await messageCost([latest]) });
+  if (memory) blocks.push({ key:'memory',label:'Memory block',tokens:mem.blockRole === 'user' && mem.memoryBlock && latest ? await count('<memory>\n'+memory+'\n</memory>\n\n'+contentFor(latest))-await count(contentFor(latest)) : await count(memory)+FRAME });
+  if(reminder) blocks.push({key:'reminder',label:'Scene reminder',tokens:await count('\n\n'+reminder)});
+  if(gapInfo()) {
+    const recipient=gapUser(),prefixed=recipient && contentFor(recipient,{gap:true});
+    const tokens=recipient ? await count(prefixed)-await count(prefixed.slice((gapInfo()+'\n\n').length)) : await count(gapInfo())+FRAME;
+    blocks.push({key:'gap',label:'Omitted turns marker',tokens});
+  }
+  blocks.push({key:'framing',label:'Request framing and section joins',tokens:actual-blocks.reduce((n,b)=>n+b.tokens,0)});
+  const uncovered = raw.filter(m => m.id!=='__continuation' && !selected.has(m.id) && m.order > checkpoint);
+  const gaps = []; for (const m of uncovered) { const turn = turns.turnById.get(m.id); const last = gaps.at(-1); if (last && turn <= last.toTurn+1) { last.toTurn = turn; last.toOrder = m.order; } else gaps.push({ fromTurn:turn,toTurn:turn,fromOrder:m.order,toOrder:m.order }); }
+  if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
+  if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
+  if(turn){const loadedIds=new Set(loaded.map(e=>e.entryId));const missing=turn.contract.requiredMemoryIds.filter(id=>!loadedIds.has(id));if(recordMode)for(const book of ['characters','locations','facts','events'])for(const entry of recordReports[book]?.entries ?? [])if(turn.contract.requiredMemoryIds.includes(entry.entryId) && entry.records.some(r=>(r.core || r.pinned) && !r.selected && r.reason==='over budget'))throw new Error('Required Director card has omitted core constraints: '+entry.name+'. Increase its book budget.');if(missing.length)throw new Error('Required Director memories do not fit the Narrator budget: '+missing.join(', ')+'. Increase book budgets or context limit.');}
+  if(director && !turn)warnings.push('Narrator selection is provisional; context preview does not call the Director.');
+  if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+}

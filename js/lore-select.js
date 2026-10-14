@@ -62,6 +62,8 @@ const compareMention = (a,b) => !a ? (b ? 1 : 0) : !b ? -1 : b.order-a.order || 
 // Structured sources preserve message boundaries. Legacy text is one synthetic message.
 export function selectEntries(entries, mem, text, scene, recentText = '', sources = {}) {
   const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
+  const start=sources.startingScene ? resolveScene(sources.startingScene,index) : null, transition=!!start;
+  const required=new Set(sources.directorRequiredIds ?? []),directorIds=new Set(sources.directorMemoryIds ?? []);
   const asList = value => value == null ? [] : Array.isArray(value) ? value : [value];
   const recent = sources.recent == null ? [{id:'__lore_recent',order:0,role:null,content:recentText}] : asList(sources.recent);
   const current = sources.current == null ? [{id:'__lore_current',order:recent.reduce((order,m)=>Math.max(order,m.order ?? 0),0)+1,role:'user',content:text}] : asList(sources.current);
@@ -81,11 +83,15 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     const sceneHits = new Set(findMentions(scene?.raw ?? '',index,book));
     const candidates = new Map();
     const add = (entry,priority,reason) => {
+      if(transition)priority=['always','protagonist','pinned record'].includes(reason) ? 0 : required.has(entry.id) ? 1 : ['in scene','current place'].includes(reason) ? 2 : ['starting character','starting place'].includes(reason) ? 3 : directorIds.has(entry.id) ? 4 : 5+priority;
       if (!candidates.has(entry.id) || candidates.get(entry.id).priority > priority)
         candidates.set(entry.id,{entry,reason,priority,mention:latestHits.get(entry.id) ?? null});
     };
     const pc = book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));
     for (const e of list) {
+      if(directorIds.has(e.id))add(e,4,'Director selection');
+      if(start?.characters.includes(e.id) && book==='characters')add(e,3,'starting character');
+      if(start?.place===e.id && book==='locations')add(e,3,'starting place');
       if(sources.records && (e.recordLayout?.records ?? []).some(r=>r.pinned))add(e,0,'pinned record');
       if (book === 'events') {
         if (e.kind === 'thread') {
@@ -110,7 +116,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
       }
     }
     const ranked = [...candidates.values()].sort((a,b) => a.priority-b.priority ||
-      ((book==='facts' && a.priority===4 || book==='events' && a.priority===2)
+      ((!transition && (book==='facts' && a.priority===4 || book==='events' && a.priority===2))
         ? newestNote(b.entry)-newestNote(a.entry) : compareMention(a.mention,b.mention)) || stableId(a.entry.id,b.entry.id));
     let optional = 0;
     for (const [i,item] of ranked.entries()) {

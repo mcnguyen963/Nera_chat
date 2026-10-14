@@ -1,4 +1,5 @@
 import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 
@@ -6,7 +7,7 @@ import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 export function appHarness({ stubs = {}, sources = {}, globals = {} } = {}) {
   const cache = new Map();
   const context = vm.createContext({ URL, fetch:promptFetch, console, structuredClone,
-    TextEncoder, TextDecoder, Date, Map, Set, AbortController, setTimeout, clearTimeout, ...globals });
+    TextEncoder, TextDecoder, crypto:webcrypto, Uint8Array, Date, Map, Set, AbortController, setTimeout, clearTimeout, ...globals });
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
     const pending = create(path); cache.set(path, pending); return pending;

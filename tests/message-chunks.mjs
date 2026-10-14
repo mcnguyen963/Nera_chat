@@ -1229,5 +1229,17 @@ test('Legacy story settings load as Classic and saving Director configuration up
  const h=await setup();const values={narratorSystemPrompt:'Legacy narrator',summarizerSystemPrompt:'Legacy summary',memoryExtractionPrompt:'Extract',memoryReorganizePrompt:'Reorganize',rewriteSystemPrompt:'Rewrite',rewriteRecentMessages:10};
  h.documents.get(h.sessionPath).storySettingsRevision=1;h.documents.set(h.sessionPath+'/storySettings/current',{version:1,revision:1,values});
  const loaded=await h.storySettings.ensureStorySettings('s');assert.equal(loaded.values.narrationMode,'classic');
- const saved=await h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director',directorProfileId:'small'});assert.equal(saved.version,2);assert.equal(saved.values.directorMaxInputTokens,20000);
+ const saved=await h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director',directorProfileId:'small'});assert.equal(saved.version,3);assert.equal(saved.values.directorMaxInputTokens,20000);
+});
+
+test('Separate Director Narrator instructions migrate old documents and survive copies and native backup import',async()=>{
+ for(const version of [1,2]){
+  const h=await setup();h.documents.get(h.sessionPath).storySettingsRevision=1;h.documents.set(h.sessionPath+'/storySettings/current',{version,revision:1,values:{narratorSystemPrompt:'Custom legacy state instructions'}});
+  const loaded=await h.storySettings.ensureStorySettings('s');assert.equal(loaded.values.directorNarratorSystemPrompt,'Custom legacy state instructions');assert.equal(loaded.values.directorNarratorPromptNeedsReview,true);
+  const saved=await h.storySettings.saveStorySettings('s',loaded.values,{directorNarratorSystemPrompt:'Reviewed prose rules',directorNarratorPromptNeedsReview:false});assert.equal(saved.version,3);assert.equal(saved.values.narratorSystemPrompt,'Custom legacy state instructions');
+  const copy=await h.sessions.duplicateSession('s',0),copied=await h.storySettings.ensureStorySettings(copy);assert.equal(copied.values.directorNarratorSystemPrompt,'Reviewed prose rules');assert.equal(copied.values.directorNarratorPromptNeedsReview,false);
+  const backup=await h.transfer.buildFullBackup('s'),file={name:'backup.json',size:100,text:async()=>JSON.stringify(backup)};
+  const imported=await h.transfer.importSillyTavern(file),restored=await h.storySettings.ensureStorySettings(imported.sessionId ?? imported);
+  assert.equal(restored.values.directorNarratorSystemPrompt,'Reviewed prose rules');assert.equal(restored.values.directorNarratorPromptNeedsReview,false);
+ }
 });
