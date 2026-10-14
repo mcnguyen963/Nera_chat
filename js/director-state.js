@@ -10,10 +10,10 @@ export function playerStopBoundary(input) {
   const text=String(input ?? '').replace(/"[^"]*"|“[^”]*”/g,'');
   const start='(?:^|[.!?;]\\s*|\\band\\s+)stop\\s+';
   return new RegExp(start+'(?:(?:when|once|as soon as)\\s+(?:we|i|you|they)\\s+arrive|(?:on|upon|at)\\s+arrival)\\b','i').test(text)
-    ? {kind:'arrival',instruction:'End immediately at destination arrival, before any NPC conversation, offer, registration or new activity.'} : null;
+    ? {kind:'arrival',instruction:'End at destination arrival before any follow-on conversation, offer, registration or activity; a genuine interruption may stop the journey earlier for a player response.'} : null;
 }
 export function assertDirectorBoundary(turn, boundary) {
-  if(boundary?.kind==='arrival' && turn.contract.action==='narrate' && turn.after.decisions.some(i=>!turn.before.decisions.some(old=>old.id===i.id)))fail('planned a new player decision beyond the requested arrival boundary. Retry or Re-plan before narration.');
+  if(boundary?.kind==='arrival' && turn.contract.action==='narrate' && turn.contract.transition==='completed' && turn.after.decisions.some(i=>!turn.before.decisions.some(old=>old.id===i.id)))fail('planned a new player decision beyond the requested arrival boundary. Retry or Re-plan before narration.');
 }
 export function validateDirectorState(value) {
   if (!object(value) || value.version !== DIRECTOR_VERSION) fail('unsupported live-state version.');
