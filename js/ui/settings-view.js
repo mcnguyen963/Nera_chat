@@ -2,7 +2,8 @@ import { openDirectorState } from './director-view.js';
 import {setIcon} from './icons.js';
 import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
-import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings} from '../story-settings.js';
+import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings,resolveStorySettings} from '../story-settings.js';
+import {addRoleTestProfiles} from '../model-profiles.js';
 import {loadRewriteDefaultPrompt} from '../rewrite.js';
 import {vibrationSupport} from '../stream-vibration.js';
 import {requestInputLimit} from '../request-budget.js';
@@ -103,6 +104,10 @@ export function initSettingsView() {
     mirrorFromActiveProfile(draft);
     renderProfile();
   });
+  input('btn-role-test-profiles').addEventListener('click',()=>{
+    capture();draft.profiles=addRoleTestProfiles(draft).profiles;renderProfile();
+    feedback('Test profiles added. Save, then select them in Prompts.');
+  });
   input("btn-profile-delete").addEventListener("click", () => {
     if (draft.profiles.length === 1) return feedback("Keep at least one profile.", true);
     capture();
@@ -152,7 +157,7 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
 function reloadGlobalSettings() {
   draft = structuredClone(state.settings);
   promptStoryId=state.sessionId;promptBase=null;
-  try {const effective=effectiveActiveSettings();for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
+  try {const effective=resolveStorySettings(state.settings,state.storySettings);for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
   renderAll(); capture();
   original = structuredClone(draft);
   clearMessage();
@@ -244,6 +249,10 @@ function renderAll() {
   const empty=document.createElement('option');empty.value='';empty.textContent='Choose a profile';directorProfiles.append(empty);
   for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;directorProfiles.append(option);}
   if(draft.directorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.directorProfileId)){const missing=document.createElement('option');missing.value=draft.directorProfileId;missing.textContent='Missing profile — choose another';directorProfiles.append(missing);}directorProfiles.value=draft.directorProfileId ?? '';
+  const narratorProfiles=input('set-narrator-profile');narratorProfiles.replaceChildren();
+  const current=document.createElement('option');current.value='';current.textContent='Use active profile';narratorProfiles.append(current);
+  for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;narratorProfiles.append(option);}
+  if(draft.narratorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.narratorProfileId)){const missing=document.createElement('option');missing.value=draft.narratorProfileId;missing.textContent='Missing profile — choose another';narratorProfiles.append(missing);}narratorProfiles.value=draft.narratorProfileId ?? '';
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-director-narrator-prompt",draft.directorNarratorSystemPrompt ?? directorDefaults.directorNarratorSystemPrompt);renderNarratorReview();
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
@@ -362,7 +371,7 @@ function capture() {
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.modelContextTokens=raw('set-model-context').trim();
-  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
+  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.narratorProfileId=raw('set-narrator-profile');draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
   for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5]])draft[key]=Number(raw(id) || fallback);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.directorNarratorSystemPrompt=raw("set-director-narrator-prompt");
@@ -478,6 +487,7 @@ async function handleSaveSettings() {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
       if(state.busy)throw new Error('Finish the current reply before saving story settings.');
       if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
+      for(const key of ['narratorProfileId','directorProfileId'])if(validated[key] && !draft.profiles.some(p=>p.id===validated[key]))throw new Error('The selected '+(key==='narratorProfileId'?'Narrator':'Director')+' profile is missing. Choose another.');
       validated.directorNarratorPromptNeedsReview=false;
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
       promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;

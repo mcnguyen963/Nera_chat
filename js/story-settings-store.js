@@ -3,12 +3,13 @@ import {db} from './db.js';
 import {currentUid} from './auth.js';
 import {state} from './state.js';
 import {assertStory} from './errors.js';
+import {resolveModelProfile} from './model-profiles.js';
 import {STORY_SETTINGS_VERSION,migrateStorySettings,defaultStorySettings,resolveStorySettings,mergeStorySettings,pickStorySettings} from './story-settings.js';
 const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySettings','current');
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
 const cache=new Map();let unsubscribe=null,epoch=0,snapshotRun=0;
-async function readDocument(data){if(![1,2,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
+async function readDocument(data){if(![1,2,3,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
 export async function preserveLegacyStorySeed(accountSettings) {
   const uid=currentUid(),ref=seedRef(uid);
   return runTransaction(db,async tx=>{
@@ -78,5 +79,6 @@ export async function selectStorySettings(sid) {
 }
 export function effectiveActiveSettings() {
   if(!state.sessionId || state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed)throw new Error('Story prompts have not loaded. Reload the story before generating.');
-  return {...resolveStorySettings(state.settings,state.storySettings),_storySettingsRevision:state.storySettings.revision};
+  const settings=resolveStorySettings(state.settings,state.storySettings);
+  return {...resolveModelProfile(settings,settings.narratorProfileId,{role:'Narrator'}),_storySettingsRevision:state.storySettings.revision};
 }

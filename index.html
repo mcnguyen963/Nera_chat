@@ -121,7 +121,11 @@
             <textarea id="chat-input" form="composer" autocomplete="off" inputmode="text" enterkeyhint="enter" autocapitalize="sentences" spellcheck="true" placeholder="Where shall we begin?" aria-label="Your message" rows="1"></textarea>
             <div class="composer-row">
               <label class="composer-select composer-model">
-                <select id="quick-profile" aria-label="Model"></select>
+                <select id="quick-profile" aria-label="Narrator profile"></select>
+                <span class="composer-select-arrow" aria-hidden="true">⌄</span>
+              </label>
+              <label id="quick-director-control" class="composer-select composer-model hidden">
+                <select id="quick-director-profile" aria-label="Director profile"></select>
                 <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
               <label class="composer-select composer-thinking">
@@ -180,6 +184,7 @@
                   <div class="profile-control"><label for="set-profiles">Profile</label><div class="profile-row"><select id="set-profiles"></select><button id="btn-profile-copy" class="btn small" type="button">Copy</button><button id="btn-profile-delete" class="btn small danger" type="button">Delete</button></div></div>
                   <label>Profile name<input type="text" id="set-profile-name" /></label>
                 </div>
+                <button id="btn-role-test-profiles" class="btn small" type="button">Add Director/Narrator test profiles</button>
                 <h3>Connection &amp; thinking</h3>
                 <div class="settings-grid">
                   <label>Endpoint URL<input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" /></label>
@@ -245,6 +250,7 @@
                 <p class="muted">These prompts and rewrite preferences are saved independently for this story.</p>
                 <div class="settings-grid">
                   <label>Narration mode<select id="set-narration-mode"><option value="classic">Classic</option><option value="director">Director–Narrator</option></select></label>
+                  <label>Narrator connection profile<select id="set-narrator-profile"></select></label>
                   <label>Director connection profile<select id="set-director-profile"></select></label>
                   <label>Director input limit<input id="set-director-input" type="number" min="1000" max="200000" /></label>
                   <label>Director output limit<input id="set-director-output" type="number" min="256" max="32000" /></label>

@@ -1,6 +1,7 @@
 import { selectScheduledPlan, renderPlanUnit } from './scheduled-plan.js';
 import { prompts } from './system-prompts.js';
-import { normalizeMemory, memoryTaskSettings } from './memory-settings.js';
+import { normalizeMemory } from './memory-settings.js';
+import { resolveModelProfile } from './model-profiles.js';
 import { activeDirectorState, directorScene, playerStopBoundary } from './director-state.js';
 import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
@@ -15,10 +16,10 @@ export function directorOutputOptions(settings) {
 }
 export function directorTaskSettings(settings) {
   if (!settings.directorProfileId) throw new Error('Choose a Director connection profile in story settings.');
-  const task=memoryTaskSettings(settings,{updateProfileId:settings.directorProfileId,updateMaxTokens:settings.directorMaxOutputTokens});
+  const task=resolveModelProfile(settings,settings.directorProfileId,{role:'Director'});
   if(!task.apiKey || !task.modelId)throw new Error('The Director profile needs an API key and Model ID.');
   // A different connection must not inherit the narrator model's window size.
-  return {...task,streaming:false,maxContextTokens:settings.directorMaxInputTokens,modelContextTokens:null};
+  return {...task,streaming:false,maxResponseTokens:settings.directorMaxOutputTokens,maxContextTokens:settings.directorMaxInputTokens,modelContextTokens:null};
 }
 export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens}={}) {
   const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session).entries;

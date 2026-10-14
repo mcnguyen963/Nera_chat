@@ -9,7 +9,8 @@ import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
-import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
+import {selectStorySettings,effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
+import {resolveModelProfile} from '../model-profiles.js';
 import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
 import {buildRewriteMessages} from '../rewrite.js';
@@ -385,12 +386,26 @@ export function initChatView() {
 
 // ---------- inline model / thinking selectors (composer) ----------
 
-// Model selection and reasoning are shared account preferences.
+// Saved connections are shared; Director mode can select both roles per story.
+const storyRoleProfiles=()=>state.storySettings?.values?.narrationMode==='director' || !!state.storySettings?.values?.narratorProfileId;
+async function saveQuickRoleProfile(key,value) {
+  try{
+    if(busy)throw new Error('Finish the current reply before changing profiles.');
+    if(!state.sessionId || state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed)throw new Error('Story settings have not loaded.');
+    if(!value && key==='directorProfileId')throw new Error('Choose a Director profile.');
+    if(value && !state.settings.profiles.some(p=>p.id===value))throw new Error('Choose an existing profile.');
+    await saveStorySettings(state.sessionId,state.storySettings.values,{[key]:value});
+  }catch(error){showTransientError(error.message);}
+  refreshQuickControls();
+}
 function initQuickControls() {
   el.quickProfile = document.getElementById("quick-profile");
+  el.quickDirector = document.getElementById('quick-director-profile');
   el.quickThinking = document.getElementById("quick-thinking");
+  el.quickDirector.addEventListener('change',()=>saveQuickRoleProfile('directorProfileId',el.quickDirector.value));
 
   el.quickProfile.addEventListener("change", async () => {
+    if(storyRoleProfiles())return saveQuickRoleProfile('narratorProfileId',el.quickProfile.value);
     const s = structuredClone(state.settings);
     if (!s) return;
     s.activeProfileId = el.quickProfile.value;
@@ -402,20 +417,24 @@ function initQuickControls() {
   el.quickThinking.addEventListener("change", async () => {
     const s = structuredClone(state.settings);
     if (!s) return;
+    const selected=state.storySettings?.values?.narratorProfileId;
+    let connection;
+    try{connection=resolveModelProfile(s,selected,{role:'Narrator'});}catch(error){showTransientError(error.message);refreshQuickControls();return;}
     const v = el.quickThinking.value;
     if (v === "off") {
-      s.reasoning = { ...s.reasoning, enabled: false };
+      connection.reasoning = { ...connection.reasoning, enabled: false };
     } else if (v === "max_tokens") {
-      s.reasoning = { ...s.reasoning, enabled: true, mode: "max_tokens" };
+      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "max_tokens" };
     } else {
-      s.reasoning = { ...s.reasoning, enabled: true, mode: "effort", effort: v };
+      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "effort", effort: v };
     }
     normalizeProfiles(s);
-    mirrorToActiveProfile(s);
+    if(selected && selected!==s.activeProfileId)s.profiles.find(p=>p.id===selected).reasoning=connection.reasoning;
+    else{s.reasoning=connection.reasoning;mirrorToActiveProfile(s);}
     try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
   });
 
-  document.addEventListener('story-settings-changed',()=>{refreshContextIndicator();});
+  document.addEventListener('story-settings-changed',()=>{refreshQuickControls();refreshContextIndicator();});
   document.addEventListener("settings-changed", refreshQuickControls);
   document.addEventListener("settings-changed", updateIndicator);
   refreshQuickControls();
@@ -427,11 +446,15 @@ function fillQuickProfileSelect(s) {
     ...s.profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.id;
-      o.textContent = `${p.modelId || 'No model'} · ${p.name}`;
+      o.textContent = `${storyRoleProfiles()?'Narrator · ':''}${p.modelId || 'No model'} · ${p.name}`;
       return o;
     })
   );
-  el.quickProfile.value = s.activeProfileId;
+  if(storyRoleProfiles()){
+    const option=document.createElement('option');option.value='';option.textContent='Narrator · Active profile';el.quickProfile.replaceChildren(option,...Array.from(el.quickProfile.children));
+    const id=state.storySettings.values.narratorProfileId ?? '';
+    if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Narrator profile';el.quickProfile.append(missing);}el.quickProfile.value=id;
+  }else el.quickProfile.value = s.activeProfileId;
 }
 
 function quickThinkingValue(s) {
@@ -444,13 +467,21 @@ function refreshQuickControls() {
   const s = state.settings;
   if (!s) return;
   normalizeProfiles(s);
-  const p = activeProfile(s);
+  let connection=s;
+  try{connection=resolveModelProfile(s,state.storySettings?.values?.narratorProfileId,{role:'Narrator'});}catch{}
+  const p = activeProfile(connection);
   fillQuickProfileSelect(s);
-  el.quickThinking.value = quickThinkingValue(s);
+  el.quickThinking.value = quickThinkingValue(connection);
   el.quickProfile.title = p?.name
-    ? `${p.name} · ${s.modelId || "no model"}`
-    : s.modelId || "Model not set";
-  el.quickThinking.title = `Thinking: ${quickThinkingValue(s)}`;
+    ? `Narrator: ${p.name} · ${connection.modelId || "no model"}`
+    : connection.modelId || "Model not set";
+  el.quickThinking.title = `Narrator thinking: ${quickThinkingValue(connection)}`;
+  const director=state.storySettings?.values?.narrationMode==='director',id=state.storySettings?.values?.directorProfileId ?? '';
+  document.getElementById('quick-director-control').classList.toggle('hidden',!director);
+  el.quickDirector.replaceChildren();
+  const choice=document.createElement('option');choice.value='';choice.textContent='Director · Choose profile';el.quickDirector.append(choice);
+  for(const profile of s.profiles){const option=document.createElement('option');option.value=profile.id;option.textContent='Director · '+(profile.name || profile.modelId);el.quickDirector.append(option);}
+  if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Director profile';el.quickDirector.append(missing);}el.quickDirector.value=id;
 }
 
 export function setSession(sessionId) {
@@ -1269,7 +1300,8 @@ async function handleRewrite() {
   if (rewriteController) { rewriteController.abort(); return; }
   if (busy || state.busy || !session || editingState) return;
   if(!el.input.value.trim()){await handleContinue();return;}
-  const settings = effectiveActiveSettings();
+  let settings;
+  try{settings=effectiveActiveSettings();}catch(error){showTransientError(error.message);return;}
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in Settings first.");
     return;
@@ -1402,7 +1434,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply first.');return;}
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
-  let settings = effectiveActiveSettings();
+  let settings;
+  try{settings=effectiveActiveSettings();}catch(error){showTransientError(error.message);if(ownsToken)releaseBusy(token);return;}
   const sid = state.sessionId;
   if (!settings) {if(ownsToken)releaseBusy(token);return;}
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
@@ -1817,6 +1850,9 @@ function appendStream(kind, text) {
 
 function applyBusyUi(b) {
   busy = state.busy = b;
+  if(el.quickProfile)el.quickProfile.disabled=b;
+  if(el.quickDirector)el.quickDirector.disabled=b;
+  if(el.quickThinking)el.quickThinking.disabled=b;
   planJumpControl?.refresh();
   updateRewriteControls();
   updateMemoryChip();
