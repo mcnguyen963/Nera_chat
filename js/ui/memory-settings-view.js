@@ -1,3 +1,4 @@
+import { normalizeCalendar, parseStoryDate, parseClock, formatStoryDate, clockText, calendarInstruction } from '../story-calendar.js';
 import {dismissRebuild} from '../session-memory.js';
 import {rebuildLabel} from '../memory-rebuild.js';
 import { skippedNotesText } from '../memory-skipped.js';
@@ -11,6 +12,7 @@ import { computeTurns, dueRange, dueRangeStatus } from '../turns.js';
 import { state } from '../state.js';
 import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
 import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-updater.js';
+import { copyText } from './clipboard.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
 const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
@@ -22,6 +24,8 @@ export function fillMemory(raw) {
   filled = normalizeMemory(raw);
   for (const key of booleans) get(key).checked = filled[key];
   for (const key of [...strings,...numbers]) get(key).value = filled[key];
+  if(get('calendar-mode'))get('calendar-mode').value=filled.calendar.mode;
+  if(get('calendar-anchor'))get('calendar-anchor').value=filled.calendar.anchor ?? '';
   refreshMemoryProfiles(filled.updateProfileId);
   const seed = parseScene(filled.startingScene);
   for (const key of seedKeys) get('starting-'+key).value = key === 'present' ? seed.present.join(', ') : key === 'date' ? seed.when ?? '' : seed[key] ?? (key === 'time' ? 'unknown' : '');
@@ -33,9 +37,15 @@ export function readMemory(validate = false, integerField) {
   const out = normalizeMemory();
   for (const key of booleans) out[key] = get(key).checked;
   for (const key of strings) out[key] = get(key).value;
+  out.calendar=normalizeCalendar({mode:get('calendar-mode')?.value,anchor:get('calendar-anchor')?.value});
+  if(validate && out.calendar.mode==='modern'&&!out.calendar.anchor)throw new Error('Enter a weekday/date anchor, such as Friday 21/10/738.');
   const seed = Object.fromEntries(seedKeys.map(key => [key,get('starting-'+key).value.trim()]));
   if (seed.date || seed.place || seed.present || seed.time && seed.time !== 'unknown') {
     if (validate && (!seed.place || !seed.present)) throw new Error('A starting scene needs a location and attendees.');
+    if(out.calendar.mode==='modern' && validate) {
+      if(seed.date && seed.date!=='unknown') {const date=parseStoryDate(seed.date);if(!date?.valid)throw new Error('Enter a valid modern starting date.');const formatted=formatStoryDate(date,out.calendar);if(date.weekday!==null&&parseStoryDate(formatted).weekday!==date.weekday)throw new Error('Starting weekday conflicts with the calendar anchor.');seed.date=formatted;}
+      if(seed.time && seed.time!=='unknown') {const clock=parseClock(seed.time);if(clock===null)throw new Error('Enter a valid starting clock, such as 15:40.');seed.time=clockText(clock);}
+    }
     try { out.startingScene = sceneLine({ ...seed,present:seed.present.split(',').map(n => n.trim()).filter(Boolean) }); }
     catch (error) { if (validate) throw error; }
   }
@@ -47,6 +57,7 @@ export function readMemory(validate = false, integerField) {
 export function memoryDirty(original) {
   if (!filled) return false;
   const saved = normalizeMemory(original);
+  if(JSON.stringify(normalizeCalendar({mode:get('calendar-mode')?.value,anchor:get('calendar-anchor')?.value}))!==JSON.stringify(saved.calendar))return true;
   if (booleans.some(k => get(k).checked !== saved[k])) return true;
   if ([...strings,...numbers].some(k => String(get(k).value) !== String(saved[k]))) return true;
   const seed = parseScene(saved.startingScene);
@@ -56,7 +67,8 @@ export function memoryDirty(original) {
 export function initMemorySettings(openLore) {
   const userRole=get('blockRole')?.querySelector('option[value="user"]');
   if(userRole) userRole.textContent='User (recommended): notes travel with your latest message';
-  for (const key of [...booleans,...numbers,...strings,...seedKeys.map(k => 'starting-'+k),...['characters','locations','facts','events'].flatMap(b => [b+'-on',b+'-budget',...(b === 'characters' || b === 'locations' ? [b+'-maxCards'] : [])])]) get(key)?.addEventListener('input',updateMemorySettingsHints);
+  for (const key of [...booleans,...numbers,...strings,'calendar-mode','calendar-anchor',...seedKeys.map(k => 'starting-'+k),...['characters','locations','facts','events'].flatMap(b => [b+'-on',b+'-budget',...(b === 'characters' || b === 'locations' ? [b+'-maxCards'] : [])])]) get(key)?.addEventListener('input',updateMemorySettingsHints);
+  get('calendar-copy')?.addEventListener('click',async()=>{try{const text=calendarInstruction(readMemory().calendar);if(!text)throw new Error('Choose modern time and enter an anchor first.');await copyText(text);toast('Copied. Review these instructions before adding them to your story prompt.');}catch(e){toast(e);}});
   get('showScene').addEventListener('change',() => { setPref('nera.memory.showScene',get('showScene').checked ? '1' : '0'); document.dispatchEvent(new CustomEvent('scene-preference')); });
   get('open-lore').addEventListener('click',openLore);
   get('update-now').addEventListener('click',() => void manualUpdate());
@@ -83,6 +95,9 @@ export function updateMemorySettingsHints() {
   get('budget-summary').textContent = `Up to ${budget.toLocaleString()} of ${available.toLocaleString()} available tokens. Recent conversation has priority; lore uses the remaining space.`+(budget>available*.5 ? ' Leaves little room for recent messages.' : ''); get('budget-summary').style.color = budget>available*.5 ? 'var(--danger)' : '';
   get('show-scene-row').classList.toggle('hidden',!mem.scene);
   get('scene-options').classList.toggle('hidden',!mem.scene);
+  get('calendar-anchor-row')?.classList.toggle('hidden',mem.calendar.mode!=='modern');
+  get('calendar-help')?.classList.toggle('hidden',mem.calendar.mode!=='modern');
+  get('calendar-copy')?.classList.toggle('hidden',mem.calendar.mode!=='modern');
   for (const book of Object.keys(mem.books)) { get(book+'-on').disabled = !mem.lorebooks && !mem.autoUpdate; get(book+'-budget').disabled = !mem.lorebooks; if (get(book+'-maxCards')) get(book+'-maxCards').disabled = !mem.lorebooks; }
   get('loreLookbackMessages').disabled = !mem.lorebooks;
   const hints = [];

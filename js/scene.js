@@ -1,9 +1,10 @@
+import { parseStoryDate, parseClock, validateModernTimestamp, calendarInstruction, formatStoryDate, clockText } from './story-calendar.js';
 import { isAcceptedTurn, lastUserOrderOf, stripDialogue } from './turn-review.js';
 import { canonicalScene, canonicalFromFields, parseSceneFields, readSceneOutput } from './scene-parser.js';
 export { canonicalScene, canonicalFromFields, parseSceneFields, readSceneOutput };
 import { prompts, renderPrompt } from './system-prompts.js';
 export const MAX_SCENE_LENGTH = 2000;
-export const SCENE_RULE = (protagonist = '') => renderPrompt(prompts.scene, { PROTAGONIST: protagonist || 'the main character' });
+export const SCENE_RULE = (protagonist = '', calendar = null) => [renderPrompt(prompts.scene, { PROTAGONIST: protagonist || 'the main character' }),calendarInstruction(calendar)].filter(Boolean).join('\n\n');
 export function normalizeSceneLine(raw) {
   const text = String(raw ?? '').replace(/\s*\n\s*/g, ' ').trim();
   if (text.length > MAX_SCENE_LENGTH) throw new Error(`The scene line exceeds ${MAX_SCENE_LENGTH} characters. Shorten it before saving.`);
@@ -74,6 +75,22 @@ export function sceneLine(fields) {
   if (!raw) throw new Error('The scene line exceeds 2000 characters. Shorten it before saving.');
   return raw;
 }
+// Author edits may correct time in either direction, but must be structurally valid.
+export function validateSceneEdit(raw,calendar=null) {
+  const fields=parseScene(raw),clock=parseClock(fields.time);
+  if(fields.time&&/\d\s*:/.test(fields.time)&&clock===null)throw new Error('Enter a valid scene clock, such as 15:40.');
+  if(calendar?.mode==='modern') {
+    if(fields.when) {
+      const date=parseStoryDate(fields.when);
+      if(!date?.valid)throw new Error('Enter a valid modern scene date.');
+      const formatted=formatStoryDate(date,calendar);
+      if(date.weekday!==null&&date.weekday!==parseStoryDate(formatted).weekday)throw new Error('Scene weekday conflicts with the story calendar anchor.');
+      fields.when=formatted;
+    }
+    if(fields.time) {if(clock===null)throw new Error('Enter a 24-hour clock or unknown.');fields.time=clockText(clock);}
+  }
+  return sceneLine(fields);
+}
 export function carryScene(prior) {
   return {scene:null,sceneMeta:{kind:'carried',stale:true,fromOrder:prior?.fromOrder ?? null,fromId:prior?.fromId ?? null,missingStreak:(prior?.missingStreak ?? 0)+1}};
 }
@@ -107,25 +124,8 @@ const CLOCK_PATTERN='\\d{1,2}:\\d{2}(?:\\s*[ap]m)?';
 const leapYear=year=>year%4===0 && (year%100!==0 || year%400===0);
 const daysInMonth=(year,month)=>[31,leapYear(year)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
 // Complete dates only; custom calendars and partial dates keep their free-text rules.
-function completeDate(value) {
-  const text=normalized(value);
-  let year,month,day,m;
-  if((m=text.match(/^(\d{3,4})-(\d{1,2})-(\d{1,2})$/))) [,year,month,day]=m;
-  else if((m=text.match(/^(\d{1,2})([/.-])(\d{1,2})\2(\d{1,4})$/))) {day=m[1];month=m[3];year=m[4];}
-  else if((m=text.match(new RegExp(`^(\\d{1,2}) (${MONTH_PATTERN}) (\\d{1,4})$`)))) {day=m[1];month=MONTHS.indexOf(m[2])+1;year=m[3];}
-  else if((m=text.match(new RegExp(`^(${MONTH_PATTERN}) (\\d{1,2}),? (\\d{1,4})$`)))) {month=MONTHS.indexOf(m[1])+1;day=m[2];year=m[3];}
-  else return null;
-  year=Number(year);month=Number(month);day=Number(day);
-  return {year,month,day,valid:year>0 && month>=1 && month<=12 && day>=1 && day<=daysInMonth(year,month)};
-}
-function clockMinutes(value) {
-  const m=normalized(value).match(/^(\d{1,2}):(\d{2})\s*([ap]m)?$/);
-  if(!m)return null;
-  let hour=Number(m[1]);const minute=Number(m[2]);
-  if(minute>59 || (m[3] ? hour<1 || hour>12 : hour>23))return null;
-  if(m[3])hour=hour%12+(m[3]==='pm'?12:0);
-  return hour*60+minute;
-}
+function completeDate(value) { return parseStoryDate(value); }
+function clockMinutes(value) { return parseClock(value); }
 function equivalent(a,b,key) {
   if(normalized(a)===normalized(b))return true;
   if(key==='time') {const x=clockMinutes(a),y=clockMinutes(b);return x!==null && x===y;}
@@ -176,8 +176,13 @@ export function sceneFromThinking(thinking) {
 }
 
 // A declared clock is accepted unless the ending narration contradicts it.
-export function validateSceneValues(raw, { narration = '', userText = '', prior = null } = {}) {
+export function validateSceneValues(raw, { narration = '', userText = '', prior = null, calendar = null, ooc = false } = {}) {
   const parsed=parseScene(raw),warnings=[],provenance={};
+  if(calendar?.mode==='modern') {
+    const checked=validateModernTimestamp(parsed,{calendar,prior,narration:stripDialogue(narration),userText:stripDialogue(userText),ooc});
+    parsed.when=checked.date;parsed.time=checked.time;
+    return {scene:sceneLine(parsed),sceneMeta:{kind:'declared',stale:false,provenance:checked.provenance},warnings:checked.warnings};
+  }
   const narrative=stripDialogue(String(narration).replace(/<(?:scene|plan|plan_thread)>[\s\S]*?<\/(?:scene|plan|plan_thread)>/gi,''));
   const ending=narrative.trim().split(/\n\s*\n/).at(-1) ?? '';
   const progressed=(date,text)=>{
@@ -190,7 +195,8 @@ export function validateSceneValues(raw, { narration = '', userText = '', prior 
     const value=parsed[field],needle=normalized(value),previous=prior?.[field];
     const declared=key==='time' ? [...timeClassesIn(value ?? '')][0] : null,endClasses=[...timeClassesIn(ending)];
     const compatible=other=>other===declared || NEIGHBOURS.some(pair=>pair.split(' ').includes(other) && pair.split(' ').includes(declared));
-    if(value && declared && endClasses.length && !endClasses.some(compatible)) {parsed[field]=previous ?? null;provenance[key]='contradicted';warnings.push('Unsupported scene time; explicit ending contradicts the declared clock.');}
+    if(key==='time' && value && /\d\s*:/.test(value) && clockMinutes(value)===null) {parsed.time=previous ?? null;provenance.time='contradicted';warnings.push('Invalid scene clock; prior value kept.');}
+    else if(value && declared && endClasses.length && !endClasses.some(compatible)) {parsed[field]=previous ?? null;provenance[key]='contradicted';warnings.push('Unsupported scene time; explicit ending contradicts the declared clock.');}
     else if(!value)provenance[key]='unknown';
     else if(equivalent(previous,value,key))provenance[key]='prior';
     else if(supportsValue(userText,value,key))provenance[key]='user';

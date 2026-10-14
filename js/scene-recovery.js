@@ -1,3 +1,4 @@
+import { calendarInstruction } from './story-calendar.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts } from './system-prompts.js';
 import { chatCompletion } from './llm-client.js';
@@ -8,8 +9,8 @@ export const SCENE_RECOVERY_FORMAT = { type:'json_schema',json_schema:{ name:'sc
     place:{ type:'string' },present:{ type:'array',items:{ type:'string' } },planThread:{ type:['string','null'] } },
     required:['date','time','place','present','planThread'] } } };
 
-export function recoveryMessages({ narration,userText,prior,names,plan }) {
-  return [{ role:'system',content:prompts.sceneRecovery },{ role:'user',content:JSON.stringify({
+export function recoveryMessages({ narration,userText,prior,names,plan,calendar }) {
+  return [{ role:'system',content:[prompts.sceneRecovery,calendarInstruction(calendar)].filter(Boolean).join("\n\n") },{ role:'user',content:JSON.stringify({
     priorScene:prior?.scene ?? null,currentUserInput:userText,narration,canonicalNames:names,
     fixedPlanActive:!!plan?.trim(),pendingPlan:plan?.trim() || null }) }];
 }
@@ -21,7 +22,7 @@ export function parseRecovery(text, context) {
   const names=[...(context.names ?? []),context.protagonist].filter(Boolean);
   obj.present=obj.present.map(n => names.find(x => x.toLowerCase()===n.trim().toLowerCase()) ?? n.trim()).filter(n => n && (names.includes(n) || (context.narration+' '+context.userText).toLowerCase().includes(n.toLowerCase())));
   let raw;try{raw=sceneLine(obj);}catch{return null;}
-  const checked = validateSceneValues(raw,{ narration:context.narration,userText:context.userText,prior:context.prior?.scene });
+  const checked = validateSceneValues(raw,{ narration:context.narration,userText:context.userText,prior:context.prior?.scene,calendar:context.calendar });
   return { ...checked,sceneMeta:{ ...checked.sceneMeta,kind:'inferred' },
     planThread:context.plan?.trim() ? obj.planThread : null };
 }

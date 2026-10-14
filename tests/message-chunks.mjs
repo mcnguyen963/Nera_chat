@@ -1142,3 +1142,10 @@ test('Lookup backfill refuses publication after concurrent history or account ch
     if(mutation==='history')assert.equal(h.documents.get(h.sessionPath+'/messageChunks/legacy1').lookupVersion,undefined);
   }
 });
+
+test('manual modern scene writes validate against transactional story calendar without accepting invalid clocks',async()=>{
+ const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Story'});h.documents.get(h.sessionPath).memory={calendar:{mode:'modern',anchor:'Friday 21/10/738'}};
+ const before=h.documents.get(h.sessionPath).historyRevision;
+ await assert.rejects(()=>h.api.updateMessageScene('s',a.id,a.order,'date: Friday 21/10/738 · time: 25:99 · place: Inn · present: Mira'),/clock/);assert.equal(h.documents.get(h.sessionPath).historyRevision,before);
+ await h.api.updateMessageScene('s',a.id,a.order,'date: 21/10/738 · time: 3:20 PM · place: Inn · present: Mira');assert.equal((await h.api.getMessages('s'))[0].scene,'date: Friday 21/10/738 · time: 15:20 · place: Inn · present: Mira');
+});

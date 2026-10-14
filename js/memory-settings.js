@@ -1,10 +1,11 @@
+import { normalizeCalendar } from './story-calendar.js';
 import { canonicalScene } from './scene.js';
 export const memoryValidationRanges = {
   loreLookbackMessages: [0, Number.MAX_SAFE_INTEGER], batchTurns: [2, 100], lagTurns: [0, 50], updateMaxTokens: [256, 32000],
   reorganizeMaxTokens: [256, 32000], blockDepth: [1, 20], budget: [0, 100000], maxCards: [1, 50],
 };
 export const DEFAULT_MEMORY = {
-  v: 1, characterSelection: false, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false,
+  v: 1, calendar: {mode:'legacy',anchor:null}, characterSelection: false, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false,
   books: { characters: { on: true, budget: 4000, maxCards: 6 }, locations: { on: true, budget: 4000, maxCards: 2 }, facts: { on: true, budget: 1000 }, events: { on: true, budget: 3000 } },
   loreLookbackMessages: 4, batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'user',
 };
@@ -12,6 +13,7 @@ export const DEFAULT_MEMORY_STATE = { extractedThroughOrder: null, lastUpdateAt:
 export function normalizeMemory(raw) {
   const out = structuredClone(DEFAULT_MEMORY);
   if (!raw || typeof raw !== 'object') return out;
+  out.calendar = normalizeCalendar(raw.calendar);
   out.protagonist = String(raw.protagonist ?? '').trim().slice(0, 60);
   for (const k of ['characterSelection', 'scene', 'sceneFallback', 'lorebooks', 'autoUpdate', 'memoryBlock', 'blockWindow']) out[k] = raw[k] === true;
   out.startingScene = typeof raw.startingScene === 'string' ? canonicalScene(raw.startingScene) : null;

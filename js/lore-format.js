@@ -1,3 +1,4 @@
+import { toRecordDocument, fromRecordDocument, validateRecords } from './lore-records.js';
 import { validateCoreReferences } from './character-core.js';
 const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|<!-- nera-)/.test(l)?'\\'+l:l).join('\n');
 import { cardFingerprint } from './lore-card-state.js';
@@ -11,6 +12,7 @@ function validateInput(text) { if (!String(text).trim()) throw new Error('The fi
 function importedLine(value) { const line = typeof value === 'string' ? { text:value } : value; return { id:newLoreId('ln'),text:String(line?.text ?? '').trim(),turn:Number.isSafeInteger(line?.turn) && line.turn>=0 ? line.turn : null,when:line?.when ? String(line.when) : null,src:line?.src ?? null,by:line?.by ?? 'import',at:line?.at ?? Date.now(),evidence:line?.evidence ?? [],sourceRevision:line?.sourceRevision ?? 0,...(line?.needsReview ? { needsReview:true } : {}) }; }
 const exportLine = l => ({ ...l });
 export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), now = new Date() } = {}) {
+  if(entries.some(e=>e.schemaVersion===3))return JSON.stringify({format:'nera-lorebooks',version:3,story:title,exportedAt:now.toISOString(),entries:entries.filter(e=>books.includes(e.book)).map(e=>toRecordDocument(e))},null,2);
   const out = { format:'nera-lorebooks',version:2,story:title,exportedAt:now.toISOString(),entries:entries.filter(e => books.includes(e.book)).map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,...sectionMeta(s,e) }])) })) };
   for (const book of books) {
     const list = entries.filter(e => e.book === book);
@@ -21,6 +23,7 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
   return JSON.stringify(out,null,2);
 }
 export function normalizeLoreEntry(e){
+      if(e?.schemaVersion===3&&e.subject)return fromRecordDocument(e);
       if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
       validateCoreReferences(e.coreReferences);
       const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
@@ -34,6 +37,7 @@ export function normalizeLoreEntry(e){
 export function fromJson(text) {
   validateInput(text); const source = unfence(text); let data;
   try { data = JSON.parse(source); } catch (e) { const p = Number(e.message.match(/position (\d+)/)?.[1]); if (Number.isFinite(p)) { const before = source.slice(0,p), line = before.split('\n').length, column = before.length-(before.lastIndexOf('\n')+1)+1; throw new Error(`JSON error at line ${line}, column ${column}: ${e.message}`); } throw new Error('JSON error: '+e.message); }
+  if(data?.format==='nera-lorebooks'&&data.version===3&&Array.isArray(data.entries)){const entries=data.entries.map(fromRecordDocument);return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};}
   if (!data || typeof data !== 'object' || !['characters','locations','facts','events'].some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
   if(data.version===2 && Array.isArray(data.entries)) {
     const entries=data.entries.map(normalizeLoreEntry);
@@ -161,14 +165,14 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
   const statsFor = () => ({new:0,merged:0,unchanged:0,removed:0,cards:[],events:0,open:0,closed:0});
   const writes = [], warnings = [...parsed.warnings], preview = { books:{},conflicts:0,warnings,format:parsed.format };
   for (const key of parsed.books) preview.books[key] = statsFor();
-  const working = structuredClone(existingEntries);
+  const working = structuredClone(existingEntries),idMap=new Map();
   if (mode === 'replace') { for (const e of existingEntries.filter(e => parsed.books.includes(e.book))) { writes.push({ id:e.id,delete:true }); preview.books[e.book].removed++; preview.books[e.book].cards.push({name:e.name,type:'removed'}); } for (let i=working.length-1;i>=0;i--) if (parsed.books.includes(working[i].book)) working.splice(i,1); }
   for (const source of parsed.entries) {
     const names = [source.name,...source.aliases].map(normalizeName);
     const target = working.find(e => e.book === source.book && (source.kind === 'timeline' ? e.kind === 'timeline' : e.kind === source.kind && [e.name,...e.aliases].some(n => names.includes(normalizeName(n)))));
     const stats = preview.books[source.book] ??= statsFor();
     let result, type;
-    if (!target) { result = structuredClone(source); result.id = newLoreId(); if(!book){result.draft = false; result.createdFrom = 'import';} type = 'new'; working.push(result); }
+    if (!target) { result = structuredClone(source); result.id = source.schemaVersion===3 && existingEntries.some(e=>e.id===source.id&&e.book===source.book&&e.kind===source.kind&&[e.name,...e.aliases].some(n=>names.includes(normalizeName(n)))) ? source.id : newLoreId(); if(!book){result.draft = false; result.createdFrom = 'import';} type = 'new'; working.push(result); }
     else {
       result = target; const before = JSON.stringify(target);
       for (const alias of source.aliases) {
@@ -176,22 +180,26 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
         if (clash) warnings.push({ line:1,reason:`name already used by ${clash.name}: ${alias}` });
         else if (![result.name,...result.aliases].some(n => normalizeName(n) === normalizeName(alias))) result.aliases.push(alias);
       }
+      if(source.recordLayout)result.recordLayout={records:[...(result.recordLayout?.records ?? []),...source.recordLayout.records.filter(r=>!(result.recordLayout?.records ?? []).some(o=>o.id===r.id))]};
+      if(source.schemaVersion===3)result.schemaVersion=3;
       if (source.coreReferences) result.coreReferences = [...new Map([...(result.coreReferences ?? []),...source.coreReferences].map(b=>[b.id,b])).values()];
       result.alwaysLoad ||= source.alwaysLoad;
       if (source.status === 'closed') result.status = 'closed';
       for (const [key,s] of Object.entries(source.sections)) {
         const dest = result.sections[key];
         if (s.text && dest.text !== s.text) { if (!dest.text) Object.assign(dest,{ ...s,lines:dest.lines }); else { preview.conflicts++; if (conflict === 'file') Object.assign(dest,{ ...s,lines:dest.lines }); else if (conflict === 'both' && !dest.lines.some(l=>normalizeName(l.text)===normalizeName(s.text))) { dest.lines.push({ id:newLoreId('ln'),text:s.text,turn:s.cutoff?.turn ?? null,when:s.cutoff?.when ?? null,src:null,by:'import',at:now,origin:s.origin,kind:s.kind,cutoff:s.cutoff }); } } }
-        for (const l of s.lines) if (!dest.lines.some(x => normalizeName(x.text) === normalizeName(l.text))) dest.lines.push({ ...l,id:newLoreId('ln') });
+        for (const l of s.lines) if (!dest.lines.some(x => normalizeName(x.text) === normalizeName(l.text))) dest.lines.push({ ...l,id:source.schemaVersion===3&&!Object.values(result.sections).some(s=>s.lines.some(n=>n.id===l.id))?l.id:newLoreId('ln') });
       }
       type = before === JSON.stringify(result) ? 'unchanged' : 'merged';
     }
     // Note IDs are local to a card. Scoped book copies keep them so provenance
     // references and reviewed core fingerprints survive the round trip.
-    if (type === 'new' && !book) for (const s of Object.values(result.sections)) for (const l of s.lines) Object.assign(l,{ id:newLoreId('ln') });
+    idMap.set(source.id,result.id);
+    if (type === 'new' && !book && source.schemaVersion!==3) for (const s of Object.values(result.sections)) for (const l of s.lines) Object.assign(l,{ id:newLoreId('ln') });
     stats[type]++; stats.cards.push({ name:result.name,type }); if (result.kind === 'timeline') stats.events += result.sections.text.lines.length; if (result.kind === 'thread') stats[result.status === 'closed' ? 'closed' : 'open']++;
     if (type !== 'unchanged') { const previous = writes.findIndex(w => w.id === result.id && !w.delete); const write = { id:result.id,data:structuredClone(result) }; if (previous >= 0) writes[previous] = write; else writes.push(write); }
   }
+  for(const w of writes)for(const record of w.data?.recordLayout?.records ?? [])record.relatedEntryIds=(record.relatedEntryIds ?? []).map(id=>idMap.get(id) ?? id);
   return { preview,writes,...(book ? {book,loreRevision} : {}) };
 }
 
@@ -211,6 +219,7 @@ export function validateCard(entry) {
   for (const key of ['alwaysLoad','draft']) if (entry[key]!=null && typeof entry[key]!=='boolean') throw new Error(key+' must be true or false.');
   if (entry.kind==='thread' && !['open','closed'].includes(entry.status)) throw new Error('Thread status must be open or closed.');
   validateCoreReferences(entry.coreReferences);
+  if(entry.recordLayout)validateRecords(entry);
   const ids=new Set();
   for (const [key,s] of Object.entries(entry.sections ?? {})) {
     if (!SECTION_KEYS[entry.book].includes(key)) throw new Error('Unsupported section: '+key);
@@ -231,7 +240,7 @@ function supportedCardFields(entry,warnings) {
     if(allowed.includes(key))return true;
     warnings.push({line:1,reason:`ignored unsupported field '${key}' in ${label}`});return false;
   }));
-  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','coreReferences'],'card');
+  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','coreReferences','schemaVersion','recordLayout'],'card');
   const note=l=>pick(l,['id','text','turn','when','src','by','at','evidence','sourceRevision','needsReview','origin','kind','cutoff'],'note');
   out.sections=Object.fromEntries(Object.entries(out.sections).map(([key,s])=>[key,{...pick(s,['text','lines','origin','kind','cutoff','unavailable','sourceRevision'],key),lines:s.lines.map(note)}]));
   if(out.statusSource)out.statusSource=note(out.statusSource);
@@ -290,6 +299,8 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   for(const prop of ['name','alwaysLoad','draft','status'])result[prop]=source[prop];
   result.statusSource=null;
   result.aliases=mode==='merge' && target ? [...new Map([...target.aliases,...source.aliases].map(n=>[normalizeName(n),n])).values()] : source.aliases;
+  if(source.recordLayout || target?.recordLayout)result.recordLayout=mode==='merge' ? {records:[...(target?.recordLayout?.records ?? []),...(source.recordLayout?.records ?? []).filter(r=>!(target?.recordLayout?.records ?? []).some(o=>o.id===r.id))]} : structuredClone(source.recordLayout ?? {records:[]});
+  if(source.schemaVersion===3)result.schemaVersion=3;
   if (source.coreReferences || target?.coreReferences) result.coreReferences = mode==='merge' ? [...new Map([...(target?.coreReferences ?? []),...(source.coreReferences ?? [])].map(b=>[b.id,b])).values()] : structuredClone(source.coreReferences ?? []);
   const changes=[],notes={added:[],edited:[],removed:[]};
   const targetNotes=new Map(Object.values(target?.sections ?? {}).flatMap(s=>s.lines).map(l=>[l.id,l]));

@@ -85,6 +85,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     };
     const pc = book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));
     for (const e of list) {
+      if(sources.records && (e.recordLayout?.records ?? []).some(r=>r.pinned))add(e,0,'pinned record');
       if (book === 'events') {
         if (e.kind === 'thread') {
           if (currentHits.has(e.id)) add(e,0,'mentioned');
@@ -116,7 +117,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
       const priorityReason = book==='facts' && item.priority===1 ? 'scene mention'
         : book==='facts' && item.priority===4 ? 'other facts' : reason;
       const ranking = {rank:i+1,priorityReason,mention};
-      const reserved = entry.alwaysLoad || entry.id===pc?.id;
+      const reserved = entry.alwaysLoad || entry.id===pc?.id || sources.records && (entry.recordLayout?.records ?? []).some(r=>r.pinned);
       if (['characters','locations'].includes(book) && !reserved && optional++ >= mem.books[book].maxCards)
         skipped.push({entryId:entry.id,book,name:entry.name,reason:`card limit (${mem.books[book].maxCards}) reached`,ranking});
       else selected[book].push({entry,reason,ranking});

@@ -1,3 +1,5 @@
+import { readLoreCard, readLoreCards, subscribeVersionedLore, wrapLoreTransaction, versionRef, versionRoot } from './lore-version-store.js';
+import { reconcileRecords, toRecordDocument, fingerprint } from './lore-records.js';
 import { cardFingerprint } from './lore-card-state.js';
 import { minOf, maxOf } from './math-utils.js';
 import { limitSkippedNotes } from './memory-skipped.js';
@@ -31,13 +33,16 @@ function storyTransaction(sid,action,source = null) {
     const session=assertStory((await tx.get(sessionRef(sid))).data());
     if (source) assertStory((await tx.get(sessionRef(source))).data());
     let loreChanged=false,revisionWritten=false;
-    const tracked=Object.create(tx);tracked.get=tx.get.bind(tx);
+    const adapter=wrapLoreTransaction(tx,sid,session);
+    const tracked=Object.create(adapter);tracked.get=adapter.get;
     for(const method of ['set','update','delete'])tracked[method]=(target,...args)=>{
       if(target.path?.includes('/lore/'))loreChanged=true;
       if(target.path===sessionRef(sid).path && args[0] && 'loreRevision' in args[0])revisionWritten=true;
-      return tx[method](target,...args);
+      return adapter[method](target,...args);
     };
-    return Promise.resolve(action(tracked,session)).then(result=>{if(loreChanged && !revisionWritten)tx.update(sessionRef(sid),{loreRevision:increment(1)});return result;});
+    const result=await action(tracked,session);
+    if(loreChanged && !revisionWritten)adapter.update(sessionRef(sid),{loreRevision:increment(1)});
+    await adapter.flush();return result;
   });
 }
 const clean = entry => {
@@ -47,7 +52,7 @@ const clean = entry => {
   return data;
 };
 export function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
-export function subscribeLore(sid, callback, onError) { return onSnapshot(root(sid,'lore'), snap => callback(snap.docs.map(d => ({ id:d.id,...d.data() }))),onError); }
+export function subscribeLore(sid, callback, onError) { return subscribeVersionedLore(sid,callback,onError); }
 async function createEntryImpl(sid,entry) { guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
 export function mergeEntryEdits(current, staged, base) {
   const out = { ...current };
@@ -55,6 +60,10 @@ export function mergeEntryEdits(current, staged, base) {
   if (cardFingerprint(staged.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) {
     if (cardFingerprint(current.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) throw new Error('Core references changed while editing. Reopen the card and review again.');
     out.coreReferences = structuredClone(staged.coreReferences ?? []);
+  }
+  if(cardFingerprint(staged.recordLayout ?? null)!==cardFingerprint(base.recordLayout ?? null)){
+    if(cardFingerprint(current.recordLayout ?? null)!==cardFingerprint(base.recordLayout ?? null))throw new Error('Selection records changed while editing. Reopen this subject.');
+    out.recordLayout=structuredClone(staged.recordLayout);
   }
   out.sections = { ...current.sections };
   for (const [key,section] of Object.entries(staged.sections)) {
@@ -71,11 +80,12 @@ async function saveEntryImpl(sid,staged,base = staged) {
   return storyTransaction(sid,async tx => {
     const target = ref(sid,staged.id), snap = await tx.get(target);
     if (!snap.exists()) throw new Error('This card was deleted. Reopen the manager.');
-    const merged = mergeEntryEdits(snap.data(),staged,base); guardSize(merged);
-    tx.update(target,{ ...clean(merged),updatedAt:serverTimestamp() });
+    let merged = mergeEntryEdits(snap.data(),staged,base);
+    if(merged.schemaVersion===3)merged=reconcileRecords({...merged,id:staged.id});guardSize(merged);
+    tx.update(target,{ ...clean(merged),updatedAt:serverTimestamp() });return merged;
   });
 }
-export async function getLore(sid) { const snap = await getDocsFromServer(root(sid,'lore')); return snap.docs.map(d => ({ id:d.id,...d.data() })); }
+export async function getLore(sid) { return (await readLoreCards(sid)).map(d=>({id:d.id,...d.data()})); }
 
 const initializedBackupIndexes=new Set();
 const backupIndexRef = sid => ref(sid,'backups','loreMeta');
@@ -247,8 +257,8 @@ async function reconcileBackgroundImpl(sid,entry,key,text,expectedText) {
 }
 export const reconcileBackground=gateWrite(reconcileBackgroundImpl);
 async function commitExtractionImpl(sid,changes,range) {
-  return runTransaction(db,async tx=>{
-    const target=sessionRef(sid),snap=await tx.get(target),session=assertStory(snap.data());
+  return storyTransaction(sid,async (tx,session)=>{
+    const target=sessionRef(sid);
     if(range.guard){assertExtractionSource(session,range.guard);if(range.guard.loreRevision!=null && (session.loreRevision ?? 0)!==range.guard.loreRevision)throw new Error('Lorebooks changed during the update. Retry memory extraction.');}else assertSource(session,range.expectedSource);
     const existing=new Map(),skipped=[],written=[];let notes=0;
     for(const id of new Set([...changes.appends,...changes.aliases,...changes.statusChanges].map(a=>a.entryId))) {
@@ -283,7 +293,7 @@ async function commitExtractionImpl(sid,changes,range) {
   });
 }
 async function replaceLinesImpl(sid,previews,snapshotAt) {
-  const cards=await Promise.all(previews.map(p=>getDocFromServer(ref(sid,p.entry.id))));
+  const cards=await Promise.all(previews.map(p=>readLoreCard(sid,p.entry.id)));
   const current=cards.filter(d=>d.exists()).map(d=>({id:d.id,...d.data()}));
   const backup = await writeBackupImpl(sid,'reorganize','Reorganized '+(previews.length === 1 ? previews[0].entry.name : previews.length+' cards'),current.filter(e => previews.some(p => p.entry.id === e.id)));
   for (const p of previews) await storyTransaction(sid,async tx => {
@@ -305,6 +315,7 @@ async function importLoreImpl(sid,plan,_existing,{isCurrent=()=>true,book=plan.b
   check();
   if(scoped && (!['characters','locations','facts','events'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
   const writes=[...new Map(plan.writes.map(w=>[w.id,w])).values()];
+  if(writes.some(w=>w.data?.schemaVersion===3) && (await getDocFromServer(sessionRef(sid))).data()?.loreSchemaVersion!==3)throw new Error('Migrate this story to selective lorebook records before importing version 3 JSON.');
   for(const w of writes) {
     if(!w.id || w.id.includes('/') || !w.delete && (w.data.id!==w.id || scoped && w.data.book!==book))throw new Error('Invalid import destination or category.');
     if(!w.delete)guardSize(w.data);
@@ -342,6 +353,7 @@ async function importLoreImpl(sid,plan,_existing,{isCurrent=()=>true,book=plan.b
 async function importCardImpl(sid,plan,{isCurrent=()=>true}={}) {
   const check=()=>{if (!isCurrent() || sid.uid!==currentUid()) throw new Error('Navigation or account changed; card import cancelled.');};
   check();guardSize(plan.data);
+  if(plan.data.schemaVersion===3 && (await getDocFromServer(sessionRef(sid))).data()?.loreSchemaVersion!==3)throw new Error('Migrate this story to selective lorebook records before importing version 3 JSON.');
   if(!plan.expected && plan.data.kind==='timeline'){const cards=await getLore(sid);check();if(cards.some(e=>e.kind==='timeline'))throw new Error('A Timeline already exists. Choose Update existing card and refresh the preview.');}
   if(!plan.id || plan.id.includes('/') || plan.data.id!==plan.id)throw new Error('Invalid card destination.');
   await ensureBackupIndex(sid);check();
@@ -364,8 +376,10 @@ async function importCardImpl(sid,plan,{isCurrent=()=>true}={}) {
 export const importCard=gateWrite(importCardImpl);
 async function copyLoreImpl(src,dst,maxOrder) {
   assertStory((await getDocFromServer(sessionRef(src))).data());
-  const snap = await getDocsFromServer(root(src,'lore'));
+  const snap = {docs:await readLoreCards(src)};
   if (src?.uid) dst = { id:dst,uid:src.uid };
+  const destination=(await getDocFromServer(sessionRef(dst))).data();
+  if(destination?.loreGeneration)await storyTransaction(dst,async tx=>tx.set(ref(dst,destination.loreGeneration,'loreV3'),{state:'active',createdAt:serverTimestamp()}));
   await batches(dst,snap.docs.map(d => { const data = d.data(); for (const s of Object.values(data.sections)) { s.lines = s.lines.filter(l => (l.src == null || l.src <= maxOrder) && !(l.evidence ?? []).some(e => e.order > maxOrder)); if (sectionMeta(s,data).kind === 'snapshot' && (s.cutoff?.order == null || s.cutoff.order > maxOrder)) s.unavailable = true; } return { id:d.id,data }; }),{ preserveTimestamps:true,source:src });
 }
 async function markGeneratedForReviewImpl(sid,fromOrder=0) {
@@ -393,7 +407,7 @@ async function removeDeletedLinesImpl(sid,entries,_callerOrders,shownCount) {
   const maxOrder = Math.max(0,maxOf(orders));
   const deleted = l => l.src != null && Number(l.src) <= maxOrder && !orders.has(Number(l.src));
   // Count current server cards, including notes that arrived after the view opened.
-  const cards = await Promise.all(entries.map(e => getDocFromServer(ref(sid,e.id))));
+  const cards = await Promise.all(entries.map(e => readLoreCard(sid,e.id)));
   const current = cards.filter(d => d.exists()).map(d => ({id:d.id,...d.data()}));
   const countDeleted = e => Object.values(e.sections ?? {}).reduce((n,s) => n+(s.lines ?? []).filter(deleted).length,0);
   const count = current.reduce((n,e) => n+countDeleted(e),0);
@@ -435,7 +449,7 @@ async function removeReviewedLinesImpl(sid,entries,fromOrder,throughOrder) {
   }
   return base.id;
 }
-async function deleteLoreTreesImpl(sid) { for (const name of ['lore','loreBackups','loreMeta']) { const snap = await getDocsFromServer(root(sid,name)); for (let i=0;i<snap.docs.length;i+=450) await storyTransaction(sid,async tx=>{for (const d of snap.docs.slice(i,i+450)) tx.delete(d.ref);}); } }
+async function deleteLoreTreesImpl(sid) { await deleteRecordGenerations(sid); for (const name of ['lore','loreBackups','loreMeta']) { const snap = await getDocsFromServer(root(sid,name)); for (let i=0;i<snap.docs.length;i+=450) await storyTransaction(sid,async tx=>{for (const d of snap.docs.slice(i,i+450)) tx.delete(d.ref);}); } }
 
 export const createEntry = gateWrite(createEntryImpl);
 export const saveEntry = gateWrite(saveEntryImpl);
@@ -453,3 +467,63 @@ export const deleteLoreTrees = gateWrite(deleteLoreTreesImpl);
 export const markGeneratedForReview = gateWrite(markGeneratedForReviewImpl);
 
 export const removeReviewedLines = gateWrite(removeReviewedLinesImpl);
+
+// Stage an entire generation before moving the active pointer. The legacy tree
+// is retained for recovery; rollback rebuilds it from the latest active sources.
+async function migrateRecordsImpl(sid,proposed,{expectedRevision,rollback=false}={}) {
+  if(proposed)proposed=structuredClone(proposed);
+  const source=await getLore(sid),session=(await getDocFromServer(sessionRef(sid))).data();assertStory(session);
+  if(expectedRevision!=null && (session.loreRevision ?? 0)!==expectedRevision)throw new Error('Lorebooks changed after preview. Refresh the conversion.');
+  if(session.loreMigration?.active && session.loreMigration.expiresAt>Date.now())throw new Error('Another lorebook migration is in progress.');
+  const generation=newLoreId('generation'),owner=currentUid(),revision=session.loreRevision ?? 0;
+  const sourceIdentity=e=>fingerprint(Object.fromEntries(Object.entries(e).filter(([key])=>!['schemaVersion','recordLayout'].includes(key))));
+  const before=new Map(source.map(e=>[e.id,sourceIdentity(e)]));
+  if(proposed && (proposed.length!==source.length || proposed.some(e=>before.get(e.id)!==sourceIdentity(e))))throw new Error('Conversion sources changed or information was removed. Refresh the preview.');
+  const entries=(proposed ?? source).map(e=>rollback ? e : reconcileRecords(e));
+  for(const e of entries)guardSize(rollback ? clean(e) : toRecordDocument(e));
+  const backup=await writeBackupImpl(sid,rollback?'record-rollback':'record-migration',rollback?'Before returning to legacy lorebooks':'Before record migration',source);
+  const lock={active:true,id:generation,rollback,expiresAt:Date.now()+10*60*1000};
+  const header=ref(sid,generation,'loreV3');
+  const check=s=>{
+    assertStory(s);if(currentUid()!==owner || (s.loreRevision ?? 0)!==revision || s.loreMigration?.id!==generation || s.loreMigration.expiresAt<=Date.now())throw new Error('Lorebooks or migration ownership changed. Nothing was activated.');
+  };
+  await runTransaction(db,async tx=>{
+    const fresh=assertStory((await tx.get(sessionRef(sid))).data());
+    if((fresh.loreRevision ?? 0)!==revision || fresh.loreGeneration!==session.loreGeneration || fresh.loreMigration?.active && fresh.loreMigration.expiresAt>Date.now())throw new Error('Lorebooks changed before migration.');
+    tx.update(sessionRef(sid),{loreMigration:lock});tx.set(header,{state:'staging',createdAt:serverTimestamp(),count:entries.length});
+  });
+  try {
+    // Verify the full source tree after the write barrier, including clients
+    // which predate loreRevision increments. A revision alone is insufficient.
+    const locked=await getLore(sid);
+    if(locked.length!==source.length||locked.some(e=>before.get(e.id)!==sourceIdentity(e)))throw new Error('Sources changed while migration was prepared.');
+    const writes=entries.map(e=>({id:e.id,entry:e})),removed=[];
+    if(rollback){const archived=await getDocsFromServer(root(sid,'lore'));for(const d of archived.docs)if(!entries.some(e=>e.id===d.id))removed.push(d.ref);}
+    if(removed.length>450)throw new Error('Rollback has too many archived deletions for one atomic activation. Export current sources into a new legacy story instead.');
+    for(let i=0;i<writes.length;i+=6)await runTransaction(db,async tx=>{
+      check((await tx.get(sessionRef(sid))).data());
+      const slice=writes.slice(i,i+6),previous=rollback ? await Promise.all(slice.map(w=>tx.get(ref(sid,w.id)))) : [];
+      for(const [n,w] of slice.entries()) {
+        const target=rollback ? ref(sid,w.id) : versionRef(sid,w.id,generation);
+        if(w.delete)tx.delete(target);
+        else if(rollback){const {schemaVersion,recordLayout,...legacy}=w.entry;tx.set(target,{...clean(legacy),loreWriteVersion:(previous[n].data()?.loreWriteVersion ?? 0)+1,loreRollbackGeneration:generation});}
+        else tx.set(target,toRecordDocument({...clean(w.entry),id:w.entry.id}));
+      }
+    });
+    await runTransaction(db,async tx=>{
+      check((await tx.get(sessionRef(sid))).data());
+      tx.update(sessionRef(sid),{loreSchemaVersion:rollback?2:3,loreGeneration:rollback?null:generation,loreMigration:{active:false},loreRevision:increment(1)});
+      tx.update(header,{state:rollback?'rollback':'active',activatedAt:serverTimestamp()});
+      for(const target of removed)tx.delete(target);
+    });return {backup,generation:rollback?null:generation};
+  }catch(error){
+    await runTransaction(db,async tx=>{const fresh=(await tx.get(sessionRef(sid))).data();if(fresh?.loreMigration?.id===generation){tx.update(sessionRef(sid),{loreMigration:{active:false}});tx.update(header,{state:'failed'});}}).catch(()=>{});
+    throw error;
+  }
+}
+export const migrateRecords=gateWrite(migrateRecordsImpl);
+export const rollbackRecords=gateWrite((sid,options)=>migrateRecordsImpl(sid,null,{...options,rollback:true}));
+export async function deleteRecordGenerations(sid) {
+  const generations=await getDocsFromServer(root(sid,'loreV3'));
+  for(const generation of generations.docs){const docs=await getDocsFromServer(versionRoot(sid,generation.id));for(let i=0;i<docs.docs.length;i+=450){const batch=writeBatch(db);for(const d of docs.docs.slice(i,i+450))batch.delete(d.ref);await batch.commit();}await runTransaction(db,async tx=>tx.delete(generation.ref));}
+}
