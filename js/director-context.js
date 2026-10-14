@@ -1,7 +1,7 @@
 import { selectScheduledPlan, renderPlanUnit } from './scheduled-plan.js';
 import { prompts } from './system-prompts.js';
 import { normalizeMemory, memoryTaskSettings } from './memory-settings.js';
-import { activeDirectorState, directorScene } from './director-state.js';
+import { activeDirectorState, directorScene, playerStopBoundary } from './director-state.js';
 import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
 import { selectEntries, renderEntry } from './lore-select.js';
@@ -41,7 +41,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
     if(excerpt && controlTokens+tokens<=4500){control.push({id:entry.id,name:entry.name,text:excerpt});controlTokens+=tokens;}
   }
   const live=activeDirectorState(before);
-  const base={state:live,player:mem.protagonist || null,entityIndex:index,controlLore:control,fixedAuthorPlan:session.longTermPlan ?? '',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
+  const base={state:live,player:mem.protagonist || null,playerBoundary:continuation?null:playerStopBoundary(latest.content),entityIndex:index,controlLore:control,fixedAuthorPlan:session.longTermPlan ?? '',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
   const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'user',content:latest.content}];
   const total=async()=>REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
   const limit=requestInputLimit(directorTaskSettings(settings));
@@ -56,5 +56,5 @@ function brief(entry) {
   return [section?.text,...(section?.lines ?? []).map(l=>l.text)].filter(Boolean).join(' ').slice(0,400);
 }
 export function narratorDirectorContract(turn) {
-  return prompts.directorNarrator+'\n\nDirector contract:\n'+JSON.stringify({startingState:{scene:turn.before.scene,event:turn.before.event},targetState:{scene:turn.after.scene,event:turn.after.event},pendingDecisions:turn.after.decisions.filter(i=>!['closed','cancelled'].includes(i.status)),readyCommitments:turn.after.commitments.filter(i=>i.status==='ready'),contract:turn.contract});
+  return prompts.directorNarrator+'\n\nDirector contract:\n'+JSON.stringify({startingState:{scene:turn.before.scene,event:turn.before.event},targetState:{scene:turn.after.scene,event:turn.after.event},playerBoundary:turn.playerBoundary ?? null,pendingDecisions:turn.after.decisions.filter(i=>!['closed','cancelled'].includes(i.status)),readyCommitments:turn.after.commitments.filter(i=>i.status==='ready'),contract:turn.contract});
 }

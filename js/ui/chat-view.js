@@ -26,7 +26,7 @@ import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
 import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene, sceneFromThinking } from '../scene.js';
-import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
+import { lintPlayerAgency, lintDirectorGestures, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns, dueRangeStatus } from '../turns.js';
 import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
@@ -1493,6 +1493,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     }
     const reviewWarnings=sceneEnabled && !ooc && !truncated ? [
       ...lintPlayerAgency(clean,mem.protagonist),
+      ...(directorMode ? lintDirectorGestures(clean,{protagonist:mem.protagonist,userText}) : []),
       ...(!prior.scene?.time && !parseScene(acceptedScene.scene).time ? lintUnestablishedTime(clean,{prior:prior.scene,userText}) : []),
       ...(acceptedScene.warnings ?? []),...(out.count > 1 ? ['Several scene tags; the last one was used.'] : []),
       ...(sceneWarning ? [sceneWarning] : []),
