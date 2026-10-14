@@ -1,7 +1,7 @@
 import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { computeTurns } from './turns.js';
-import { canonicalScene } from './scene.js';
+import { canonicalScene, validateSceneEdit } from './scene.js';
 import { assertSource, revisionOf, trimInvalidations } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
@@ -412,7 +412,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       if (requireLatestReply && (current.role !== 'assistant' || chunks.some(chunk => (chunk.messages ?? []).some(m => m.role !== 'summary' && m.order > current.order)))) throw new HistoryConflict('Newer story messages exist. Copy this reply or save it at the end.');
       resetNarratorTurn = deletingAssistant && current.role === 'assistant' && !chunks.some(chunk => (chunk.messages ?? []).some(m => ['assistant','user'].includes(m.role) && m.order > current.order));
     }
-    const changed=await change(current),contentChanged=!changed || changed.content!==current.content || canonicalScene(changed.scene)!==canonicalScene(current.scene) || JSON.stringify(changed.sceneMeta ?? null)!==JSON.stringify(current.sceneMeta ?? null);
+    const changed=await change(current,data),contentChanged=!changed || changed.content!==current.content || canonicalScene(changed.scene)!==canonicalScene(current.scene) || JSON.stringify(changed.sceneMeta ?? null)!==JSON.stringify(current.sceneMeta ?? null);
     const replacement=changed ? {...changed,revision:revisionOf(current)+(contentChanged ? 1 : 0)} : null;
     const updated = previous.messages.flatMap(m => m.id === messageId ? (replacement ? [replacement] : []) : [m]);
     const groups = packMessages(updated);
@@ -507,7 +507,7 @@ export async function updateMessageScene(sessionId, messageId, order, scene, pri
   if (String(scene ?? '').length > 2000) throw new Error('The scene line exceeds 2000 characters. Shorten it before saving.');
   const raw = scene?.trim() ? canonicalScene(scene) : null;
   if (scene?.trim() && !raw) throw new Error('Could not read that scene. Use: date: … · time: … · place: … · present: …');
-  return changeMessage(sessionId, messageId, order, message => ({ ...message,lastContinuation:null, scene:raw,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }));
+  return changeMessage(sessionId, messageId, order, (message,session) => ({ ...message,lastContinuation:null, scene:raw ? validateSceneEdit(raw,session.memory?.calendar) : null,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }));
 }
 
 export function acceptMessage(sessionId,messageId,order,expectedRevision) {

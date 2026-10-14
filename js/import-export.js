@@ -8,6 +8,7 @@ import {currentUid} from './auth.js';
 import {normalizeLoreEntry} from './lore-format.js';
 import {download} from './ui/memory-ui.js';
 import { getLore, importLore } from './lore-store.js';
+import * as loreStore from './lore-store.js';
 import { normalizeMemory } from './memory-settings.js';
 // SillyTavern JSONL import/export (spec §10). Chat log only, no character cards.
 // Line 1 is a metadata header ({user_name, character_name, create_date}); every
@@ -64,6 +65,9 @@ export async function importSillyTavern(file) {
     const values=importedSettings ? explicitStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
     await writeInitialStorySettings(sessionId,values);
     await addMessagesBulk(sessionId,messages);
+    // Importing a full V3 backup explicitly creates a new selective story.
+    // Existing destinations still require the separate migration action.
+    if(lore.some(e=>e.schemaVersion===3))await loreStore.migrateRecords(sessionId,[],{expectedRevision:0});
     if(lore.length)await importLore(sessionId,{writes:lore.map(e=>({id:e.id,data:e}))},[]);
     const source=metadata?.session ?? {},memory=normalizeMemory(source.memory);
     memory.autoUpdate=false;memory.sceneFallback=false;memory.updateMaxTokens=normalizeMemory().updateMaxTokens;
@@ -91,7 +95,8 @@ export async function serializeStory(sessionId) {
   if (!session) throw new Error("No active session to export.");
   assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
   const msgs = await getMessages(sessionId);
-  const lore = await getLore(sessionId);
+  let lore;
+  try{lore=await getLore(sessionId);}catch(error){if(error.code==='lore-read-changed')assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));throw error;}
   assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));
   if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');
 

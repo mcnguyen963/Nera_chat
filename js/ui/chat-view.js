@@ -1446,14 +1446,14 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     let acceptedScene={scene:null,sceneMeta:null},sceneWarning=null;
     if (sceneEnabled && !ooc) {
       acceptedScene=carryScene(prior);
-      if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene});
+      if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene,calendar:mem.calendar});
       else if (!truncated) {
         const candidate=sceneFromThinking(thinking);
-        if(candidate){acceptedScene=validateSceneValues(candidate,{narration:clean,userText,prior:prior.scene});acceptedScene.sceneMeta.source='thinking';sceneWarning="Scene taken from the model's reasoning.";}
+        if(candidate){acceptedScene=validateSceneValues(candidate,{narration:clean,userText,prior:prior.scene,calendar:mem.calendar});acceptedScene.sceneMeta.source='thinking';sceneWarning="Scene taken from the model's reasoning.";}
       }
       if (!truncated && acceptedScene.sceneMeta?.kind==='carried' && mem.sceneFallback && !maintenanceUsed) {
         try {
-          const recovered=await recoverScene(settings,{narration:clean,userText,prior,
+          const recovered=await recoverScene(settings,{narration:clean,userText,prior,calendar:mem.calendar,
             names:loreEntries.filter(e => e.book==='characters').map(e => e.name),protagonist:mem.protagonist,plan:sourceSession.longTermPlan,model:mem.sceneFallbackModel},{signal:controller.signal,onStart:()=>{maintenanceUsed=true;}});
           assertActive(token);
           if (recovered) { acceptedScene=recovered; planThread ||= sourceSession.longTermPlan?.trim() ? recovered.planThread : null; }

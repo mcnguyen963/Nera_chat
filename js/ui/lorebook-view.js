@@ -1,3 +1,6 @@
+import { renderRecordEditor } from './lore-record-editor.js';
+import { addRecordConversion } from './lore-record-conversion.js';
+import { resolveRecord } from '../lore-records.js';
 import { resolveCore } from '../character-core.js';
 import { renderCoreEditor } from './character-core-editor.js';
 import { currentUid } from '../auth.js';
@@ -133,7 +136,7 @@ function renderRail() {
   rail.append(button('Import & export',() => { if (!canLeave()) return; staged = base = null; screen = 'transfer'; renderShell(); }),button('Backups',() => { if (!canLeave()) return; staged = base = null; screen = 'backups'; renderShell(); }));
 }
 function needsReview(l) { return noteNeedsReview(l,live()?.messages ?? [],live()?.session ?? {}); }
-function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && (linesOf(e).some(needsReview) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages:live()?.messages ?? [],session:live()?.session}).valid) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
+function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && ((e.recordLayout?.records ?? []).some(r=>!resolveRecord(e,r).valid || r.coreCandidate&&!r.approval)||linesOf(e).some(needsReview) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages:live()?.messages ?? [],session:live()?.session}).valid) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
 function badge(text,kind = '') { return node('span',text,'badge '+kind); }
 function renderList() {
   if (!list || ['transfer','book-transfer','backups'].includes(screen)) return;
@@ -208,8 +211,11 @@ function renderEditor() {
     const always = field('Always load','',{ type:'checkbox' }); always.input.checked = staged.alwaysLoad; always.input.addEventListener('change',() => staged.alwaysLoad = always.input.checked); editor.append(always.wrap,node('p',"Load this card every turn, even when it isn't mentioned.",'muted'));
   }
   if (staged.kind === 'thread') { const status = field('Status',''); const select = node('select'); for (const value of ['open','closed']) { const o = node('option',value); o.value = value; select.append(o); } select.value = staged.status; select.addEventListener('change',() => staged.status = select.value); status.input.replaceWith(select); editor.append(status.wrap); }
-  if (book === 'facts') editor.append(node('p',"World facts are sent every turn. Keep them short — rules, not stories.",'muted'));
+  if (book === 'facts') editor.append(node('p',staged.schemaVersion===3 ? "World rules are selected by relevance within the World facts budget." : "World facts are sent every turn. Keep them short — rules, not stories.",'muted'));
   const protagonist = normalizeMemory(live()?.session.memory).protagonist, own = book === 'characters' && [staged.name,...staged.aliases].some(n => normalizeName(n) === normalizeName(protagonist));
+  if(staged.schemaVersion===3)renderRecordEditor(editor,staged,{entries:entries(),messages:live()?.messages ?? [],session:live()?.session ?? {}});
+  const archive=staged.schemaVersion===3 ? node('details') : editor;
+  if(staged.schemaVersion===3){archive.append(node('summary','Source archive · edit original text and notes'));editor.append(archive);}
   for (const key of SECTION_KEYS[book]) {
     if (key === 'bond' && own) continue;
     const section = staged.sections[key], container = node('section',null,'lore-section');
@@ -247,9 +253,9 @@ function renderEditor() {
         const menu = node('details',null,'line-menu'); menu.append(node('summary','⋯'));
         menu.append(button('Edit',() => editLine(ln,row,key,renderLines),'btn small'),button('Move into my text',() => { section.text += (section.text ? '\n' : '')+ln.text; text.input.value = section.text; section.lines = section.lines.filter(l => l.id !== ln.id); renderLines(); void updateFooter(); },'btn small'),button('Delete',() => { section.lines = section.lines.filter(l => l.id !== ln.id); renderLines(); void updateFooter(); },'btn small danger')); row.append(menu); lineList.append(row);
       }
-    }; renderLines(); container.append(lineList,button('+ Add line',() => { const turns = computeTurns(live()?.messages ?? []), when = latestScene(live()?.messages ?? []).scene?.when ?? null; const ln = { id:newLoreId('ln'),text:'',turn:turns.lastTurn,when,src:null,by:'user',at:Date.now() }; section.lines.push(ln); renderLines(); const row = lineList.lastElementChild; if (row) editLine(ln,row,key,renderLines); },'btn small')); editor.append(container);
+    }; renderLines(); container.append(lineList,button('+ Add line',() => { const turns = computeTurns(live()?.messages ?? []), when = latestScene(live()?.messages ?? []).scene?.when ?? null; const ln = { id:newLoreId('ln'),text:'',turn:turns.lastTurn,when,src:null,by:'user',at:Date.now() }; section.lines.push(ln); renderLines(); const row = lineList.lastElementChild; if (row) editLine(ln,row,key,renderLines); },'btn small')); archive.append(container);
   }
-  if (book === 'characters') renderCoreEditor(editor,staged,()=>{}, {messages:live()?.messages ?? [],session:live()?.session});
+  if (book === 'characters' && staged.schemaVersion!==3) renderCoreEditor(editor,staged,()=>{}, {messages:live()?.messages ?? [],session:live()?.session});
   const footer = node('footer',null,'memory-actions'); footer.id = 'lore-editor-footer';
   const tokenLabel = node('span','','muted'); tokenLabel.title = 'Cards larger than the book budget are sent with only their newest lines.'; footer.append(tokenLabel);
   async function updateFooter() { const tokens = await countTokens(renderEntry(staged)), budget = normalizeMemory(live()?.session.memory).books[book].budget; if (version !== editorVersion) return; tokenLabel.textContent = `${tokens.toLocaleString()} / ${budget.toLocaleString()} tokens · ${linesOf(staged).length} lines`; tokenLabel.style.color = tokens>budget ? 'var(--danger)' : ''; if (new TextEncoder().encode(JSON.stringify(staged)).length > 700000) tokenLabel.textContent += ' · Too big to store much longer — reorganize it'; }
@@ -270,7 +276,7 @@ async function saveCard() {
   if (linesOf(staged).some(l => !l.text.trim())) throw new Error('Finish or delete empty update lines.');
   const saved = structuredClone(staged), original = structuredClone(base);
   if (state.busy) throw new Error('Wait for the current reply or summary.');
-  await store.saveEntry(sid,saved,original); base = structuredClone(saved); staged = structuredClone(saved); sizes.delete(saved.id); toast('Saved'); renderEditor();
+  const result=await store.saveEntry(sid,saved,original); base = structuredClone(result ?? saved); staged = structuredClone(result ?? saved); sizes.delete(saved.id); toast('Saved'); renderEditor();
 }
 async function removeDeletedNotes(affected,shownCount) {
   if (state.busy || reorganizing.size) throw new Error('Wait for the current reply or memory action.');
@@ -324,6 +330,8 @@ function renderTransfer(scope = null) {
   const segmented = node('div',null,'segmented'), md = button('Markdown',() => changeFormat('md')), json = button('JSON',() => changeFormat('json')); segmented.append(md,json); list.append(segmented);
   function changeFormat(value) { format = value; setPref('nera.lore.format',value); md.classList.toggle('selected',value === 'md'); json.classList.toggle('selected',value === 'json'); picker.accept = value === 'md' ? '.md,.markdown,.txt' : '.json'; }
   const checks = {};
+  if(!scope)addRecordConversion(editor,{snapshot:live,prepare:prepareMemorySnapshot,isCurrent:storyId=>opened&&sid===state.sessionId&&(!storyId||sid===storyId)});
+  if(live()?.session.loreSchemaVersion===3)editor.append(node('p','JSON preserves records and approvals. Markdown is a compatibility export of original sources.','muted'));
   if(!scope) {
   editor.append(node('h3','Export'));
   for (const [key,label] of Object.entries(BOOK_LABELS)) { const f = field(label,'',{ type:'checkbox' }); f.input.checked = true; checks[key] = f.input; editor.append(f.wrap); }
@@ -353,6 +361,7 @@ function renderTransfer(scope = null) {
       for (const [key,stats] of Object.entries(plan.preview.books)) {
         const d = node('details');d.open=stats.removed>0; d.append(node('summary',BOOK_LABELS[key]+': '+stats.new+' new · '+stats.merged+' merged · '+stats.unchanged+' unchanged · '+stats.removed+' removed'+(key === 'events' ? ` · ${stats.events} events · ${stats.open} open threads · ${stats.closed} closed` : ''))); for (const card of stats.cards) d.append(node('p',card.name+' · '+card.type,'muted')); body.append(d);
       }
+      if(parsed.entries.some(e=>e.schemaVersion===3)&&live()?.session.loreSchemaVersion!==3)body.append(node('p','This version 3 import will migrate this story to selective records after its sources are saved.','memory-warning'));
       if (plan.preview.conflicts) body.append(node('p',`Your text conflicts: ${plan.preview.conflicts} (${conflict.selectedOptions[0].textContent})`,'muted'));
       for (const w of plan.preview.warnings) body.append(node('p',`Line ${w.line}: ${w.reason}`,'memory-warning'));
       const valid=()=>!cancelled && ctx.isCurrent() && mode.value===reviewedMode && conflict.value===reviewedConflict;
@@ -452,6 +461,7 @@ function cardTransfer(explicitId=null) {
         for(const w of plan.preview.warnings)preview.append(node('p','Line '+w.line+': '+w.reason,'memory-warning'));
         for(const c of plan.preview.changes){preview.append(node('h4',c.field),node('pre','Before: '+(typeof c.before==='string' ? c.before : JSON.stringify(c.before))+'\nAfter: '+(typeof c.after==='string' ? c.after : JSON.stringify(c.after))));}
         for(const [kind,notes] of Object.entries(plan.preview.notes)){preview.append(node('h4',kind+' notes · '+notes.length));for(const n of notes)preview.append(node('pre',n.section+' · '+[n.turn!=null ? 'T'+n.turn : '',n.when].filter(Boolean).join(' · ')+'\n'+(n.before ? 'Before: '+n.before.text+'\nAfter: ' : '')+n.text));}
+        if(plan.data.schemaVersion===3&&live()?.session.loreSchemaVersion!==3)preview.append(node('p','This version 3 card import will migrate this story to selective records.','memory-warning'));
         const detail=node('details');detail.append(node('summary','Resulting card'),node('pre',serializeCard(plan.data,{storyId:ctx.source.id})));preview.append(detail);save.disabled=false;
       }catch(e){preview.append(node('p',e.message,'memory-warning'));}
     }

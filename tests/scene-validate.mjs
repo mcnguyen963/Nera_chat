@@ -101,7 +101,7 @@ for(const [old,time] of [['15:40','3:40pm'],['3:40pm','3:40 PM'],['00:00','12:00
  assert.equal(api.parseScene(result.scene).time,time);assert.equal(result.sceneMeta.provenance.time,'prior');
 });
 test('different clocks remain declared without clock restrictions or invented evidence',()=>{
- for(const [old,time] of [['03:40','3:40 PM'],['00:00','12:00pm'],['15:40','25:40'],['15:40','3:70pm']]) {
+ for(const [old,time] of [['03:40','3:40 PM'],['00:00','12:00pm']]) {
   const result=api.validateSceneValues(raw(time),{prior:{when:'October 738',time:old},narration:'Morning light fills the room.'});
   assert.equal(api.parseScene(result.scene).time,time);assert.equal(result.sceneMeta.provenance.time,'declared');
  }
@@ -120,3 +120,5 @@ test('equivalent clock evidence preserves future-cue and dialogue exclusions',()
   assert.equal(result.sceneMeta.provenance.time,'declared');
  }
 });
+
+for(const value of ['25:40','3:70pm','15:40:30'])test('invalid numeric clock '+value+' keeps prior',()=>{const r=api.validateSceneValues(raw(value),{prior:{when:'October 738',time:'15:40'}});assert.equal(api.parseScene(r.scene).time,'15:40');assert.equal(r.sceneMeta.provenance.time,'contradicted');});
