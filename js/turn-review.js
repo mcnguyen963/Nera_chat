@@ -1,5 +1,6 @@
 const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 export function isAcceptedTurn(message, { lastUserOrder = -Infinity, sceneOn = true } = {}) {
+  if(message?.directorIncomplete)return false;
   if (message?.role !== 'assistant' || !sceneOn) return true;
   return !['pending','rejected'].includes(message.acceptance) || Number(message.order) < Number(lastUserOrder);
 }

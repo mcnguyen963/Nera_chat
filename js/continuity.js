@@ -45,7 +45,7 @@ function orderedValue(value) {
   return value;
 }
 export function requestSource(session) {
-  return { storySettingsRevision:session.storySettingsRevision ?? 0, historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(orderedValue(session.memory ?? null)), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
+  return { directorRevision:session.directorRevision ?? 0, directorCheckpoint:session.directorCheckpoint ?? null, storySettingsRevision:session.storySettingsRevision ?? 0, historyRevision:session.historyRevision ?? 0, longTermPlan:session.longTermPlan ?? '', memory:JSON.stringify(orderedValue(session.memory ?? null)), loreRevision:session.loreRevision ?? 0, activeSummaryMessageId:session.activeSummaryMessageId ?? null, breakpointOrder:session.breakpointOrder ?? 0 };
 }
 export function summarySource(session) {
   const { loreRevision, ...source } = requestSource(session);

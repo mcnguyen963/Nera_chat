@@ -1,3 +1,6 @@
+import { directorScene } from './director-state.js';
+import { narratorDirectorContract } from './director-context.js';
+import { parseScene } from './scene.js';
 import { selectScheduledPlan, fitScheduledPlan, validatePlanJump, planJumpInstruction } from './scheduled-plan.js';
 import { fitRecords, relevantSubjects, recordUnits } from './lore-record-select.js';
 import { fitCharacters } from './character-select.js';
@@ -19,13 +22,16 @@ function stripOcc(content) {
 }
 // Memory mode uses additive message costs and renders the final wire request once.
 export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd, accountingRetry = false }) {
-  const mem = normalizeMemory(session.memory), limit = requestInputLimit(settings);
+  const director=settings.narrationMode==='director', turn=opts.directorTurn;
+  const mem = normalizeMemory(session.memory);
+  if(director){mem.scene=true;mem.calendar={mode:'legacy',anchor:null};mem.lorebooks=true;}
+  const limit = requestInputLimit(settings);
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
-  const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
+  const raw = [...new Map(all.filter(m => !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId) && ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
   if (opts.draftText?.trim() || opts.placeholderLatest || opts.draftPlanJump) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '',...(opts.draftPlanJump ? {planJump:opts.draftPlanJump} : {}) });
   const byId=new Map(raw.map(m=>[m.id,m]));
-  const turns = computeTurns(raw), current = mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
+  const turns = computeTurns(raw), current = director && (turn?.after || session.directorState) ? {scene:parseScene(directorScene(turn?.after ?? session.directorState)),missingStreak:0} : mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
   const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latestUser = raw.findLast(m => m.role === 'user');
   const latest=opts.continuationId ? {id:'__continuation',role:'user',content:prompts.continue} : latestUser;
   if(opts.continuationId) {
@@ -41,8 +47,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
   let narrator = (settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
   const planOn=!!session.longTermPlan?.trim();
-  const system=[narrator,adRule,CONTINUITY_RULE,planInjectionBlock(session.longTermPlan),planOn ? prompts.planThread : '',mem.scene ? SCENE_RULE(mem.protagonist,mem.calendar) : ''].filter(Boolean).join('\n\n');
-  const reminder=mem.scene ? (mem.calendar.mode==='modern' ? modernSceneReminder(mem.calendar,current.scene,planOn) : planOn ? prompts.sceneReminderPlan : prompts.sceneReminder) : '';
+  if(director)narrator+='\n\n'+(turn ? narratorDirectorContract(turn) : prompts.directorNarrator+'\nNarrator preview is provisional until the Director produces a contract.');
+  const system=[narrator,adRule,CONTINUITY_RULE,planInjectionBlock(session.longTermPlan),!director && planOn ? prompts.planThread : '',!director && mem.scene ? SCENE_RULE(mem.protagonist,mem.calendar) : ''].filter(Boolean).join('\n\n');
+  const reminder=!director && mem.scene ? (mem.calendar.mode==='modern' ? modernSceneReminder(mem.calendar,current.scene,planOn) : planOn ? prompts.sceneReminderPlan : prompts.sceneReminder) : '';
   const blocks=[{key:'system',label:'Instructions and fixed author plan',tokens:await count(system)+FRAME}];
   let summaryText='';
   let summary = session.activeSummaryMessageId && (session.breakpointOrder ?? 0) < upTo ? all.find(m => m.id === session.activeSummaryMessageId && !m.needsReview) : null;
@@ -64,11 +71,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const key=m.id+'|'+gap+'|'+gapPrefix;if(contentCache.has(key))return contentCache.get(key);
     let text = m.role === 'assistant' ? readSceneOutput(normalizeAd(m.content),{sceneEnabled:mem.scene}).clean : normalizeAd(m.content);
     if (m.role === 'assistant' && mem.scene && !m.ooc) {
-      if (session.longTermPlan?.trim() && m.planThread) text+='\n<plan_thread>'+m.planThread+'</plan_thread>';
+      if (!director && session.longTermPlan?.trim() && m.planThread) text+='\n<plan_thread>'+m.planThread+'</plan_thread>';
       const effective=timeline.get(m.id)?.effective;
       if (effective) text+='\n<scene>'+effective+'</scene>';
     }
-    if (m.id === latest?.id && jump) text+='\n\n'+planJumpInstruction(jump);
+    if (m.id === latest?.id && jump) text+='\n\n'+(director ? 'Author-confirmed time skip from '+jump.from+' toward '+jump.to+'. Realize only the segment allowed by the Director contract.' : planJumpInstruction(jump));
     if (m.id !== latest?.id) text=stripOcc(text);
     if (gap && anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{CONTENT:text});
     text=gapPrefix+text;contentCache.set(key,text);return text;
@@ -76,7 +83,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const selected = new Set(required), books = [], loaded = [], warnings = [];
   // Inspection is device-local metadata; it never participates in request accounting.
   const inspection = opts.includeInspection ? { sections:{}, messages:[] } : null;
-  const contract = mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
+  const contract = !director && mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
   if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
   if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
   let memory = '';
@@ -164,13 +171,18 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
   const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
+  if(turn){
+    for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');const list=selection.selected[entry.book];if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);continue;}if(list){const existing=list.find(i=>i.entry.id===id);if(existing)list.splice(list.indexOf(existing),1);list.unshift({entry,reason:'Director selection'});}}
+  }
+  if(turn)for(const book of ['characters','locations']){const list=selection.selected[book],priority=item=>['always','protagonist','in scene','current place','pinned record'].includes(item.reason)?0:turn.contract.requiredMemoryIds.includes(item.entry.id)?1:item.reason==='Director selection'?2:3;list.sort((a,b)=>priority(a)-priority(b));const overflow=list.splice(mem.books[book].maxCards);selection.skipped.push(...overflow.map(i=>({entryId:i.entry.id,book,name:i.entry.name,reason:'card limit after Director ranking'})));}
   const scheduled = mem.lorebooks && mem.books.plan.on
-    ? selectScheduledPlan(filtered.entries,mem.scene && mem.calendar.mode==='modern' ? current.scene?.when : null,jump)
+    ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)
     : {selected:[],warnings:[],skipped:filtered.entries.filter(e=>e.book==='plan').map(e=>({entryId:e.id,book:'plan',name:e.name,reason:'book off'}))};
-  selection.selected.plan=scheduled.selected;warnings.push(...scheduled.warnings);
+  selection.selected.plan=[...(selection.selected.plan ?? []),...scheduled.selected.filter(i=>!(selection.selected.plan ?? []).some(x=>x.entry.id===i.entry.id))];warnings.push(...scheduled.warnings);
   const skipped = [...filtered.skipped,...selection.skipped,...scheduled.skipped];
   const recordMode=session.loreSchemaVersion===3;
   const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
+  if(turn && recordAnchors)for(const id of turn.contract.memoryIds)recordAnchors.add(id);
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
     if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
   }
@@ -279,6 +291,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const gaps = []; for (const m of uncovered) { const turn = turns.turnById.get(m.id); const last = gaps.at(-1); if (last && turn <= last.toTurn+1) { last.toTurn = turn; last.toOrder = m.order; } else gaps.push({ fromTurn:turn,toTurn:turn,fromOrder:m.order,toOrder:m.order }); }
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
+  if(turn){const loadedIds=new Set(loaded.map(e=>e.entryId));const missing=turn.contract.requiredMemoryIds.filter(id=>!loadedIds.has(id));if(recordMode)for(const book of ['characters','locations','facts','events'])for(const entry of recordReports[book]?.entries ?? [])if(turn.contract.requiredMemoryIds.includes(entry.entryId) && entry.records.some(r=>(r.core || r.pinned) && !r.selected && r.reason==='over budget'))throw new Error('Required Director card has omitted core constraints: '+entry.name+'. Increase its book budget.');if(missing.length)throw new Error('Required Director memories do not fit the Narrator budget: '+missing.join(', ')+'. Increase book budgets or context limit.');}
+  if(director && !turn)warnings.push('Narrator selection is provisional; context preview does not call the Director.');
   if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
-  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

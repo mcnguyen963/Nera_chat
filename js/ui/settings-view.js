@@ -1,3 +1,4 @@
+import { openDirectorState } from './director-view.js';
 import {setIcon} from './icons.js';
 import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
@@ -80,7 +81,7 @@ export function initSettingsView() {
   });
   document.querySelectorAll("[data-settings-panel]").forEach((button) =>
     button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
-  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);clearMessage();}));
+  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);clearMessage();}));
   for(const id of ['set-reasoning-maxtokens','set-max-resp'])input(id).addEventListener('input',syncOptionalControls);
   el.profiles.addEventListener("change", () => {
     capture();
@@ -116,6 +117,7 @@ export function initSettingsView() {
   input("set-pet-movement").addEventListener("change", () => { capture(); clearMessage(); });
   input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
   document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
+  input('btn-director-state').addEventListener('click',openDirectorState);
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
@@ -235,6 +237,12 @@ function renderAll() {
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set('set-model-context',draft.modelContextTokens ?? '');
+  const directorDefaults=defaultStorySettings();
+  set('set-narration-mode',draft.narrationMode ?? 'classic');set('set-director-input',draft.directorMaxInputTokens ?? 20000);set('set-director-output',draft.directorMaxOutputTokens ?? 4000);set('set-director-turns',draft.directorRecentTurns ?? 5);set('set-director-prompt',draft.directorSystemPrompt ?? directorDefaults.directorSystemPrompt);
+  const directorProfiles=input('set-director-profile');directorProfiles.replaceChildren();
+  const empty=document.createElement('option');empty.value='';empty.textContent='Choose a profile';directorProfiles.append(empty);
+  for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;directorProfiles.append(option);}
+  if(draft.directorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.directorProfileId)){const missing=document.createElement('option');missing.value=draft.directorProfileId;missing.textContent='Missing profile — choose another';directorProfiles.append(missing);}directorProfiles.value=draft.directorProfileId ?? '';
   set("set-narrator-prompt", draft.narratorSystemPrompt);
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
   set("set-memory-update-prompt", draft.memoryExtractionPrompt);
@@ -347,6 +355,8 @@ function capture() {
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.modelContextTokens=raw('set-model-context').trim();
+  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
+  for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5]])draft[key]=Number(raw(id) || fallback);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
   draft.memoryExtractionPrompt = raw("set-memory-update-prompt");
@@ -456,10 +466,12 @@ async function handleSaveSettings() {
   try {
     if(panel==='prompts') {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
+      if(state.busy)throw new Error('Finish the current reply before saving story settings.');
+      if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
       promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;
     }
-    for(const key of STORY_SETTING_KEYS)validated[key]=state.settings[key];
+    for(const key of STORY_SETTING_KEYS){if(state.settings[key]===undefined)delete validated[key];else validated[key]=state.settings[key];}
     const promptDraft=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,draft[k]])),promptOriginal=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,original[k]]));
     await saveSettings(validated);
     draft = {...structuredClone(state.settings),...promptDraft};

@@ -1,0 +1,60 @@
+import { selectScheduledPlan, renderPlanUnit } from './scheduled-plan.js';
+import { prompts } from './system-prompts.js';
+import { normalizeMemory, memoryTaskSettings } from './memory-settings.js';
+import { activeDirectorState, directorScene } from './director-state.js';
+import { parseScene, readSceneOutput } from './scene.js';
+import { usableLore } from './continuity.js';
+import { selectEntries, renderEntry } from './lore-select.js';
+import { recordUnits } from './lore-record-select.js';
+import { countTokens } from './tokenizer.js';
+import { requestInputLimit, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from './request-budget.js';
+export function directorTaskSettings(settings) {
+  if (!settings.directorProfileId) throw new Error('Choose a Director connection profile in story settings.');
+  const task=memoryTaskSettings(settings,{updateProfileId:settings.directorProfileId,updateMaxTokens:settings.directorMaxOutputTokens});
+  if(!task.apiKey || !task.modelId)throw new Error('The Director profile needs an API key and Model ID.');
+  // A different connection must not inherit the narrator model's window size.
+  return {...task,streaming:false,maxContextTokens:settings.directorMaxInputTokens,modelContextTokens:null};
+}
+export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens}={}) {
+  const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session).entries;
+  const raw=messages.filter(m=>['user','assistant'].includes(m.role) && !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order);
+  const latest=continuation ? {role:'user',content:'Continue the latest completed narration within player-agency boundaries.'} : raw.findLast(m=>m.role==='user');
+  if(!latest)throw new Error('Director needs a user action.');
+  const recent=raw.filter(m=>m!==latest),pairs=[];let pair=[];
+  for(const m of recent){if(m.role==='user' && pair.length){if(pair.some(x=>x.role==='assistant'))pairs.push(pair);pair=[];}pair.push(m);}
+  if(pair.some(x=>x.role==='assistant'))pairs.push(pair);
+  let window=pairs.slice(-settings.directorRecentTurns).flat();
+  const index=available.filter(e=>['characters','locations'].includes(e.book)).map(e=>({id:e.id,book:e.book,name:e.name,aliases:e.aliases ?? [],brief:brief(e)}));
+  const controlMem={...mem,scene:true,lorebooks:true};
+  const text=latest.content,recentText=window.map(m=>m.content).join('\n');
+  const selection=selectEntries(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3});
+  const anchors=new Set([...selection.selected.characters,...selection.selected.locations].map(i=>i.entry.id));
+  const candidates=[...selection.selected.characters,...selection.selected.locations,...selection.selected.facts,...selection.selected.events];
+  const protagonist=available.find(e=>e.book==='characters' && e.name===mem.protagonist);
+  if(protagonist && !candidates.some(i=>i.entry.id===protagonist.id))candidates.unshift({entry:protagonist});
+  const control=selectScheduledPlan(available,before.scene.date,latest.planJump ?? null).selected.map(item=>({id:item.entry.id,name:item.entry.name,text:renderPlanUnit(item).slice(0,6000)}));let controlTokens=0;
+  while(control.length && await count(JSON.stringify(control))>4500)control.pop();
+  controlTokens=await count(JSON.stringify(control));
+  for(const {entry} of candidates){
+    const constraints=entry.schemaVersion===3 ? recordUnits(entry,{anchors,currentText:text,recentText,index:selection.index}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(entry,null,mem.protagonist);
+    const excerpt=constraints.slice(0,6000),tokens=await count(excerpt);
+    if(excerpt && controlTokens+tokens<=4500){control.push({id:entry.id,name:entry.name,text:excerpt});controlTokens+=tokens;}
+  }
+  const live=activeDirectorState(before);
+  const base={state:live,player:mem.protagonist || null,entityIndex:index,controlLore:control,fixedAuthorPlan:session.longTermPlan ?? '',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
+  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'user',content:latest.content}];
+  const total=async()=>REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
+  const limit=requestInputLimit(directorTaskSettings(settings));
+  while(await total()>limit && control.length)control.pop();
+  while(await total()>limit && window.length){let n=1;while(n<window.length && window[n].role!=='user')n++;window=window.slice(n);}
+  const usedTokens=await total();
+  if(usedTokens>limit)throw new Error('Director state, entity index and latest input exceed its input budget. Increase the Director limit or shorten the live ledger.');
+  return {apiMessages:render(),entries:available,report:{mode:'director',totals:{input:usedTokens,max:limit},recentMessages:window.map(m=>m.id),controlMemoryIds:control.map(e=>e.id),warnings:control.length<candidates.length?['Some control lore was omitted; unknown transitions must remain unresolved.']:[]},usedTokens};
+}
+function brief(entry) {
+  const section=[entry.sections?.description,entry.sections?.state,entry.sections?.status,...Object.values(entry.sections ?? {})].find(s=>s && [s.text,...(s.lines ?? []).map(l=>l.text)].some(t=>t?.trim()));
+  return [section?.text,...(section?.lines ?? []).map(l=>l.text)].filter(Boolean).join(' ').slice(0,400);
+}
+export function narratorDirectorContract(turn) {
+  return prompts.directorNarrator+'\n\nDirector contract:\n'+JSON.stringify({startingState:{scene:turn.before.scene,event:turn.before.event},targetState:{scene:turn.after.scene,event:turn.after.event},pendingDecisions:turn.after.decisions.filter(i=>!['closed','cancelled'].includes(i.status)),readyCommitments:turn.after.commitments.filter(i=>i.status==='ready'),contract:turn.contract});
+}

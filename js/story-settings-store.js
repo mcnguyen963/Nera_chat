@@ -8,7 +8,7 @@ const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySettings','current');
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
 const cache=new Map();let unsubscribe=null,epoch=0;
-function readDocument(data){if(data?.version!==STORY_SETTINGS_VERSION || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:explicitStorySettings(data.values)};}
+function readDocument(data){if(![1,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:explicitStorySettings(data.values)};}
 export async function preserveLegacyStorySeed(accountSettings) {
   const uid=currentUid(),ref=seedRef(uid);
   return runTransaction(db,async tx=>{
@@ -48,9 +48,12 @@ export async function saveStorySettings(sid,base,changes) {
     if(current.revision!==(session.storySettingsRevision ?? 0))throw new Error('Story settings revisions disagree. Reload and review before saving.');
     const values=mergeStorySettings(current.values,base,allowed);
     if(!Object.keys(allowed).length)return current;
+    const modeChanged=values.narrationMode!==current.values.narrationMode;
+    if(modeChanged && session.directorPending)throw new Error('Finish or discard pending Director narration before switching modes.');
+    if(modeChanged && values.narrationMode==='director' && session.memory?.calendar?.mode==='modern' && !session.directorState)throw new Error('Review live state and enter game hours 1–24 before enabling Director mode for a modern-clock story.');
     const revision=(session.storySettingsRevision ?? 0)+1;
     const result={version:STORY_SETTINGS_VERSION,revision,values};
-    tx.set(target(sid,uid),result);tx.update(parent(sid,uid),{storySettingsRevision:revision,updatedAt:serverTimestamp()});return result;
+    tx.set(target(sid,uid),result);tx.update(parent(sid,uid),{storySettingsRevision:revision,...(modeChanged && values.narrationMode==='director' && session.directorState && session.directorStateHistoryOrder!==(session.nextOrder ?? 0) ? {directorNeedsReview:true} : {}),updatedAt:serverTimestamp()});return result;
   });
   cache.set(uid+':'+sid,result);
   if(state.sessionId===sid && uid===currentUid()){state.storySettings=result;emit();}

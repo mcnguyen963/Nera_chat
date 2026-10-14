@@ -41,7 +41,7 @@ const countSystemTokensCached=createTokenCounter({count:text=>tokenizer.countTok
 export async function buildContextForRequest(session, settings, opts = {}) {
   const messages = opts.messages ?? await getMessages(session.id);
   if(opts.continuationId)continuationTarget(session,messages,opts.continuationId);
-  if (!memoryActive(normalizeMemory(session.memory))) {
+  if (settings.narrationMode !== 'director' && !memoryActive(normalizeMemory(session.memory))) {
     let all=[...messages];
     if (opts.draftText?.trim()) all.push({id:'__legacy_draft',order:(all.filter(m=>m.role!=='summary').at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText});
     if (opts.onlyRequiredWindow) {

@@ -1,3 +1,4 @@
+import { directorReplyPatch, directorTurnRef } from './director-store.js';
 import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { computeTurns } from './turns.js';
@@ -196,6 +197,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     const snap = await tx.get(sessionRef(sessionId, owner));
     assertStory(snap.data());
     const data = assertStory(snap.data());
+    if (message.role === 'user' && data.directorPending)throw new Error('Finish or discard the pending Director narration before sending another turn.');
     if (message.role === 'assistant') assertReplySource(data,opts.expectedSource);
     else assertSource(data,opts.expectedSource);
     if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});
@@ -214,6 +216,8 @@ export async function addMessage(sessionId, message, opts = {}) {
       summaryCoverageUnknown:!!data.summaryCoverageUnknown || lookup.summaryCoverageUnknown,
     };
     if(!append && (await tx.get(chunkRef(sessionId,activeId,owner))).exists())throw new Error('The next message chunk already exists. Refresh the story before sending.');
+    const directorSave=await directorReplyPatch(tx,sessionId,data,item,order,owner);
+    directorSave?.write();
     if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});
     tx.update(sessionRef(sessionId, owner), {
       nextOrder: order,
@@ -224,7 +228,7 @@ export async function addMessage(sessionId, message, opts = {}) {
       activeChunkId: activeId,
       activeChunkBytes: bytes,
       activeChunkCount: count,
-      ...(opts.sessionUpdate ?? {}),
+      ...(opts.sessionUpdate ?? {}),...(directorSave?.patch ?? {}),
     });
     if (append) {
       tx.update(chunkRef(sessionId, activeId, owner), {
@@ -235,7 +239,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     } else {
       tx.set(chunkRef(sessionId, activeId, owner), chunkRecord([item]));
     }
-    return {message:{...item,historyRevision:(data.historyRevision ?? 0)+1},...item,historyRevision:(data.historyRevision ?? 0)+1,session:{id:sessionId,...data,...coveragePatch,nextOrder:order,historyRevision:(data.historyRevision ?? 0)+1,nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role==='assistant' ? 1 : 0),activeChunkId:activeId,activeChunkBytes:bytes,activeChunkCount:count,...(opts.sessionUpdate ?? {})}};
+    return {message:{...item,historyRevision:(data.historyRevision ?? 0)+1},...item,historyRevision:(data.historyRevision ?? 0)+1,session:{id:sessionId,...data,...coveragePatch,nextOrder:order,historyRevision:(data.historyRevision ?? 0)+1,nextNarratorTurn:(data.nextNarratorTurn ?? 1)+(message.role==='assistant' ? 1 : 0),activeChunkId:activeId,activeChunkBytes:bytes,activeChunkCount:count,...(opts.sessionUpdate ?? {}),...(directorSave?.patch ?? {})}};
   });
 }
 
@@ -433,8 +437,20 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       });
       fallback = candidates.sort((a,b) => b.order-a.order)[0] ?? null;
     }
+    const directorSave=replacement && requireLatestReply ? await directorReplyPatch(tx,sessionId,data,replacement,order,owner) : null;
+    let directorRollback=null;
+    if(deletingAssistant && resetNarratorTurn && current.directorTurnId) {
+      let turn=(await tx.get(directorTurnRef(sessionId,current.directorTurnId,owner))).data();
+      if(turn && data.directorCheckpoint===turn.id){
+        let previous=turn.previousCheckpoint ?? null,steps=0;
+        while(previous && steps++<100){const prior=(await tx.get(directorTurnRef(sessionId,previous,owner))).data();if(!prior || prior.assistantId!==current.id)break;turn=prior;previous=prior.previousCheckpoint ?? null;}
+        directorRollback={directorState:turn.before,directorCheckpoint:previous,directorStateHistoryOrder:Math.max(0,order-1),directorPending:null,directorRevision:(data.directorRevision ?? 0)+1};
+      }
+    }
     const historyRevision = (data.historyRevision ?? 0)+1;
-    const patch = { historyRevision,updatedAt:serverTimestamp(),...(resetNarratorTurn ? {nextNarratorTurn:current.narratorTurn} : {}),...(summaryReset ? { activeSummaryMessageId:fallback?.id ?? null,breakpointOrder:fallback?.coveredRange?.toOrder ?? fallback?.coveredRange?.to ?? 0 } : {}),...sessionUpdate };
+    const patch = { historyRevision,updatedAt:serverTimestamp(),...(resetNarratorTurn ? {nextNarratorTurn:current.narratorTurn} : {}),...(summaryReset ? { activeSummaryMessageId:fallback?.id ?? null,breakpointOrder:fallback?.coveredRange?.toOrder ?? fallback?.coveredRange?.to ?? 0 } : {}),...sessionUpdate,...(directorSave?.patch ?? {}),...(directorRollback ?? {}) };
+    if(!requireLatestReply && contentChanged && current.role!=='summary' && data.directorState && !directorRollback)Object.assign(patch,{directorNeedsReview:true,directorPending:null,directorRevision:(data.directorRevision ?? 0)+1});
+    directorSave?.write();
     const pointer=data.memoryState?.extractedThroughOrder;
     if(contentChanged && current.role!=='summary' && pointer!=null) {
       const edits=[...(data.contentEdits ?? []),{order,revision:historyRevision}];
@@ -489,11 +505,11 @@ export async function editMessage(sessionId, messageId, content, order, metadata
   return { tokenCount,...result };
 }
 
-export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false,sceneMeta = null,sceneCandidate = null,acceptance,reviewWarnings = [],truncated = false,lastContinuation = null,responseDiagnostics = null }, order, sessionUpdate = {}, expectedSource = null) {
+export async function overwriteMessage(sessionId, messageId, { content, thinking, planThread = null, planBefore = null, scene = null, ooc = false,sceneMeta = null,sceneCandidate = null,acceptance,reviewWarnings = [],truncated = false,lastContinuation = null,responseDiagnostics = null,directorTurnId = null,directorIncomplete = false }, order, sessionUpdate = {}, expectedSource = null) {
   const tokenCount = await countTokens(contextText({ content, planThread }));
   const result = await changeMessage(sessionId,messageId,order,message => {
     const {editedAt,acceptance:oldAcceptance,reviewWarnings:oldWarnings,sceneCandidate:oldCandidate,truncated:oldTruncated,...rest}=message;
-    return {...rest,lastContinuation,responseDiagnostics,content,thinking:thinking ?? null,planThread,planBefore,scene,ooc,tokenCount,sceneMeta,
+    return {...rest,lastContinuation,responseDiagnostics,...(directorTurnId ? {directorTurnId,directorIncomplete} : {}),content,thinking:thinking ?? null,planThread,planBefore,scene,ooc,tokenCount,sceneMeta,
       ...(acceptance!==undefined ? {acceptance,reviewWarnings,sceneCandidate} : {}),...(truncated || oldTruncated ? {truncated} : {})};
   },sessionUpdate,expectedSource,true);
   return { tokenCount,...result };
