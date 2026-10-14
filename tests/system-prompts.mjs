@@ -23,7 +23,7 @@ test('prompt files load once at a Pages subpath and preserve text and template d
     urls.push(url.href);
     return diskFetch(url);
   });
-  assert.equal(urls.length, Object.keys(api.prompts).length);
+  assert.equal(urls.length, Object.keys(api.prompts).length-2);
   assert.equal(new Set(urls).size, urls.length);
   assert.ok(Object.isFrozen(api.prompts));
   for (const [key, value] of Object.entries(api.prompts)) {

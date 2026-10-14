@@ -55,6 +55,6 @@ function brief(entry) {
   const section=[entry.sections?.description,entry.sections?.state,entry.sections?.status,...Object.values(entry.sections ?? {})].find(s=>s && [s.text,...(s.lines ?? []).map(l=>l.text)].some(t=>t?.trim()));
   return [section?.text,...(section?.lines ?? []).map(l=>l.text)].filter(Boolean).join(' ').slice(0,400);
 }
-export function narratorDirectorContract(turn) {
-  return prompts.directorNarrator+'\n\nDirector contract:\n'+JSON.stringify({startingState:{scene:turn.before.scene,event:turn.before.event},targetState:{scene:turn.after.scene,event:turn.after.event},playerBoundary:turn.playerBoundary ?? null,pendingDecisions:turn.after.decisions.filter(i=>!['closed','cancelled'].includes(i.status)),readyCommitments:turn.after.commitments.filter(i=>i.status==='ready'),contract:turn.contract});
+export function narratorDirectorContract(turn,{includeRules=true}={}) {
+  return (includeRules ? prompts.directorNarrator+'\n\n' : '')+'Director contract:\n'+JSON.stringify({startingState:{scene:turn.before.scene,event:turn.before.event},targetState:{scene:turn.after.scene,event:turn.after.event},playerBoundary:turn.playerBoundary ?? null,pendingDecisions:turn.after.decisions.filter(i=>!['closed','cancelled'].includes(i.status)),readyCommitments:turn.after.commitments.filter(i=>i.status==='ready'),contract:turn.contract});
 }

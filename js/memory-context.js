@@ -1,5 +1,6 @@
 import { directorScene } from './director-state.js';
-import { narratorDirectorContract } from './director-context.js';
+import { buildReplyBrief, replySubjects } from './narrator-brief.js';
+import { explicitStorySettings } from './story-settings.js';
 import { parseScene } from './scene.js';
 import { selectScheduledPlan, fitScheduledPlan, validatePlanJump, planJumpInstruction } from './scheduled-plan.js';
 import { fitRecords, relevantSubjects, recordUnits } from './lore-record-select.js';
@@ -45,9 +46,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (latest) required.add(latest.id);
   if(opts.continuationId)required.add(opts.continuationId);
   if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
-  let narrator = (settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
+  let narrator = (director ? explicitStorySettings(settings).directorNarratorSystemPrompt : settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
   const planOn=!!session.longTermPlan?.trim();
-  if(director)narrator+='\n\n'+(turn ? narratorDirectorContract(turn) : prompts.directorNarrator+'\nNarrator preview is provisional until the Director produces a contract.');
+  if(director)narrator+='\n\n'+prompts.directorNarrator+(!turn ? '\nNarrator preview is provisional until the Director produces a contract.' : '');
   const system=[narrator,adRule,CONTINUITY_RULE,planInjectionBlock(session.longTermPlan),!director && planOn ? prompts.planThread : '',!director && mem.scene ? SCENE_RULE(mem.protagonist,mem.calendar) : ''].filter(Boolean).join('\n\n');
   const reminder=!director && mem.scene ? (mem.calendar.mode==='modern' ? modernSceneReminder(mem.calendar,current.scene,planOn) : planOn ? prompts.sceneReminderPlan : prompts.sceneReminder) : '';
   const blocks=[{key:'system',label:'Instructions and fixed author plan',tokens:await count(system)+FRAME}];
@@ -86,7 +87,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const contract = !director && mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
   if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
   if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
-  let memory = '';
+  let memory = '',briefText='',briefReport=null;
+  if(turn){const initial=await buildReplyBrief({turn,userSource:latestUser?.id,fits:{},options:{},count,canRelocate:async()=>false});briefText=initial.text;briefReport=initial.report;}
   const gapInfo=() => {
     if(selectionState.size===raw.length)return '';
     const covered=!!summaryText && checkpoint>(anchors.at(-1)?.order ?? 0);
@@ -112,6 +114,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       if(reminder) history[i].content+='\n\n'+reminder;
       if(contract && mem.replyContract==='system') history.splice(i,0,{role:'system',content:contract});
     }
+    if(briefText && latest){const i=history.findIndex(m=>m.id===latest.id);history.splice(i,0,{role:'system',content:briefText});}
     if (inspect) inspection.messages = history.flatMap((m,index) => m.id ? [{
       id:m.id,order:byId.get(m.id)?.order,role:m.role,content:m.content,requestIndex:index+1,
       source:anchorIds.has(m.id) ? 'Opening exchange' : m.id==='__memory_draft' ? 'Composer draft' : m.id==='__continuation' ? 'Continuation instruction' : m.id===latest?.id ? 'Latest user message' : 'Recent conversation',
@@ -147,6 +150,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if(gap && !gapUser())total+=FRAME+await count(gap);
     if(memory && !userMemory)total+=FRAME+await count(memory);
     if(contract && mem.replyContract==='system' && latest)total+=FRAME+await count(contract);
+    if(briefText && latest)total+=FRAME+await count(briefText);
     return total;
   };
   if (await cost() > limit) throw new Error('The opening story, summary and latest user message exceed the context budget. Increase the context limit or shorten required content.');
@@ -170,11 +174,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
-  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
-  if(turn){
-    for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');const list=selection.selected[entry.book];if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);continue;}if(list){const existing=list.find(i=>i.entry.id===id);if(existing)list.splice(list.indexOf(existing),1);list.unshift({entry,reason:'Director selection'});}}
-  }
-  if(turn)for(const book of ['characters','locations']){const list=selection.selected[book],priority=item=>['always','protagonist','in scene','current place','pinned record'].includes(item.reason)?0:turn.contract.requiredMemoryIds.includes(item.entry.id)?1:item.reason==='Director selection'?2:3;list.sort((a,b)=>priority(a)-priority(b));const overflow=list.splice(mem.books[book].maxCards);selection.skipped.push(...overflow.map(i=>({entryId:i.entry.id,book,name:i.entry.name,reason:'card limit after Director ranking'})));}
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds} : {})});
+  if(turn)for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);}}
   const scheduled = mem.lorebooks && mem.books.plan.on
     ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)
     : {selected:[],warnings:[],skipped:filtered.entries.filter(e=>e.book==='plan').map(e=>({entryId:e.id,book:'plan',name:e.name,reason:'book off'}))};
@@ -182,11 +183,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const skipped = [...filtered.skipped,...selection.skipped,...scheduled.skipped];
   const recordMode=session.loreSchemaVersion===3;
   const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
-  if(turn && recordAnchors)for(const id of turn.contract.memoryIds)recordAnchors.add(id);
+  if(turn && recordAnchors){for(const id of turn.contract.memoryIds)recordAnchors.add(id);for(const book of ['characters','locations'])for(const item of selection.selected[book])if(['starting character','starting place','in scene','current place'].includes(item.reason))recordAnchors.add(item.entry.id);}
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
     if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
   }
-  const recordReports={};
+  const recordReports={},fits={};
   let characterSelectionReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
@@ -222,6 +223,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       }
       fit = empty;
     }
+    fits[book]=fit;
     skipped.push(...fit.skipped);
     if(book==='plan' && fit.skipped.length)warnings.push(`${fit.skipped.length} scheduled plan phase(s) omitted for budget. Review Plan in the context viewer.`);
     if (fit.selectionReport) for (const c of fit.selectionReport.characters) {
@@ -232,6 +234,25 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if (inspection && fit.text) inspection.sections[book] = text;
     if (fit.text && (book === 'plan' || book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
     for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,ranking:e.ranking,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds],...(book==='plan' ? {phaseId:e.phaseId,phaseTitle:e.phaseTitle} : {}) });
+  }
+  if(turn){
+    const fittingOptions={recordMode,characterSelection:mem.characterSelection,protagonist:mem.protagonist,relevantEntryIds:replySubjects(turn,selection.index)};
+    const applyFits=remaining=>{
+      chars=remaining.characters ?? empty;places=remaining.locations ?? empty;memory=memoryText();books.length=0;
+      for(const book of ['plan','facts','events']){const fit=remaining[book];if(!fit)continue;const text=book==='facts'?renderFactsBlock(fit):book==='events'?renderEventsBlock(fit,{provenance:false}):fit.text;if(text)books.push(text);}
+    };
+    const result=await buildReplyBrief({turn,userSource:latestUser?.id,fits,options:fittingOptions,count,canRelocate:async(remaining,text,moved)=>{
+      applyFits(remaining);briefText=text;
+      for(const [book,passages] of Object.entries(moved)){
+        if(!passages)continue;
+        const fit=remaining[book],normal=book==='facts'?renderFactsBlock(fit):book==='events'?renderEventsBlock(fit,{provenance:false}):fit.text;
+        if(await count([normal,passages].filter(Boolean).join('\n\n'))>mem.books[book].budget)return false;
+      }
+      return await cost()<=limit;
+    }});
+    applyFits(result.fits);briefText=result.text;briefReport=result.report;
+    if(inspection)for(const [book,fit] of Object.entries(result.fits))inspection.sections[book]=book==='facts'?renderFactsBlock(fit):book==='events'?renderEventsBlock(fit,{provenance:false}):fit.text;
+    for(const b of blocks)if(['plan','facts','events'].includes(b.key))b.tokens=await count(inspection?.sections[b.key] ?? (b.key==='facts'?renderFactsBlock(result.fits.facts):b.key==='events'?renderEventsBlock(result.fits.events,{provenance:false}):result.fits.plan.text));
   }
   if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
     const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];
@@ -280,6 +301,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   blocks.push({ key:'window',label:'Recent conversation',tokens:await messageCost(window),fromTurn:turns.turnById.get(window[0]?.id),toTurn:turns.turnById.get(window.at(-1)?.id),messages:window.length,mode:windowMode,step:mem.batchTurns,target:targetCount,retained:retainedTarget });
   if (latest) blocks.push({ key:'latest',label:opts.continuationId ? 'Temporary continuation instruction' : 'Latest user message',tokens:await messageCost([latest]) });
   if (memory) blocks.push({ key:'memory',label:'Memory block',tokens:mem.blockRole === 'user' && mem.memoryBlock && latest ? await count('<memory>\n'+memory+'\n</memory>\n\n'+contentFor(latest))-await count(contentFor(latest)) : await count(memory)+FRAME });
+  if(briefText)blocks.push({key:'replyBrief',label:'Current reply brief',tokens:await count(briefText)+FRAME});
   if(reminder) blocks.push({key:'reminder',label:'Scene reminder',tokens:await count('\n\n'+reminder)});
   if(gapInfo()) {
     const recipient=gapUser(),prefixed=recipient && contentFor(recipient,{gap:true});
@@ -292,7 +314,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (gaps.length) warnings.push(`${uncovered.length} messages are outside the request and not covered by the active summary. Memory notes may provide only partial coverage.`);
   if (effectivelyPaused(session.memoryState)) warnings.push('Memory updates paused. '+(session.memoryState.lastError ?? ''));
   if(turn){const loadedIds=new Set(loaded.map(e=>e.entryId));const missing=turn.contract.requiredMemoryIds.filter(id=>!loadedIds.has(id));if(recordMode)for(const book of ['characters','locations','facts','events'])for(const entry of recordReports[book]?.entries ?? [])if(turn.contract.requiredMemoryIds.includes(entry.entryId) && entry.records.some(r=>(r.core || r.pinned) && !r.selected && r.reason==='over budget'))throw new Error('Required Director card has omitted core constraints: '+entry.name+'. Increase its book budget.');if(missing.length)throw new Error('Required Director memories do not fit the Narrator budget: '+missing.join(', ')+'. Increase book budgets or context limit.');}
+  if(director && settings.directorNarratorPromptNeedsReview)warnings.push('Preserved custom Director-mode Narrator instructions need review in Settings → Prompts.');
   if(director && !turn)warnings.push('Narrator selection is provisional; context preview does not call the Director.');
-  if (inspection) Object.assign(inspection.sections,{system,summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
-  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  if (inspection) Object.assign(inspection.sections,{system,...(director ? {replyBrief:briefText} : {}),summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(briefReport ? {replyBrief:briefReport} : {}),...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

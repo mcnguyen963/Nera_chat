@@ -134,6 +134,7 @@ async function render() {
     }
     overview.append(breakdown); body.append(overview);
     textSection(body, 'instructions', 'Instructions & story plan', sections.system, 'No instructions included.');
+    if(sections.replyBrief)textSection(body,'reply-brief','Current reply brief',sections.replyBrief,'No Director contract yet.');
     textSection(body, 'summary', 'Story summary', sections.summary, 'No active summary.');
 
     const lore = group('lorebooks', 'Lorebooks', true);
@@ -182,6 +183,7 @@ async function render() {
     if (live.sentContext) {
       const sent=live.sentContext,section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString());
       section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
+      if(sent.report?.replyBrief){section.append(preview('sent-reply-brief','Reply brief · exact sent text',sent.report.replyBrief.text),preview('sent-brief-sources','Reply brief sources and omissions',JSON.stringify(sent.report.replyBrief,null,2)));}
       if(sent.director){const d=sent.director;section.append(node('p',`Director: ${d.reused ? 'reused contract' : (d.usage?.prompt_tokens ?? d.report?.totals?.input ?? 0).toLocaleString()+' input tokens'} · ${d.elapsedMs ?? 0} ms. Narrator: ${sent.narratorUsage?.prompt_tokens?.toLocaleString() ?? 'usage unavailable'} input tokens · ${sent.narratorElapsedMs ?? 0} ms. Combined estimate: ${((d.reused ? 0 : d.report?.totals?.input ?? 0)+(sent.report?.totals?.input ?? 0)).toLocaleString()} input tokens.`, 'muted'));if(d.requestBody)section.append(preview('director-sent-json','Director serialized request',JSON.stringify(d.requestBody,null,2)));section.append(preview('director-contract','Director contract',JSON.stringify(d.contract,null,2)));}
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
       if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');

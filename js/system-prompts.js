@@ -23,7 +23,12 @@ const files = {
   "legacyPlan": "legacy-plan.md",
   "legacyAuthorDirection": "legacy-author-direction.md",
   "legacyPromptHashes": "legacy-prompt-default-hashes.md",
-  "narrator": "narrator.md",
+  "narratorShared": "narrator.md",
+  "narratorClassicMode": "narrator-classic-mode.md",
+  "narratorDirectorMode": "narrator-director-mode.md",
+  "narratorBrief": "narrator-brief.md",
+  "narratorArrival": "narrator-arrival.md",
+  "narratorBriefSource": "narrator-brief-source.md",
   "summarizer": "summarizer.md",
   "authorDirection": "author-direction.md",
   "continuity": "continuity.md",
@@ -57,9 +62,17 @@ export async function loadPrompt(filename) {
   return text;
 }
 
-export const prompts = Object.freeze(Object.fromEntries(
+const loadedPrompts = Object.fromEntries(
   await Promise.all(Object.entries(files).map(async ([key, filename]) => [key, await loadPrompt(filename)]))
-));
+);
+
+function composeNarrator(mode) {
+  const blocks=Object.fromEntries([...mode.matchAll(/^## ([A-Z_]+)\n\n([\s\S]*?)(?=\n\n## [A-Z_]+\n|(?![\s\S]))/gm)].map(m=>[m[1],m[2]]));
+  const text=renderPrompt(loadedPrompts.narratorShared,blocks);
+  if(/\{\{[A-Z_]+\}\}/.test(text))throw new Error("Narrator mode is missing a shared prompt section.");
+  return text;
+}
+export const prompts=Object.freeze({...loadedPrompts,narrator:composeNarrator(loadedPrompts.narratorClassicMode),directorNarratorDefault:composeNarrator(loadedPrompts.narratorDirectorMode)});
 
 export function renderPrompt(template, values) {
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (placeholder, key) =>
