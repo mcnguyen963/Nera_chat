@@ -2281,3 +2281,23 @@ test('Cut-off Director Re-plan preserves the original reply and provides Continu
  for(let i=0;i<100 && h.state.busy;i++)await new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(h.calls.requests.length,3);assert.equal(h.calls.overwrites.length,1);assert.ok(h.calls.overwrites[0][2].content.includes('Incomplete replacement'));assert.ok(h.calls.overwrites[0][2].content.includes('The replacement finishes.'));assert.equal(h.calls.overwrites[0][2].truncated,false);
 });
+
+test('Director and Narrator inline selectors save story roles without switching the shared active connection',async()=>{
+ const h=await harness();h.state.sessionId='story';h.state.storySettingsId='story';h.state.storySettings={values:{narrationMode:'director',narratorProfileId:'',directorProfileId:'default'}};
+ const base=h.state.settings.profiles[0];h.state.settings.profiles.push({...base,id:'second',name:'Second',modelId:'second-model'});const active=h.state.settings.activeProfileId;
+ (await h.use('ui/chat-view.js')).initChatView();
+ assert.equal(h.el('quick-director-control').classList.contains('hidden'),false);
+ h.el('quick-profile').value='second';await h.fire('quick-profile','change');assert.equal(h.state.storySettings.values.narratorProfileId,'second');assert.equal(h.state.settings.activeProfileId,active);
+ h.el('quick-director-profile').value='second';await h.fire('quick-director-profile','change');assert.equal(h.state.storySettings.values.directorProfileId,'second');assert.equal(h.state.settings.activeProfileId,active);
+ h.el('quick-thinking').value='medium';await h.fire('quick-thinking','change');assert.equal(h.state.settings.profiles.find(p=>p.id==='second').reasoning.effort,'medium');
+});
+
+test('Test profile presets remain draft-only until saved and are selectable separately in story prompts',async()=>{
+ const h=await harness();h.state.sessionId='story';h.state.storySettingsId='story';h.state.storySettings={values:(await h.use('story-settings.js')).defaultStorySettings()};
+ Object.assign(h.state.settings,{endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:'fake-openrouter-key',modelId:'original-model',maxOutputPrice:.4});h.settings.mirrorToActiveProfile(h.state.settings);
+ (await h.use('ui/chat-view.js')).initChatView();const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();const count=h.state.settings.profiles.length;
+ await h.fire('btn-role-test-profiles');assert.equal(h.state.settings.profiles.length,count);await h.fire('btn-save-settings');assert.equal(h.state.settings.profiles.length,count+2);
+ const d=h.state.settings.profiles.find(p=>p.modelId==='anthropic/claude-haiku-5.5:floor'),n=h.state.settings.profiles.find(p=>p.modelId==='deepseek/deepseek-v4.1-flash:floor');assert.equal(d.reasoning.effort,'medium');assert.equal(n.reasoning.effort,'high');
+ await h.fire('nav-prompts');h.el('set-narration-mode').value='director';h.el('set-director-profile').value=d.id;h.el('set-narrator-profile').value=n.id;h.el('set-director-output').value='8192';await h.fire('btn-save-settings');
+ assert.equal(h.state.storySettings.values.directorProfileId,d.id);assert.equal(h.state.storySettings.values.narratorProfileId,n.id);assert.equal(h.state.settings.modelId,'original-model');
+});
