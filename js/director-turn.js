@@ -34,7 +34,13 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   check();hooks.onContext?.(built);
   const started=Date.now();
   const task=directorTaskSettings(settings);
-  const result=await chatCompletion({settings:task,messages:built.apiMessages,...directorOutputOptions(task),signal:hooks.signal,onRequest:hooks.onRequest});
+  let result;
+  try {
+    result=await chatCompletion({settings:task,messages:built.apiMessages,...directorOutputOptions(task),signal:hooks.signal,onRequest:hooks.onRequest});
+  }catch(error){
+    if(['length','max_tokens','max_output_tokens'].includes(String(error.finishReason ?? '').toLowerCase()))error.message='Director output limit was reached before a complete contract. Raise Director output tokens in story settings; this limit includes reasoning. No state was saved.';
+    throw error;
+  }
   check();
   if(result.finishReason==='length' || !result.content?.trim())throw new Error('Director output was incomplete. Raise its output limit or retry.');
   const parsed=parseDirectorContract(result.content,before,built.entries);
