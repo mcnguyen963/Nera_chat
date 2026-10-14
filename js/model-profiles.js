@@ -10,13 +10,14 @@ export function resolveModelProfile(settings,profileId,{role='Selected'}={}) {
     ...Object.fromEntries(['temperature','topP','frequencyPenalty','presencePenalty'].map(k=>[k,profile[k] ?? null]))};
 }
 export const ROLE_TEST_PROFILES=Object.freeze([
-  Object.freeze({role:'director',name:'Director · Haiku 5.5',modelId:'anthropic/claude-haiku-5.5:floor',maxOutputPrice:.5}),
-  Object.freeze({role:'narrator',name:'Narrator · DeepSeek Flash',modelId:'deepseek/deepseek-v4.1-flash:floor',maxOutputPrice:.4})
+  Object.freeze({role:'director',name:'Haiku 5.5 · medium',modelId:'anthropic/claude-haiku-5.5:floor',maxOutputPrice:.5}),
+  Object.freeze({role:'narrator',name:'DeepSeek Flash · high',modelId:'deepseek/deepseek-v4.1-flash:floor',maxOutputPrice:.4})
 ]);
 export function addRoleTestProfiles(settings,newId=()=>crypto.randomUUID()) {
   const profiles=structuredClone(settings.profiles ?? []),ids={},source=profiles.find(p=>p.id===settings.activeProfileId) ?? settings;
   for(const preset of ROLE_TEST_PROFILES){
-    let profile=profiles.find(p=>p.modelId===preset.modelId);
+    const effort=preset.role==='director'?'medium':'high';
+    let profile=profiles.find(p=>p.modelId===preset.modelId && /^https:\/\/openrouter\.ai\//i.test(p.endpoint ?? '') && p.reasoning?.enabled===true && p.reasoning?.mode==='effort' && p.reasoning?.effort===effort && p.maxOutputPrice===preset.maxOutputPrice && p.maxResponseTokens===8192 && p.advancedParametersEnabled!==true && (preset.role==='director'||p.streaming!==false));
     if(!profile){profile={id:newId(),name:preset.name,endpoint:'https://openrouter.ai/api/v1/chat/completions',apiKey:/^https:\/\/openrouter\.ai\//i.test(source.endpoint ?? '') ? source.apiKey ?? '' : '',modelId:preset.modelId,streaming:preset.role==='narrator',maxResponseTokens:8192,maxOutputPrice:preset.maxOutputPrice,advancedParametersEnabled:false,temperature:null,topP:null,frequencyPenalty:null,presencePenalty:null,reasoning:{enabled:true,mode:'effort',effort:preset.role==='director'?'medium':'high',maxTokens:4096}};profiles.push(profile);}
     ids[preset.role]=profile.id;
   }
