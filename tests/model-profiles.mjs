@@ -17,6 +17,8 @@ test('Role test presets use the requested exact models and effort, reuse existin
  assert.equal(d.modelId,'anthropic/claude-haiku-5.5:floor');assert.equal(d.reasoning.effort,'medium');assert.equal(d.maxOutputPrice,.5);assert.equal(d.apiKey,'');assert.equal(n.modelId,'deepseek/deepseek-v4.1-flash:floor');assert.equal(n.reasoning.effort,'high');assert.equal(n.maxOutputPrice,.4);
  const again=api.addRoleTestProfiles({...settings,profiles:result.profiles},()=>{throw Error('Duplicate profile');});assert.deepEqual(plain(again.profiles),plain(result.profiles));
  const existing=api.addRoleTestProfiles(settings);assert.equal(existing.ids.director,'d');assert.equal(existing.ids.narrator,'n');assert.deepEqual(plain(existing.profiles),plain(settings.profiles));
+ const custom=structuredClone(settings);custom.profiles.find(p=>p.id==='d').reasoning.effort='high';
+ const selected=api.addRoleTestProfiles(custom,()=> 'medium-director');assert.equal(selected.ids.director,'medium-director');assert.equal(selected.profiles.find(p=>p.id==='d').reasoning.effort,'high');assert.equal(selected.profiles.find(p=>p.id==='medium-director').reasoning.effort,'medium');
 });
 test('Narrator selections migrate without changing old defaults and participate in story setting conflicts',async()=>{
  const api=await appHarness()('story-settings.js'),old=await api.migrateStorySettings({narratorSystemPrompt:'Custom'});assert.equal(old.narratorProfileId,'');
