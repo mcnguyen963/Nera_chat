@@ -2209,3 +2209,40 @@ test('settings profile switch, defaults, close and reload cancel model discovery
     assert.equal(h.el('model-status').textContent, '', action);
   }
 });
+
+for(const time of ['15:40','3:40pm','3:40 PM']) for(const mode of ['normal','stream','thinking','recovery'])
+test(`numeric scene collection ${time} via ${mode} survives reload and next request`,async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');
+ const raw=`date: 21/10/738 · time: ${time} · place: Inn · present: Mira`;
+ const prose='Mira waits by the door.';
+ Object.assign(h.state.settings,{modelId:'model',apiKey:'fixture',streaming:mode==='stream'});
+ h.calls.messageOrder=2;
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene:true,sceneFallback:true}})});
+ const old={id:'a',order:2,role:'assistant',content:'At the inn.',scene:'date: 21 October 738 · time: 15:40 · place: Inn · present: Mira'};
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u',role:'user',order:1,content:'Start.'},old],hasEarlier:false});
+ h.calls.onRequest=()=>{
+  if(mode==='thinking') h.calls.responseData={choices:[{message:{content:prose,reasoning:'Scene tag: '+raw}}]};
+  else if(mode==='recovery') h.calls.response=h.calls.requests.length===1?prose:JSON.stringify({date:'21/10/738',time,place:'Inn',present:['Mira'],planThread:null});
+  else h.calls.response=prose+'\n<scene>'+raw+'</scene>';
+ };
+ if(mode==='stream') {
+  const split=time.indexOf(':')+1;
+  const parts=[prose+'\n<sc','ene>date: 21/10/738 · time: '+time.slice(0,split),time.slice(split)+' · place: Inn · present: Mira</sce','ne>'];
+  h.calls.streamLines=[...parts.map(content=>'data: '+JSON.stringify({choices:[{delta:{content}}]})+'\n\n'),
+   'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n','data: [DONE]\n\n'];
+ }
+ h.el('chat-input').value='Continue.';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
+ assert.equal(saved.scene,raw);assert.equal(saved.content,prose);
+ assert.equal(h.calls.requests.length,mode==='recovery'?2:1,'Readable tags and reasoning need no recovery call');
+ assert.equal(saved.sceneMeta.kind,mode==='recovery'?'inferred':'declared');
+ if(mode==='thinking')assert.equal(saved.sceneMeta.source,'thinking');
+ const reloaded=JSON.parse(JSON.stringify([{id:'u',role:'user',order:1,content:'Start.'},old,{...saved,id:'saved',order:4},{id:'next',role:'user',order:5,content:'Continue.'}]));
+ const scene=await h.use('scene.js');assert.equal(scene.latestScene(reloaded).scene.raw,raw);
+ const built=await (await h.use('context-builder.js')).buildContextForRequest({memory:{scene:true}},h.state.settings,{messages:reloaded,loreEntries:[],requireLatestUser:true});
+ const client=await h.use('llm-client.js');
+ const body=client.buildRequestBody(h.state.settings,built.apiMessages);
+ assert.ok(body.messages.some(m=>m.content.includes(raw)),'Next serialized request retains written date and time');
+});

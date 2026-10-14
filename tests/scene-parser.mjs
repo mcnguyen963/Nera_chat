@@ -140,3 +140,13 @@ test('S11 only OpenRouter recovery requests explicitly disable reasoning and dro
  const {buildRequestBody}=await use('llm-client.js');assert.equal(buildRequestBody(request.settings,[]).reasoning.enabled,false);
  assert.equal(buildRequestBody({...request.settings,endpoint:'https://example.test'},[]).reasoning,undefined);
 });
+
+test('numeric clock scene tags stay hidden at every streamed character boundary',async()=>{
+ const {stripPlan}=await use('plan-parser.js');
+ for(const time of ['15:40','3:40pm','3:40 PM']) {
+  const scene=`date: 21/10/738 · time: ${time} · place: Inn · present: Mira`;
+  const output='Mira waits.\n'+tag(scene);
+  for(let end='Mira waits.'.length;end<=output.length;end++)assert.equal(stripPlan(output.slice(0,end)),'Mira waits.');
+  const parsed=api.readSceneOutput(output);assert.equal(parsed.scene,scene);assert.equal(parsed.warning,null);
+ }
+});

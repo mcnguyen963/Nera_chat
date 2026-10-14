@@ -100,7 +100,57 @@ function supports(text,word,time=false) {
 export function timeClassesIn(text) {
   return new Set(Object.entries(TIME_CLASSES).filter(([,words])=>words.some(word=>supports(text,word,true))).map(([key])=>key));
 }
+const MONTHS=['january','february','march','april','may','june','july','august','september','october','november','december'];
+const MONTH_PATTERN=MONTHS.join('|');
+const DATE_PATTERN=`(?:\\d{3,4}-\\d{1,2}-\\d{1,2}|\\d{1,2}([/.-])\\d{1,2}\\1\\d{1,4}|\\d{1,2} (?:${MONTH_PATTERN}) \\d{1,4}|(?:${MONTH_PATTERN}) \\d{1,2},? \\d{1,4})`;
+const CLOCK_PATTERN='\\d{1,2}:\\d{2}(?:\\s*[ap]m)?';
+const leapYear=year=>year%4===0 && (year%100!==0 || year%400===0);
+const daysInMonth=(year,month)=>[31,leapYear(year)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
+// Complete dates only; custom calendars and partial dates keep their free-text rules.
+function completeDate(value) {
+  const text=normalized(value);
+  let year,month,day,m;
+  if((m=text.match(/^(\d{3,4})-(\d{1,2})-(\d{1,2})$/))) [,year,month,day]=m;
+  else if((m=text.match(/^(\d{1,2})([/.-])(\d{1,2})\2(\d{1,4})$/))) {day=m[1];month=m[3];year=m[4];}
+  else if((m=text.match(new RegExp(`^(\\d{1,2}) (${MONTH_PATTERN}) (\\d{1,4})$`)))) {day=m[1];month=MONTHS.indexOf(m[2])+1;year=m[3];}
+  else if((m=text.match(new RegExp(`^(${MONTH_PATTERN}) (\\d{1,2}),? (\\d{1,4})$`)))) {month=MONTHS.indexOf(m[1])+1;day=m[2];year=m[3];}
+  else return null;
+  year=Number(year);month=Number(month);day=Number(day);
+  return {year,month,day,valid:year>0 && month>=1 && month<=12 && day>=1 && day<=daysInMonth(year,month)};
+}
+function clockMinutes(value) {
+  const m=normalized(value).match(/^(\d{1,2}):(\d{2})\s*([ap]m)?$/);
+  if(!m)return null;
+  let hour=Number(m[1]);const minute=Number(m[2]);
+  if(minute>59 || (m[3] ? hour<1 || hour>12 : hour>23))return null;
+  if(m[3])hour=hour%12+(m[3]==='pm'?12:0);
+  return hour*60+minute;
+}
+function equivalent(a,b,key) {
+  if(normalized(a)===normalized(b))return true;
+  if(key==='time') {const x=clockMinutes(a),y=clockMinutes(b);return x!==null && x===y;}
+  const x=completeDate(a),y=completeDate(b);
+  return !!(x?.valid && y?.valid && x.year===y.year && x.month===y.month && x.day===y.day);
+}
+function supportsValue(text,value,key) {
+  const recognized=key==='date'?completeDate(value)?.valid:clockMinutes(value)!==null;
+  if(!recognized)return supports(text,value,key==='time');
+  text=normalized(text);
+  const pattern=key==='date'?DATE_PATTERN:CLOCK_PATTERN;
+  for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}/.:-])${pattern}(?![\\p{L}\\p{N}/:-]|\\.\\d)`,'gu'))) {
+    if(key==='time' && /\b(?:last|next|yesterday|tomorrow|previous|that|every)\s*$/.test(text.slice(0,match.index)))continue;
+    if(equivalent(match[0],value,key))return true;
+  }
+  return false;
+}
 function oneDayForward(previous,next) {
+  const before=completeDate(previous),after=completeDate(next);
+  if(before || after) {
+    if(!before?.valid || !after?.valid)return false;
+    let {year,month,day}=before;
+    if(++day>daysInMonth(year,month)) {day=1;if(++month>12){month=1;year++;}}
+    return year===after.year && month===after.month && day===after.day;
+  }
   const old=normalized(previous),fresh=normalized(next),a=[...old.matchAll(/\d+/g)],b=[...fresh.matchAll(/\d+/g)];
   if(a.length!==b.length || !a.length || old.replace(/\d+/g,'#')!==fresh.replace(/\d+/g,'#')) return false;
   let changed=0;
@@ -142,21 +192,21 @@ export function validateSceneValues(raw, { narration = '', userText = '', prior 
     const compatible=other=>other===declared || NEIGHBOURS.some(pair=>pair.split(' ').includes(other) && pair.split(' ').includes(declared));
     if(value && declared && endClasses.length && !endClasses.some(compatible)) {parsed[field]=previous ?? null;provenance[key]='contradicted';warnings.push('Unsupported scene time; explicit ending contradicts the declared clock.');}
     else if(!value)provenance[key]='unknown';
-    else if(normalized(previous)===needle)provenance[key]='prior';
-    else if(supports(userText,needle,key==='time'))provenance[key]='user';
+    else if(equivalent(previous,value,key))provenance[key]='prior';
+    else if(supportsValue(userText,value,key))provenance[key]='user';
     else {
       let accepted=false;
       if(key==='time') {
         const declared=[...timeClassesIn(value)][0],classes=timeClassesIn(narrative);
-        if((declared && classes.has(declared)) || supports(narrative,needle,true) || /^\d{1,2}:00$/.test(value) && new RegExp('\\b'+Number(value.split(':')[0])+" o.clock\\b",'i').test(narrative)) {provenance[key]='narration';accepted=true;}
+        if((declared && classes.has(declared)) || supportsValue(narrative,value,key) || /^\d{1,2}:00$/.test(value) && new RegExp('\\b'+Number(value.split(':')[0])+" o.clock\\b",'i').test(narrative)) {provenance[key]='narration';accepted=true;}
         else {
           const endClasses=[...timeClassesIn(ending)];
           const compatible=other=>other===declared || NEIGHBOURS.some(pair=>pair.split(' ').includes(other) && pair.split(' ').includes(declared));
           if(!previous || normalized(previous)==='unknown' || !declared || !endClasses.length || endClasses.some(compatible)) {provenance[key]='declared';accepted=true;}
         }
       } else {
-        if(supports(narrative,needle) || progressed(value,narrative) || DAY_CHANGE.test(narrative+' '+userText) && oneDayForward(previous,value) || LONG_SKIP.test(narrative+' '+userText)) {provenance[key]='narration';accepted=true;}
-        else if(!previous || normalized(previous)==='unknown' || needle.includes(normalized(previous))) {provenance[key]='declared';accepted=true;}
+        if(supportsValue(narrative,value,key) || progressed(value,narrative) || DAY_CHANGE.test(narrative+' '+userText) && oneDayForward(previous,value) || LONG_SKIP.test(narrative+' '+userText)) {provenance[key]='narration';accepted=true;}
+        else if(!previous || normalized(previous)==='unknown' || !completeDate(previous) && needle.includes(normalized(previous))) {provenance[key]='declared';accepted=true;}
       }
       if(!accepted) {parsed[field]=previous ?? null;provenance[key]='contradicted';warnings.push(`Unsupported scene ${key}; ${parsed[field] ? 'prior value kept' : 'stored as unknown'}.`);}
     }
