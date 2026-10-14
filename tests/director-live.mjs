@@ -15,7 +15,7 @@ test('Director live provider eligibility enforces the 0.40 output ceiling and hi
  assert.equal(eligible(listing.data).length,1);assert.equal(LIMITS.completion,.4);assert.equal(MODEL,'deepseek/deepseek-v4.1-flash:floor');
  for(const bad of [{pricing:{prompt:'0.00000009',completion:'0.00000041'}},{supported_parameters:['reasoning','max_tokens']},{pricing:{prompt:'0.00000026',completion:'0.0000003'}},{pricing:{prompt:'0.00000009',completion:'0.0000003',request:'0.01'}}])assert.equal(eligible({...listing.data,endpoints:[{...endpoint,...bad}]}).length,0);
 });
-for(const badReply of [false,true])test('Offline Director/Narrator live-run rehearsal '+(badReply?'stops after a bad contract':'captures routing, usage, reasoning and all eight calls'),async()=>{
+for(const suite of ['independent','chained'])for(const badReply of [false,true])test('Offline '+suite+' Director/Narrator live-run rehearsal '+(badReply?'stops after a bad contract':'captures routing, usage, reasoning and all eight calls'),async()=>{
  const dir=await mkdtemp(join(tmpdir(),'nera-director-eval-')),realFetch=globalThis.fetch,realLog=console.log,key='fake-openrouter-key-for-replay';let completions=0;
  globalThis.fetch=async(url,opts)=>{
   if(String(url).endsWith('/endpoints'))return new Response(JSON.stringify(listing));
@@ -29,6 +29,8 @@ for(const badReply of [false,true])test('Offline Director/Narrator live-run rehe
    if(/Dinner finishes/.test(input))output.updates.commitments={upsert:[{id:'visit-lysia',status:'ready'}],close:[]};
    if(/one-hour route/.test(input)){output.transition='completed';output.updates.scene={...s.scene,date:'22/10/738',hour:1,location:'Crownspire infirmary'};}
    if(/closed bridge/.test(input))output.transition='blocked';
+   if(/established healer Lysia/.test(input))output.updates.scene={...s.scene,present:['Nera','Isolde Veyless','Lysia Solenne']};
+   if(/I choose Observation only/.test(input))output.updates.decisions={upsert:[],close:s.decisions.map(i=>i.id)};
    content=badReply?'invalid json':JSON.stringify(output);
    return new Response(JSON.stringify({id:'mock-'+completions,model:MODEL.split(':')[0],provider:'Test',choices:[{message:{content,reasoning:'Mock private reasoning '+key},finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:300,completion_tokens_details:{reasoning_tokens:100},cost:.001}}),{headers:{'content-type':'application/json'}});
   }
@@ -38,12 +40,12 @@ for(const badReply of [false,true])test('Offline Director/Narrator live-run rehe
  };
  console.log=()=>{};
  try{
-  await main(['prepare','--out',dir]);assert.equal(completions,0);
+  await main(['prepare','--out',dir,'--suite',suite]);assert.equal(completions,0);
   const preflight=JSON.parse(await readFile(join(dir,'preflight.json'),'utf8'));assert.equal(preflight.completionCalls,0);assert.equal(preflight.paidApprovalRequired,true);assert.equal(preflight.scenarios.length,4);assert.ok(preflight.previewBasedCostBoundUSD<.10);
-  const previews=JSON.parse(await readFile(join(dir,'previews.json'),'utf8')),promise=previews.find(p=>p.name==='long-promise');assert.ok(promise.director.body.messages[0].content.includes('visit-lysia'));assert.ok(!promise.director.body.messages.slice(1).some(m=>m.content.includes('After dinner, I will')));
+  const previews=JSON.parse(await readFile(join(dir,'previews.json'),'utf8')),promise=previews[ suite==='chained'?0:1 ];assert.ok(promise.director.body.messages[0].content.includes('visit-lysia'));assert.ok(!promise.director.body.messages.slice(1).some(m=>m.content.includes('After dinner, I will')));
   await writeFile(join(dir,'key.txt'),key);
   const args=['run','--out',dir,'--key-file',join(dir,'key.txt'),'--confirm-live','yes','--approved-budget','0.10'];
-  if(badReply){await assert.rejects(main(args),/invalid JSON/);assert.equal(completions,1);}else{const result=await main(args);assert.equal(completions,8);assert.ok(result.every(r=>r.hardPass));assert.ok(result.every(r=>r.canonicalScene));}
+  if(badReply){await assert.rejects(main(args),/invalid JSON/);assert.equal(completions,1);}else{const result=await main(args);assert.equal(completions,8);assert.ok(result.every(r=>r.hardPass));assert.ok(result.every(r=>r.canonicalScene));assert.ok(result.every(r=>r.regenerateReused));assert.ok(result.some(r=>r.continueBlocked));if(suite==='chained'){for(let i=1;i<result.length;i++)assert.deepEqual(result[i].before,result[i-1].after);assert.equal(result[2].corruptHistoricalTag,true);assert.equal(result[2].after.scene.location,'Crownspire infirmary');assert.equal(result[3].after.decisions.length,0);}}
   const ledger=JSON.parse(await readFile(join(dir,'ledger.json'),'utf8'));assert.ok(ledger.every(r=>r.provider==='Test' && r.responseModel==='deepseek/deepseek-v4.1-flash'));assert.ok(ledger.every(r=>r.actualMicros===1000 && r.reasoningTokens===100));
   const response=await readFile(join(dir,'1-response.txt'),'utf8');assert.ok(!response.includes(key));assert.ok(response.includes('[REDACTED]'));
   await assert.rejects(main(args),/already contains paid calls/);await assert.rejects(main(['prepare','--out',dir]),/paid run/);

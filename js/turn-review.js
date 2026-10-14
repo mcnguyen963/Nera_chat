@@ -22,6 +22,20 @@ export function lintPlayerAgency(text, protagonist = '') {
   return warnings;
 }
 
+// Additive Director diagnostics, not an outcome validator. Flag an explicit
+// body gesture missing from the player's input; leave authorized wording alone.
+export function lintDirectorGestures(text, { protagonist = '', userText = '' } = {}) {
+  const names=[protagonist,protagonist.trim().split(/\s+/)[0]].filter(Boolean).map(escape);
+  const player='(?:you'+(names.length?'|'+[...new Set(names)].join('|'):'')+')';
+  const gesture='(?:put|puts|placed?|places|rest|rests|raise|raises|lower|lowers|lift|lifts|extend|extends)\\s+(?:your|his|her|their|a|one|both)\\s+(?:hands?|arms?|fists?|feet|foot)\\b';
+  const pattern=new RegExp('\\b'+player+'\\s+'+gesture,'gi');
+  const namePattern=names.length?new RegExp('\\b(?:'+names.join('|')+')\\b','gi'):null;
+  const normalize=value=>{let normalized=String(value);if(namePattern)normalized=normalized.replace(namePattern,'you');return normalized.toLowerCase().replace(/\bi\b/g,'you').replace(/\b(?:my|his|her|their)\b/g,'your').replace(/\b(put|place|rest|raise|lower|lift|extend)s\b/g,'$1').replace(/\s+/g,' ').trim();};
+  const authorized=normalize(userText),prose=stripDialogue(text);
+  const gestures=[...prose.matchAll(pattern)];
+  return gestures.some(m=>!authorized.includes(normalize(m[0]))) ? ['Possible player body gesture added beyond the supplied action.'] : [];
+}
+
 export function lintUnestablishedTime(text, { prior = null,userText = '' } = {}) {
   if (prior?.time || /\b(?:it is|it's|now|skip to|advance to|set (?:the )?time (?:to|as))\s+(?:early |late |mid-?)?(?:morning|afternoon|evening|night|noon|midnight)\b/i.test(userText)) return [];
   const prose = stripDialogue(text);

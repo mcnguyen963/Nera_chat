@@ -10,6 +10,10 @@ Prepare and review without an API key or completion calls:
 node --experimental-vm-modules tests/tools/director-eval.mjs prepare --out investigate/director-eval
 ```
 
+Use `prepare --suite chained --out investigate/director-chain` for four connected turns: finish dinner and activate an old promise, confirm travel across hour 24, receive a choice from the established healer, then answer it. Each turn uses the preceding real Director state and Narrator reply. A deliberately incorrect historical scene tag checks that it cannot override canonical state. The runner also checks that Regenerate reuses each completed contract and Continue makes no call at pending choices. Checkpoints are simulated in memory; this does not test Firestore persistence.
+
+The application recognizes clear unquoted instructions such as “Stop when we arrive” and “stop upon arrival.” It passes that boundary to both models and rejects a Director contract that opens a new player decision beyond it before saving or calling the Narrator. Other stopping instructions remain model-interpreted. The gesture review is a limited diagnostic, not proof that the prose preserves agency.
+
 `prepared.json`, `previews.json` and `preflight.json` are private ignored artifacts. Narrator previews are provisional because the real Director has not yet answered. Model/provider eligibility is checked from the public listing; run checks it again before completions. Limits are never relaxed when no eligible route exists.
 
 **Ask the user to confirm this exact run before executing any live completion request.** After confirmation:

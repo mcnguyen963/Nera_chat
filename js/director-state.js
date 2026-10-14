@@ -6,6 +6,15 @@ const statuses = ['open','active','waiting','ready','closed','cancelled'];
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max = 2000) => typeof value === 'string' && value.length <= max;
 const fail = message => { throw new Error('Director: '+message); };
+export function playerStopBoundary(input) {
+  const text=String(input ?? '').replace(/"[^"]*"|“[^”]*”/g,'');
+  const start='(?:^|[.!?;]\\s*|\\band\\s+)stop\\s+';
+  return new RegExp(start+'(?:(?:when|once|as soon as)\\s+(?:we|i|you|they)\\s+arrive|(?:on|upon|at)\\s+arrival)\\b','i').test(text)
+    ? {kind:'arrival',instruction:'End immediately at destination arrival, before any NPC conversation, offer, registration or new activity.'} : null;
+}
+export function assertDirectorBoundary(turn, boundary) {
+  if(boundary?.kind==='arrival' && turn.contract.action==='narrate' && turn.after.decisions.some(i=>!turn.before.decisions.some(old=>old.id===i.id)))fail('planned a new player decision beyond the requested arrival boundary. Retry or Re-plan before narration.');
+}
 export function validateDirectorState(value) {
   if (!object(value) || value.version !== DIRECTOR_VERSION) fail('unsupported live-state version.');
   const s = structuredClone(value), scene = s.scene;
@@ -39,6 +48,9 @@ export function parseDirectorContract(content, before, entries = []) {
   try { raw = JSON.parse(String(content).trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i,'$1')); } catch { fail('returned invalid JSON. Retry or change the Director model.'); }
   if (!object(raw) || raw.version!==1 || !['narrate','answer','wait'].includes(raw.action) || !text(raw.objective,4000) || !raw.objective.trim() || !text(raw.stopCondition,2000) || !raw.stopCondition.trim() || !['attempted','blocked','completed','unchanged'].includes(raw.transition) || !Array.isArray(raw.memoryIds) || raw.memoryIds.length>100 || !Array.isArray(raw.requiredMemoryIds) || raw.requiredMemoryIds.length>100 || !object(raw.updates)) fail('invalid turn contract.');
   if (JSON.stringify(raw).length>60000) fail('turn contract is too large.');
+  // Ignore unrecognized top-level fields rather than forwarding a second,
+  // unvalidated state or ledger to the Narrator alongside canonical updates.
+  raw=Object.fromEntries(['version','action','transition','objective','stopCondition','memoryIds','requiredMemoryIds','updates'].map(key=>[key,raw[key]]));
   // Essential cards are necessarily selected; omission from the optional list
   // does not change their meaning or authorize an unknown reference.
   raw.memoryIds=[...new Set([...raw.memoryIds,...raw.requiredMemoryIds])];

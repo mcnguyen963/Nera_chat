@@ -6,6 +6,34 @@ const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
+test('Director gesture review flags the captured unrequested gesture but allows explicit player action and NPC speech',async()=>{
+ const api=await appHarness()('turn-review.js');
+ assert.equal(api.lintDirectorGestures('You put your hand on the bars.',{protagonist:'Nera',userText:'I try to cross the closed bridge.'}).length,1);
+ assert.equal(api.lintDirectorGestures('You put your hand on the bars.',{protagonist:'Nera',userText:'I put my hand on the bars.'}).length,0);
+ assert.equal(api.lintDirectorGestures('Isolde says, "You put your hand on the bars."',{protagonist:'Nera'}).length,0);
+ assert.equal(api.lintDirectorGestures('Isolde raises her hand.',{protagonist:'Nera'}).length,0);
+ assert.equal(api.lintDirectorGestures('Nera raises her hand.',{protagonist:'Nera',userText:'I wait.'}).length,1);
+ assert.equal(api.lintDirectorGestures('Nera raises her hand.',{protagonist:'Nera',userText:'I raise my hand.'}).length,0);
+ assert.equal(api.lintPlayerAgency('You put your hand on the bars.','Nera').length,0,'Classic diagnostic behavior stays unchanged');
+});
+test('Explicit arrival boundaries recognize player directions without treating quoted or negated speech as a direction',async()=>{
+ const api=await appHarness()('director-state.js');
+ for(const input of ['I walk to the infirmary. Stop when we arrive.','I walk there and stop upon arrival.','Stop at arrival.','Stop once I arrive.'])assert.equal(api.playerStopBoundary(input)?.kind,'arrival',input);
+ for(const input of ['Do not stop when we arrive.','Isolde says, "Stop when we arrive."','Stop before I answer.'])assert.equal(api.playerStopBoundary(input),null,input);
+});
+test('Director rejects a new NPC choice beyond an arrival boundary before saving and carries accepted boundaries to the Narrator',async()=>{
+ let saved=0,beyond=true;
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_s,t)=>{saved++;return t;}},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify(contract({scene:{date:'22/10/738',hour:1,location:'Infirmary'},...(beyond?{decisions:{upsert:[{id:'registration',text:'Which registration option?',status:'open'}],close:[]}}:{})}))})}}});
+ const api=await use('director-turn.js'),messages=[{id:'u',role:'user',order:1,content:'I walk to the infirmary. Stop when we arrive.'}];
+ await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]),/beyond the requested arrival boundary/);assert.equal(saved,0);assert.equal(state.scene.location,'Inn');
+ beyond=false;const turn=await api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]);assert.equal(saved,1);assert.equal(turn.playerBoundary.kind,'arrival');
+ const context=await use('director-context.js');assert.ok(context.narratorDirectorContract(turn).includes('"playerBoundary":{"kind":"arrival"'));
+});
+test('Director never forwards an extra unvalidated scene or ledger beside the canonical updates',async()=>{
+ const api=await appHarness()('director-state.js');
+ const turn=api.parseDirectorContract(JSON.stringify({...contract({}),scene:{hour:99},decisions:[{id:'shadow',text:'Fake offer',status:'open'}],commitments:[]}),state);
+ assert.equal(turn.after.scene.hour,20);assert.equal(turn.after.decisions.length,0);assert.equal(turn.contract.scene,undefined);assert.equal(turn.contract.decisions,undefined);assert.equal(turn.contract.commitments,undefined);
+});
 test('Director ledger survives omitted updates across thirty turns and explicitly becomes ready without travel',async()=>{
  const api=await appHarness()('director-state.js');let next=state;
  for(let i=0;i<30;i++)next=api.parseDirectorContract(JSON.stringify(contract({})),next).after;

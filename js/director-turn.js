@@ -1,6 +1,6 @@
 import { classifyUserInput } from './scene.js';
 import { requestSource, assertSource } from './continuity.js';
-import { validateDirectorState, seedDirectorState, parseDirectorContract } from './director-state.js';
+import { validateDirectorState, seedDirectorState, parseDirectorContract, playerStopBoundary, assertDirectorBoundary } from './director-state.js';
 import { buildDirectorContext, directorTaskSettings } from './director-context.js';
 import { getDirectorTurn, savePendingDirectorTurn } from './director-store.js';
 import { chatCompletion } from './llm-client.js';
@@ -38,8 +38,10 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   if(result.finishReason==='length' || !result.content?.trim())throw new Error('Director output was incomplete. Raise its output limit or retry.');
   const parsed=parseDirectorContract(result.content,before,built.entries);
   const input=messages.filter(m=>m.role==='user' && m.order<(opts.upToOrder ?? Infinity)).at(-1)?.content ?? '';
+  const boundary=opts.continuationId ? null : playerStopBoundary(input);
+  assertDirectorBoundary(parsed,boundary);
   if(!opts.continuationId && classifyUserInput(input)!=='narrative' && parsed.contract.action!=='answer')throw new Error('Director must answer OOC questions without changing story state. Retry the turn.');
   if(parsed.contract.action==='wait')return {...parsed,usage:result.usage};
-  const turn={previousCheckpoint,...(opts.replan && session.directorPending ? {replaces:session.directorPending} : {}),id:'director_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9),...parsed,report:built.report,usage:result.usage ?? null,elapsedMs:Date.now()-started};
+  const turn={previousCheckpoint,...(opts.replan && session.directorPending ? {replaces:session.directorPending} : {}),id:'director_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9),...parsed,playerBoundary:boundary,report:built.report,usage:result.usage ?? null,elapsedMs:Date.now()-started};
   return savePendingDirectorTurn(session.id,turn,source);
 }
