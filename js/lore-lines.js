@@ -15,7 +15,7 @@ export const SECTION_MAP = {
   characters: { appearance:'appearance', looks:'appearance', look:'appearance', status:'status', state:'status', condition:'status', health:'status', bond:'bond', relationship:'bond', relations:'relations', relationships:'relations', alias:'alias', aka:'alias', 'also called':'alias', name:'alias', notes:'notes', note:'notes', other:'notes', personality:'personality', traits:'personality' },
   locations: { description:'description', look:'description', appearance:'description', state:'state', status:'state', condition:'state', alias:'alias', aka:'alias', 'also called':'alias', notes:'notes', note:'notes' },
 };
-export const SECTION_KEYS = { characters:['personality','appearance','status','bond','relations','notes'], locations:['description','state','notes'], facts:['text'], events:['text'] };
+export const SECTION_KEYS = { characters:['personality','appearance','status','bond','relations','notes'], locations:['description','state','notes'], facts:['text'], events:['text'], plan:['text'] };
 export function sectionKey(book, value, protagonist = '') {
   const name = normalizeName(value);
   if (book === 'characters' && /^(bond with |relation(?:ship)? with )/.test(name)) return normalizeName(name.replace(/^(?:bond|relation(?:ship)?) with /,'')) === normalizeName(protagonist)  ? 'bond' : 'relations';

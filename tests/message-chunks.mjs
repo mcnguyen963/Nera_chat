@@ -207,6 +207,14 @@ test('assistant plan thread is stored separately from visible content', async ()
   message = (await h.api.getMessages('s'))[0];
   assert.equal(message.planThread, 'steering toward the reveal');
 });
+test('confirmed time skips survive message persistence, edits and story copying',async()=>{
+  const h=await setup(),jump={from:'1/10/738',to:'19/10/738'};
+  const saved=await h.api.addMessage('s',{role:'user',content:'Advance the story.',planJump:jump});
+  const first=(await h.api.getMessages('s'))[0];assert.deepEqual(JSON.parse(JSON.stringify(first.planJump)),jump);
+  await h.api.editMessage('s',saved.id,'Advance carefully.',saved.order);
+  assert.deepEqual(JSON.parse(JSON.stringify((await h.api.getMessages('s'))[0].planJump)),jump);
+  const copied=await h.sessions.duplicateSession('s');assert.deepEqual(JSON.parse(JSON.stringify((await h.api.getMessages(copied))[0].planJump)),jump);
+});
 
 test('assistant plan updates are committed with the message', async () => {
   const h = await setup();
