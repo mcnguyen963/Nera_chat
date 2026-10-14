@@ -59,3 +59,12 @@ export function lintDirectorHistory(text,{userText=''}={}) {
   }
   return [];
 }
+// A narrow chronology hint: an NPC's request followed by narrated compliance
+// can hide an extra player turn even when no player dialogue is quoted.
+export function lintDirectorResponseBoundary(text) {
+  const value=String(text ?? ''),quotes=[...value.matchAll(/“[^”]*(?:”|$)|"[^"]*(?:"|$)/g)];
+  const request=/\b(?:say it back|repeat (?:it|that|the)|answer (?:me|that|the question)|tell me|explain (?:it|that|the))\b/i;
+  const response=/\byou\s+(?:answer|respond|reply|repeat|explain|tell|say)\b|\byou put\b[^.!?\n]{0,100}\bin order\b|\bwhen you finish\b/i;
+  return quotes.some(q=>request.test(q[0])&&response.test(stripDialogue(value.slice(q.index+q[0].length))))
+    ? ['NPC request is followed by a narrated player response; verify the user authorized that response.'] : [];
+}
