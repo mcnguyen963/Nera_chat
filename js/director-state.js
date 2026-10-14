@@ -37,8 +37,13 @@ export function seedDirectorState(session, messages, entries = []) {
 export function parseDirectorContract(content, before, entries = []) {
   let raw;
   try { raw = JSON.parse(String(content).trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i,'$1')); } catch { fail('returned invalid JSON. Retry or change the Director model.'); }
-  if (!object(raw) || raw.version!==1 || !['narrate','answer','wait'].includes(raw.action) || !text(raw.objective,4000) || !raw.objective.trim() || !text(raw.stopCondition,2000) || !raw.stopCondition.trim() || !['attempted','blocked','completed','unchanged'].includes(raw.transition) || !Array.isArray(raw.memoryIds) || raw.memoryIds.length>100 || !Array.isArray(raw.requiredMemoryIds) || !raw.requiredMemoryIds.every(id=>raw.memoryIds.includes(id)) || !object(raw.updates)) fail('invalid turn contract.');
+  if (!object(raw) || raw.version!==1 || !['narrate','answer','wait'].includes(raw.action) || !text(raw.objective,4000) || !raw.objective.trim() || !text(raw.stopCondition,2000) || !raw.stopCondition.trim() || !['attempted','blocked','completed','unchanged'].includes(raw.transition) || !Array.isArray(raw.memoryIds) || raw.memoryIds.length>100 || !Array.isArray(raw.requiredMemoryIds) || raw.requiredMemoryIds.length>100 || !object(raw.updates)) fail('invalid turn contract.');
   if (JSON.stringify(raw).length>60000) fail('turn contract is too large.');
+  // Essential cards are necessarily selected; omission from the optional list
+  // does not change their meaning or authorize an unknown reference.
+  raw.memoryIds=[...new Set([...raw.memoryIds,...raw.requiredMemoryIds])];
+  raw.requiredMemoryIds=[...new Set(raw.requiredMemoryIds)];
+  if(raw.memoryIds.length>100)fail('too many selected memory cards.');
   const known = new Set(entries.map(e=>e.id));
   if (raw.memoryIds.some(id=>!known.has(id))) fail('contract references unknown memory cards.');
   let after = validateDirectorState(before);
@@ -48,9 +53,11 @@ export function parseDirectorContract(content, before, entries = []) {
   if (raw.updates.scene) after.scene = {...after.scene,...raw.updates.scene};
   if (Object.hasOwn(raw.updates,'event')) after.event = raw.updates.event;
   for (const group of groups) {
-    const ops = raw.updates[group];
-    if (!ops) continue;
-    if (!object(ops) || !Array.isArray(ops.upsert) || !Array.isArray(ops.close) || ops.close.some(id=>typeof id!=='string') || new Set(ops.upsert.map(i=>i.id)).size!==ops.upsert.length) fail('invalid '+group+' operations.');
+    let ops = raw.updates[group];
+    if (ops===undefined) continue;
+    if (!object(ops)) fail('invalid '+group+' operations.');
+    ops=raw.updates[group]={...ops,upsert:ops.upsert===undefined?[]:ops.upsert,close:ops.close===undefined?[]:ops.close};
+    if (!Array.isArray(ops.upsert) || !Array.isArray(ops.close) || ops.upsert.some(i=>!object(i)) || ops.close.some(id=>typeof id!=='string') || new Set(ops.upsert.map(i=>i.id)).size!==ops.upsert.length) fail('invalid '+group+' operations.');
     const items = new Map(after[group].map(i=>[i.id,i]));
     for (const item of ops.upsert) items.set(item.id,{...items.get(item.id),...item});
     for (const id of ops.close) {if(!items.has(id))fail('cannot close an unknown '+group+' item.');items.set(id,{...items.get(id),status:'closed'});}

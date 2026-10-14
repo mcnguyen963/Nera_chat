@@ -28,6 +28,21 @@ test('Director validates JSON, game hours, dates, memory IDs and answer-only tra
  assert.throws(()=>api.parseDirectorContract(JSON.stringify({...contract({scene:{hour:9,date:'22/10/738'}}),action:'answer'}),state),/unchanged/);
  assert.equal(api.parseDirectorContract(JSON.stringify({...contract({}),action:'answer'}),state).after.scene.hour,20);
 });
+test('Director normalizes required-only cards and omitted empty ledger operations without losing state',async()=>{
+ const api=await appHarness()('director-state.js'),entries=[{id:'nera'},{id:'isolde'}];
+ const raw={...contract({decisions:{upsert:[{id:'choice',text:'Choose an excursion option',status:'open'}]}}),requiredMemoryIds:['nera','isolde','nera']};
+ const parsed=api.parseDirectorContract(JSON.stringify(raw),state,entries);
+ assert.deepEqual(plain(parsed.contract.memoryIds),['nera','isolde']);assert.deepEqual(plain(parsed.contract.requiredMemoryIds),['nera','isolde']);
+ assert.deepEqual(plain(parsed.contract.updates.decisions.close),[]);assert.equal(parsed.after.decisions[0].id,'choice');assert.deepEqual(plain(parsed.after.commitments),state.commitments);assert.deepEqual(plain(parsed.after.scene),state.scene);
+ const closed=api.parseDirectorContract(JSON.stringify(contract({decisions:{close:['choice']}})),parsed.after,entries);
+ assert.deepEqual(plain(closed.contract.updates.decisions.upsert),[]);assert.equal(closed.after.decisions.length,0);
+ assert.throws(()=>api.parseDirectorContract(JSON.stringify({...raw,requiredMemoryIds:['unknown']}),state,entries),/unknown memory/);
+ for(const operations of [null,{upsert:null},{close:null},{upsert:[null]}])assert.throws(()=>api.parseDirectorContract(JSON.stringify(contract({decisions:operations})),state),/invalid decisions operations/);
+});
+test('Director required-card normalization still enforces the combined selection limit',async()=>{
+ const api=await appHarness()('director-state.js'),ids=Array.from({length:101},(_,i)=>'card-'+i);
+ assert.throws(()=>api.parseDirectorContract(JSON.stringify({...contract({}),memoryIds:ids.slice(0,100),requiredMemoryIds:ids.slice(100)}),state,ids.map(id=>({id}))),/too many selected/);
+});
 test('Narrator scene tags cannot override Director time, place or presence',async()=>{
  const api=await appHarness()('director-state.js');assert.equal(api.directorSceneWarnings('date: 21/10/738 · time: Hour 11 · place: Elsewhere · present: Someone',state).length,1);assert.equal(api.directorSceneWarnings(api.directorScene(state),state).length,0);
 });
