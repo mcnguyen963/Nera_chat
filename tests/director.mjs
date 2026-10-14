@@ -6,6 +6,14 @@ const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
+test('Director reasoning exhaustion points to its own output setting without retries or state saves',async()=>{
+ for(const finishReason of ['length','MAX_TOKENS','max_output_tokens']){
+  let calls=0,saves=0;const error=Object.assign(new Error('Raise Max response tokens.'),{classification:'malformed_response',finishReason});
+  const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{saves++;}},'llm-client.js':{chatCompletion:async()=>{calls++;throw error;}}}})('director-turn.js');
+  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{id:'u',role:'user',order:1,content:'I wait.'}],[]),e=>e===error&&e.message.includes('Raise Director output tokens')&&e.message.includes('includes reasoning')&&e.classification==='malformed_response');
+  assert.equal(calls,1);assert.equal(saves,0);
+ }
+});
 test('Director serializes JSON mode and requires OpenRouter format support while preserving price limits',async()=>{
  const requests=[];let saved=0;
  const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_sid,t)=>{saved++;return t;}}},globals:{fetch:async(url,opts)=>{
