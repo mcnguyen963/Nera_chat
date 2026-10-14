@@ -1,3 +1,4 @@
+import { validateSchedule } from './scheduled-plan.js';
 import { cardFingerprint } from './lore-card-state.js';
 import { SECTION_KEYS, newLoreId } from './lore-lines.js';
 import { sectionMeta } from './continuity.js';
@@ -62,6 +63,7 @@ export function validSupersession(entry,record) {
   return !!record.replacementApproval && resolveRecord(entry,record).valid && targets.length>0 && targets.every(r=>r && r.id!==record.id && resolveRecord(entry,r).valid) && record.replacementApproval===fingerprint({record:approvalPayload(entry,record),targets:targets.map(r=>approvalPayload(entry,r))});
 }
 export function reconcileRecords(entry) {
+  if(entry.book==='plan')validateSchedule(entry.schedule);
   if(entry.recordLayout)validateRecords(entry);
   const records=structuredClone(entry.recordLayout?.records ?? []),sources=recordSources(entry);
   if(!entry.recordLayout)for(const bundle of entry.coreReferences ?? []) {
@@ -107,7 +109,7 @@ export function fromRecordDocument(doc) {
   }
   if(doc.archivedSources!=null&&(!Array.isArray(doc.archivedSources)||doc.archivedSources.some(s=>typeof s.id!=='string'||typeof s.data?.text!=='string')))throw new Error('Invalid source archive');
   const entry={...doc.subject,schemaVersion:3,sections,recordLayout:{records:structuredClone(doc.records),sourceArchive:structuredClone(doc.archivedSources ?? [])}};
-  validateRecords(entry);return entry;
+  validateRecords(entry);if(entry.book==='plan')validateSchedule(entry.schedule);return entry;
 }
 export function validateRecords(entry) {
   const records=entry.recordLayout?.records;if(!Array.isArray(records))throw new Error('Invalid records');

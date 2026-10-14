@@ -67,7 +67,7 @@ export function memoryDirty(original) {
 export function initMemorySettings(openLore) {
   const userRole=get('blockRole')?.querySelector('option[value="user"]');
   if(userRole) userRole.textContent='User (recommended): notes travel with your latest message';
-  for (const key of [...booleans,...numbers,...strings,'calendar-mode','calendar-anchor',...seedKeys.map(k => 'starting-'+k),...['characters','locations','facts','events'].flatMap(b => [b+'-on',b+'-budget',...(b === 'characters' || b === 'locations' ? [b+'-maxCards'] : [])])]) get(key)?.addEventListener('input',updateMemorySettingsHints);
+  for (const key of [...booleans,...numbers,...strings,'calendar-mode','calendar-anchor',...seedKeys.map(k => 'starting-'+k),...Object.keys(normalizeMemory().books).flatMap(b => [b+'-on',b+'-budget',...(b === 'characters' || b === 'locations' ? [b+'-maxCards'] : [])])]) get(key)?.addEventListener('input',updateMemorySettingsHints);
   get('calendar-copy')?.addEventListener('click',async()=>{try{const text=calendarInstruction(readMemory().calendar);if(!text)throw new Error('Choose modern time and enter an anchor first.');await copyText(text);toast('Copied. Review these instructions before adding them to your story prompt.');}catch(e){toast(e);}});
   get('showScene').addEventListener('change',() => { setPref('nera.memory.showScene',get('showScene').checked ? '1' : '0'); document.dispatchEvent(new CustomEvent('scene-preference')); });
   get('open-lore').addEventListener('click',openLore);

@@ -1,3 +1,4 @@
+import { renderPlanUnit } from './scheduled-plan.js';
 import { maxOf } from './math-utils.js';
 import { prompts, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
@@ -134,6 +135,7 @@ export function renderLine(line,{provenance=false}={}) {
 }
 export function sectionLabel(key, protagonist) { return key === 'bond' ? renderLoreLabel('bond',{PROTAGONIST:protagonist || renderLoreLabel('protagonistName')}) : key === 'text' ? '' : renderLoreLabel(key); }
 export function renderEntry(entry, lineIds = null, protagonist = '', { provenance = false } = {}) {
+  if(entry.book==='plan')return [renderPlanUnit({entry,phase:null,reason:entry.schedule?.status ?? 'pending'}),...(entry.schedule?.phases ?? []).map(phase=>renderPlanUnit({entry,phase,reason:phase.status},false))].join('\n\n');
   const out = [renderLoreLabel('entryHeading',{NAME:entry.name,ALIASES:entry.aliases?.length ? renderLoreLabel('aliases',{ALIASES:entry.aliases.join(', ')}) : ''})];
   for (const key of SECTION_KEYS[entry.book]) {
     const s = entry.sections[key]; if (!s) continue;

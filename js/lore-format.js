@@ -1,3 +1,4 @@
+import { validateSchedule, mergePlanSchedule } from './scheduled-plan.js';
 import { toRecordDocument, fromRecordDocument, validateRecords } from './lore-records.js';
 import { validateCoreReferences } from './character-core.js';
 const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|<!-- nera-)/.test(l)?'\\'+l:l).join('\n');
@@ -5,19 +6,20 @@ import { cardFingerprint } from './lore-card-state.js';
 import { sectionMeta } from './continuity.js';
 import { makeEntry, newLoreId, normalizeName, sectionKey, SECTION_MAP, SECTION_KEYS } from './lore-lines.js';
 import { sortLines, sectionLabel } from './lore-select.js';
-export const BOOK_LABELS = { characters:'Characters',locations:'Locations',facts:'World facts',events:'Events & threads' };
+export const BOOK_LABELS = { characters:'Characters',locations:'Locations',facts:'World facts',events:'Events & threads',plan:'Plan' };
 const unfence = text => String(text ?? '').trim().replace(/^```(?:json|markdown|md)?\s*\n?/i,'').replace(/\n?```\s*$/,'').trim();
 export function detectFormat(text) { return unfence(text).startsWith('{') ? 'json' : 'md'; }
 function validateInput(text) { if (!String(text).trim()) throw new Error('The file is empty.'); if (new TextEncoder().encode(text).length > 2*1024*1024) throw new Error('The file is larger than 2 MB. Split it by book.'); }
 function importedLine(value) { const line = typeof value === 'string' ? { text:value } : value; return { id:newLoreId('ln'),text:String(line?.text ?? '').trim(),turn:Number.isSafeInteger(line?.turn) && line.turn>=0 ? line.turn : null,when:line?.when ? String(line.when) : null,src:line?.src ?? null,by:line?.by ?? 'import',at:line?.at ?? Date.now(),evidence:line?.evidence ?? [],sourceRevision:line?.sourceRevision ?? 0,...(line?.needsReview ? { needsReview:true } : {}) }; }
 const exportLine = l => ({ ...l });
 export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), now = new Date() } = {}) {
-  if(entries.some(e=>e.schemaVersion===3))return JSON.stringify({format:'nera-lorebooks',version:3,story:title,exportedAt:now.toISOString(),entries:entries.filter(e=>books.includes(e.book)).map(e=>toRecordDocument(e))},null,2);
+  if(entries.some(e=>e.schemaVersion===3))return JSON.stringify({format:'nera-lorebooks',version:3,story:title,books,exportedAt:now.toISOString(),entries:entries.filter(e=>books.includes(e.book)).map(e=>toRecordDocument(e))},null,2);
   const out = { format:'nera-lorebooks',version:2,story:title,exportedAt:now.toISOString(),entries:entries.filter(e => books.includes(e.book)).map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,...sectionMeta(s,e) }])) })) };
   for (const book of books) {
     const list = entries.filter(e => e.book === book);
     if (book === 'characters' || book === 'locations') out[book] = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],alwaysLoad:!!e.alwaysLoad,sections:Object.fromEntries(Object.entries(e.sections).filter(([,s]) => s.text || s.lines.length).map(([k,s]) => [k,{ text:s.text,lines:sortLines(s.lines).map(exportLine) }])) }));
     if (book === 'facts') out.facts = list.map(e => ({ name:e.name,text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) }));
+    if (book === 'plan') out.plan = list.map(e=>({name:e.name,schedule:e.schedule,text:e.sections.text.text}));
     if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,status:e.status,text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
   }
   return JSON.stringify(out,null,2);
@@ -27,6 +29,7 @@ export function normalizeLoreEntry(e){
       if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
       validateCoreReferences(e.coreReferences);
       const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
+      if(e.book==='plan')validateSchedule(e.schedule);
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
         const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
         if(section.lines!=null && !Array.isArray(section.lines))throw new Error('Invalid version 2 section.');
@@ -37,8 +40,8 @@ export function normalizeLoreEntry(e){
 export function fromJson(text) {
   validateInput(text); const source = unfence(text); let data;
   try { data = JSON.parse(source); } catch (e) { const p = Number(e.message.match(/position (\d+)/)?.[1]); if (Number.isFinite(p)) { const before = source.slice(0,p), line = before.split('\n').length, column = before.length-(before.lastIndexOf('\n')+1)+1; throw new Error(`JSON error at line ${line}, column ${column}: ${e.message}`); } throw new Error('JSON error: '+e.message); }
-  if(data?.format==='nera-lorebooks'&&data.version===3&&Array.isArray(data.entries)){const entries=data.entries.map(fromRecordDocument);return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};}
-  if (!data || typeof data !== 'object' || !['characters','locations','facts','events'].some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
+  if(data?.format==='nera-lorebooks'&&data.version===3&&Array.isArray(data.entries)){const entries=data.entries.map(fromRecordDocument);return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>data.books?.includes(k)||entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};}
+  if (!data || typeof data !== 'object' || !Object.keys(BOOK_LABELS).some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
   if(data.version===2 && Array.isArray(data.entries)) {
     const entries=data.entries.map(normalizeLoreEntry);
     return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>k in data || entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};
@@ -54,6 +57,11 @@ export function fromJson(text) {
     if (book === 'facts') e.sections.text = section(item);
     else { warnUnknown(item.sections,SECTION_KEYS[book],e.name); for (const key of SECTION_KEYS[book]) if (item.sections?.[key] != null) e.sections[key] = section(item.sections[key]); }
     entries.push(e);
+  }
+  for(const item of data.plan ?? []) {
+    if(!item?.name?.trim())throw new Error('A plan event needs a name.');
+    validateSchedule(item.schedule);
+    const e=makeEntry('plan',item.name.trim(),{schedule:structuredClone(item.schedule),createdFrom:'import'});e.sections.text=section(item);entries.push(e);
   }
   if ('events' in data) {
     const events = data.events;
@@ -71,7 +79,7 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
     out.push('## '+(book === 'events' ? 'Events' : BOOK_LABELS[book]),'');
     for (const e of entries.filter(e => e.book === book)) {
       out.push('### '+(e.kind === 'thread' ? 'Thread: ' : '')+e.name);
-      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
+      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.schedule ? {schedule:{...e.schedule,phases:[]}} : {}),...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
       if (e.aliases?.length) out.push('aliases: '+JSON.stringify(e.aliases));
       if (e.alwaysLoad) out.push('always load: yes');
       if (e.kind === 'thread') out.push('status: '+e.status);
@@ -84,30 +92,44 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
         if (s.lines.length) { out.push('Updates:'); for (const l of sortLines(s.lines)) { const stamp = [l.turn != null ? 'T'+l.turn : '',l.when ?? ''].filter(Boolean).join(' · '); out.push('- '+(stamp ? '['+stamp+'] ' : '')+String(l.text).split('\n').map((v,i)=>(i?'  ':'')+escapeContent(v)).join('\n'),'<!-- nera-line: '+JSON.stringify(exportLine(l))+' -->'); } }
         out.push('');
       }
+      if(book==='plan')for(const phase of e.schedule.phases) {
+        out.push('#### Phase: '+phase.title,'<!-- nera-phase: '+JSON.stringify({id:phase.id,start:phase.start,end:phase.end,status:phase.status})+' -->',escapeContent(phase.text),'');
+      }
     }
   }
   return out.join('\n');
 }
 export function fromMarkdown(text, { protagonist = '', strictFields = false } = {}) {
-  validateInput(text); const source = unfence(text).split('\n'), entries = [], warnings = [], books = []; const noteMetadata = new Map(); let book = null, entry = null, key = null, updates = false, metadata = false, prefix = '', story = '';
-  const aliases = { characters:['characters','character','people','cast'],locations:['locations','location','places','place'],facts:['world facts','facts','world','lore'],events:['events','events & threads','events and threads','timeline','threads','story'] };
+  validateInput(text); const source = unfence(text).split('\n'), entries = [], warnings = [], books = []; const noteMetadata = new Map(); let book = null, entry = null, phase = null, key = null, updates = false, metadata = false, prefix = '', story = '';
+  const aliases = { characters:['characters','character','people','cast'],locations:['locations','location','places','place'],facts:['world facts','facts','world','lore'],events:['events','events & threads','events and threads','timeline','threads','story'],plan:['plan','plans','scheduled plan'] };
   const warn = (line,reason) => warnings.push({ line,reason });
   for (const [i,line] of source.entries()) {
     const trimmed = line.trim(), bookMatch = trimmed.match(/^##\s+(.+)$/), cardMatch = trimmed.match(/^###\s+(.+)$/), sectionMatch = trimmed.match(/^####\s*(.+)$/);
-    if (bookMatch) { book = Object.keys(aliases).find(k => aliases[k].includes(normalizeName(bookMatch[1]))) ?? null; entry = null; if (book) { if (!books.includes(book)) books.push(book); } else warn(i+1,'unknown book; skipped'); continue; }
+    if (bookMatch) { book = Object.keys(aliases).find(k => aliases[k].includes(normalizeName(bookMatch[1]))) ?? null; entry = null; phase = null; if (book) { if (!books.includes(book)) books.push(book); } else warn(i+1,'unknown book; skipped'); continue; }
     if (!book) { if (/^story:/i.test(trimmed)) story = trimmed.replace(/^story:\s*/i,''); continue; }
     if (cardMatch) {
       const heading = cardMatch[1].trim(), timeline = book === 'events' && /^Timeline$/i.test(heading);
-      entry = makeEntry(book,book === 'events' ? heading.replace(/^Thread:\s*/i,'') : heading,{ kind:book === 'events' ? timeline ? 'timeline' : 'thread' : 'card',status:book === 'events' && !timeline ? 'open' : null,createdFrom:'import' }); entries.push(entry); key = book === 'characters' || book === 'locations' ? 'notes' : 'text'; updates = false; metadata = true; prefix = ''; continue;
+      entry = makeEntry(book,book === 'events' ? heading.replace(/^Thread:\s*/i,'') : heading,{ kind:book === 'events' ? timeline ? 'timeline' : 'thread' : 'card',status:book === 'events' && !timeline ? 'open' : null,createdFrom:'import' }); entries.push(entry); phase = null; key = book === 'characters' || book === 'locations' ? 'notes' : 'text'; updates = false; metadata = true; prefix = ''; continue;
     }
     if (!entry) { if (trimmed) warn(i+1,'no card heading above it'); continue; }
+    if(book==='plan' && sectionMatch && /^Phase:\s*/i.test(sectionMatch[1])) {
+      if(!entry.schedule)throw new Error('Plan schedule metadata is missing.');
+      phase={id:newLoreId('phase'),title:sectionMatch[1].replace(/^Phase:\s*/i,''),start:entry.schedule.start,end:entry.schedule.end,status:'pending',text:''};entry.schedule.phases.push(phase);continue;
+    }
+    const phaseMeta=trimmed.match(/^<!-- nera-phase: (.*) -->$/);
+    if(phaseMeta) {
+      if(!phase)throw new Error('Phase metadata needs a Phase heading.');
+      try { const data=JSON.parse(phaseMeta[1]);for(const key of ['id','start','end','status'])if(key in data)phase[key]=data[key]; } catch {throw new Error('Invalid phase metadata at line '+(i+1));}continue;
+    }
+    if(phase && !sectionMatch) {phase.text+=(phase.text ? '\n' : '')+(line.startsWith('\\') ? line.slice(1) : line);continue;}
+    if(sectionMatch)phase=null;
     const provenance = trimmed.match(/^<!-- nera-(entry|section|line): (.*) -->$/);
     if (provenance) {
       try {
         const value = JSON.parse(provenance[2]);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
         if (provenance[1] === 'entry') {
-          for (const prop of ['id','draft','createdFrom','statusSource','coreReferences','createdAt','updatedAt']) if (prop in value) entry[prop] = value[prop];
+          for (const prop of ['id','draft','createdFrom','statusSource','coreReferences','schedule','createdAt','updatedAt']) if (prop in value) entry[prop] = value[prop];
         } else if (provenance[1] === 'section') {
           for (const prop of ['origin','kind','cutoff','unavailable','sourceRevision']) if (prop in value) entry.sections[key][prop] = value[prop];
         } else if (entry.sections[key].lines.length && !noteMetadata.has(entry.sections[key].lines.at(-1))) noteMetadata.set(entry.sections[key].lines.at(-1),value);
@@ -137,6 +159,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
       else if (trimmed) warn(i+1,'update line could not be read');
     } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(line.startsWith('\\')?line.slice(1):line) : '');
   }
+  for(const e of entries)if(e.book==='plan'){for(const phase of e.schedule?.phases ?? [])phase.text=phase.text.trim();validateSchedule(e.schedule);}
   for (const e of entries) for (const s of Object.values(e.sections)) {
     validateCoreReferences(e.coreReferences);
     s.text = s.text.trim();
@@ -180,9 +203,13 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
         if (clash) warnings.push({ line:1,reason:`name already used by ${clash.name}: ${alias}` });
         else if (![result.name,...result.aliases].some(n => normalizeName(n) === normalizeName(alias))) result.aliases.push(alias);
       }
-      if(source.recordLayout)result.recordLayout={records:[...(result.recordLayout?.records ?? []),...source.recordLayout.records.filter(r=>!(result.recordLayout?.records ?? []).some(o=>o.id===r.id))]};
+      if(source.recordLayout)result.recordLayout={...result.recordLayout,records:[...(result.recordLayout?.records ?? []),...source.recordLayout.records.filter(r=>!(result.recordLayout?.records ?? []).some(o=>o.id===r.id))]};
       if(source.schemaVersion===3)result.schemaVersion=3;
       if (source.coreReferences) result.coreReferences = [...new Map([...(result.coreReferences ?? []),...source.coreReferences].map(b=>[b.id,b])).values()];
+      if(source.book==='plan') {
+        if(cardFingerprint(result.schedule)!==cardFingerprint(source.schedule))preview.conflicts++;
+        result.schedule=mergePlanSchedule(result.schedule,source.schedule,conflict);
+      }
       result.alwaysLoad ||= source.alwaysLoad;
       if (source.status === 'closed') result.status = 'closed';
       for (const [key,s] of Object.entries(source.sections)) {
@@ -218,6 +245,7 @@ export function validateCard(entry) {
   if (!Array.isArray(entry.aliases) || entry.aliases.some(a=>typeof a!=='string')) throw new Error('Aliases must be a list of names.');
   for (const key of ['alwaysLoad','draft']) if (entry[key]!=null && typeof entry[key]!=='boolean') throw new Error(key+' must be true or false.');
   if (entry.kind==='thread' && !['open','closed'].includes(entry.status)) throw new Error('Thread status must be open or closed.');
+  if(entry.book==='plan')validateSchedule(entry.schedule);
   validateCoreReferences(entry.coreReferences);
   if(entry.recordLayout)validateRecords(entry);
   const ids=new Set();
@@ -240,7 +268,7 @@ function supportedCardFields(entry,warnings) {
     if(allowed.includes(key))return true;
     warnings.push({line:1,reason:`ignored unsupported field '${key}' in ${label}`});return false;
   }));
-  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','coreReferences','schemaVersion','recordLayout'],'card');
+  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','coreReferences','schemaVersion','recordLayout','schedule'],'card');
   const note=l=>pick(l,['id','text','turn','when','src','by','at','evidence','sourceRevision','needsReview','origin','kind','cutoff'],'note');
   out.sections=Object.fromEntries(Object.entries(out.sections).map(([key,s])=>[key,{...pick(s,['text','lines','origin','kind','cutoff','unavailable','sourceRevision'],key),lines:s.lines.map(note)}]));
   if(out.statusSource)out.statusSource=note(out.statusSource);
@@ -297,6 +325,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   }
   const result=target ? structuredClone(target) : makeEntry(source.book,source.name,{kind:source.kind,createdFrom:'import'});
   for(const prop of ['name','alwaysLoad','draft','status'])result[prop]=source[prop];
+  if(source.book==='plan')result.schedule=mode==='merge' ? mergePlanSchedule(target?.schedule,source.schedule,conflict) : structuredClone(source.schedule);
   result.statusSource=null;
   result.aliases=mode==='merge' && target ? [...new Map([...target.aliases,...source.aliases].map(n=>[normalizeName(n),n])).values()] : source.aliases;
   if(source.recordLayout || target?.recordLayout)result.recordLayout=mode==='merge' ? {records:[...(target?.recordLayout?.records ?? []),...(source.recordLayout?.records ?? []).filter(r=>!(target?.recordLayout?.records ?? []).some(o=>o.id===r.id))]} : structuredClone(source.recordLayout ?? {records:[]});
@@ -305,7 +334,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   const changes=[],notes={added:[],edited:[],removed:[]};
   const targetNotes=new Map(Object.values(target?.sections ?? {}).flatMap(s=>s.lines).map(l=>[l.id,l]));
   const incomingSections=new Map(Object.entries(source.sections).flatMap(([key,s])=>s.lines.map(l=>[l.id,key])));
-  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences'])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
+  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences','schedule'])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
   for(const key of SECTION_KEYS[source.book]) {
     const incoming=source.sections[key],before=target?.sections[key] ?? makeEntry(source.book,'empty').sections[key];
     const next=incoming ? structuredClone(incoming) : {...before,text:'',lines:[],origin:'import',kind:'background',cutoff:null};

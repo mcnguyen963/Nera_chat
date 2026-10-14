@@ -7,7 +7,7 @@ import {normalizeMemory, anyMemory} from '../memory-settings.js';
 import {BOOK_LABELS} from '../lore-format.js';
 import {state} from '../state.js';
 import {buildContextForRequest} from '../context-builder.js';
-import {memorySnapshot, prepareMemorySnapshot} from './chat-view.js';
+import {memorySnapshot, prepareMemorySnapshot, scheduledPlanDraftJump} from './chat-view.js';
 import {lastRawAnswer, updateNow, isRunning} from '../memory-updater.js';
 import {node, button, sheet, subSheet, copy, toast} from './memory-ui.js';
 let open = false, version = 0, timer, viewedSession;
@@ -98,7 +98,7 @@ async function render() {
   try {
     const draftText = document.getElementById('chat-input').value;
     const built = await buildContextForRequest(live.session, effectiveActiveSettings(), {
-      messages:live.messages, loreEntries:live.entries, draftText, includeInspection:true,
+      messages:live.messages, loreEntries:live.entries, draftText, draftPlanJump:scheduledPlanDraftJump(), includeInspection:true,
     });
     if (run !== version || !open || state.sessionId !== live.session.id) return;
     rememberView();
@@ -147,6 +147,7 @@ async function render() {
           closeViewer();
           document.dispatchEvent(new CustomEvent('lorebooks', {detail:{entryId:e.entryId,book:e.book,newName:e.entryId ? null : e.name}}));
         }, 'lore-link'));
+        if(e.phaseTitle)card.append(node('p','Phase: '+e.phaseTitle,'muted'));
         card.append(node('p', included ? `Loaded · ${e.reason} · ${e.tokens.toLocaleString()} tokens within this book${e.linesCut ? ' · '+e.linesCut+' older lines not sent' : ''}${e.draft ? ' · draft' : ''}` : e.reason==='no card' ? 'In scene, no card' : 'Not loaded — '+e.reason, 'muted'));
         if (e.ranking) {
           const {rank,priorityReason,mention} = e.ranking;

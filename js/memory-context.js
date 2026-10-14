@@ -1,3 +1,4 @@
+import { selectScheduledPlan, fitScheduledPlan, validatePlanJump, planJumpInstruction } from './scheduled-plan.js';
 import { fitRecords, relevantSubjects, recordUnits } from './lore-record-select.js';
 import { fitCharacters } from './character-select.js';
 import { minOf, maxOf } from './math-utils.js';
@@ -22,7 +23,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
   const raw = [...new Map(all.filter(m => ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
-  if (opts.draftText?.trim() || opts.placeholderLatest) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '' });
+  if (opts.draftText?.trim() || opts.placeholderLatest || opts.draftPlanJump) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '',...(opts.draftPlanJump ? {planJump:opts.draftPlanJump} : {}) });
   const byId=new Map(raw.map(m=>[m.id,m]));
   const turns = computeTurns(raw), current = mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
   const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latestUser = raw.findLast(m => m.role === 'user');
@@ -32,6 +33,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if(!target)throw new Error('The continuation target is missing from context.');
     raw.push(latest);byId.set(latest.id,latest);
   }
+  const jump = !opts.continuationId && raw.at(-1)?.id===latest?.id && latest?.planJump ? validatePlanJump(latest.planJump) : null;
   const anchors = [firstUser,firstAssistant].filter(Boolean), anchorIds = new Set(anchors.map(m => m.id));
   const required = new Set(anchorIds);
   if (latest) required.add(latest.id);
@@ -66,6 +68,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       const effective=timeline.get(m.id)?.effective;
       if (effective) text+='\n<scene>'+effective+'</scene>';
     }
+    if (m.id === latest?.id && jump) text+='\n\n'+planJumpInstruction(jump);
     if (m.id !== latest?.id) text=stripOcc(text);
     if (gap && anchorIds.has(m.id) && m.id!==latest?.id) text=renderPrompt(prompts.openingExchange,{CONTENT:text});
     text=gapPrefix+text;contentCache.set(key,text);return text;
@@ -161,7 +164,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
   const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages});
-  const skipped = [...filtered.skipped,...selection.skipped];
+  const scheduled = mem.lorebooks && mem.books.plan.on
+    ? selectScheduledPlan(filtered.entries,mem.scene && mem.calendar.mode==='modern' ? current.scene?.when : null,jump)
+    : {selected:[],warnings:[],skipped:filtered.entries.filter(e=>e.book==='plan').map(e=>({entryId:e.id,book:'plan',name:e.name,reason:'book off'}))};
+  selection.selected.plan=scheduled.selected;warnings.push(...scheduled.warnings);
+  const skipped = [...filtered.skipped,...selection.skipped,...scheduled.skipped];
   const recordMode=session.loreSchemaVersion===3;
   const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
@@ -172,12 +179,12 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
   if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
-  for (const book of ['facts','events','characters','locations']) {
+  for (const book of ['plan','facts','events','characters','locations']) {
     if (!selection.selected[book].length) continue;
     const beforeMemory = memory;
-    const header = book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
+    const header = book === 'plan' ? '' : book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
+    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
       ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
       : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
     if (fit.selectionReport) characterSelectionReport = fit.selectionReport;
@@ -192,7 +199,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       else if (book === 'locations') places = empty;
       else if (text) books.pop();
       memory = beforeMemory;
-      skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,ranking:e.ranking,reason:'over budget' })));
+      skipped.push(...fit.included.map(e => ({ entryId:e.entry.id,book,name:e.entry.name,ranking:e.ranking,...(book==='plan' ? {phaseId:e.phaseId,phaseTitle:e.phaseTitle} : {}),reason:'over budget' })));
+      if(book==='plan')warnings.push('Scheduled plan omitted for the overall request budget.');
       if (characterSelectionReport && book === 'characters') {
         characterSelectionReport.fullFit = false;
         for (const c of characterSelectionReport.characters) {
@@ -203,14 +211,15 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       fit = empty;
     }
     skipped.push(...fit.skipped);
+    if(book==='plan' && fit.skipped.length)warnings.push(`${fit.skipped.length} scheduled plan phase(s) omitted for budget. Review Plan in the context viewer.`);
     if (fit.selectionReport) for (const c of fit.selectionReport.characters) {
       if (c.missingCoverage.length) warnings.push(`${c.name}: missing core coverage (${c.missingCoverage.join(', ')}).`);
       if (c.invalidCores.length) warnings.push(`${c.name}: ${c.invalidCores.length} core bundle(s) need review.`);
     }
     if(fit.userLinesCut)warnings.push(`${fit.userLinesCut} user-written lore lines could not fit in the ${book} budget.`);
     if (inspection && fit.text) inspection.sections[book] = text;
-    if (fit.text && (book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
-    for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,ranking:e.ranking,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds] });
+    if (fit.text && (book === 'plan' || book === 'facts' || book === 'events')) blocks.push({ key:book,label:book,tokens:await count(text),budget:mem.books[book].budget,cut:fit.cut });
+    for (const e of fit.included) loaded.push({ entryId:e.entry.id,book,name:e.entry.name,reason:e.reason,ranking:e.ranking,tokens:e.tokens,linesSent:e.linesSent,linesCut:e.linesCut,draft:e.entry.draft,lineIds:[...e.lineIds],...(book==='plan' ? {phaseId:e.phaseId,phaseTitle:e.phaseTitle} : {}) });
   }
   if (!opts.onlyRequiredWindow && mem.blockWindow && retainedTarget === targetCount && candidates.length) {
     const ts=candidates.map(m=>turns.turnById.get(m.id)).filter(Number.isFinite),starts=[];

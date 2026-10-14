@@ -1,3 +1,4 @@
+import { validateSchedule } from './scheduled-plan.js';
 import { readLoreCard, readLoreCards, subscribeVersionedLore, wrapLoreTransaction, versionRef, versionRoot } from './lore-version-store.js';
 import { reconcileRecords, toRecordDocument, fingerprint } from './lore-records.js';
 import { cardFingerprint } from './lore-card-state.js';
@@ -53,7 +54,7 @@ const clean = entry => {
 };
 export function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
 export function subscribeLore(sid, callback, onError) { return subscribeVersionedLore(sid,callback,onError); }
-async function createEntryImpl(sid,entry) { guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
+async function createEntryImpl(sid,entry) { if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
 export function mergeEntryEdits(current, staged, base) {
   const out = { ...current };
   for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
@@ -64,6 +65,13 @@ export function mergeEntryEdits(current, staged, base) {
   if(cardFingerprint(staged.recordLayout ?? null)!==cardFingerprint(base.recordLayout ?? null)){
     if(cardFingerprint(current.recordLayout ?? null)!==cardFingerprint(base.recordLayout ?? null))throw new Error('Selection records changed while editing. Reopen this subject.');
     out.recordLayout=structuredClone(staged.recordLayout);
+  }
+  if(staged.book==='plan') {
+    validateSchedule(staged.schedule);
+    if(cardFingerprint(staged.schedule)!==cardFingerprint(base.schedule)) {
+      if(cardFingerprint(current.schedule)!==cardFingerprint(base.schedule))throw new Error('Plan dates or phases changed while editing. Reopen the event.');
+      out.schedule=structuredClone(staged.schedule);
+    }
   }
   out.sections = { ...current.sections };
   for (const [key,section] of Object.entries(staged.sections)) {

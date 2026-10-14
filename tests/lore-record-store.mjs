@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 const FIRESTORE='https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+const planFixture=l=>{const e=l.makeEntry('plan','Festival',{schedule:{start:'1/10/738',end:'20/10/738',status:'pending',phases:[{id:'intro',title:'Introduction',start:'1/10/738',end:'5/10/738',text:'Introduce A, B, C.',status:'pending'}]}});e.id='festival';e.sections.text.text='Shared festival goals.';return e;};
 async function setup(){
  const path='users/u/sessions/s',docs=new Map([[path,{loreRevision:0}]]),control={failStage:false,failActivation:false,uid:'u'},listeners=[];
  const ref=(_db,...p)=>({path:p.join('/'),id:p.at(-1)});
@@ -22,6 +23,20 @@ async function setup(){
 test('migration stages canonical sources and records before atomically activating a generation',async()=>{
  const {store,docs,path,entry}=await setup();const result=await store.migrateRecords('s',[entry],{expectedRevision:0});const session=docs.get(path);assert.equal(session.loreGeneration,result.generation);assert.equal(session.loreSchemaVersion,3);assert.equal(session.loreRevision,1);assert.equal(docs.get(path+'/lore/mira').sections.notes.text,entry.sections.notes.text);
  const active=docs.get(path+'/loreV3/'+result.generation+'/entries/mira');assert.equal(active.schemaVersion,3);assert.equal(active.sections,undefined);assert.ok(active.sources.length);assert.ok(active.records.length);assert.equal((await store.getLore('s'))[0].sections.notes.text,entry.sections.notes.text);
+});
+for(const migrated of [false,true])test(`scheduled plans persist completion and copy independently in ${migrated?'record':'legacy'} storage`,async()=>{
+ const h=await setup(),e=planFixture(h.l);await h.store.createEntry('s',e);
+ if(migrated)await h.store.migrateRecords('s',await h.store.getLore('s'),{expectedRevision:1});
+ const base=(await h.store.getLore('s')).find(x=>x.id===e.id),edited=structuredClone(base);edited.schedule.phases[0].status='completed';await h.store.saveEntry('s',edited,base);
+ const saved=(await h.store.getLore('s')).find(x=>x.id===e.id);assert.equal(saved.schedule.phases[0].status,'completed');
+ h.docs.set('users/u/sessions/dst',migrated?{loreSchemaVersion:3,loreGeneration:'dst-generation',loreRevision:0}:{loreRevision:0});await h.store.copyLore('s','dst',0);
+ const copy=(await h.store.getLore('dst')).find(x=>x.id===e.id);assert.equal(JSON.stringify(copy.schedule),JSON.stringify(saved.schedule));
+ const next=structuredClone(saved);next.schedule.status='completed';await h.store.saveEntry('s',next,saved);assert.equal((await h.store.getLore('dst')).find(x=>x.id===e.id).schedule.status,'pending');
+});
+test('concurrent phase changes reject stale edits without losing author completion',async()=>{
+ const h=await setup(),e=planFixture(h.l);await h.store.createEntry('s',e);const base=(await h.store.getLore('s')).find(x=>x.id===e.id),mine=structuredClone(base),other=structuredClone(base);
+ mine.schedule.phases[0].text='My revised instructions.';other.schedule.phases[0].status='completed';await h.store.saveEntry('s',other,base);await assert.rejects(()=>h.store.saveEntry('s',mine,base),/phases changed/);assert.equal((await h.store.getLore('s')).find(x=>x.id===e.id).schedule.phases[0].status,'completed');
+ const staleOverview=structuredClone(base);staleOverview.sections.text.text='Revised overview.';await h.store.saveEntry('s',staleOverview,base);const saved=(await h.store.getLore('s')).find(x=>x.id===e.id);assert.equal(saved.schedule.phases[0].status,'completed');assert.equal(saved.sections.text.text,'Revised overview.');
 });
 for(const failure of ['failStage','failActivation'])test(failure+' leaves the old generation active and releases the write barrier',async()=>{
  const {store,docs,path,entry,control}=await setup();control[failure]=true;await assert.rejects(()=>store.migrateRecords('s',[entry],{expectedRevision:0}));assert.equal(docs.get(path).loreGeneration,undefined);assert.equal(docs.get(path).loreRevision,0);assert.equal(docs.get(path).loreMigration.active,false);assert.equal((await store.getLore('s'))[0].sections.notes.text,entry.sections.notes.text);

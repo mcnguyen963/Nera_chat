@@ -1,3 +1,5 @@
+import { renderPlanEditor } from './plan-editor.js';
+import { planDate, validateSchedule, scheduleRange } from '../scheduled-plan.js';
 import { renderRecordEditor } from './lore-record-editor.js';
 import { addRecordConversion } from './lore-record-conversion.js';
 import { resolveRecord } from '../lore-records.js';
@@ -159,7 +161,7 @@ function renderList() {
     list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}}));
   }
   list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
-  list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small'));
+  list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),...(book==='plan' ? [] : [button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small')]));
   if (filter === 'deleted' && deletedHistoryReady && live()?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
   const missing = books.filter(e => !sizes.has(e.id));
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
@@ -167,12 +169,12 @@ function renderList() {
 function renderRows(rows) {
   rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
   if (!cards.length) {
-    const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.' };
+    const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.',plan:'No scheduled plans yet. Add an event with dates and optional phases.' };
     rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : messages[book],'muted')); return;
   }
   for (const e of cards) {
     const row = button('',() => openCard(e),'lore-list-item'); row.setAttribute('role','option'); row.setAttribute('aria-selected',String(selected === e.id)); row.append(node('strong',e.name),node('small',e.aliases.join(', '),'muted'),node('span',sizes.has(e.id) ? (sizes.get(e.id)/1000).toFixed(1)+'k' : '…','muted'));
-    const badges = node('div',null,'lore-badges'); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newCount(e)) badges.append(badge('+'+newCount(e)+' new','new')); if (passes(e,'big')) badges.append(badge('Too big to send in full','warn')); if (passes(e,'deleted')) badges.append(badge('From deleted turns','warn')); row.append(badges); rows.append(row);
+    const badges = node('div',null,'lore-badges'); if(e.book==='plan')badges.append(badge(scheduleRange(e.schedule)),badge(e.schedule.status)); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newCount(e)) badges.append(badge('+'+newCount(e)+' new','new')); if (passes(e,'big')) badges.append(badge('Too big to send in full','warn')); if (passes(e,'deleted')) badges.append(badge('From deleted turns','warn')); row.append(badges); rows.append(row);
     row.addEventListener('keydown',ev => { if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); const options = [...rows.children]; options[Math.max(0,Math.min(options.length-1,options.indexOf(row)+(ev.key === 'ArrowDown' ? 1 : -1)))].focus(); } });
   }
 }
@@ -181,11 +183,18 @@ async function newCard(prefill = '',kind = 'card') {
   const s = subSheet('+ New '+(book === 'facts' ? 'topic' : book === 'events' && kind !== 'timeline' ? 'thread' : 'card'),{compact:true});
   const name = field('Name',prefill), status = node('p','','memory-warning');
   const body = node('div',null,'memory-content'); body.append(name.wrap,status);
+  let planStart,planEnd;
+  if(book==='plan') {
+    const current=latestScene(live()?.messages ?? [],Infinity,live()?.session.memory?.startingScene).scene?.when;
+    let initial='';try{initial=planDate(current);}catch{}
+    planStart=field('Start date · D/M/YYYY',initial);planEnd=field('End date · D/M/YYYY',initial);body.append(planStart.wrap,planEnd.wrap);
+  }
   const save = button('Create',async () => {
     const value = name.input.value.trim().slice(0,60); if (!value) return;
     const exists = entries().find(e => e.book === book && [e.name,...e.aliases].some(n => normalizeName(n) === normalizeName(value)));
     if (exists) { status.replaceChildren(node('span',`A card named ${value} already exists.`),button('Open it',() => { s.hide(); openCard(exists); })); return; }
     const e = makeEntry(book,value,{ kind:book === 'events' ? kind === 'timeline' ? 'timeline' : 'thread' : 'card',status:book === 'events' && kind !== 'timeline' ? 'open' : null });
+    if(book==='plan'){e.schedule={start:planDate(planStart.input.value),end:planDate(planEnd.input.value),status:'pending',phases:[]};validateSchedule(e.schedule);}
     if (state.busy) throw new Error('Wait for the current reply or summary.');
     save.disabled = true; await store.createEntry(sid,e); s.hide(); openCard(e);
   },'btn primary'); body.append(save,button('Cancel',s.hide)); name.input.addEventListener('keydown',e => { if (e.key === 'Enter') save.click(); }); s.dialog.append(body); name.input.focus();
@@ -209,6 +218,11 @@ function renderEditor() {
   if (book === 'characters' || book === 'locations') {
     renderNameChips(editor);
     const always = field('Always load','',{ type:'checkbox' }); always.input.checked = staged.alwaysLoad; always.input.addEventListener('change',() => staged.alwaysLoad = always.input.checked); editor.append(always.wrap,node('p',"Load this card every turn, even when it isn't mentioned.",'muted'));
+  }
+  if(book==='plan'){
+    const mem=normalizeMemory(live()?.session.memory),ready=mem.scene && mem.calendar.mode==='modern';
+    if(!ready)editor.append(node('p','Enable Scene line and Modern date in Memory settings to load scheduled plans.','memory-warning'));
+    renderPlanEditor(editor,staged,{date:ready ? latestScene(live()?.messages ?? [],Infinity,mem.startingScene).scene?.when : null,budget:normalizeMemory(live()?.session.memory).books.plan.budget,save:saveCard,remove:deleteCard,cancel:()=>{staged=structuredClone(base);renderEditor();}});return;
   }
   if (staged.kind === 'thread') { const status = field('Status',''); const select = node('select'); for (const value of ['open','closed']) { const o = node('option',value); o.value = value; select.append(o); } select.value = staged.status; select.addEventListener('change',() => staged.status = select.value); status.input.replaceWith(select); editor.append(status.wrap); }
   if (book === 'facts') editor.append(node('p',staged.schemaVersion===3 ? "World rules are selected by relevance within the World facts budget." : "World facts are sent every turn. Keep them short — rules, not stories.",'muted'));

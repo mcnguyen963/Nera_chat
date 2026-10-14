@@ -1,3 +1,4 @@
+import { createPlanJumpControl } from './plan-jump.js';
 import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
@@ -57,6 +58,7 @@ let session = null;      // latest snapshot of the active session doc
 let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
+let planJumpControl=null;
 let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>document.dispatchEvent(new CustomEvent('turn-finished'))});
 const acquireBusy=kind=>busyGate.acquire(kind),releaseBusy=token=>busyGate.release(token);
@@ -333,6 +335,8 @@ export function initChatView() {
     }
   });
 
+  const jumpButton=document.getElementById('btn-plan-jump');
+  if(jumpButton)planJumpControl=createPlanJumpControl(jumpButton,{story:()=>session,messages:()=>historyMessages ?? lastMessages,owner:currentUid,busy:()=>busy || !!editingState,changed:()=>{indicatorRefresh.invalidate();void updateIndicator();}});
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
   document.addEventListener("summarize-full", handleFullSummarize);
@@ -471,6 +475,7 @@ export function setSession(sessionId) {
   void selectStorySettings(sessionId).catch(error=>showTransientError(error.message));
   session = null;
   streamState = null;
+  planJumpControl?.reset();
   editingState = null;clearOriginalDraft();
   lastMessages = [];
   visibleCount = PAGE_SIZE;
@@ -817,6 +822,7 @@ export function sameRenderedMessage(a,b) {
   return a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
     (a.revision ?? 0)===(b.revision ?? 0) && a.acceptance===b.acceptance &&
     Boolean(a.editedAt)===Boolean(b.editedAt) && Boolean(a.ooc)===Boolean(b.ooc) && Boolean(a.truncated)===Boolean(b.truncated) &&
+    JSON.stringify(a.planJump ?? null)===JSON.stringify(b.planJump ?? null) &&
     JSON.stringify(a.sceneMeta ?? null)===JSON.stringify(b.sceneMeta ?? null) && JSON.stringify(a.sceneCandidate ?? null)===JSON.stringify(b.sceneCandidate ?? null) &&
     (a.reviewWarnings ?? []).join('\n')===(b.reviewWarnings ?? []).join('\n');
 }
@@ -831,6 +837,7 @@ function updateWelcome() {
   if (newStory) newStory.hidden = Boolean(state.sessionId);
   document.getElementById("chat-tab")?.classList.toggle("is-empty", empty);
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
+  planJumpControl?.refresh();
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
@@ -906,6 +913,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   content.className = "msg-content";
   content.textContent = m.content;
   wrap.appendChild(content);
+  if(m.role==='user' && m.planJump){const note=document.createElement('p');note.className='muted';note.textContent='Confirmed time skip: '+m.planJump.from+' → '+m.planJump.to;wrap.append(note);}
   if (pending) {
     const review = document.createElement('div');review.className = 'muted';
     review.textContent = 'Needs review: '+(m.reviewWarnings?.length ? m.reviewWarnings : lintPlayerAgency(m.content,normalizeMemory(session?.memory).protagonist)).join(' ')+' Memory and summaries wait for acceptance.';
@@ -1145,16 +1153,17 @@ function showToast(text, ok) {
 const indicatorHint = 'Token count refreshes after you leave the message box.';
 const indicatorRefresh = createIndicatorRefresh({
   focused: () => !!el.input && document.activeElement === el.input,
-  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value]),
+  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value,planJumpControl?.preview()]),
   compute: async () => {
     if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
     const source = session, settings = effectiveActiveSettings(), draftText = el.input.value;
     const messages = !anyMemory(normalizeMemory(source.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory();
-    return computeContextUsage(source, settings, messages, { loreEntries, draftText });
+    return computeContextUsage(source, settings, messages, { loreEntries, draftText,draftPlanJump:planJumpControl?.preview() });
   },
   apply: usage => { if (usage) applyIndicator(usage); },
   onError: error => { if (el.contextLabel) el.contextLabel.textContent = error.message; },
 });
+export function scheduledPlanDraftJump() {return planJumpControl?.preview() ?? null;}
 export async function updateIndicator() {
   if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
   return indicatorRefresh.request();
@@ -1342,12 +1351,15 @@ async function handleSend(e) {
   if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
   const token=acquireBusy('send');if(!token)return;
   try {
+    const planJump=planJumpControl?.get();
+    if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
     const baseHistory=historyMessages,baseRevision=historyRevision,baseSession=session;
     const snapshotVersion=sessionSnapshotVersion;
-    const userResult = await messagesApi.addMessage(session.id, { role: "user", content: text });
+    const userResult = await messagesApi.addMessage(session.id, { role: "user", content: text,...(planJump ? {planJump} : {}) });
     const {session:committedUserSession,message:resultMessage,...flatUserMessage}=userResult;
     const userMsg=resultMessage ?? flatUserMessage;
     saved = true;
+    planJumpControl?.reset();
     if(requestedOwner!==currentUid())throw new StaleTurn('Account changed; this action was cancelled.');
     if(busyGate.stillActive(token) && el.input.value===draft)setComposerText('');
     assertActive(token);
@@ -1778,6 +1790,7 @@ function appendStream(kind, text) {
 
 function applyBusyUi(b) {
   busy = state.busy = b;
+  planJumpControl?.refresh();
   updateRewriteControls();
   updateMemoryChip();
   el.sendBtn.disabled=b;
