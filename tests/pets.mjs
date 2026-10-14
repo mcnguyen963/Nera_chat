@@ -20,6 +20,13 @@ test('pet sheets use their actual action rows and valid occupied frames', () => 
   }
 });
 
+test('Lilith v2 is listed in the catalog and uses Lilith animation rows', async () => {
+  const catalog = JSON.parse(await readFile(new URL('../resources/pets/manifest.json', import.meta.url), 'utf8'));
+  assert.ok(catalog.includes('lillith-v2.png'));
+  await readFile(new URL('../resources/pets/lillith-v2.png', import.meta.url));
+  assert.deepEqual(petAnimations('lillith-v2.png'), petAnimations('lilith.webp'));
+});
+
 test('selection avoids repeats without excluding a single selected pet', () => {
   assert.equal(nextPetId(['violet', 'lilith.webp', 'violet'], 'violet', () => 0), 'lilith.webp');
   assert.equal(nextPetId(['violet'], 'violet'), 'violet');

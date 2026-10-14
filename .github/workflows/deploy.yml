@@ -47,6 +47,9 @@ jobs:
           };
           EOF
 
+      - name: Generate pet catalog
+        run: python3 scripts/generate-pet-manifest.py
+
       - name: Assemble site (app files only)
         run: |
           set -euo pipefail
