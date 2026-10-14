@@ -6,6 +6,31 @@ const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
+test('A large entity catalog retains every identity without crowding out current control lore',async()=>{
+ const use=appHarness({stubs:{'tokenizer.js':tokens}}),api=await use('director-context.js'),lore=await use('lore-lines.js');
+ const entries=Array.from({length:134},(_,i)=>{const e=lore.makeEntry(i<82?'characters':'locations','Established subject '+i);e.sections[Object.keys(e.sections)[0]].text='An established subject with a long background and many descriptive details. '.repeat(15);return e;});
+ entries[0].name='Nera';entries[1].name='Isolde';entries[1].sections.notes.text='Isolde cannot cross the closed bridge until the bridge reopens.';
+ const messages=[{id:'u',order:1,role:'user',content:'I wait with Isolde at the Inn.'}];
+ const built=await api.buildDirectorContext({id:'s',memory:{protagonist:'Nera'}},settings,messages,entries,state);
+ const data=JSON.parse(built.apiMessages[0].content.slice(built.apiMessages[0].content.indexOf('{"state":')));
+ assert.equal(data.entityIndex.length,entries.length);assert.deepEqual(data.entityIndex.map(e=>e.id),entries.map(e=>e.id));
+ assert.ok(data.controlLore.some(e=>e.id===entries[1].id&&e.text.includes('until the bridge reopens')));
+ assert.ok(built.usedTokens<=settings.directorMaxInputTokens);
+});
+test('Long fixed author plans stay whole with the Narrator without overflowing or silently truncating Director context',async()=>{
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'messages.js':{getMessages:async()=>[]}}}),api=await use('director-context.js'),builder=await use('context-builder.js');
+ const plan='Do not begin the future festival before the player confirms.\n'.repeat(850),messages=[{id:'u',role:'user',order:1,content:'I wait at the inn.'}],session={id:'s',memory:{scene:true,lorebooks:true},longTermPlan:plan};
+ const built=await api.buildDirectorContext(session,settings,messages,[],state);
+ assert.ok(built.usedTokens<settings.directorMaxInputTokens);assert.equal(built.report.fixedAuthorPlan.included,false);
+ assert.ok(built.report.warnings.some(w=>w.includes('fixed author plan')));assert.ok(built.apiMessages[0].content.includes('keep it unresolved'));
+ assert.ok(built.apiMessages[0].content.includes('omitted; full plan remains'));assert.ok(built.apiMessages[0].content.includes('Visit Lysia after dinner'));
+ const turn={before:state,after:state,contract:contract({})};
+ const narrator=await builder.buildContextForRequest(session,settings,{messages,loreEntries:[],directorTurn:turn});
+ assert.ok(narrator.apiMessages.some(m=>m.content.includes(plan.trim())));assert.equal(session.longTermPlan,plan);
+ const short='Keep the current dinner in progress until the player ends it.';
+ const preserved=await api.buildDirectorContext({...session,longTermPlan:short},settings,messages,[],state);
+ assert.equal(preserved.report.fixedAuthorPlan.included,true);assert.ok(preserved.apiMessages[0].content.includes(short));
+});
 test('Director gesture review flags the captured unrequested gesture but allows explicit player action and NPC speech',async()=>{
  const api=await appHarness()('turn-review.js');
  assert.equal(api.lintDirectorGestures('You put your hand on the bars.',{protagonist:'Nera',userText:'I try to cross the closed bridge.'}).length,1);
