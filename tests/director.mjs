@@ -23,11 +23,18 @@ test('Explicit arrival boundaries recognize player directions without treating q
 });
 test('Director rejects a new NPC choice beyond an arrival boundary before saving and carries accepted boundaries to the Narrator',async()=>{
  let saved=0,beyond=true;
- const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_s,t)=>{saved++;return t;}},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify(contract({scene:{date:'22/10/738',hour:1,location:'Infirmary'},...(beyond?{decisions:{upsert:[{id:'registration',text:'Which registration option?',status:'open'}],close:[]}}:{})}))})}}});
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_s,t)=>{saved++;return t;}},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify({...contract({scene:{date:'22/10/738',hour:1,location:'Infirmary'},...(beyond?{decisions:{upsert:[{id:'registration',text:'Which registration option?',status:'open'}],close:[]}}:{})}),transition:'completed'})})}}});
  const api=await use('director-turn.js'),messages=[{id:'u',role:'user',order:1,content:'I walk to the infirmary. Stop when we arrive.'}];
  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]),/beyond the requested arrival boundary/);assert.equal(saved,0);assert.equal(state.scene.location,'Inn');
  beyond=false;const turn=await api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]);assert.equal(saved,1);assert.equal(turn.playerBoundary.kind,'arrival');
  const context=await use('director-context.js');assert.ok(context.narratorDirectorContract(turn).includes('"playerBoundary":{"kind":"arrival"'));
+});
+test('An arrival boundary still permits a genuine blocked or interrupted journey to stop for a choice',async()=>{
+ const api=await appHarness()('director-state.js'),boundary=api.playerStopBoundary('I walk there. Stop when we arrive.');
+ for(const transition of ['attempted','blocked']){
+  const turn=api.parseDirectorContract(JSON.stringify({...contract({decisions:{upsert:[{id:'interruption',text:'The route is blocked. What next?',status:'open'}],close:[]}}),transition}),state);
+  assert.doesNotThrow(()=>api.assertDirectorBoundary(turn,boundary));assert.equal(turn.after.scene.location,'Inn');assert.equal(turn.after.decisions.length,1);
+ }
 });
 test('Director never forwards an extra unvalidated scene or ledger beside the canonical updates',async()=>{
  const api=await appHarness()('director-state.js');
