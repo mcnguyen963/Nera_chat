@@ -4,7 +4,7 @@ import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {main,eligible,LIMITS,MODEL,API,assertPaidApproval,checkTransition} from './tools/director-eval.mjs';
-const endpoint={name:'Test | DeepSeek',provider_name:'Test',tag:'test/fp4',quantization:'fp4',pricing:{prompt:'0.00000009',completion:'0.0000003'},context_length:1048576,max_completion_tokens:943718,supported_parameters:['reasoning','reasoning_effort','max_tokens']};
+const endpoint={name:'Test | DeepSeek',provider_name:'Test',tag:'test/fp4',quantization:'fp4',pricing:{prompt:'0.00000009',completion:'0.0000003'},context_length:1048576,max_completion_tokens:943718,supported_parameters:['reasoning','reasoning_effort','max_tokens','response_format']};
 const listing={data:{id:'deepseek/deepseek-v4.1-flash',endpoints:[endpoint]}};
 test('Director live evaluation requires separate explicit confirmation and an exact total budget',async()=>{
  for(const options of [{},{'approved-budget':'0.10'},{'confirm-live':'yes','approved-budget':'0.40'}])assert.throws(()=>assertPaidApproval(options),/separate user confirmation/);
@@ -12,7 +12,7 @@ test('Director live evaluation requires separate explicit confirmation and an ex
  await assert.rejects(main(['run','--key-file','/missing-key']),/separate user confirmation/);
 });
 test('Director live provider eligibility enforces the 0.40 output ceiling and high-effort support',()=>{
- assert.equal(eligible(listing.data).length,1);assert.equal(LIMITS.completion,.4);assert.equal(MODEL,'deepseek/deepseek-v4.1-flash:floor');
+ assert.equal(eligible(listing.data).length,1);assert.equal(eligible(listing.data,0,8192,{json:true}).length,1);assert.equal(eligible({...listing.data,endpoints:[{...endpoint,supported_parameters:['reasoning','reasoning_effort','max_tokens']}]},0,8192,{json:true}).length,0);assert.equal(LIMITS.completion,.4);assert.equal(MODEL,'deepseek/deepseek-v4.1-flash:floor');
  for(const bad of [{pricing:{prompt:'0.00000009',completion:'0.00000041'}},{supported_parameters:['reasoning','max_tokens']},{pricing:{prompt:'0.00000026',completion:'0.0000003'}},{pricing:{prompt:'0.00000009',completion:'0.0000003',request:'0.01'}}])assert.equal(eligible({...listing.data,endpoints:[{...endpoint,...bad}]}).length,0);
 });
 for(const suite of ['independent','chained'])for(const badReply of [false,true])test('Offline '+suite+' Director/Narrator live-run rehearsal '+(badReply?'stops after a bad contract':'captures routing, usage, reasoning and all eight calls'),async()=>{
@@ -23,6 +23,7 @@ for(const suite of ['independent','chained'])for(const badReply of [false,true])
   assert.equal(body.model,MODEL);assert.equal(body.reasoning.effort,'high');assert.equal(body.provider.max_price.completion,.4);assert.equal(body.provider.max_price.prompt,.25);assert.equal(body.provider.require_parameters,true);
   let content;
   if(!body.stream){
+   assert.deepEqual(body.response_format,{type:'json_object'});
    const raw=JSON.parse(body.messages[0].content.slice(body.messages[0].content.lastIndexOf('\n\n{')+2)),s=raw.state,input=body.messages.at(-1).content;
    const output={version:1,action:'narrate',transition:'unchanged',objective:'Narrate the authorized action without taking the next voluntary decision.',stopCondition:'Stop before the next player choice',memoryIds:raw.entityIndex.map(e=>e.id),requiredMemoryIds:[],updates:{}};
    if(/registration options/.test(input))output.updates.decisions={upsert:[{id:'registration',text:'Which excursion option?',status:'open'}],close:[]};

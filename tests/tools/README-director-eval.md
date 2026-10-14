@@ -14,6 +14,8 @@ Use `prepare --suite chained --out investigate/director-chain` for four connecte
 
 The application recognizes clear unquoted instructions such as “Stop when we arrive” and “stop upon arrival.” It passes that boundary to both models and rejects a completed-journey Director contract that opens a new player decision beyond it before saving or calling the Narrator. A genuine interruption may stop an attempted or blocked journey earlier. Other stopping instructions remain model-interpreted. The gesture review is a limited diagnostic, not proof that the prose preserves agency.
 
+Director requests use `response_format: {type: 'json_object'}` and a final system reminder beside the latest action. OpenRouter routing requires parameter support, and this evaluator checks `response_format` support before selecting routes for the Director. Other Director endpoints must support the compatible JSON output parameter. JSON mode does not validate contract semantics: the application still checks the schema, memory IDs, canonical state and player boundaries. Invalid replies stop before the Narrator or any state save; there is no automatic repair request. Narrator calls keep their normal prose format.
+
 `prepared.json`, `previews.json` and `preflight.json` are private ignored artifacts. Narrator previews are provisional because the real Director has not yet answered. Model/provider eligibility is checked from the public listing; run checks it again before completions. Limits are never relaxed when no eligible route exists.
 
 **Ask the user to confirm this exact run before executing any live completion request.** After confirmation:
