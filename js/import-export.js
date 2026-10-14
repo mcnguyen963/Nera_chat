@@ -54,8 +54,11 @@ export function parseSillyTavernJsonl(text) {
 }
 
 export async function importSillyTavern(file) {
-  if(file.size>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
-  const text=await file.text();if(new TextEncoder().encode(text).length>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
+  // Full backups include lore and private reply metadata as well as messages.
+  // Long stories can exceed 20 MB without any single document being oversized.
+  const maxBytes=64*1024*1024;
+  if(file.size>maxBytes)throw new Error('The story file is larger than 64 MB.');
+  const text=await file.text();if(new TextEncoder().encode(text).length>maxBytes)throw new Error('The story file is larger than 64 MB.');
   let parsed;
   try{const full=JSON.parse(text);if(full?.format==='nera-chat-backup' && Array.isArray(full.messages))parsed={title:full.session?.title,messages:full.messages,metadata:{session:full.session,lore:full.lore,storySettings:full.storySettings,directorTurns:full.directorTurns}};}catch{}
   const {title,messages,metadata}=parsed ?? parseSillyTavernJsonl(text);
