@@ -52,14 +52,14 @@ const summaryRunning=new Set();
 export function planSummary(session,settings,messages,{maxChunks=Infinity,force=true,full=false,running=false,urgent=false}={}) {
   if(running)return {skip:'running'};
   if(!force)return {skip:'not-needed'};
-  const all=[...messages].sort((a,b)=>a.order-b.order),raw=all.filter(m=>m.role!=='summary'),turns=computeTurns(raw),N=Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
+  const all=messages.filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order),raw=all.filter(m=>m.role!=='summary'),turns=computeTurns(raw),N=Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
   if(raw.length<=N)return {skip:'nothing-to-fold'};
   let recentStart=raw.length-N,firstRecentTurn=turns.turnById.get(raw[recentStart]?.id);
   while(recentStart>0 && turns.turnById.get(raw[recentStart-1].id)===firstRecentTurn)recentStart--;
   const cutoff=raw[recentStart-1]?.order ?? 0,prior=!full && all.some(m=>m.id===session.activeSummaryMessageId),fromOrder=prior ? session.breakpointOrder ?? 0 : 0;
   const firstUser=raw.find(m=>m.role==='user'),firstAssistant=firstUser && raw.find(m=>m.role==='assistant' && m.order>firstUser.order),opening=new Set([firstUser?.id,firstAssistant?.id]);
   let toFold=raw.filter(m=>m.order>fromOrder && m.order<=cutoff && !opening.has(m.id));
-  if(session.memory?.scene){const pending=toFold.find(m=>m.role==='assistant' && !isAcceptedTurn(m,{lastUserOrder:lastUserOrderOf(raw)}));if(pending){toFold=toFold.filter(m=>turns.turnById.get(m.id)<turns.turnById.get(pending.id));if(!toFold.length)return {skip:'pending-reply'};}}
+  if(session.memory?.scene || toFold.some(m=>m.directorIncomplete)){const pending=toFold.find(m=>m.role==='assistant' && !isAcceptedTurn(m,{lastUserOrder:lastUserOrderOf(raw)}));if(pending){toFold=toFold.filter(m=>turns.turnById.get(m.id)<turns.turnById.get(pending.id));if(!toFold.length)return {skip:'pending-reply'};}}
   while(toFold.length && toFold.at(-1).role!=='assistant')toFold.pop();
   if(!toFold.length)return {skip:'nothing-to-fold'};
   const groups=[];for(const m of toFold){const turn=turns.turnById.get(m.id);if(groups.at(-1)?.turn!==turn)groups.push({turn,messages:[]});groups.at(-1).messages.push(m);}

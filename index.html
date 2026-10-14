@@ -243,6 +243,17 @@
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts · current story</h2>
                 <p class="muted">These prompts and rewrite preferences are saved independently for this story.</p>
+                <div class="settings-grid">
+                  <label>Narration mode<select id="set-narration-mode"><option value="classic">Classic</option><option value="director">Director–Narrator</option></select></label>
+                  <label>Director connection profile<select id="set-director-profile"></select></label>
+                  <label>Director input limit<input id="set-director-input" type="number" min="1000" max="200000" /></label>
+                  <label>Director output limit<input id="set-director-output" type="number" min="256" max="32000" /></label>
+                  <label>Director recent complete turns<input id="set-director-turns" type="number" min="1" max="20" /></label>
+                </div>
+                <p class="muted">Director mode uses game hours 1–24 and two model calls per turn. A memory update or summary may use a third call. Starts from the saved scene; add older promises in live state.</p>
+                <button type="button" id="btn-director-state" class="btn small">Review live state, decisions &amp; promises</button>
+                <label>Director instructions<textarea id="set-director-prompt" rows="8"></textarea></label>
+                <button type="button" class="btn small" data-reset-prompt="directorSystemPrompt" data-prompt-field="set-director-prompt">Reset Director instructions</button>
                   <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
                   <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
                   <p id="rewrite-prompt-help" class="muted">The default comes from system prompts/rewrite.md.</p>

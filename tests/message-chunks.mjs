@@ -159,7 +159,7 @@ async function setup(legacyCount = 0) {
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
   const storySettings=await load('story-settings-store.js');await link(storySettings);await storySettings.evaluate();
   const transfer=await load('import-export.js');await link(transfer);await transfer.evaluate();
-  return {transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
+  return {director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
 
 test('migration packs existing messages once and checkpoint reads use chunks', async () => {
@@ -1156,4 +1156,78 @@ test('manual modern scene writes validate against transactional story calendar w
  const before=h.documents.get(h.sessionPath).historyRevision;
  await assert.rejects(()=>h.api.updateMessageScene('s',a.id,a.order,'date: Friday 21/10/738 · time: 25:99 · place: Inn · present: Mira'),/clock/);assert.equal(h.documents.get(h.sessionPath).historyRevision,before);
  await h.api.updateMessageScene('s',a.id,a.order,'date: 21/10/738 · time: 3:20 PM · place: Inn · present: Mira');assert.equal((await h.api.getMessages('s'))[0].scene,'date: Friday 21/10/738 · time: 15:20 · place: Inn · present: Mira');
+});
+
+const directorSeed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[{id:'visit',text:'Visit Lysia after dinner',status:'waiting',trigger:'Dinner ends'}]};
+async function pendingDirector(h){
+ const user=await h.api.addMessage('s',{role:'user',content:'Finish dinner'});
+ const session=h.documents.get(h.sessionPath);session.directorState=structuredClone(directorSeed);session.directorRevision=1;
+ const turn={id:'director_test',version:1,before:structuredClone(directorSeed),after:{...structuredClone(directorSeed),scene:{...directorSeed.scene,hour:21}},contract:{version:1,action:'narrate',objective:'Finish dinner',stopCondition:'Stop before travel',transition:'completed',memoryIds:[],requiredMemoryIds:[],updates:{}},previousCheckpoint:null};
+ await h.director.savePendingDirectorTurn('s',turn,h.source.requestSource(session));return turn;
+}
+test('Director narration and canonical state commit atomically; truncated replies preserve prior state',async()=>{
+ const h=await setup(),turn=await pendingDirector(h);
+ const partial=await h.api.addMessage('s',{role:'assistant',content:'Dinner begins to end',truncated:true,directorTurnId:turn.id,directorIncomplete:true},{expectedSource:h.source.requestSource(h.documents.get(h.sessionPath))});
+ assert.equal(h.documents.get(h.sessionPath).directorState.scene.hour,20);assert.equal(h.documents.get(h.sessionPath).directorPending,turn.id);
+ const finished=await h.api.overwriteMessage('s',partial.id,{content:'Dinner ended. Will you visit Lysia?',truncated:false,directorTurnId:turn.id,directorIncomplete:false,scene:'date: 21/10/738 · time: Hour 21 · place: Inn · present: Nera'},partial.order,{},h.source.requestSource(h.documents.get(h.sessionPath)));
+ assert.equal(finished.session.directorState.scene.hour,21);assert.equal(finished.session.directorPending,null);assert.equal(h.documents.get(h.sessionPath+'/directorTurns/'+turn.id).status,'completed');
+});
+test('Director blocks new player turns until pending narration is completed or discarded',async()=>{
+ const h=await setup();await pendingDirector(h);await assert.rejects(h.api.addMessage('s',{role:'user',content:'Travel'}),/pending Director/);
+ await h.director.discardPendingDirector('s',h.source.requestSource(h.documents.get(h.sessionPath)));
+ await h.api.addMessage('s',{role:'user',content:'Travel'});assert.equal(h.documents.get(h.sessionPath).directorState.scene.hour,20);
+});
+test('Director rejects stale lore, settings and state without saving narration',async()=>{
+ for(const key of ['loreRevision','storySettingsRevision','directorRevision']){
+  const h=await setup(),turn=await pendingDirector(h),s=h.documents.get(h.sessionPath);s[key]=(s[key] ?? 0)+1;
+  await assert.rejects(h.api.addMessage('s',{role:'assistant',content:'Arrival',directorTurnId:turn.id}),/changed/);
+  assert.equal(h.documents.get(h.sessionPath).directorState.scene.hour,20);assert.equal(h.documents.get(h.sessionPath).nextOrder,1);
+ }
+});
+test('Regenerating a completed Director reply does not apply the transition twice',async()=>{
+ const h=await setup(),turn=await pendingDirector(h);const reply=await h.api.addMessage('s',{role:'assistant',content:'Dinner ended.',directorTurnId:turn.id});const rev=reply.session.directorRevision;
+ const regen=await h.api.overwriteMessage('s',reply.id,{content:'The last plates were cleared.',directorTurnId:turn.id},reply.order,{},h.source.requestSource(h.documents.get(h.sessionPath)));
+ assert.equal(regen.session.directorRevision,rev);assert.equal(regen.session.directorState.scene.hour,21);
+});
+test('Deleting the latest Director reply restores the previous state; historical edits require review',async()=>{
+ const h=await setup(),turn=await pendingDirector(h);const reply=await h.api.addMessage('s',{role:'assistant',content:'Dinner ended.',directorTurnId:turn.id});
+ const deleted=await h.api.deleteMessage('s',reply.id,reply.order);assert.equal(deleted.session.directorState.scene.hour,20);assert.equal(deleted.session.directorPending,null);
+ const user=(await h.api.getMessages('s'))[0];await h.api.editMessage('s',user.id,'Dinner never happened',user.order);assert.equal(h.documents.get(h.sessionPath).directorNeedsReview,true);
+});
+test('Director story copy and backup preserve completed checkpoints at the copied cutoff',async()=>{
+ const h=await setup(),turn=await pendingDirector(h);const reply=await h.api.addMessage('s',{role:'assistant',content:'Dinner ended.',directorTurnId:turn.id});
+ const copy=await h.sessions.duplicateSession('s',null,reply.id),copied=h.documents.get('users/u/sessions/'+copy);
+ assert.equal(copied.directorState.scene.hour,21);assert.equal(copied.directorPending,null);assert.ok(h.documents.has('users/u/sessions/'+copy+'/directorTurns/'+turn.id));
+ const backup=await h.transfer.buildFullBackup('s');assert.equal(backup.directorTurns.length,1);assert.equal(backup.directorTurns[0].after.scene.hour,21);
+ const restored=await h.transfer.importSillyTavern({name:'director.json',size:10,text:async()=>JSON.stringify(backup)});
+ assert.equal(h.documents.get('users/u/sessions/'+restored).directorState.scene.hour,21);assert.equal(h.documents.get('users/u/sessions/'+restored).directorPending,null);
+});
+
+test('Explicit Re-plan replaces a pending contract while competing replacement attempts are rejected',async()=>{
+ const h=await setup(),old=await pendingDirector(h),source=h.source.requestSource(h.documents.get(h.sessionPath));
+ const next={...old,id:'director_replan',replaces:old.id,after:{...old.after,scene:{...old.after.scene,hour:22}}};
+ await h.director.savePendingDirectorTurn('s',next,source);assert.equal(h.documents.get(h.sessionPath).directorPending,next.id);
+ await assert.rejects(h.director.savePendingDirectorTurn('s',{...next,id:'director_competing'},source),/Another Director/);
+ assert.equal(h.documents.get(h.sessionPath).directorState.scene.hour,20);
+});
+test('Director live-state reset is guarded and completed items leave the live ledger',async()=>{
+ const h=await setup();const user=await h.api.addMessage('s',{role:'user',content:'Begin'}),source=h.source.requestSource(h.documents.get(h.sessionPath));
+ await h.director.resetDirectorState('s',{...directorSeed,commitments:[{...directorSeed.commitments[0],status:'closed'}]},source);
+ assert.equal(h.documents.get(h.sessionPath).directorState.commitments.length,0);
+ await assert.rejects(h.director.resetDirectorState('s',directorSeed,source),/changed/);
+ const copy=await h.sessions.duplicateSession('s',null,user.id);assert.equal(h.documents.get('users/u/sessions/'+copy).directorState.scene.hour,20);
+});
+test('Copies and imports archive an interrupted first Director turn without resuming it',async()=>{
+ const h=await setup(),turn=await pendingDirector(h);h.documents.get(h.sessionPath).directorState=null;
+ const reply=await h.api.addMessage('s',{role:'assistant',content:'Partial dinner',truncated:true,directorTurnId:turn.id,directorIncomplete:true});
+ const copy=await h.sessions.duplicateSession('s',null,reply.id);assert.equal(h.documents.get('users/u/sessions/'+copy).directorPending,null);assert.equal(h.documents.get('users/u/sessions/'+copy).directorNeedsReview,true);
+ const backup=await h.transfer.buildFullBackup('s'),restored=await h.transfer.importSillyTavern({name:'first.json',size:100,text:async()=>JSON.stringify(backup)}),imported=h.documents.get('users/u/sessions/'+restored);
+ assert.equal(imported.directorPending,null);assert.equal(imported.directorState.scene.hour,20);assert.equal(imported.directorNeedsReview,true);assert.ok(imported.directorAbandonedTurnIds.includes(turn.id));
+});
+
+test('Legacy story settings load as Classic and saving Director configuration upgrades the document version',async()=>{
+ const h=await setup();const values={narratorSystemPrompt:'Legacy narrator',summarizerSystemPrompt:'Legacy summary',memoryExtractionPrompt:'Extract',memoryReorganizePrompt:'Reorganize',rewriteSystemPrompt:'Rewrite',rewriteRecentMessages:10};
+ h.documents.get(h.sessionPath).storySettingsRevision=1;h.documents.set(h.sessionPath+'/storySettings/current',{version:1,revision:1,values});
+ const loaded=await h.storySettings.ensureStorySettings('s');assert.equal(loaded.values.narrationMode,'classic');
+ const saved=await h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director',directorProfileId:'small'});assert.equal(saved.version,2);assert.equal(saved.values.directorMaxInputTokens,20000);
 });

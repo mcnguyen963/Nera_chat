@@ -5,11 +5,11 @@ import {promptFetch} from './prompt-files.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
 const history=Array.from({length:12},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'Event '+i,revision:0,narratorTurn:Math.floor(i/2)+1}));
 const account={endpoint:'https://mock.local/chat',modelId:'shared-model',apiKey:'shared-key',streaming:false,maxContextTokens:50000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:2,summarizerMaxTokens:2000,summarizerChunkTokens:20000,reasoning:{enabled:false}};
-test('Resolver overlays only six story fields and leaves shared and device values intact',async()=>{
+test('Resolver overlays only story fields and leaves shared and device values intact',async()=>{
  const api=await appHarness()('story-settings.js'),base={...account,streamVibrationMode:'off',petMovement:'roam'};
  const resolved=api.resolveStorySettings(base,{narratorSystemPrompt:'Story A',apiKey:'intruder',maxContextTokens:1,petMovement:'stay',streamVibrationMode:'speed'});
  assert.equal(resolved.narratorSystemPrompt,'Story A');for(const key of ['apiKey','maxContextTokens','petMovement','streamVibrationMode'])assert.equal(resolved[key],base[key]);assert.equal(base.narratorSystemPrompt,undefined);
- const copied=api.explicitStorySettings({rewriteSystemPrompt:null});assert.equal(typeof copied.rewriteSystemPrompt,'string');assert.equal(Object.keys(copied).length,6);
+ const copied=api.explicitStorySettings({rewriteSystemPrompt:null});assert.equal(typeof copied.rewriteSystemPrompt,'string');assert.equal(Object.keys(copied).length,api.STORY_SETTING_KEYS.length);
 });
 test('Serialized narration, regeneration context, summary, rewrite, extraction and reorganize use each story prompt with unchanged calls',async()=>{
  const requests=[],saves=[];

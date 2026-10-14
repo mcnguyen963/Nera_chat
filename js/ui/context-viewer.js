@@ -1,3 +1,5 @@
+import { buildDirectorContext } from '../director-context.js';
+import { seedDirectorState } from '../director-state.js';
 import { renderCoreEditor } from './character-core-editor.js';
 import { saveEntry } from '../lore-store.js';
 import { currentUid } from '../auth.js';
@@ -180,11 +182,13 @@ async function render() {
     if (live.sentContext) {
       const sent=live.sentContext,section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString());
       section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
+      if(sent.director){const d=sent.director;section.append(node('p',`Director: ${d.reused ? 'reused contract' : (d.usage?.prompt_tokens ?? d.report?.totals?.input ?? 0).toLocaleString()+' input tokens'} · ${d.elapsedMs ?? 0} ms. Narrator: ${sent.narratorUsage?.prompt_tokens?.toLocaleString() ?? 'usage unavailable'} input tokens · ${sent.narratorElapsedMs ?? 0} ms. Combined estimate: ${((d.reused ? 0 : d.report?.totals?.input ?? 0)+(sent.report?.totals?.input ?? 0)).toLocaleString()} input tokens.`, 'muted'));if(d.requestBody)section.append(preview('director-sent-json','Director serialized request',JSON.stringify(d.requestBody,null,2)));section.append(preview('director-contract','Director contract',JSON.stringify(d.contract,null,2)));}
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
       if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
       section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
       body.append(section);
     }
+    if(live.settings.narrationMode==='director'){const dg=group('director-preview','Director · next request preview');try{const d=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`, 'muted'),preview('director-next-json','Read Director input',JSON.stringify(d.apiMessages,null,2)));}catch(error){dg.append(node('p',error.message,'muted'));}if(run!==version || !open || state.sessionId!==live.session.id)return;body.append(dg);}
     const scene = group('scene', 'Current scene & memory');
     scene.append(node('p', r.scene ? r.scene.raw+' (from turn '+r.scene.fromTurn+')' : 'No current scene included.', 'muted'));
     for (const [key,label] of [['memory','Read assembled memory block'],['replyContract','Read reply contract'],['reminder','Read scene reminder']]) {

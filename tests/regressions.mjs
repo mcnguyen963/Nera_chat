@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {} } = {}) {
+async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {} } = {}) {
   const elements = new Map();
   class Element {
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
@@ -189,6 +189,7 @@ async function harness({ legacyNarratorHashes = null, chatCache = null, timers =
       subscribeLatestMessages: (sessionId, callback, onError) => {(calls.latestErrors ??= []).push(onError); calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
     },
   };
+  Object.assign(stubs,extraStubs);
   if (chatCache) stubs['chat-cache.js'] = chatCache;
   const cache = new Map();
   async function load(path) {
@@ -2245,4 +2246,38 @@ test(`numeric scene collection ${time} via ${mode} survives reload and next requ
  const client=await h.use('llm-client.js');
  const body=client.buildRequestBody(h.state.settings,built.apiMessages);
  assert.ok(body.messages.some(m=>m.content.includes(raw)),'Next serialized request retains written date and time');
+});
+
+test('Director-mode Send saves the player first, persists the contract before narration, and ignores conflicting scene tags',async()=>{
+ let pending=null,h;
+ const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ h=await harness({extraStubs:{'director-store.js':{discardPendingDirector:async()=>{},getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn,source)=>{assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);pending={...turn,source,status:'pending'};return pending;}}}});
+ Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'director-profile',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'narrator-profile',profiles:[{id:'narrator-profile',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'director-profile',endpoint:'https://director.test',apiKey:'small-key',modelId:'director'}]});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,memory:{scene:true}})});
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'At dinner',scene:'date: 21/10/738 · time: Hour 20 · place: Inn · present: Nera'}],hasEarlier:false});h.calls.messageOrder=2;
+ h.calls.onRequest=body=>{if(body.model==='director'){assert.equal(pending,null);h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'completed',objective:'Finish dinner',stopCondition:'Stop before the next player action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{hour:21}}});}else{assert.ok(pending);h.calls.response='The plates are cleared.\n<scene>date: 22/10/738 · time: Hour 4 · place: Palace · present: Stranger</scene>';}};
+ h.el('chat-input').value='Finish dinner';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.calls.requests.length,2,JSON.stringify({pending,requests:h.calls.requests.map(r=>r.model),messages:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(h.calls.requests[0].model,'director');assert.equal(h.calls.requests[1].model,'narrator');
+ const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];assert.match(saved.scene,/Hour 21/);assert.match(saved.scene,/place: Inn/);assert.ok(saved.directorTurnId);assert.ok(saved.reviewWarnings.some(w=>/disagreed/.test(w)));
+ assert.ok(chat.memorySnapshot().sentContext.director.requestBody);assert.equal(h.state.busy,false);
+});
+
+test('Cut-off Director Re-plan preserves the original reply and provides Continue replacement recovery',async()=>{
+ let h,pending;const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ const old={id:'old-director',version:1,status:'completed',before:seed,after:seed,contract:{version:1,action:'narrate',transition:'unchanged',objective:'Dinner',stopCondition:'Stop',memoryIds:[],requiredMemoryIds:[],updates:{}},assistantId:'a',previousCheckpoint:null};
+ h=await harness({extraStubs:{'director-store.js':{getDirectorTurn:async(_sid,id)=>id===old.id?old:pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};h.calls.sessionDocs.story.directorPending=t.id;return pending;},discardPendingDirector:async()=>{}}}});
+ Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'large',profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,directorCheckpoint:old.id,memory:{scene:true}})});
+ h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Dinner'},{id:'a',order:2,role:'assistant',content:'Original dinner reply',directorTurnId:old.id,narratorTurn:1}],hasEarlier:false});
+ h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({...old.contract,updates:{scene:{hour:21}}}):'Incomplete replacement'},finish_reason:body.model==='director'?'stop':'length'}]};};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Re-plan').click();
+ for(let i=0;i<100 && h.state.busy;i++)await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal((h.calls.overwrites ?? []).length,0);assert.equal(chat.memorySnapshot().session.directorState.scene.hour,20);
+ assert.ok(h.el('message-list').querySelectorAll('button').some(b=>b.textContent==='Continue replacement'),JSON.stringify({requests:h.calls.requests.map(r=>r.model),messages:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(h.state.busy,false);
+ h.calls.onRequest=()=>{h.calls.responseData={choices:[{message:{content:'The replacement finishes.'},finish_reason:'stop'}]};};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Continue replacement').click();
+ for(let i=0;i<100 && h.state.busy;i++)await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(h.calls.requests.length,3);assert.equal(h.calls.overwrites.length,1);assert.ok(h.calls.overwrites[0][2].content.includes('Incomplete replacement'));assert.ok(h.calls.overwrites[0][2].content.includes('The replacement finishes.'));assert.equal(h.calls.overwrites[0][2].truncated,false);
 });

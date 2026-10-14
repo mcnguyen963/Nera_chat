@@ -1,3 +1,4 @@
+import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
 import * as loreStore from './lore-store.js';
 import {writeInitialStorySettings,ensureStorySettings} from './story-settings-store.js';
 import {assertSnapshotRevisions} from './story-settings.js';
@@ -95,7 +96,7 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     await storeUnsavedReply(owner,sessionId,null);
     deletionNotice(sessionId);
     await waitForStoryWrites(sessionId);
-    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings']) {
+    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns']) {
       const snap=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,name));
       for(let i=0;i<snap.docs.length;i+=450) {
         const batch=writeBatch(db);
@@ -214,6 +215,14 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
   }
 
   const lastSelectedOrder=selected.at(-1)?.order ?? 0;
+  const directorTurns=source.directorState || selected.some(m=>m.directorTurnId) ? (await exportDirectorTurns(sourceId,owner)).filter(t=>t.status==='completed' && (t.order ?? Infinity)<=lastSelectedOrder) : [];
+  const lastDirectorId=selected.filter(m=>m.directorTurnId && !m.directorIncomplete).at(-1)?.directorTurnId;
+  const directorCheckpoint=directorTurns.find(t=>t.id===source.directorCheckpoint && t.manual && (t.order ?? Infinity)<=lastSelectedOrder) ?? directorTurns.find(t=>t.id===lastDirectorId);
+  if(source.directorState || source.directorPending || selected.some(m=>m.directorTurnId)){
+    data.directorState=directorCheckpoint?.after ?? null;data.directorCheckpoint=directorCheckpoint?.id ?? null;data.directorPending=null;data.directorRevision=0;data.directorStateHistoryOrder=directorCheckpoint?.order ?? lastSelectedOrder;data.directorAbandonedTurnIds=[...(source.directorAbandonedTurnIds ?? []),...selected.filter(m=>m.directorIncomplete).map(m=>m.directorTurnId)].filter(Boolean);
+    data.directorNeedsReview=!!source.directorNeedsReview || selected.some(m=>m.directorIncomplete);
+  }
+
   data.memoryInvalidations=(source.memoryInvalidations ?? []).filter(i=>(i.fromOrder ?? i.order ?? Infinity)<=lastSelectedOrder);
   data.contentEdits=(source.contentEdits ?? []).filter(i=>i.order<=lastSelectedOrder);
   if(data.memoryState){
@@ -235,6 +244,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     if (owner !== currentUid()) throw new Error('Account changed; session copy cancelled.');
     await writeInitialStorySettings(id,sourceSettings.values,owner);
     await copyLore(sourceId,id,selected.at(-1)?.order ?? 0);
+    if(directorTurns.length)await importDirectorTurns(id,directorTurns,owner);
     await runTransaction(db,async tx=>{
       const fresh=assertStory((await tx.get(sessionDoc(sourceId,owner))).data());
       assertSnapshotRevisions(capturedSource,fresh);

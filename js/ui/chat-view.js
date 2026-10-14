@@ -1,3 +1,7 @@
+import { discardPendingDirector } from '../director-store.js';
+import { prepareDirectorTurn } from '../director-turn.js';
+import { directorScene, directorSceneWarnings } from '../director-state.js';
+import { requestSource } from '../continuity.js';
 import { createPlanJumpControl } from './plan-jump.js';
 import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
@@ -112,7 +116,7 @@ const memoryStories = new Map();
 let lastMemoryReport = null;
 let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
@@ -127,7 +131,7 @@ function rememberMemoryStory() {
   if (session && anyMemory(normalizeMemory(session.memory))) memoryStories.set(session.id,{ ...memorySnapshot(),owner:currentUid() });
 }
 function syncLore() {
-  const wanted = session && (anyMemory(normalizeMemory(session.memory)) || managerOpen);
+  const wanted = session && (anyMemory(normalizeMemory(session.memory)) || state.storySettings?.values?.narrationMode==='director' || managerOpen);
   if (!wanted) {clearTimeout(loreRetryTimer); loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreReady = Promise.resolve(); updateMemoryChip(); return; }
   if (loreSessionId === session.id) return;
   loreUnsub?.();
@@ -146,7 +150,7 @@ function syncLore() {
 // Fields that can change the context or the caches needed to build it.
 function preparationKey(story) {
   return JSON.stringify([story?.historyRevision ?? 0,story?.loreRevision ?? 0,
-    story?.storySettingsRevision ?? 0,story?.longTermPlan,story?.allowLlmPlanUpdates,
+    story?.storySettingsRevision ?? 0,story?.directorRevision ?? 0,story?.directorPending,story?.directorNeedsReview,story?.longTermPlan,story?.allowLlmPlanUpdates,
     story?.activeSummaryMessageId,story?.breakpointOrder,story?.memory,story?.memoryState]);
 }
 async function reconcileStory(token = null) {
@@ -176,7 +180,7 @@ async function prepareStoryDocument(fresh,token = null) {
   session = fresh;
   if (historyRevision !== (fresh.historyRevision ?? 0)) historyMessages = null;
   syncLore();
-  if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate) {
+  if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate || state.storySettings?.values?.narrationMode==='director') {
     try {await loreReady;check();} catch {check();syncLore();await loreReady;check();}
     if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) {
       const entries = await getLore(sid);check();
@@ -600,7 +604,7 @@ function subscribeChat(sessionId) {
       chatRetry=0;chatStatus='ok';el.contextLabel.textContent=el.contextLabel.textContent.replace(/ · (?:offline|reconnecting)$/,'');
       if(!snap.exists() || snap.data().deleting){const deletedId=state.sessionId;forgetChatSession(deletedId);session=null;const clear=()=>{if(state.sessionId===deletedId){setSession(null);showTransientInfo('This story was deleted.');}};if(busy){busyGate.active?.abort?.();document.addEventListener('turn-finished',clear,{once:true});}else clear();return;}
       const previous = session;
-      if (snap.exists() && (snap.data().historyRevision ?? 0) < (previous?.historyRevision ?? 0)) return;
+      if (snap.exists() && ((snap.data().historyRevision ?? 0) < (previous?.historyRevision ?? 0) || (snap.data().directorRevision ?? 0) < (previous?.directorRevision ?? 0))) return;
       sessionSnapshotVersion++;
       session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
       if (historyRevision !== (session?.historyRevision ?? 0)) historyMessages = null;
@@ -819,7 +823,7 @@ function renderMessages(msgs) {
 }
 
 export function sameRenderedMessage(a,b) {
-  return a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
+  return a.directorTurnId===b.directorTurnId && a.directorIncomplete===b.directorIncomplete && a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
     (a.revision ?? 0)===(b.revision ?? 0) && a.acceptance===b.acceptance &&
     Boolean(a.editedAt)===Boolean(b.editedAt) && Boolean(a.ooc)===Boolean(b.ooc) && Boolean(a.truncated)===Boolean(b.truncated) &&
     JSON.stringify(a.planJump ?? null)===JSON.stringify(b.planJump ?? null) &&
@@ -884,6 +888,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
 
   if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
+    if(m.role==='assistant' && m.directorTurnId)actions.appendChild(actionBtn('Re-plan',()=>{if(!busy)void regenerateMessage(m,true);}));
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
@@ -1200,7 +1205,7 @@ function clearLocalSummary() {
   queueCacheSave();
 }
 
-async function regenerateMessage(message) {
+async function regenerateMessage(message, replan = false) {
   const requestedSessionId = state.sessionId;
   if(busy)return;
   while(loreWritesPending()){await waitForLoreWrites();if(requestedSessionId!==state.sessionId)return;}
@@ -1214,10 +1219,10 @@ async function regenerateMessage(message) {
     }
     assertActive(token);
     const target=all.find(m=>m.id===message.id);
-    if(target.lastContinuation!=null) {
+    if(target.lastContinuation!=null && !replan) {
       const prefix=continuationPrefix(target);
-      await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:prefix,overwriteId:target.id},token);
-    } else await runAssistantTurn({reconciled:true,messages:all,upToOrder:target.order,overwriteId:target.id},token);
+      await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:prefix,overwriteId:target.id,...(target.directorTurnId ? {directorReuseId:target.directorTurnId} : {})},token);
+    } else await runAssistantTurn({reconciled:true,messages:all,upToOrder:target.order,overwriteId:target.id,replan},token);
   } catch (err) {
     if(!(err instanceof StaleTurn))showTransientError(err);
   } finally {releaseBusy(token);}
@@ -1353,6 +1358,7 @@ async function handleSend(e) {
   try {
     const planJump=planJumpControl?.get();
     if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
+    if(settings.narrationMode==='director' && session.directorPending)throw new Error('Finish or discard the pending Director narration before sending.');
     const baseHistory=historyMessages,baseRevision=historyRevision,baseSession=session;
     const snapshotVersion=sessionSnapshotVersion;
     const userResult = await messagesApi.addMessage(session.id, { role: "user", content: text,...(planJump ? {planJump} : {}) });
@@ -1421,19 +1427,29 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     }
     let sourceSession = structuredClone(session);
     if(settings._storySettingsRevision!=null)sourceSession.storySettingsRevision=settings._storySettingsRevision;
+    const directorMode=settings.narrationMode==='director';
+    let directorTurn=null,lastDirectorRequest=null;
+    if(directorMode){
+      showTransientInfo('Directing…');
+      directorTurn=await waitForPreparation(prepareDirectorTurn(sourceSession,settings,sourceMessages,structuredClone(loreEntries),opts,{signal:controller.signal,check:()=>assertActive(token),onRequest:serialized=>{lastDirectorRequest={requestBody:JSON.parse(serialized),sentAt:Date.now()};}}),controller);
+      assertActive(token);
+      if(directorTurn.contract.action==='wait'){showTransientInfo(directorTurn.contract.objective);finishPetTurn('ready',petTurn);return;}
+      opts={...opts,directorTurn};
+      showTransientInfo('Narrating…');
+    }
     let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
     if(opts.savedUserId){
       validateSavedStorySettings();
-      if(preparationKey(session)!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
+      if(preparationKey({...session,directorPending:sourceSession.directorPending})!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
         throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
     }
     startStreamUI(prefix);turnStream=streamState;
-    let result,stopReason=null;
+    let result,stopReason=null;const narratorStarted=Date.now();
     try {
       result=await chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
         const requestBody=JSON.parse(serialized);
-        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now()});
+        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
       },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
     } catch(error) {
       assertActive(token);
@@ -1444,19 +1460,22 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     vibration.stop();
     const {content,thinking,finishReason,usage}=result;
     assertActive(token);
+    if(directorMode && lastSentContext){lastSentContext.narratorElapsedMs=Date.now()-narratorStarted;lastSentContext.narratorUsage=usage ?? null;}
     const truncated = finishReason === 'length';
     lastProviderUsage = usage?.prompt_tokens != null ? { sessionId:sid,promptTokens:usage.prompt_tokens,estimate:built.usedTokens } : null;
     const fresh=session;
-    const mem=normalizeMemory(sourceSession.memory),sceneEnabled=mem.scene;
+    const mem=normalizeMemory(sourceSession.memory),sceneEnabled=directorMode || mem.scene;
     const out=readSceneOutput(content,{sceneEnabled}),clean=out.clean;
-    let planThread=sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
+    let planThread=!directorMode && sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
     if (truncated && !clean) throw new Error('The output limit left no narrative reply. Raise Max response tokens or lower the reasoning budget.');
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
     const userText=opts.continuationId ? '' : normalizeAdDirective(sourceMessages.filter(m => m.role==='user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
-    const inputKind=classifyUserInput(userText),ooc=opts.continuationId ? false : inputKind==='ooc' || inputKind==='question' && !out.scene;
+    const inputKind=classifyUserInput(userText),ooc=directorMode ? directorTurn.contract.action==='answer' : opts.continuationId ? false : inputKind==='ooc' || inputKind==='question' && !out.scene;
     const prior=latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
     let acceptedScene={scene:null,sceneMeta:null},sceneWarning=null;
-    if (sceneEnabled && !ooc) {
+    if (directorMode) {
+      acceptedScene={scene:directorScene(truncated ? directorTurn.before : directorTurn.after),sceneMeta:{kind:'director',stale:false,source:'director',turnId:directorTurn.id},warnings:directorSceneWarnings(out.scene,directorTurn.after)};
+    } else if (sceneEnabled && !ooc) {
       acceptedScene=carryScene(prior);
       if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene,calendar:mem.calendar});
       else if (!truncated) {
@@ -1480,6 +1499,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       ...(acceptedScene.sceneMeta?.kind==='carried' ? ['No scene tag; previous scene carried.'] : [])] : [];
     let message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
       scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
+      ...(directorMode ? {directorTurnId:directorTurn.id,directorIncomplete:truncated} : {}),
       responseDiagnostics:{finishReason:result.originalFinishReason ?? finishReason,classification:result.failureClassification ?? null,error:result.originalError ?? null},
       ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
     if(prefix) {
@@ -1488,10 +1508,11 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       }
       if(!planThread)message.planThread=prefix.planThread ?? null;
       message=appendContinuation(prefix,message);
+      if(directorMode){message.truncated=truncated;message.directorIncomplete=truncated;}
     }
     updatePetPhase('saving',petTurn);
     let saved;
-    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:prefix?.order ?? opts.upToOrder ?? null,continuation:!!prefix,sourceRevision:sourceSession.historyRevision ?? 0};
+    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:prefix?.order ?? opts.upToOrder ?? null,continuation:!!prefix,sourceRevision:sourceSession.historyRevision ?? 0,...(opts.replan || opts.replanReplacement ? {replanReplacement:true} : {}),...(directorMode ? {expectedSource:requestSource(sourceSession)} : {})};
     if(streamState)streamState.savedId=pendingReply.id;
     try {
       const result=await saveNarration(pendingReply);
@@ -1519,6 +1540,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
     lastMemoryReport = built.report;
+    if(directorMode && truncated)return;
     finishPetTurn('ready',petTurn);
     try {
     const backoff=summaryBackoff.get(sid) ?? 0;if(backoff)summaryBackoff.set(sid,backoff-1);
@@ -1546,8 +1568,10 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
 }
 
 async function saveNarration(reply,asNew=false) {
+  if(reply.replanReplacement && reply.message.truncated)throw new Error('Replacement is incomplete. Continue it before saving; the previous reply is still kept.');
+  if(asNew && reply.message.directorTurnId)throw new Error('Director narration must be saved with its original contract. Re-plan after a conflict.');
   if(asNew && reply.continuation)throw new Error('A continuation must replace its original reply.');
-  const expectedSource={historyRevision:reply.sourceRevision};
+  const expectedSource=reply.expectedSource ?? {historyRevision:reply.sourceRevision};
   if(reply.overwriteId && !asNew){
     const result=await messagesApi.overwriteMessage(reply.sid,reply.overwriteId,reply.message,reply.order,{},expectedSource);
     return {...result,message:result.replacement};
@@ -1566,7 +1590,7 @@ function renderUnsavedReply() {
   unsavedNode?.remove();unsavedNode=null;
   const reply=unsavedReplies.get(unsavedKey(currentUid(),state.sessionId));if(!reply || !el.list)return;
   const wrap=document.createElement('div');wrap.className='msg assistant unsaved';
-  const label=document.createElement('div');label.className='msg-meta';label.textContent='Not saved'+(reply.conflict ? ' · story changed on another device' : '');
+  const label=document.createElement('div');label.className='msg-meta';label.textContent=(reply.replanReplacement ? 'Replacement cut off · original reply kept' : 'Not saved')+(reply.conflict ? ' · story changed on another device' : '');
   const body=document.createElement('div');body.className='msg-content';body.textContent=reply.message.content;
   const controls=document.createElement('div');controls.className='msg-actions';
   const retry=asNew=>historyAction('save-reply',async token=>{
@@ -1583,8 +1607,10 @@ function renderUnsavedReply() {
       clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[result.message]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');
     }catch(error){if(error.name==='HistoryConflict'){reply.conflict=true;void storeUnsavedReply(reply.owner,reply.sid,reply);renderUnsavedReply();}throw error;}
   });
-  controls.append(actionBtn('Save again',()=>retry(false)),actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(confirm('Discard this unsaved reply?')){clearUnsaved(reply.owner,reply.sid);updateWelcome();}}));
-  if(reply.conflict && !reply.continuation)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
+  if(reply.replanReplacement && reply.message.truncated)controls.append(actionBtn('Continue replacement',()=>historyAction('continue-replacement',async token=>{await reconcileStory(token);assertActive(token);const all=await ensureHistory();assertActive(token);const target=all.find(m=>m.id===reply.overwriteId);if(!target)throw new Error('The original reply was deleted. Copy the replacement text.');clearUnsaved(reply.owner,reply.sid);await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:{...target,...reply.message},overwriteId:target.id,directorReuseId:reply.message.directorTurnId,replanReplacement:true},token);})));
+  if(!(reply.replanReplacement && reply.message.truncated))controls.append(actionBtn('Save again',()=>retry(false)));
+  controls.append(actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(!confirm('Discard this unsaved reply?'))return;if(reply.replanReplacement)return historyAction('discard-replacement',async token=>{await discardPendingDirector(reply.sid,reply.expectedSource);assertActive(token);clearUnsaved(reply.owner,reply.sid);await reconcileStory(token);updateWelcome();});clearUnsaved(reply.owner,reply.sid);updateWelcome();}));
+  if(reply.conflict && !reply.continuation && !reply.message.directorTurnId)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
   wrap.append(label,body,controls);if(reply.message.thinking)wrap.append(buildThinking(reply.message.thinking));el.list.append(wrap);unsavedNode=wrap;
 }
 
