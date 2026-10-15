@@ -2018,7 +2018,56 @@ test('Cached edits close immediately, keep scrolling unlocked, and reach the nex
  assert.equal(h.el('message-list').querySelector('.msg-editor'),null);assert.equal(h.state.busy,false);assert.equal(h.calls.editReads,undefined);
  assert.ok(chat.memorySnapshot().messages.some(m=>m.content==='Locally corrected turn'),JSON.stringify({messages:chat.memorySnapshot().messages,edits:h.calls.edits,ui:h.el('message-list').children.map(x=>x.textContent)}));
  Object.assign(h.state.settings,{modelId:'model',apiKey:'key',streaming:false});h.calls.response='Based on correction';h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
- assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Locally corrected turn')));release();
+ assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Locally corrected turn')));
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Locally corrected turn'));
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Based on correction'));release();
+});
+test('Opening a story reconnects a background queue to visible edits and the next reply',async()=>{
+ const h=await harness(),local=await h.use('local-story-store.js');
+ const messages=[{id:'u',order:1,role:'user',content:'Original action',revision:0},{id:'a',order:2,role:'assistant',content:'Original reply'}];
+ await local.openStoryStore('improvement',{session:{id:'improvement',historyRevision:0,nextOrder:2,storySettingsRevision:1},messages,turns:{}},()=>{});
+ await openImprovementChat(h,{},messages);await new Promise(resolve=>setImmediate(resolve));
+ h.calls.editMessage=()=>new Promise(()=>{});
+ const list=h.el('message-list'),bubble=list.children.find(n=>n.dataset.messageId==='u');
+ await bubble.querySelectorAll('button').find(b=>b.textContent==='Edit').click();
+ bubble.querySelector('.msg-editor').value='Corrected visible action';
+ await bubble.querySelector('.msg-actions').children.find(b=>b.textContent==='Save').click();
+ assert.ok(list.querySelectorAll('.msg-content').some(n=>n.textContent==='Corrected visible action'),'Save must replace the visible text');
+ h.calls.response='New visible narration';h.el('chat-input').value='Continue visibly';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ for(const text of ['Continue visibly','New visible narration'])assert.ok(list.querySelectorAll('.msg-content').some(n=>n.textContent===text),text);
+ assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Corrected visible action')));
+});
+test('Reattaching a detached queue preserves a newer confirmed save over the displayed snapshot',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Stale displayed action',revision:0}]);
+ await new Promise(resolve=>setImmediate(resolve));
+ const local=await h.use('local-story-store.js'),store=local.storyStore('improvement');local.closeStoryStores();
+ h.calls.editMessage=async()=>({});
+ store.enqueue('edit',{id:'u',order:1,content:'Newer confirmed action',expectedRevision:0});await store.flush();
+ assert.equal(store.status.pending,0);assert.equal(store.view.session.historyRevision,1);
+ const bubble=h.el('message-list').children.find(n=>n.dataset.messageId==='u');
+ await bubble.querySelectorAll('button').find(b=>b.textContent==='Edit').click();
+ assert.equal(bubble.querySelector('.msg-editor').value,'Newer confirmed action');
+ await bubble.querySelector('.msg-actions').children.find(b=>b.textContent==='Cancel').click();
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Newer confirmed action'));
+ assert.equal(store.view.session.historyRevision,1);
+});
+test('Returning to a story displays pending edits without leaking them into another story',async()=>{
+ const h=await harness(),messages=[{id:'shared',order:1,role:'user',content:'Original story action',revision:0}];
+ const chat=await openImprovementChat(h,{},messages);await new Promise(resolve=>setImmediate(resolve));
+ h.calls.editMessage=()=>new Promise(()=>{});
+ const local=await h.use('local-story-store.js'),store=local.storyStore('improvement');
+ chat.setSession('other');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'other',data:()=>({title:'Other story'})});
+ await h.calls.latestCallbacks.at(-1)({messages:[{id:'shared',order:1,role:'user',content:'Other story action'}],hasEarlier:false});
+ store.enqueue('edit',{id:'shared',order:1,content:'Pending original story correction',expectedRevision:0});
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Other story action'));
+ assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Pending original story correction'));
+ chat.setSession('improvement');await new Promise(resolve=>setTimeout(resolve,0));
+ h.calls.sessionCallbacks.at(-1)({id:'improvement',data:()=>({title:'Story',historyRevision:0})});
+ await h.calls.latestCallbacks.at(-1)({messages,hasEarlier:false});await new Promise(resolve=>setImmediate(resolve));
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Pending original story correction'));
+ assert.equal(local.storyStore('improvement'),store);assert.equal(store.status.pending,1);
 });
 test('Cached deletion is immediate even while its Firebase transaction never settles',async()=>{
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Remove this'},{id:'a',order:2,role:'assistant',content:'Keep this'}]);

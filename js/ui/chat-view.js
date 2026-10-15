@@ -92,11 +92,20 @@ function updateSyncStatus(){
   node.title=!syncStatus.durable && syncStatus.pending?'Local storage is unavailable. Keep this page open until changes sync.':syncStatus.error?.message ?? '';node.hidden=!node.textContent;
 }
 async function ensureLocalStory() {
-  const sid=state.sessionId,owner=currentUid();
+  const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
+  const active=()=>sid===state.sessionId && owner===currentUid() && epoch===historyEpoch;
+  const observe=(view,status)=>{if(active())applyWorkingStory(view,status);};
   let store=storyStore(sid);
-  if(!store){const messages=await ensureHistory();if(sid!==state.sessionId || owner!==currentUid())throw new StaleTurn();
-    store=await openStoryStore(sid,{session:{...session,storySettingsRevision:state.storySettings?.revision ?? session.storySettingsRevision ?? 0},messages,turns:{}},(view,status)=>{if(currentUid()===owner && state.sessionId===sid)applyWorkingStory(view,status);});
-  }else if(!store.status.pending && preparationKey(store.view.session)!==preparationKey(session))store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+  if(!store){const messages=await ensureHistory();if(!active())throw new StaleTurn();
+    store=await openStoryStore(sid,{session:{...session,storySettingsRevision:state.storySettings?.revision ?? session.storySettingsRevision ?? 0},messages,turns:{}},observe);
+  }else{
+    // Reopening a cached story must reconnect its view, including queues opened
+    // by background sync. Never replace newer local work with an older snapshot.
+    const upToDate=['historyRevision','directorRevision','loreRevision','storySettingsRevision'].every(key=>(session[key] ?? 0)>=(store.view.session[key] ?? 0));
+    if(!store.status.pending && upToDate && preparationKey(store.view.session)!==preparationKey(session))store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+    store.observe=observe;observe(store.view,store.status);
+  }
+  if(!active())throw new StaleTurn();
   return store;
 }
 function cancelGeneration(token,controller,vibration,petTurn){
