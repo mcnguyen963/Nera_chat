@@ -321,7 +321,7 @@ async function importLoreImpl(sid,plan,_existing,{isCurrent=()=>true,book=plan.b
   const scoped=book!=null;
   const check=()=>{if(sid.uid!==currentUid() || !isCurrent())throw new Error('Navigation or account changed; import cancelled. Refresh the preview.');};
   check();
-  if(scoped && (!['characters','locations','facts','events'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
+  if(scoped && (!['characters','locations','facts','events','plan'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
   const writes=[...new Map(plan.writes.map(w=>[w.id,w])).values()];
   if(writes.some(w=>w.data?.schemaVersion===3) && (await getDocFromServer(sessionRef(sid))).data()?.loreSchemaVersion!==3)throw new Error('Migrate this story to selective lorebook records before importing version 3 JSON.');
   for(const w of writes) {
