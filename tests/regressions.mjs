@@ -2125,13 +2125,14 @@ test('save-first Send preserves newer subscription metadata at the committed his
 async function bookPreview({book='characters',mode='merge',empty=false}={}) {
  const ctx=await cardUI(),{h,f,l,lore,root}=ctx;
  const fact=l.makeEntry('facts','World'),closed=l.makeEntry('events','Closed quest',{kind:'thread',status:'closed'}),timeline=l.makeEntry('events','Timeline',{kind:'timeline'});
- h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ const scheduled=l.makeEntry('plan','Festival',{schedule:{start:'21/10/738',end:'22/10/738',status:'pending',phases:[]}});scheduled.sections.text.text='Keep the invitation pending.';
+ h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
  lore.openLorebooks({screen:'list',book});await namedButton(root,'Import book…').click();
  const selects=root.querySelectorAll('select');assert.equal(selects[0].value,'merge');assert.equal(selects[1].value,'mine');selects[0].value=mode;
  await namedButton(root,'Paste text').click();const paste=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);paste.querySelector('textarea').value=f.toJson(empty?[]:h.calls.loreEntries,{books:empty?[book]:undefined});await namedButton(paste,'Read').click();
  return {...ctx,preview:h.document.body.querySelectorAll('.memory-sub-sheet').at(-1)};
 }
-for(const book of ['characters','locations','facts','events'])test('category action previews only '+book+' and uses captured destination',async()=>{
+for(const book of ['characters','locations','facts','events','plan'])test('category action previews only '+book+' and uses captured destination',async()=>{
  const {h,preview}=await bookPreview({book,mode:'replace'});assert.equal(preview.querySelectorAll('summary').length,1);await namedButton(preview,'Import').click();assert.equal(h.calls.bookImports.length,1);const [origin,plan,,guard]=h.calls.bookImports[0];assert.equal(origin.id,'improvement');assert.equal(origin.uid,'test-user');assert.equal(plan.book,book);assert.equal(guard.book,book);assert.ok(plan.writes.every(w=>w.delete || w.data.book===book));
  const ctx=await bookPreview({book,mode:'replace',empty:true});assert.ok(ctx.preview.querySelector('summary').textContent.includes('0 new'));if(book==='characters')assert.ok(ctx.preview.querySelector('summary').textContent.includes('2 removed'));
 });
@@ -2148,10 +2149,11 @@ for(const change of ['lore','choices','story','account','category','close'])test
 test('book Undo uses captured story and category after navigating away',async()=>{
  const {h,lore,preview}=await bookPreview();await namedButton(preview,'Import').click();lore.openLorebooks({screen:'list',book:'facts'});h.state.sessionId='another';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();assert.equal(h.calls.cardRestores[0][0].id,'improvement');assert.equal(h.calls.cardRestores[0][3].book,'characters');
 });
-for(const book of ['characters','locations','facts','events'])for(const format of ['md','json'])test('Export book includes hidden '+book+' cards in '+format,async()=>{
+for(const book of ['characters','locations','facts','events','plan'])for(const format of ['md','json'])test('Export book includes hidden '+book+' cards in '+format,async()=>{
  const {h,l,f,lore,root,card,other}=await cardUI(),exports=[];
  const timeline=l.makeEntry('events','Timeline',{kind:'timeline'}),closed=l.makeEntry('events','Closed',{kind:'thread',status:'closed'}),open=l.makeEntry('events','Open',{kind:'thread',status:'open'}),fact=l.makeEntry('facts','World'),place=l.makeEntry('locations','Inn');
- h.calls.loreEntries=[card,other,timeline,closed,open,fact,place];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ const scheduled=l.makeEntry('plan','Festival',{schedule:{start:'21/10/738',end:'22/10/738',status:'pending',phases:[]}});scheduled.sections.text.text='Keep the invitation pending.';
+ h.calls.loreEntries=[card,other,timeline,closed,open,fact,place,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
  lore.openLorebooks({screen:'list',book,filter:'always'});const search=root.querySelector('input');search.value='No match';await search.dispatchEvent({type:'input'});
  const create=h.document.createElement;h.document.createElement=tag=>{const e=create(tag);if(tag==='a')e.click=async()=>exports.push({name:e.download,text:await (await fetch(e.href)).text()});return e;};
  await namedButton(root,'Export book…').click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);const select=dialog.querySelector('select');select.value=format;await select.dispatchEvent({type:'change'});await namedButton(dialog,'Export book').click();await new Promise(r=>setImmediate(r));
