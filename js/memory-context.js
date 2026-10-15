@@ -1,3 +1,4 @@
+import { directorCast } from './director-cast.js';
 import { directorScene } from './director-state.js';
 import { buildReplyBrief, replySubjects } from './narrator-brief.js';
 import { explicitStorySettings } from './story-settings.js';
@@ -23,7 +24,7 @@ function stripOcc(content) {
 }
 // Memory mode uses additive message costs and renders the final wire request once.
 export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd, accountingRetry = false }) {
-  const director=settings.narrationMode==='director', turn=opts.directorTurn;
+  const director=settings.narrationMode==='director', turn=opts.directorTurn ? {...opts.directorTurn} : null;
   const mem = normalizeMemory(session.memory);
   if(director){mem.scene=true;mem.calendar={mode:'legacy',anchor:null};mem.lorebooks=true;}
   const limit = requestInputLimit(settings);
@@ -87,6 +88,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const contract = !director && mem.scene && mem.replyContract !== 'off' ? replyContract(mem.protagonist,session.longTermPlan) : '';
   if (contract) blocks.push({ key:'replyContract',label:'Current reply contract',tokens:await count(contract)+FRAME });
   if (mem.scene && current.missingStreak > 0) warnings.push('Recent narrative has missing scene metadata; the previous scene is retained.');
+  if(turn && !turn.cast)turn.cast=directorCast(turn,usableLore(opts.loreEntries ?? [],all,session,upTo).entries,{protagonist:mem.protagonist,limit:settings.directorFocusLimit ?? 5,currentText:latest?.content ?? '',recentText:raw.slice(-10).map(m=>m.content).join('\n')});
   let memory = '',briefText='',briefReport=null;
   if(turn){const initial=await buildReplyBrief({turn,userSource:latestUser?.id,fits:{},options:{},count,canRelocate:async()=>false});briefText=initial.text;briefReport=initial.report;}
   const gapInfo=() => {
@@ -174,7 +176,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
-  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds} : {})});
+  const selection = selectEntries(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds,directorBackgroundIds:turn.cast.backgroundCharacterIds} : {})});
   if(turn)for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);}}
   const scheduled = mem.lorebooks && mem.books.plan.on
     ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)

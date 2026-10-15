@@ -1,6 +1,7 @@
 // Prompt text lives only in Markdown. Resolve relative to this module for Pages subpaths.
 const files = {
   "director": "director.md",
+  "directorDefaultHashes": "director-default-hashes.md",
   "directorOutput": "director-output.md",
   "directorNarrator": "director-narrator.md",
   "continue": "continue.md",

@@ -9,7 +9,7 @@ const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySettings','current');
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
 const cache=new Map();let unsubscribe=null,epoch=0,snapshotRun=0;
-async function readDocument(data){if(![1,2,3,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
+async function readDocument(data){if(![1,2,3,4,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
 export async function preserveLegacyStorySeed(accountSettings) {
   const uid=currentUid(),ref=seedRef(uid);
   return runTransaction(db,async tx=>{

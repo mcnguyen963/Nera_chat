@@ -1,3 +1,4 @@
+import { normalizeName } from './lore-lines.js';
 import { latestScene, parseScene, sceneLine } from './scene.js';
 import { parseStoryDate, parseClock } from './story-calendar.js';
 export const DIRECTOR_VERSION = 1;
@@ -48,14 +49,14 @@ export function directorClockNeedsReview(session,messages,state,upToOrder=Infini
   const time=latestScene(messages,upToOrder,session.memory?.startingScene).scene?.time;
   return time && parseClock(time)!==null ? time : null;
 }
-export function parseDirectorContract(content, before, entries = []) {
+export function parseDirectorContract(content, before, entries = [], {protagonist='',focusLimit=5}={}) {
   let raw;
   try { raw = JSON.parse(String(content).trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i,'$1')); } catch { fail('returned invalid JSON. Retry or change the Director model.'); }
   if (!object(raw) || raw.version!==1 || !['narrate','answer','wait'].includes(raw.action) || !text(raw.objective,4000) || !raw.objective.trim() || !text(raw.stopCondition,2000) || !raw.stopCondition.trim() || !['attempted','blocked','completed','unchanged'].includes(raw.transition) || !Array.isArray(raw.memoryIds) || raw.memoryIds.length>100 || !Array.isArray(raw.requiredMemoryIds) || raw.requiredMemoryIds.length>100 || !object(raw.updates)) fail('invalid turn contract.');
   if (JSON.stringify(raw).length>60000) fail('turn contract is too large.');
   // Ignore unrecognized top-level fields rather than forwarding a second,
   // unvalidated state or ledger to the Narrator alongside canonical updates.
-  raw=Object.fromEntries(['version','action','transition','objective','stopCondition','memoryIds','requiredMemoryIds','updates'].map(key=>[key,raw[key]]));
+  raw=Object.fromEntries(['version','action','transition','objective','stopCondition','memoryIds','requiredMemoryIds','updates',...(Object.hasOwn(raw,'focusCharacterIds')?['focusCharacterIds']:[])].map(key=>[key,raw[key]]));
   // Essential cards are necessarily selected; omission from the optional list
   // does not change their meaning or authorize an unknown reference.
   raw.memoryIds=[...new Set([...raw.memoryIds,...raw.requiredMemoryIds])];
@@ -82,6 +83,15 @@ export function parseDirectorContract(content, before, entries = []) {
   }
   if(raw.action==='narrate')for(const group of groups)after[group]=after[group].filter(i=>!['closed','cancelled'].includes(i.status));
   after = validateDirectorState(after);
+  if(raw.focusCharacterIds!==undefined) {
+    const ids=raw.focusCharacterIds;
+    if(!Array.isArray(ids)||ids.length>focusLimit||new Set(ids).size!==ids.length||ids.some(id=>{
+      const e=entries.find(e=>e.id===id && e.book==='characters');
+      return !e || [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist)) || !after.scene.present.some(n=>[e.name,...(e.aliases ?? [])].some(name=>normalizeName(name)===normalizeName(n)));
+    }))fail('focusCharacterIds must contain distinct present NPC card IDs within the focus limit.');
+    raw.memoryIds=[...new Set([...raw.memoryIds,...ids])];
+    if(raw.memoryIds.length>100)fail('too many selected memory cards.');
+  }
   if(before.scene.date && after.scene.date===before.scene.date && before.scene.hour!==null && after.scene.hour!==null && after.scene.hour<before.scene.hour)fail('game-hour rollover needs the following date.');
   if (raw.action !== 'narrate' && JSON.stringify(after)!==JSON.stringify(before)) fail('answer-only and waiting contracts must keep state unchanged.');
   return {contract:raw,before:structuredClone(before),after};

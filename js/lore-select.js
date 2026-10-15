@@ -89,6 +89,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     };
     const pc = book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));
     for (const e of list) {
+      if(book==='characters' && sources.directorBackgroundIds?.includes(e.id) && !required.has(e.id) && !e.alwaysLoad && !(sources.records && (e.recordLayout?.records ?? []).some(r=>r.pinned))) {skipped.push({entryId:e.id,book,name:e.name,reason:'present in background; not in focus'});continue;}
       if(directorIds.has(e.id))add(e,4,'Director selection');
       if(start?.characters.includes(e.id) && book==='characters')add(e,3,'starting character');
       if(start?.place===e.id && book==='locations')add(e,3,'starting place');

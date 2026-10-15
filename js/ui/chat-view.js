@@ -1482,7 +1482,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     try {
       result=await chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
         const requestBody=JSON.parse(serialized);
-        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
+        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,timings:directorTurn.timings,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
       },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
     } catch(error) {
       assertActive(token);

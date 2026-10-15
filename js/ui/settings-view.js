@@ -244,7 +244,7 @@ function renderAll() {
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set('set-model-context',draft.modelContextTokens ?? '');
   const directorDefaults=defaultStorySettings();
-  set('set-narration-mode',draft.narrationMode ?? 'classic');set('set-director-input',draft.directorMaxInputTokens ?? 20000);set('set-director-output',draft.directorMaxOutputTokens ?? 4000);set('set-director-turns',draft.directorRecentTurns ?? 5);set('set-director-prompt',draft.directorSystemPrompt ?? directorDefaults.directorSystemPrompt);
+  set('set-narration-mode',draft.narrationMode ?? 'classic');set('set-director-input',draft.directorMaxInputTokens ?? 20000);set('set-director-output',draft.directorMaxOutputTokens ?? 4000);set('set-director-turns',draft.directorRecentTurns ?? 5);set('set-director-focus',draft.directorFocusLimit ?? 5);set('set-director-prompt',draft.directorSystemPrompt ?? directorDefaults.directorSystemPrompt);
   const directorProfiles=input('set-director-profile');directorProfiles.replaceChildren();
   const empty=document.createElement('option');empty.value='';empty.textContent='Choose a profile';directorProfiles.append(empty);
   for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;directorProfiles.append(option);}
@@ -372,7 +372,7 @@ function capture() {
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.modelContextTokens=raw('set-model-context').trim();
   draft.narrationMode=raw('set-narration-mode') || 'classic';draft.narratorProfileId=raw('set-narrator-profile');draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
-  for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5]])draft[key]=Number(raw(id) || fallback);
+  for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5],['directorFocusLimit','set-director-focus',5]])draft[key]=Number(raw(id) || fallback);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.directorNarratorSystemPrompt=raw("set-director-narrator-prompt");
   draft.directorNarratorPromptNeedsReview ??= false;
