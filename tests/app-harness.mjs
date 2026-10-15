@@ -16,6 +16,7 @@ export function appHarness({ stubs = {}, sources = {}, globals = {} } = {}) {
     const stub = stubs[path] ?? (path==='director-store.js' && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] && (stubs['sessions.js'] || stubs['messages.js']) ? {exportDirectorTurns:async()=>[],importDirectorTurns:async()=>{},getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{},resetDirectorState:async()=>{},discardPendingDirector:async()=>{}} : null) ?? (path==='story-settings-store.js' && stubs['sessions.js'] && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] ? {ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},preserveLegacyStorySeed:async()=>({})} : null);
     if(path==='sessions.js' && stub && !stub.getSessionFromServer)stub.getSessionFromServer=stub.getSession;
     if(path==='messages.js' && stub && !stub.ensureChunked)stub.ensureChunked=async()=>{};
+    if(path==='chat-cache.js' && stub){stub.loadStoryData ??= async()=>null;stub.saveStoryData ??= async()=>true;}
     const module = stub
       ? new vm.SyntheticModule(Object.keys(stub), function () {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);

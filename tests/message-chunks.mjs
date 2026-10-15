@@ -1243,3 +1243,39 @@ test('Separate Director Narrator instructions migrate old documents and survive 
   assert.equal(restored.values.directorNarratorSystemPrompt,'Reviewed prose rules');assert.equal(restored.values.directorNarratorPromptNeedsReview,false);assert.equal(restored.values.narratorProfileId,'selected-narrator');
  }
 });
+
+test('Queued operation receipts make add, edit and delete idempotent after an acknowledgement is lost',async()=>{
+ const h=await setup();const first=await h.api.addMessage('s',{role:'user',content:'Stable'},{id:'stable',operationId:'add-once'});
+ const revision=h.documents.get(h.sessionPath).historyRevision;
+ const duplicate=await h.api.addMessage('s',{role:'user',content:'Stable'},{id:'stable',operationId:'add-once'});
+ assert.equal(duplicate.message.id,first.message.id);assert.equal(h.documents.get(h.sessionPath).historyRevision,revision);
+ await h.api.editMessage('s','stable','Edited',first.order,{expectedRevision:0,operationId:'edit-once'});
+ const edited=h.documents.get(h.sessionPath).historyRevision;await h.api.editMessage('s','stable','Edited',first.order,{expectedRevision:0,operationId:'edit-once'});assert.equal(h.documents.get(h.sessionPath).historyRevision,edited);
+ await h.api.deleteMessage('s','stable',first.order,{operationId:'delete-once'});const deleted=h.documents.get(h.sessionPath).historyRevision;
+ await h.api.deleteMessage('s','stable',first.order,{operationId:'delete-once'});assert.equal(h.documents.get(h.sessionPath).historyRevision,deleted);
+ assert.equal([...h.documents.keys()].filter(k=>k.includes('/operationReceipts/')).length,3);
+});
+test('Warm queued edits use cached chunk discovery and never reload the message collection',async()=>{
+ const h=await setup(80);await h.api.ensureContinuityMetadata('s');const history=await h.api.getMessages('s');let collections=0;h.fault.onServerRead=async path=>{if(path.endsWith('/messageChunks'))collections++;};
+ const item=history.at(-1),source=h.documents.get(h.sessionPath);
+ await h.api.editMessage('s',item.id,'Corrected',item.order,{operationId:'warm',session:source,expectedSource:h.source.requestSource(source),expectedRevision:item.revision ?? 0});
+ assert.equal(collections,0);assert.ok(h.documents.has(h.sessionPath+'/operationReceipts/warm'));
+});
+
+test('Local Director completion and regeneration agree with the real transactional source revisions',async()=>{
+ const {appHarness}=await import('./app-harness.mjs'),{applyStoryOperation}=await appHarness()('local-story.js');
+ const h=await setup();await h.api.addMessage('s',{role:'user',content:'Look around'},{id:'user'});
+ const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};h.documents.get(h.sessionPath).directorState=seed;
+ const before={id:'s',...h.documents.get(h.sessionPath)},messages=await h.api.getMessages('s');let local={session:before,messages,turns:{}};
+ const turn={id:'director',before:seed,after:{...seed,scene:{...seed.scene,hour:21}},previousCheckpoint:null,contract:{action:'narrate'}};
+ local=applyStoryOperation(local,{id:'d',kind:'director',payload:{turn},createdAt:1});
+ const first=await h.director.savePendingDirectorTurn('s',turn,h.source.requestSource(before),{operationId:'director-once'});
+ const replay=await h.director.savePendingDirectorTurn('s',turn,h.source.requestSource(before),{operationId:'director-once'});assert.equal(first.id,replay.id);
+ const message={role:'assistant',content:'The clock strikes.',directorTurnId:'director'};
+ local=applyStoryOperation(local,{id:'reply',kind:'add',payload:{id:'reply',message},createdAt:2});
+ const saved=await h.api.addMessage('s',message,{id:'reply',operationId:'reply-once',expectedSource:h.source.requestSource(before)});
+ assert.deepEqual(JSON.parse(JSON.stringify(h.source.requestSource(local.session))),JSON.parse(JSON.stringify(h.source.requestSource(saved.session))));
+ const replacement={...message,content:'The clock rings.'};local=applyStoryOperation(local,{id:'rewrite',kind:'overwrite',payload:{id:'reply',message:replacement},createdAt:3});
+ const overwritten=await h.api.overwriteMessage('s','reply',replacement,saved.order,{},h.source.requestSource(saved.session),{operationId:'rewrite-once'});
+ assert.deepEqual(JSON.parse(JSON.stringify(h.source.requestSource(local.session))),JSON.parse(JSON.stringify(h.source.requestSource(overwritten.session))));
+});

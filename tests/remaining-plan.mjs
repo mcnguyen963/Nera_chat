@@ -1,3 +1,4 @@
+import {indexedDBFixture} from './indexeddb-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -118,10 +119,11 @@ test('L6 reorganized notes inherit only their matched source evidence instead of
  const u=use(),l=await u('lore-lines.js'),r=await u('memory-reorganize.js'),m=await u('memory-settings.js'),e=l.makeEntry('characters','Mira');e.sections.notes.lines=[{id:'a',text:'older',turn:2,src:4,when:'Day 1',at:1,by:'auto',sourceRevision:3,evidence:[{id:'m3',order:4,revision:0}]},{id:'b',text:'newer',turn:4,src:8,at:2,by:'auto',sourceRevision:8,evidence:[{id:'m7',order:8,revision:0}]}];const result=await r.runReorganizeBatch({settings,mem:m.normalizeMemory(),messages:history},[e],{[e.id]:['notes']},'',{complete:async()=>({content:'T3 [char] Mira | notes: combined older note'})});const note=result.previews[0].sections.notes[0];assert.equal(note.turn,2);assert.equal(note.src,4);assert.equal(note.sourceRevision,3);assert.deepEqual(plain(note.evidence),[{id:'m3',order:4,revision:0}]);
 });
 test('U8 IndexedDB writes initialize metadata once, retain three recent sessions and clear only the departing account',async()=>{
- const documents=new Map();let bulkReads=0;
- const db={transaction:()=>{const tx={};tx.objectStore=()=>({get:key=>request(()=>documents.get(key)),getAll:()=>{bulkReads++;return request(()=>[...documents.values()]);},getAllKeys:()=>request(()=>[...documents.keys()]),put:value=>documents.set(value.key,structuredClone(value)),delete:key=>documents.delete(key)});setTimeout(()=>tx.oncomplete?.(),0);return tx;}};
- const request=read=>{const r={};queueMicrotask(()=>{r.result=structuredClone(read());r.onsuccess?.();});return r;};
- const u=appHarness({globals:{indexedDB:{open:()=>{const r={result:db};queueMicrotask(()=>r.onsuccess?.());return r;}}}}),cache=await u('chat-cache.js');for(const sid of ['a','b','c','d','d'])await cache.saveChatCache('u',sid,{sid});assert.equal(bulkReads,1);assert.deepEqual(documents.get('meta:u').order,['d','c','b']);assert.equal(documents.has('u:a'),false);await cache.saveChatCache('other','x',{});await cache.clearChatCache('u');assert.ok(![...documents.keys()].some(k=>k.startsWith('u:') || k==='meta:u'));assert.ok(documents.has('other:x'));
+ const fixture=indexedDBFixture({sessions:[]});
+ const u=appHarness({globals:{indexedDB:fixture.indexedDB}}),cache=await u('chat-cache.js');
+ for(const sid of ['a','b','c','d','d'])await cache.saveChatCache('u',sid,{sid});
+ const documents=fixture.stores.get('sessions');assert.equal(fixture.bulkReads,1);assert.deepEqual(documents.get('meta:u').order,['d','c','b']);assert.equal(documents.has('u:a'),false);
+ await cache.saveChatCache('other','x',{});await cache.clearChatCache('u');assert.ok(![...fixture.stores.get('sessions').keys()].some(k=>k.startsWith('u:') || k==='meta:u'));assert.ok(fixture.stores.get('sessions').has('other:x'));
 });
 
 test('main adaptation: stopping preparation releases a hung operation and ignores its late result',async()=>{

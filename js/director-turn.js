@@ -13,7 +13,7 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const finishing=!!opts.continuationId && target?.truncated;
   const oldId=opts.directorReuseId ?? ((opts.overwriteId && (!opts.continuationId || finishing)) ? target?.directorTurnId : null);
   if(oldId && !opts.replan){
-    const old=await getDirectorTurn(session.id,oldId);
+    const old=await (hooks.getTurn ?? getDirectorTurn)(session.id,oldId);
     if(old?.status==='discarded')throw new Error('This contract was discarded. Use Re-plan to create a new one.');
     if(!old)throw new Error('Director checkpoint is missing. Re-plan the reply.');
     if(old.status==='completed' && session.directorPending && session.directorPending!==old.id)throw new Error('A replacement contract is pending. Use Re-plan or discard it in live state.');
@@ -22,14 +22,14 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
     check();return old;
   }
   if(!opts.overwriteId && session.directorPending){
-    const pending=await getDirectorTurn(session.id,session.directorPending);
+    const pending=await (hooks.getTurn ?? getDirectorTurn)(session.id,session.directorPending);
     if(pending?.status==='pending'){
       try{assertSource(session,pending.source);check();return pending;}catch(error){if(error.name==='AbortError')throw error;}
     }
   }
   let before=session.directorState ? validateDirectorState(session.directorState) : seedDirectorState(session,messages,entries);
   let previousCheckpoint=session.directorCheckpoint ?? null;
-  if(opts.replan && target?.directorTurnId){const old=await getDirectorTurn(session.id,target.directorTurnId);if(!old)throw new Error('Original Director state is missing.');before=old.before;previousCheckpoint=old.previousCheckpoint ?? null;let steps=0;while(previousCheckpoint && steps++<100){const prior=await getDirectorTurn(session.id,previousCheckpoint);check();if(!prior || prior.assistantId!==target.id)break;before=prior.before;previousCheckpoint=prior.previousCheckpoint ?? null;}}
+  if(opts.replan && target?.directorTurnId){const old=await (hooks.getTurn ?? getDirectorTurn)(session.id,target.directorTurnId);if(!old)throw new Error('Original Director state is missing.');before=old.before;previousCheckpoint=old.previousCheckpoint ?? null;let steps=0;while(previousCheckpoint && steps++<100){const prior=await (hooks.getTurn ?? getDirectorTurn)(session.id,previousCheckpoint);check();if(!prior || prior.assistantId!==target.id)break;before=prior.before;previousCheckpoint=prior.previousCheckpoint ?? null;}}
   const importedClock=directorClockNeedsReview(session,messages,before,opts.upToOrder ?? Infinity);
   if(importedClock)throw new Error('Story clock is '+importedClock+'. Director mode uses game hours 1–24. Choose a game hour in live state settings before continuing, or use Classic to keep minute precision.');
   if(opts.continuationId && !finishing && before.decisions.some(i=>!['closed','cancelled'].includes(i.status)))return {contract:{action:'wait',objective:'Respond to the pending player decision before continuing.'}};
@@ -58,6 +58,6 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const cast=directorCast(parsed,built.entries,{protagonist:session.memory?.protagonist,limit:settings.directorFocusLimit ?? 5,currentText:input,recentText:messages.slice(-10).map(m=>m.content).join('\n')});
   timings.validationMs=(globalThis.performance?.now?.() ?? Date.now())-validationStarted;
   const turn={cast,timings,previousCheckpoint,...(opts.replan && session.directorPending ? {replaces:session.directorPending} : {}),id:'director_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9),...parsed,playerBoundary:boundary,report:built.report,usage:result.usage ?? null,elapsedMs:Date.now()-started};
-  const persistenceStarted=(globalThis.performance?.now?.() ?? Date.now()),saved=await savePendingDirectorTurn(session.id,turn,source);
+  const persistenceStarted=(globalThis.performance?.now?.() ?? Date.now()),saved=await (hooks.saveTurn ?? savePendingDirectorTurn)(session.id,turn,source);
   return {...saved,timings:{...timings,pendingPersistenceMs:(globalThis.performance?.now?.() ?? Date.now())-persistenceStarted}};
 }
