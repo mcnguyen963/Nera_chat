@@ -34,7 +34,7 @@ test('Effective story settings and the production serializer send each role to i
  const store=await use('story-settings-store.js'),coordinator=await use('director-turn.js'),client=await use('llm-client.js'),effective=store.effectiveActiveSettings(),before={version:1,scene:{date:'21/10/738',hour:16,location:'Bench',present:['Nera','Lysia']},event:null,decisions:[],threads:[],commitments:[]};
  await coordinator.prepareDirectorTurn({id:'s',directorState:before},effective,[{id:'u',role:'user',order:1,content:'Confirm tomorrow’s appointment.'}],[]);
  await client.chatCompletion({settings:{...effective,streaming:false},messages:[{role:'user',content:'Narrate the contract.'}]});
- assert.equal(requests[0].model,'anthropic/claude-haiku-5.5:floor');assert.equal(requests[0].reasoning.effort,'medium');assert.equal(requests[0].provider.max_price.completion,.5);assert.equal(requests[0].response_format.type,'json_object');
+ assert.equal(requests[0].model,'anthropic/claude-haiku-5.5:floor');assert.equal(requests[0].reasoning.effort,'medium');assert.equal(requests[0].provider.max_price.completion,.5);assert.equal(requests[0].response_format.type,'json_schema');
  assert.equal(requests[1].model,'deepseek/deepseek-v4.1-flash:floor');assert.equal(requests[1].reasoning.effort,'high');assert.equal(requests[1].provider.max_price.completion,.4);assert.equal(requests[1].response_format,undefined);
  assert.equal(live.settings.activeProfileId,'global');assert.equal(live.settings.apiKey,'global-key');
 });

@@ -40,7 +40,7 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const task=directorTaskSettings(settings);
   let result;
   try {
-    result=await chatCompletion({settings:task,messages:built.apiMessages,...directorOutputOptions(task),signal:hooks.signal,onRequest:hooks.onRequest});
+    result=await chatCompletion({settings:task,messages:built.apiMessages,...directorOutputOptions(task,built),signal:hooks.signal,onRequest:hooks.onRequest});
   }catch(error){
     if(['length','max_tokens','max_output_tokens'].includes(String(error.finishReason ?? '').toLowerCase()))error.message='Director output limit was reached before a complete contract. Raise Director output tokens in story settings; this limit includes reasoning. No state was saved.';
     throw error;
@@ -49,7 +49,7 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const validationStarted=(globalThis.performance?.now?.() ?? Date.now());
   check();
   if(result.finishReason==='length' || !result.content?.trim())throw new Error('Director output was incomplete. Raise its output limit or retry.');
-  const parsed=parseDirectorContract(result.content,before,built.entries,{protagonist:session.memory?.protagonist,focusLimit:settings.directorFocusLimit ?? 5});
+  const parsed=parseDirectorContract(result.content,before,built.entries,{protagonist:session.memory?.protagonist,focusLimit:settings.directorFocusLimit ?? 5,allowedMemoryIds:built.report.offeredMemoryIds});
   const input=messages.filter(m=>m.role==='user' && m.order<(opts.upToOrder ?? Infinity)).at(-1)?.content ?? '';
   const boundary=opts.continuationId ? null : playerStopBoundary(input);
   assertDirectorBoundary(parsed,boundary);

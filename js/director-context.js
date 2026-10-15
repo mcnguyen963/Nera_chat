@@ -1,3 +1,4 @@
+import { directorResponseFormat, isDirectorSchemaEndpoint } from './director-schema.js';
 import { attendanceHints } from './director-cast.js';
 import { selectScheduledPlan, renderPlanUnit } from './scheduled-plan.js';
 import { prompts } from './system-prompts.js';
@@ -31,8 +32,8 @@ function entityIndex(entries) {
   if(indexCache.size>=4)indexCache.clear();indexCache.set(key,rows);return rows;
 }
 export const DIRECTOR_RESPONSE_FORMAT=Object.freeze({type:'json_object'});
-export function directorOutputOptions(settings) {
-  return {responseFormat:DIRECTOR_RESPONSE_FORMAT,
+export function directorOutputOptions(settings,context) {
+  return {responseFormat:context?.responseFormat ?? DIRECTOR_RESPONSE_FORMAT,
     ...(/^https:\/\/openrouter\.ai\//i.test(settings.endpoint) ? {provider:{require_parameters:true}} : {})};
 }
 export function directorTaskSettings(settings) {
@@ -80,14 +81,23 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const planOmitted=authorPlanTokens>authorPlanLimit;
   const base={state:live,focusLimit:settings.directorFocusLimit ?? 5,player:mem.protagonist || null,playerBoundary:continuation?null:playerStopBoundary(latest.content),entityIndex:index,controlLore:control,fixedAuthorPlan:planOmitted ? '' : authorPlan,fixedAuthorPlanStatus:planOmitted ? 'omitted; full plan remains in Narrator context' : 'complete',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
   const planGuard=planOmitted ? '\nThe full fixed author plan is omitted from this small context and remains with the Narrator. Omission does not remove its constraints or authorize planned future events. Use the live ledger, selected control lore and explicit player action. When a transition depends on unavailable plan details, keep it unresolved and stop before that transition; do not guess. The author can place essential current constraints in the live ledger or control lore.' : '';
+  const responseFormat=()=>directorResponseFormat(directorTaskSettings(settings),{entries:available,before:live,offeredIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],protagonist:mem.protagonist,focusLimit:settings.directorFocusLimit ?? 5});
+  const schemaCost=async()=>isDirectorSchemaEndpoint(directorTaskSettings(settings)) ? await count(JSON.stringify(responseFormat())) : 0;
   const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];
-  const total=async()=>REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
+  const total=async()=>await schemaCost()+REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
   const limit=requestInputLimit(directorTaskSettings(settings));
-  while(await total()>limit && control.length)control.pop();
-  while(await total()>limit && window.length){let n=1;while(n<window.length && window[n].role!=='user')n++;window=window.slice(n);}
+  // Retain direct-action control lore ahead of older conversation when the
+  // response schema consumes space. Never trim the current action/state/index.
+  while(await total()>limit) {
+    const optional=control.findLastIndex(e=>!directIds.has(e.id));
+    if(optional>=0){control.splice(optional,1);continue;}
+    if(window.length){let n=1;while(n<window.length && window[n].role!=='user')n++;window=window.slice(n);continue;}
+    if(control.length){control.pop();continue;}
+    break;
+  }
   const usedTokens=await total();
   if(usedTokens>limit)throw new Error('Director state, entity index and latest input exceed its input budget. Increase the Director limit or shorten the live ledger.');
-  return {apiMessages:render(),entries:available,report:{mode:'director',totals:{input:usedTokens,max:limit},recentMessages:window.map(m=>m.id),controlMemoryIds:control.map(e=>e.id),rosterHints:control.filter(e=>e.kind).map(e=>({group:e.group,memberIds:e.memberIds,source:e.source})),focusLimit:settings.directorFocusLimit ?? 5,fixedAuthorPlan:{tokens:authorPlanTokens,limit:authorPlanLimit,included:!planOmitted},warnings:[...(control.length<candidates.length?['Some control lore was omitted; unknown transitions must remain unresolved.']:[]),...(planOmitted?['The fixed author plan exceeds the Director plan budget and stays in Narrator context. Put essential current constraints in the live ledger or control lore.']:[])]},usedTokens};
+  return {apiMessages:render(),responseFormat:responseFormat(),entries:available,report:{mode:'director',responseFormat:responseFormat().type,responseSchemaTokens:await schemaCost(),offeredMemoryIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],totals:{input:usedTokens,max:limit},recentMessages:window.map(m=>m.id),controlMemoryIds:control.map(e=>e.id),rosterHints:control.filter(e=>e.kind).map(e=>({group:e.group,memberIds:e.memberIds,source:e.source})),focusLimit:settings.directorFocusLimit ?? 5,fixedAuthorPlan:{tokens:authorPlanTokens,limit:authorPlanLimit,included:!planOmitted},warnings:[...(control.length<candidates.length?['Some control lore was omitted; unknown transitions must remain unresolved.']:[]),...(planOmitted?['The fixed author plan exceeds the Director plan budget and stays in Narrator context. Put essential current constraints in the live ledger or control lore.']:[])]},usedTokens};
 }
 function brief(entry) {
   const section=[entry.sections?.description,entry.sections?.state,entry.sections?.status,...Object.values(entry.sections ?? {})].find(s=>s && [s.text,...(s.lines ?? []).map(l=>l.text)].some(t=>t?.trim()));
