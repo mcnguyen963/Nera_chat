@@ -205,3 +205,10 @@ test('Regenerating a continuation reuses the latest continuation contract, rathe
  const turn=await api.prepareDirectorTurn({id:'s',directorState:state,directorCheckpoint:old.id},settings,[{id:'u',order:1,role:'user',content:'Begin'},{id:'a',order:2,role:'assistant',content:'Original prefix',directorTurnId:'original'}],[],{overwriteId:'a',continuationId:'a',directorReuseId:old.id});
  assert.equal(turn.id,'continuation');assert.equal(calls,0);
 });
+
+test('captured Haiku bare-array ledger failure is rejected before saving and final reminder specifies operation objects',async()=>{
+ let saves=0,calls=0;const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{saves++;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify({...contract({decisions:[],threads:[],commitments:[{id:'visit',text:'Deliver biscuits to Lysia',status:'open',trigger:'Player confirms',source:'player'}]}),transition:'attempted',objective:'Do not have Lysia appear; stop before Liora replies.'}),finishReason:'stop'};}}}});
+ const api=await use('director-turn.js'),prompts=(await use('system-prompts.js')).prompts;
+ await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{id:'u',role:'user',order:1,content:'Shall we go visit Lysia?'}],[]),/invalid decisions operations/);
+ assert.equal(calls,1);assert.equal(saves,0);assert.ok(prompts.directorOutput.includes('{"upsert":[],"close":[]}'));assert.match(prompts.directorOutput,/never a bare array/);
+});
