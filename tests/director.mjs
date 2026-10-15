@@ -31,7 +31,7 @@ test('Director serializes JSON mode and requires OpenRouter format support while
  const api=await use('director-turn.js'),config={...settings,endpoint:'https://openrouter.ai/api/v1/chat/completions',activeProfileId:'small',apiKey:'fake-key',maxOutputPrice:.4};
  await api.prepareDirectorTurn({id:'s',directorState:state},config,[{id:'a',role:'assistant',order:1,content:'Lysia speaks in story prose.'},{id:'u',role:'user',order:2,content:'I wait.'}],[]);
  assert.equal(requests.length,1);assert.equal(saved,1);const body=requests[0];
- assert.deepEqual(body.response_format,{type:'json_object'});assert.equal(body.provider.require_parameters,true);assert.equal(body.provider.max_price.completion,.4);
+ assert.equal(body.response_format.type,'json_schema');assert.equal(body.response_format.json_schema.strict,true);assert.equal(body.provider.require_parameters,true);assert.equal(body.provider.max_price.completion,.4);
  assert.equal(body.messages.at(-2).role,'system');assert.match(body.messages.at(-2).content,/not examples of your output/);assert.equal(body.messages.at(-1).content,'I wait.');
  const options=(await use('director-context.js')).directorOutputOptions({endpoint:'http://local.test/v1/chat/completions'});
  assert.equal(options.provider,undefined);assert.equal(options.responseFormat.type,'json_object');

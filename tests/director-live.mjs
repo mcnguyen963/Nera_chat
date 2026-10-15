@@ -4,7 +4,7 @@ import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {main,eligible,LIMITS,MODEL,API,assertPaidApproval,checkTransition} from './tools/director-eval.mjs';
-const endpoint={name:'Test | DeepSeek',provider_name:'Test',tag:'test/fp4',quantization:'fp4',pricing:{prompt:'0.00000009',completion:'0.0000003'},context_length:1048576,max_completion_tokens:943718,supported_parameters:['reasoning','reasoning_effort','max_tokens','response_format']};
+const endpoint={name:'Test | DeepSeek',provider_name:'Test',tag:'test/fp4',quantization:'fp4',pricing:{prompt:'0.00000009',completion:'0.0000003'},context_length:1048576,max_completion_tokens:943718,supported_parameters:['reasoning','reasoning_effort','max_tokens','response_format','structured_outputs']};
 const listing={data:{id:'deepseek/deepseek-v4.1-flash',endpoints:[endpoint]}};
 test('Director live evaluation requires separate explicit confirmation and an exact total budget',async()=>{
  for(const options of [{},{'approved-budget':'0.10'},{'confirm-live':'yes','approved-budget':'0.40'}])assert.throws(()=>assertPaidApproval(options),/separate user confirmation/);
@@ -23,7 +23,7 @@ for(const suite of ['independent','chained'])for(const badReply of [false,true])
   assert.equal(body.model,MODEL);assert.equal(body.reasoning.effort,'high');assert.equal(body.provider.max_price.completion,.4);assert.equal(body.provider.max_price.prompt,.25);assert.equal(body.provider.require_parameters,true);
   let content;
   if(!body.stream){
-   assert.deepEqual(body.response_format,{type:'json_object'});
+   assert.equal(body.response_format.type,'json_schema');assert.equal(body.response_format.json_schema.strict,true);
    const raw=JSON.parse(body.messages[0].content.slice(body.messages[0].content.lastIndexOf('\n\n{')+2)),s=raw.state,input=body.messages.at(-1).content;
    const output={version:1,action:'narrate',transition:'unchanged',objective:'Narrate the authorized action without taking the next voluntary decision.',stopCondition:'Stop before the next player choice',memoryIds:raw.entityIndex.map(e=>e.id),requiredMemoryIds:[],updates:{}};
    if(/registration options/.test(input))output.updates.decisions={upsert:[{id:'registration',text:'Which excursion option?',status:'open'}],close:[]};

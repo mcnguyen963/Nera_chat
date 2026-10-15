@@ -49,20 +49,20 @@ export function directorClockNeedsReview(session,messages,state,upToOrder=Infini
   const time=latestScene(messages,upToOrder,session.memory?.startingScene).scene?.time;
   return time && parseClock(time)!==null ? time : null;
 }
-export function parseDirectorContract(content, before, entries = [], {protagonist='',focusLimit=5}={}) {
+export function parseDirectorContract(content, before, entries = [], {protagonist='',focusLimit=5,allowedMemoryIds}={}) {
   let raw;
   try { raw = JSON.parse(String(content).trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i,'$1')); } catch { fail('returned invalid JSON. Retry or change the Director model.'); }
   if (!object(raw) || raw.version!==1 || !['narrate','answer','wait'].includes(raw.action) || !text(raw.objective,4000) || !raw.objective.trim() || !text(raw.stopCondition,2000) || !raw.stopCondition.trim() || !['attempted','blocked','completed','unchanged'].includes(raw.transition) || !Array.isArray(raw.memoryIds) || raw.memoryIds.length>100 || !Array.isArray(raw.requiredMemoryIds) || raw.requiredMemoryIds.length>100 || !object(raw.updates)) fail('invalid turn contract.');
   if (JSON.stringify(raw).length>60000) fail('turn contract is too large.');
   // Ignore unrecognized top-level fields rather than forwarding a second,
   // unvalidated state or ledger to the Narrator alongside canonical updates.
-  raw=Object.fromEntries(['version','action','transition','objective','stopCondition','memoryIds','requiredMemoryIds','updates',...(Object.hasOwn(raw,'focusCharacterIds')?['focusCharacterIds']:[])].map(key=>[key,raw[key]]));
+  raw=Object.fromEntries(['version','action','transition','objective','stopCondition','memoryIds','requiredMemoryIds','updates',...['focusCharacterIds','encounterCharacterIds'].filter(k=>Object.hasOwn(raw,k))].map(key=>[key,raw[key]]));
   // Essential cards are necessarily selected; omission from the optional list
   // does not change their meaning or authorize an unknown reference.
   raw.memoryIds=[...new Set([...raw.memoryIds,...raw.requiredMemoryIds])];
   raw.requiredMemoryIds=[...new Set(raw.requiredMemoryIds)];
   if(raw.memoryIds.length>100)fail('too many selected memory cards.');
-  const known = new Set(entries.map(e=>e.id));
+  const known = new Set(entries.filter(e=>!allowedMemoryIds || allowedMemoryIds.includes(e.id)).map(e=>e.id));
   if (raw.memoryIds.some(id=>!known.has(id))) fail('contract references unknown memory cards.');
   let after = validateDirectorState(before);
   const allowed = new Set(['scene','event',...groups]);
@@ -83,15 +83,23 @@ export function parseDirectorContract(content, before, entries = [], {protagonis
   }
   if(raw.action==='narrate')for(const group of groups)after[group]=after[group].filter(i=>!['closed','cancelled'].includes(i.status));
   after = validateDirectorState(after);
+  if(raw.encounterCharacterIds!==undefined) {
+    if(!Array.isArray(raw.encounterCharacterIds)||raw.encounterCharacterIds.length>100||new Set(raw.encounterCharacterIds).size!==raw.encounterCharacterIds.length||raw.encounterCharacterIds.some(id=>{
+      const e=entries.find(e=>known.has(id)&&e.id===id&&e.book==='characters');
+      return !e || [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist));
+    }))fail('encounterCharacterIds must contain distinct offered NPC card IDs; seeking someone does not establish presence.');
+    raw.memoryIds=[...new Set([...raw.memoryIds,...raw.encounterCharacterIds])];
+  }
   if(raw.focusCharacterIds!==undefined) {
     const ids=raw.focusCharacterIds;
     if(!Array.isArray(ids)||ids.length>focusLimit||new Set(ids).size!==ids.length||ids.some(id=>{
-      const e=entries.find(e=>e.id===id && e.book==='characters');
+      const e=entries.find(e=>known.has(id)&&e.id===id && e.book==='characters');
       return !e || [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist)) || !after.scene.present.some(n=>[e.name,...(e.aliases ?? [])].some(name=>normalizeName(name)===normalizeName(n)));
-    }))fail('focusCharacterIds must contain distinct present NPC card IDs within the focus limit.');
+    }))fail('focusCharacterIds must contain distinct present NPC card IDs within the focus limit. Use encounterCharacterIds for NPCs being sought but not yet present.');
     raw.memoryIds=[...new Set([...raw.memoryIds,...ids])];
     if(raw.memoryIds.length>100)fail('too many selected memory cards.');
   }
+  if(raw.memoryIds.length>100)fail('too many selected memory cards.');
   if(before.scene.date && after.scene.date===before.scene.date && before.scene.hour!==null && after.scene.hour!==null && after.scene.hour<before.scene.hour)fail('game-hour rollover needs the following date.');
   if (raw.action !== 'narrate' && JSON.stringify(after)!==JSON.stringify(before)) fail('answer-only and waiting contracts must keep state unchanged.');
   return {contract:raw,before:structuredClone(before),after};
