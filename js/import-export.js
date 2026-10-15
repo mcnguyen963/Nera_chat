@@ -1,3 +1,4 @@
+import {flushStory} from './story-sync.js';
 import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
 import { validateDirectorState } from './director-state.js';
 import {ensureStorySettings,writeInitialStorySettings,preserveLegacyStorySeed} from './story-settings-store.js';
@@ -97,6 +98,7 @@ export async function importSillyTavern(file) {
 }
 
 export async function serializeStory(sessionId) {
+  await flushStory(sessionId);
   const owner=currentUid();
   await messagesApi.ensureChunked(sessionId);
   const storySettings=await ensureStorySettings(sessionId);
@@ -145,6 +147,7 @@ export async function exportAllStories({signal,onProgress=()=>{},save=download}=
 
 // Preserve MAIN's full JSON backup alongside the v2 story/account exports.
 export async function buildFullBackup(sessionId){
+  await flushStory(sessionId);
  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
  await messagesApi.ensureChunked(sessionId);check();
  const storySettings=await ensureStorySettings(sessionId);check();

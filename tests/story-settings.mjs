@@ -80,7 +80,7 @@ test('Long conversation replays unchanged without provider calls or input mutati
  assert.equal(messages.length,581);assert.equal(JSON.stringify({messages,session}),before);assert.equal(JSON.stringify(loreEntries),beforeLore);assert.equal(providerCalls,0);assert.ok(built.apiMessages.length);assert.ok(built.usedTokens<=125000);assert.ok(built.droppedCount>0);assert.ok(built.apiMessages.some(m=>m.content.includes('Replay message 581:')));
 });
 
-test('Active-story subscriptions replace prompts, ignore stale replies, and block failed loads',async()=>{
+test('Active-story cached prompts ignore external updates until explicit refresh and reject stale account loads',async()=>{
  let uid='u',releaseA,delayA=false;const docs=new Map(),callbacks=new Map();
  const snap=(path,metadata={})=>({metadata,exists:()=>docs.has(path),data:()=>structuredClone(docs.get(path))});
  const firestore={doc:(_db,...parts)=>({path:parts.join('/')}),serverTimestamp:()=>0,
@@ -92,8 +92,7 @@ test('Active-story subscriptions replace prompts, ignore stale replies, and bloc
  for(const owner of ['u','v'])for(const name of ['A','B']){docs.set(`users/${owner}/sessions/${name}`,{storySettingsRevision:1});docs.set(`users/${owner}/sessions/${name}/storySettings/current`,{version:1,revision:1,values:{...pure.defaultStorySettings(),narratorSystemPrompt:owner+' '+name}});}
  state.sessionId='A';delayA=true;const a=store.selectStorySettings('A');while(!releaseA)await new Promise(resolve=>setTimeout(resolve,0));
  state.sessionId='B';await store.selectStorySettings('B');releaseA();await a;assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'u B');assert.equal(callbacks.has('users/u/sessions/A/storySettings/current'),false);
- const path='users/u/sessions/B/storySettings/current',updated={...docs.get(path),revision:2,values:{...docs.get(path).values,narratorSystemPrompt:'Remote B'}};docs.set(path,updated);await callbacks.get(path).next(snap(path));assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'Remote B');
- callbacks.get(path).error(Error('offline'));assert.throws(()=>store.effectiveActiveSettings(),/prompts have not loaded/);
+ const path='users/u/sessions/B/storySettings/current',updated={...docs.get(path),revision:2,values:{...docs.get(path).values,narratorSystemPrompt:'Remote B'}};docs.set(path,updated);await store.selectStorySettings('B');assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'u B');docs.set('users/u/sessions/B',{storySettingsRevision:2});await store.selectStorySettings('B',{force:true});assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'Remote B');assert.equal(callbacks.size,0);
  uid='v';state.sessionId='B';await store.selectStorySettings('B');assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'v B');assert.equal(callbacks.has(path),false);
  state.sessionId='missing';await assert.rejects(store.selectStorySettings('missing'));assert.equal(state.storySettings,null);assert.throws(()=>store.effectiveActiveSettings(),/prompts have not loaded/);
 });

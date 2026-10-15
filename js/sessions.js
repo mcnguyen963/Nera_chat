@@ -1,3 +1,4 @@
+import {flushStory} from './story-sync.js';
 import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
 import * as loreStore from './lore-store.js';
 import {writeInitialStorySettings,ensureStorySettings} from './story-settings-store.js';
@@ -69,11 +70,13 @@ export async function createSession(title, { importing = false } = {}) {
 }
 
 export async function updateSession(sessionId, partial) {
+  await flushStory(sessionId);
   const target=sessionDoc(sessionId);
   await runTransaction(db,async tx=>{
     assertStory((await tx.get(target)).data());
     tx.update(target,{ ...partial,updatedAt:serverTimestamp() });
   });
+  if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('memory-session-saved',{detail:{sessionId,partial}}));
 }
 
 export async function renameSession(sessionId, title) {
@@ -96,7 +99,7 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     await storeUnsavedReply(owner,sessionId,null);
     deletionNotice(sessionId);
     await waitForStoryWrites(sessionId);
-    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns']) {
+    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns','operationReceipts']) {
       const snap=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,name));
       for(let i=0;i<snap.docs.length;i+=450) {
         const batch=writeBatch(db);
@@ -128,6 +131,7 @@ export async function resumeQueuedDeletions(owner=currentUid()){
   try{for(const id of await queuedFor(owner)){if(owner!==currentUid())break;try{await deleteSession(id);}catch(error){console.error('Deletion will retry after reconnecting:',error);break;}}}finally{retryingDeletes.delete(owner);}
 }
 export async function deleteSession(sessionId) {
+  await flushStory(sessionId);
   const owner=currentUid(),target=sessionDoc(sessionId,owner);
   try{
     await runTransaction(db,async tx=>{
@@ -163,6 +167,7 @@ export function subscribeSessions(callback,onError) {
 // Copy the first N stored messages (including summary messages), or all when
 // omitted. Keep message ids, timestamps, orders, and hidden reply data intact.
 export async function duplicateSession(sourceId, messageCount = null, throughMessageId = null) {
+  await flushStory(sourceId);
   const owner = currentUid();
   if (messageCount !== null && (!Number.isSafeInteger(messageCount) || messageCount < 0)) {
     throw new Error("Message count must be a whole number of 0 or more.");

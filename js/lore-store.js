@@ -22,7 +22,7 @@ function gateWrite(action) {
     const owner = args[0]?.uid ?? currentUid();
     const sid = typeof args[0] === 'object' ? args[0].id : args[0]; storyWrites.set(sid,(storyWrites.get(sid) ?? 0)+1);
     activeWrites++;
-    try { await waitForNarrator(); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); return await action({ id:sid,uid:owner },...args.slice(1)); }
+    try { await waitForNarrator(sid); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); const result=await action({ id:sid,uid:owner },...args.slice(1));if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('local-lore-saved',{detail:{sessionId:sid}}));return result; }
     finally { const remaining = storyWrites.get(sid)-1; if (remaining) storyWrites.set(sid,remaining); else { storyWrites.delete(sid); for (const resolve of storyWaiters.get(sid) ?? []) resolve(); storyWaiters.delete(sid); } if (--activeWrites === 0) { for (const resolve of writeWaiters) resolve(); writeWaiters.clear(); } }
   };
 }

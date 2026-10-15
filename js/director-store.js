@@ -1,3 +1,4 @@
+import {readReceipt,writeReceipt} from './operation-receipts.js';
 import * as firestore from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 const {doc,collection,getDocFromServer,getDocsFromServer,runTransaction,serverTimestamp,writeBatch}=firestore;
 import { db } from './db.js';
@@ -15,17 +16,17 @@ export async function getDirectorTurn(sid,id) {
   if(turn && turn.version!==1)throw new Error('Unsupported Director turn version.');
   return turn;
 }
-export async function savePendingDirectorTurn(sid,turn,source) {
+export async function savePendingDirectorTurn(sid,turn,source,options={}) {
   const uid=currentUid();
   return runTransaction(db,async tx=>{
-    check(uid);const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,source);
+    check(uid);const receipt=await readReceipt(tx,sid,options.operationId,uid);if(receipt)return receipt;const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,source);
     if(s.directorPending && s.directorPending!==turn.id) {
       const previous=(await tx.get(directorTurnRef(sid,s.directorPending,uid))).data();
       if(turn.replaces!==s.directorPending && previous?.source && JSON.stringify(previous.source)===JSON.stringify(source))throw new Error('Another Director turn is pending. Refresh and retry.');
     }
     check(uid);const saved={...turn,version:1,status:'pending',source,createdAt:Date.now()};
     tx.set(directorTurnRef(sid,turn.id,uid),saved);tx.update(ref,{directorPending:turn.id,updatedAt:serverTimestamp()});
-    return saved;
+    return writeReceipt(tx,sid,options.operationId,saved,uid);
   });
 }
 // Read before any transaction writes. The caller saves this patch with narration.
@@ -55,8 +56,8 @@ export async function resetDirectorState(sid,value,expected) {
     return state;
   });
 }
-export async function discardPendingDirector(sid,expected) {
-  const uid=currentUid();return runTransaction(db,async tx=>{check(uid);const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,expected);if(s.directorPending){const pendingRef=directorTurnRef(sid,s.directorPending,uid);const pending=await tx.get(pendingRef);if(pending.exists())tx.update(pendingRef,{status:'discarded'});}tx.update(ref,{directorAbandonedTurnIds:[...(s.directorAbandonedTurnIds ?? []),...(s.directorPending ? [s.directorPending] : [])].slice(-200),directorPending:null,directorRevision:(s.directorRevision ?? 0)+1,updatedAt:serverTimestamp()});});
+export async function discardPendingDirector(sid,expected,options={}) {
+  const uid=currentUid();return runTransaction(db,async tx=>{check(uid);const receipt=await readReceipt(tx,sid,options.operationId,uid);if(receipt)return receipt;const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,expected);if(s.directorPending){const pendingRef=directorTurnRef(sid,s.directorPending,uid);const pending=await tx.get(pendingRef);if(pending.exists())tx.update(pendingRef,{status:'discarded'});}tx.update(ref,{directorAbandonedTurnIds:[...(s.directorAbandonedTurnIds ?? []),...(s.directorPending ? [s.directorPending] : [])].slice(-200),directorPending:null,directorRevision:(s.directorRevision ?? 0)+1,updatedAt:serverTimestamp()});return writeReceipt(tx,sid,options.operationId,{discarded:true},uid);});
 }
 export async function exportDirectorTurns(sid,uid=currentUid()) {
   const snap=await getDocsFromServer(collection(db,'users',uid,'sessions',sid,'directorTurns'));check(uid);
