@@ -41,7 +41,7 @@ export function fromJson(text) {
   validateInput(text); const source = unfence(text); let data;
   try { data = JSON.parse(source); } catch (e) { const p = Number(e.message.match(/position (\d+)/)?.[1]); if (Number.isFinite(p)) { const before = source.slice(0,p), line = before.split('\n').length, column = before.length-(before.lastIndexOf('\n')+1)+1; throw new Error(`JSON error at line ${line}, column ${column}: ${e.message}`); } throw new Error('JSON error: '+e.message); }
   if(data?.format==='nera-lorebooks'&&data.version===3&&Array.isArray(data.entries)){const entries=data.entries.map(fromRecordDocument);return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>data.books?.includes(k)||entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};}
-  if (!data || typeof data !== 'object' || !Object.keys(BOOK_LABELS).some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
+  if (!data || typeof data !== 'object' || !Object.keys(BOOK_LABELS).some(k => k in data)) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Plan\' or another lorebook heading (Markdown), or a JSON object with "plan" or another lorebook key.');
   if(data.version===2 && Array.isArray(data.entries)) {
     const entries=data.entries.map(normalizeLoreEntry);
     return {entries,warnings:[],books:Object.keys(BOOK_LABELS).filter(k=>k in data || entries.some(e=>e.book===k)),story:data.story ?? '',format:'json'};
@@ -99,8 +99,16 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
   }
   return out.join('\n');
 }
-export function fromMarkdown(text, { protagonist = '', strictFields = false } = {}) {
-  validateInput(text); const source = unfence(text).split('\n'), entries = [], warnings = [], books = []; const noteMetadata = new Map(); let book = null, entry = null, phase = null, key = null, updates = false, metadata = false, prefix = '', story = '';
+export function fromMarkdown(text, { protagonist = '', strictFields = false, book: scope = null } = {}) {
+  validateInput(text);
+  let markdown=unfence(text);
+  // Standalone Plan files need no empty Characters/Locations books.
+  if(!/^##\s+/m.test(markdown))markdown=markdown.replace(/^# (Plan|Plans|Scheduled plan)[ \t]*$/im,'## Plan');
+  if(scope==='plan' && !/^##\s+/m.test(markdown)) {
+    if(!/^###\s+\S/m.test(markdown) || !/^<!-- nera-entry: .*"schedule"\s*:/m.test(markdown))throw new Error('Plan import needs event headings (### Event title) and schedule metadata with start/end dates. Export a Plan book for the required format.');
+    markdown='## Plan\n\n'+markdown;
+  }
+  const source = markdown.split('\n'), entries = [], warnings = [], books = []; const noteMetadata = new Map(); let book = null, entry = null, phase = null, key = null, updates = false, metadata = false, prefix = '', story = '';
   const aliases = { characters:['characters','character','people','cast'],locations:['locations','location','places','place'],facts:['world facts','facts','world','lore'],events:['events','events & threads','events and threads','timeline','threads','story'],plan:['plan','plans','scheduled plan'] };
   const warn = (line,reason) => warnings.push({ line,reason });
   for (const [i,line] of source.entries()) {
@@ -175,7 +183,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false } = 
       if (!unchanged) Object.assign(line,{by:'user',at:Date.now(),src:null,evidence:[],sourceRevision:0,needsReview:false,kind:'canon',origin:'user',cutoff:null});
     }
   }
-  if (!books.length) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Characters\' style headings (Markdown) or a JSON object with "characters".');
+  if (!books.length) throw new Error('This file doesn\'t look like lorebooks. Expected \'## Plan\' or another lorebook heading (Markdown), or a JSON object with "plan" or another lorebook key.');
   return { entries,warnings,books,story,format:'md' };
 }
 export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'mine',now = Date.now(),book = null,loreRevision = null } = {}) {

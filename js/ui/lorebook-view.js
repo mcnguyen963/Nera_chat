@@ -366,7 +366,7 @@ function renderTransfer(scope = null) {
     try {
       ctx.check();
       const snapshot=await prepareMemorySnapshot();ctx.check();
-      const detected = detectFormat(text), parsed = detected === 'json' ? fromJson(text) : fromMarkdown(text,{ protagonist:normalizeMemory(snapshot.session.memory).protagonist });
+      const detected = detectFormat(text), parsed = detected === 'json' ? fromJson(text) : fromMarkdown(text,{ protagonist:normalizeMemory(snapshot.session.memory).protagonist,book:scope });
       const reviewedMode=mode.value,reviewedConflict=conflict.value,revision=snapshot.session.loreRevision ?? 0;
       const fingerprint=JSON.stringify(snapshot.entries);
       const plan = planImport(snapshot.entries,parsed,{mode:reviewedMode,conflict:reviewedConflict,book:scope,loreRevision:revision});
