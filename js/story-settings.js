@@ -1,11 +1,11 @@
 import { prompts } from './system-prompts.js';
-export const STORY_SETTINGS_VERSION=4;
-export const STORY_SETTING_KEYS=Object.freeze(['narratorSystemPrompt','directorNarratorSystemPrompt','directorNarratorPromptNeedsReview','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages','narrationMode','narratorProfileId','directorProfileId','directorSystemPrompt','directorMaxInputTokens','directorMaxOutputTokens','directorRecentTurns']);
+export const STORY_SETTINGS_VERSION=5;
+export const STORY_SETTING_KEYS=Object.freeze(['narratorSystemPrompt','directorNarratorSystemPrompt','directorNarratorPromptNeedsReview','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages','narrationMode','narratorProfileId','directorProfileId','directorSystemPrompt','directorMaxInputTokens','directorMaxOutputTokens','directorRecentTurns','directorFocusLimit']);
 export function pickStorySettings(value={}) {
   return Object.fromEntries(STORY_SETTING_KEYS.filter(k=>Object.hasOwn(value,k)).map(k=>[k,structuredClone(value[k])]));
 }
 export function defaultStorySettings() {
-  return {narratorSystemPrompt:prompts.narrator,directorNarratorSystemPrompt:prompts.directorNarratorDefault,directorNarratorPromptNeedsReview:false,summarizerSystemPrompt:prompts.summarizer,memoryExtractionPrompt:prompts.memoryExtraction,memoryReorganizePrompt:prompts.memoryReorganize,rewriteSystemPrompt:prompts.rewrite,rewriteRecentMessages:10,narrationMode:'classic',narratorProfileId:'',directorProfileId:'',directorSystemPrompt:prompts.director,directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5};
+  return {narratorSystemPrompt:prompts.narrator,directorNarratorSystemPrompt:prompts.directorNarratorDefault,directorNarratorPromptNeedsReview:false,summarizerSystemPrompt:prompts.summarizer,memoryExtractionPrompt:prompts.memoryExtraction,memoryReorganizePrompt:prompts.memoryReorganize,rewriteSystemPrompt:prompts.rewrite,rewriteRecentMessages:10,narrationMode:'classic',narratorProfileId:'',directorProfileId:'',directorSystemPrompt:prompts.director,directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,directorFocusLimit:5};
 }
 export function explicitStorySettings(value={}) {
   const result={...defaultStorySettings(),...pickStorySettings(value)};
@@ -20,7 +20,7 @@ export function explicitStorySettings(value={}) {
   if(!['classic','director'].includes(result.narrationMode))throw new Error('Choose Classic or Director mode.');
   if(typeof result.directorProfileId!=='string' || result.directorProfileId.length>200)throw new Error('Invalid Director profile.');
   if(typeof result.narratorProfileId!=='string' || result.narratorProfileId.length>200)throw new Error('Invalid Narrator profile.');
-  for(const [key,min,max] of [['directorMaxInputTokens',1000,200000],['directorMaxOutputTokens',256,32000],['directorRecentTurns',1,20]])if(!Number.isSafeInteger(result[key]) || result[key]<min || result[key]>max)throw new Error('Invalid '+key+'.');
+  for(const [key,min,max] of [['directorMaxInputTokens',1000,200000],['directorMaxOutputTokens',256,32000],['directorRecentTurns',1,20],['directorFocusLimit',1,20]])if(!Number.isSafeInteger(result[key]) || result[key]<min || result[key]>max)throw new Error('Invalid '+key+'.');
   return result;
 }
 export function resolveStorySettings(accountSettings,storySettings) {
@@ -43,6 +43,12 @@ export function assertSnapshotRevisions(before,after) {
 
 // Recognize old built-in defaults without modifying the original Classic field.
 export async function migrateStorySettings(value={}) {
+  if(typeof value.directorSystemPrompt==='string' && globalThis.crypto?.subtle) {
+    const text=value.directorSystemPrompt.replace(/\r\n/g,'\n').trimEnd();
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
+    const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+    if(prompts.directorDefaultHashes.split('\n').includes(hash))value={...value,directorSystemPrompt:prompts.director};
+  }
   if(!Object.hasOwn(value,'directorNarratorSystemPrompt') && typeof value.narratorSystemPrompt==='string' && value.narratorSystemPrompt.replace(/\r\n/g,'\n').trimEnd()!==prompts.narrator.trimEnd() && globalThis.crypto?.subtle) {
     const known=new Set(prompts.legacyPromptHashes.split('\n').map(line=>line.trim().split(/\s+/)).filter(([key])=>key==='narratorSystemPrompt').map(([,hash])=>hash));
     for(const text of new Set([value.narratorSystemPrompt,value.narratorSystemPrompt.replace(/\r\n/g,'\n').replace(/\n$/,'').trimEnd()])) {
