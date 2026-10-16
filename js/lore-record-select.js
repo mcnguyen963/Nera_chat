@@ -1,3 +1,4 @@
+import { allocateCharacterPools } from './character-budget.js';
 import { reconcileRecords, resolveRecord, archivedRecord, approvedRecord, validSupersession } from './lore-records.js';
 import { renderEntry, findMentions, sortLines } from './lore-select.js';
 import { normalizeName } from './lore-lines.js';
@@ -56,10 +57,20 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
 export async function fitRecords(selected,budget,count,options={}) {
   const cap=Math.max(0,budget),records=selected.map(item=>({...item,...recordUnits(item.entry,options),chosen:[],identity:false}));
   const render=()=>records.filter(r=>r.identity).map(r=>renderRecordSelection(r.entry,r.chosen,options.protagonist)).join('\n\n');
-  for(let round=1;round<=5;round++) {
-    const queues=new Map(records.map(r=>[r,r.units.filter(u=>!u.blocked&&u.round===round)]));
-    let pending=true;while(pending){pending=false;for(const r of records){const q=queues.get(r);while(q.length){pending=true;const u=q.shift(),identity=r.identity;r.identity=true;r.chosen.push(u);if(await count(render())<=cap)break;r.chosen.pop();r.identity=identity;}}}
-  }
+  const renderOne=r=>r.identity&&r.chosen.length ? renderRecordSelection(r.entry,r.chosen,options.protagonist) : '';
+  const fill=async(active,fits,protectedOnly=false)=>{
+    for(let round=1;round<=5;round++) {
+      const queues=new Map(active.map(r=>[r,r.units.filter(u=>!u.blocked&&u.round===round&&!r.chosen.includes(u))]));
+      let pending=true;while(pending){pending=false;for(const r of active){const q=queues.get(r);while(q.length){
+        const u=q.shift();if(protectedOnly && u.round!==1 && r.identity)continue;
+        pending=true;const identity=r.identity;r.identity=true;r.chosen.push(u);
+        if(await fits())break;r.chosen.pop();r.identity=identity;
+      }}}
+    }
+  };
+  const characterBudget=selected.length && selected.every(item=>item.entry.book==='characters')
+    ? await allocateCharacterPools(records,cap,count,renderOne,fill,options)
+    : (await fill(records,async()=>await count(render())<=cap),null);
   const included=[],skipped=[],report=[];
   for(const r of records) {
     const chosen=new Set(r.chosen.map(u=>u.id)),lineIds=new Set(r.chosen.flatMap(u=>u.resolved.sources.filter(s=>s.lineId!=null).map(s=>s.lineId)));
@@ -75,5 +86,5 @@ export async function fitRecords(selected,budget,count,options={}) {
   }
   const text=records.filter(r=>r.identity&&r.chosen.length).map(r=>renderRecordSelection(r.entry,r.chosen,options.protagonist)).join('\n\n');
   const userLinesCut=selected.reduce((n,item)=>n+Object.values(item.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user'&&!included.find(e=>e.entry.id===item.entry.id)?.lineIds.has(l.id)).length,0);
-  return {text,tokens:await count(text),included,skipped,userLinesCut,cut:included.reduce((n,r)=>n+r.linesCut,0),recordReport:{budget:cap,entries:report}};
+  return {text,tokens:await count(text),included,skipped,userLinesCut,cut:included.reduce((n,r)=>n+r.linesCut,0),...(characterBudget ? {characterBudget} : {}),recordReport:{budget:cap,entries:report}};
 }

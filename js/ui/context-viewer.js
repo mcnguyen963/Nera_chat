@@ -177,6 +177,7 @@ async function render() {
       if (sections[book]) bookGroup.append(preview('book-'+book+'-text', 'Read included '+label.toLowerCase(), sections[book]));
       lore.append(bookGroup);
     }
+    if(r.characterBudget)characterBudgetReport(lore,r.characterBudget);
     if (r.characterSelection) characterReport(lore,r.characterSelection,'next-character',live);
     if(r.recordSelection)recordReport(lore,r.recordSelection,'next-records');
     body.append(lore);
@@ -185,6 +186,7 @@ async function render() {
       section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
       if(sent.report?.replyBrief){section.append(preview('sent-reply-brief','Reply brief · exact sent text',sent.report.replyBrief.text),preview('sent-brief-sources','Reply brief sources and omissions',JSON.stringify(sent.report.replyBrief,null,2)));}
       if(sent.director){const d=sent.director;section.append(node('p',`Director: ${d.reused ? 'reused contract' : (d.usage?.prompt_tokens ?? d.report?.totals?.input ?? 0).toLocaleString()+' input tokens'} · ${d.elapsedMs ?? 0} ms. Narrator: ${sent.narratorUsage?.prompt_tokens?.toLocaleString() ?? 'usage unavailable'} input tokens · ${sent.narratorElapsedMs ?? 0} ms. Combined estimate: ${((d.reused ? 0 : d.report?.totals?.input ?? 0)+(sent.report?.totals?.input ?? 0)).toLocaleString()} input tokens.`, 'muted'));if(d.timings && !d.reused)section.append(node('p',Object.entries(d.timings).map(([key,value])=>({contextPreparationMs:'Prepare',providerMs:'Model',validationMs:'Validate',pendingPersistenceMs:'Save'}[key] ?? key)+': '+Math.round(value)+' ms').join(' · '),'muted'));if(d.usage?.cost!=null && !d.reused)section.append(node('p','Director cost: $'+Number(d.usage.cost).toFixed(6),'muted'));if(d.requestBody)section.append(preview('director-sent-json','Director serialized request',JSON.stringify(d.requestBody,null,2)));section.append(preview('director-contract','Director contract',JSON.stringify(d.contract,null,2)));}
+      if(sent.report.characterBudget)characterBudgetReport(section,sent.report.characterBudget);
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
       if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
       section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
@@ -295,4 +297,12 @@ function reviewCharacterCore(live, entryId) {
     if(state.busy)throw new Error('Wait for the current reply or summary.');
     await saveEntry(source,staged,base);dialog.hide();toast('Core references saved');void render();
   },'btn primary'),button('Cancel',dialog.hide));
+}
+
+function characterBudgetReport(parent,report) {
+  const section=node('div');section.append(node('p','Character budget · 80% priority / 20% supporting · unused space shared','muted'));
+  for(const [key,label] of [['priority','Protagonist / Core / Major'],['supporting','Minor / Background']]){const group=report[key];section.append(node('p',`${label}: ${group.used.toLocaleString()} / ${group.allocation.toLocaleString()} initial tokens · ${group.included} of ${group.eligible} cards${group.borrowed ? ' · '+group.borrowed.toLocaleString()+' borrowed tokens' : ''}`,'muted'));}
+  section.append(node('p',`${report.tokens.toLocaleString()} / ${report.budget.toLocaleString()} fitted character tokens including framing. Required constraints may borrow across groups.`,'muted'));
+  for(const item of report.omitted ?? [])section.append(node('p',item.name+' · '+item.group+' · '+item.reason,'muted'));
+  parent.append(section);
 }
