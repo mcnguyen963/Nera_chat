@@ -48,6 +48,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if(opts.continuationId)required.add(opts.continuationId);
   if (opts.requireLatestUser && !latest) throw new Error('No user message is available for this request.');
   let narrator = (director ? explicitStorySettings(settings).directorNarratorSystemPrompt : settings.narratorSystemPrompt || '').replace(LEGACY_PLAN_LOSS_RULE, '');
+  narrator+='\n\n'+prompts.threadPolicy;
   const planOn=!!session.longTermPlan?.trim();
   if(director)narrator+='\n\n'+prompts.directorNarrator+(!turn ? '\nNarrator preview is provisional until the Director produces a contract.' : '');
   const system=[narrator,adRule,CONTINUITY_RULE,planInjectionBlock(session.longTermPlan),!director && planOn ? prompts.planThread : '',!director && mem.scene ? SCENE_RULE(mem.protagonist,mem.calendar) : ''].filter(Boolean).join('\n\n');
@@ -171,7 +172,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const targetCount = recentRaw.slice(targetStart).length, retainedTarget = recentRaw.slice(targetStart).filter(m => selected.has(m.id)).length;
   if (retainedTarget < targetCount) warnings.push(`Recent window reduced from ${targetCount} to ${retainedTarget} messages to fit the request budget.`);
   let windowMode = mem.blockWindow ? 'fallback' : 'newest-first';
-  const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo);
+  const filtered = usableLore(opts.onlyRequiredWindow ? [] : opts.loreEntries ?? [],all,session,upTo,current.scene);
   const recentLoreMessages = mem.loreLookbackMessages > 0
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));

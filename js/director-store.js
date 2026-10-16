@@ -5,7 +5,7 @@ import { db } from './db.js';
 import { currentUid } from './auth.js';
 import { assertStory } from './errors.js';
 import { requestSource, assertSource } from './continuity.js';
-import { validateDirectorState, activeDirectorState } from './director-state.js';
+import { validateDirectorState, settleDirectorState } from './director-state.js';
 const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 export const directorTurnRef=(sid,id,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'directorTurns',id);
 const check=uid=>{if(uid!==currentUid())throw new Error('Account changed during Director operation.');};
@@ -46,7 +46,7 @@ export async function directorReplyPatch(tx,sid,session,message,order,uid=curren
   return {patch,write:()=>tx.update(ref,{status:completed?'completed':'pending',assistantId:message.id,order,source,updatedAt:Date.now()})};
 }
 export async function resetDirectorState(sid,value,expected) {
-  const uid=currentUid(),state=activeDirectorState(value),id='manual_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+  const uid=currentUid(),state=settleDirectorState(value),id='manual_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
   return runTransaction(db,async tx=>{
     check(uid);const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,expected);
     if(s.directorPending)throw new Error('Finish or discard the pending narration before editing live state.');

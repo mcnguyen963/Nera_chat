@@ -4,6 +4,7 @@ import { prompts, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { normalizeName, STOPLIST, COMMON_ALIAS_WORDS, SECTION_KEYS } from './lore-lines.js';
 import { stripTurnStamps } from './story-text.js';
+import {threadSummary} from './thread-lifecycle.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
 export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? (a.by==='user'?Infinity:0))-(b.turn ?? (b.by==='user'?Infinity:0))||(a.at ?? 0)-(b.at ?? 0)); }
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -144,6 +145,7 @@ export function sectionLabel(key, protagonist) { return key === 'bond' ? renderL
 export function renderEntry(entry, lineIds = null, protagonist = '', { provenance = false } = {}) {
   if(entry.book==='plan')return [renderPlanUnit({entry,phase:null,reason:entry.schedule?.status ?? 'pending'}),...(entry.schedule?.phases ?? []).map(phase=>renderPlanUnit({entry,phase,reason:phase.status},false))].join('\n\n');
   const out = [renderLoreLabel('entryHeading',{NAME:entry.name,ALIASES:entry.aliases?.length ? renderLoreLabel('aliases',{ALIASES:entry.aliases.join(', ')}) : ''})];
+  if(entry.kind==='thread' && threadSummary(entry))out.push('Thread: '+entry.status+' · '+threadSummary(entry));
   for (const key of SECTION_KEYS[entry.book]) {
     const s = entry.sections[key]; if (!s) continue;
     const lines = sortLines(s.lines ?? []).filter(l => !lineIds || lineIds.has(l.id));

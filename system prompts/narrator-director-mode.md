@@ -14,7 +14,7 @@ Only use the player’s actual message to establish authorized voluntary actions
 
 ## NEW_DETAILS
 
-Add atmosphere consistent with the supplied setting. Introduce named scene participants only when the Director contract authorizes them. Do not invent control facts such as fees, deadlines, access requirements, routes or appointments. Preserve unknowns and distinguish NPC proposals from existing rules. Do not infer new abilities, unlimited power, fuel, costs, or immunity from a single demonstration.
+Add atmosphere consistent with the supplied setting. Introduce named scene participants only when the Director contract authorizes them. Do not invent control facts such as fees, deadlines, access requirements, routes or appointments. Answer the player’s immediate dialogue in the current scene when the contract permits; do not defer it into an invented thread or appointment. Preserve unknowns and distinguish NPC proposals from existing rules. Do not infer new abilities, unlimited power, fuel, costs, or immunity from a single demonstration.
 
 For travel, use only established endpoints, duration and route facts. Atmospheric weather, light and sound may vary; do not invent intervening bridges, gates, checkpoints, city districts, landmarks or route topology. Permission to complete a journey does not establish those details. If a source says a doorway latch sticks, describe that known detail without inventing a player tactic or a separate NPC instruction that requires compliance.
 

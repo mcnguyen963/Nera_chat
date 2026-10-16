@@ -29,11 +29,12 @@ const scenarios=[
 test('C2 main fixtures have their original hashes',async()=>{
  for(const line of (await fx('SOURCE.txt')).split('\n').slice(1).filter(Boolean)){const [hash,f]=line.split(' ');assert.equal(createHash('sha256').update(await fx(f)).digest('hex'),hash,f);}
 });
+// Only the approved shared policy changes prompt bytes; keep frozen assembly and budgets.
 for(const [i,s] of scenarios.entries()) test('C2 main wire parity '+(i+1),async()=>{
- const main=await api(true),feature=await api(false),session={id:'s',longTermPlan:'Fixed',...s.session,allowLlmPlanUpdates:false},settings={...cfg,...s.settings},opts={messages:s.all??messages,...s.opts};delete opts.planOverride;
- let expected;try{expected=await main.buildContextForRequest(session,settings,opts);}catch(error){await assert.rejects(feature.buildContextForRequest(session,settings,opts),e=>e.message===error.message);return;}
+ const main=await api(true),feature=await api(false),{prompts}=await appHarness()('system-prompts.js'),session={id:'s',longTermPlan:'Fixed',...s.session,allowLlmPlanUpdates:false},settings={...cfg,...s.settings},opts={messages:s.all??messages,...s.opts};delete opts.planOverride;
+ let expected;try{expected=await main.buildContextForRequest(session,{...settings,narratorSystemPrompt:settings.narratorSystemPrompt.replace(JSON.parse(await fx('recovery-rule.json')),'')+'\n\n'+prompts.threadPolicy},opts);}catch(error){await assert.rejects(feature.buildContextForRequest(session,settings,opts),e=>e.message===error.message);return;}
  const actual=await feature.buildContextForRequest(session,settings,opts);
  for(const k of ['apiMessages','usedTokens','windowedCount','droppedCount','exceedsInputLimit']) assert.deepEqual(JSON.parse(JSON.stringify(actual[k])),JSON.parse(JSON.stringify(expected[k])),k);
- const a=await main.computeContextUsage(session,settings,opts.messages),b=await feature.computeContextUsage(session,settings,opts.messages);
+ const a=await main.computeContextUsage(session,{...settings,narratorSystemPrompt:settings.narratorSystemPrompt.replace(JSON.parse(await fx('recovery-rule.json')),'')+'\n\n'+prompts.threadPolicy},opts.messages),b=await feature.computeContextUsage(session,settings,opts.messages);
  for(const k of ['usedTokens','max','threshold','overThreshold'])assert.equal(b[k],a[k],k);
 });

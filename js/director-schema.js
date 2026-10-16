@@ -14,9 +14,10 @@ export function directorResponseFormat(settings,{entries,before,offeredIds,prota
   if(!isDirectorSchemaEndpoint(settings))return {type:'json_object'};
   const offered=new Set(offeredIds),memoryIds=entries.filter(e=>offered.has(e.id)).map(e=>e.id);
   const characterIds=entries.filter(e=>offered.has(e.id)&&e.book==='characters'&&![e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist))).map(e=>e.id);
-  const item=object({id:string,text:string,status:{type:'string',enum:['open','active','waiting','ready','closed','cancelled']},trigger:string,source:string});
+  const metadata=nullable(object({kind:{type:'string',enum:['appointment','commitment','ongoing']},dueDate:nullable(string),dueTime:nullable(string),participants:list(string),location:nullable(string),outcome:nullable({type:'string',enum:['resolved','cancelled','expired-unresolved','background-unresolved']})}));
+  const item=object({id:string,text:string,status:{type:'string',enum:['open','active','waiting','ready','closed','cancelled']},trigger:string,source:string,threadMeta:metadata});
   const operations=group=>object({upsert:list({$ref:'#/$defs/ledgerItem'},200),close:before[group].length?list({type:'string',enum:before[group].map(i=>i.id)},200):list(string,0)});
-  const scene=object({date:nullable(string),hour:nullable({type:'integer',enum:Array.from({length:24},(_,i)=>i+1)}),location:nullable(string),present:list(string)});
+  const scene=object({date:nullable(string),...(before.version===2?{time:nullable({...string,description:'Modern 24-hour HH:mm; retain unknown precision as null.'})}:{hour:nullable({type:'integer',enum:Array.from({length:24},(_,i)=>i+1)})}),location:nullable(string),present:list(string)});
   const event=nullable(object({id:string,name:string,phase:string}));
   const updates={anyOf:[object({}),object({scene,event,decisions:operations('decisions'),threads:operations('threads'),commitments:operations('commitments')})]};
   const focus=reference('characterId',characterIds);

@@ -11,7 +11,7 @@ const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySettings','current');
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
 const cache=new Map();let epoch=0;
-async function readDocument(data){if(![1,2,3,4,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
+async function readDocument(data){if(![1,2,3,4,5,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
 export async function preserveLegacyStorySeed(accountSettings) {
   const uid=currentUid(),ref=seedRef(uid);
   return runTransaction(db,async tx=>{
@@ -55,7 +55,7 @@ export async function saveStorySettings(sid,base,changes) {
     if(!Object.keys(allowed).length)return current;
     const modeChanged=values.narrationMode!==current.values.narrationMode;
     if(modeChanged && session.directorPending)throw new Error('Finish or discard pending Director narration before switching modes.');
-    if(modeChanged && values.narrationMode==='director' && session.memory?.calendar?.mode==='modern' && !session.directorState)throw new Error('Review live state and enter game hours 1–24 before enabling Director mode for a modern-clock story.');
+    if(modeChanged && values.narrationMode==='director' && session.memory?.calendar?.mode==='modern' && !session.directorState)throw new Error('Review live state and save its modern date and HH:mm time before enabling Director mode.');
     const revision=(session.storySettingsRevision ?? 0)+1;
     const result={version:STORY_SETTINGS_VERSION,revision,values};
     committedPatch={storySettingsRevision:revision,...(modeChanged && values.narrationMode==='director' && session.directorState && session.directorStateHistoryOrder!==(session.nextOrder ?? 0) ? {directorNeedsReview:true} : {})};

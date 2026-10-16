@@ -28,7 +28,7 @@ for(const suite of ['independent','chained'])for(const badReply of [false,true])
    const output={version:1,action:'narrate',transition:'unchanged',objective:'Narrate the authorized action without taking the next voluntary decision.',stopCondition:'Stop before the next player choice',memoryIds:raw.entityIndex.map(e=>e.id),requiredMemoryIds:[],updates:{}};
    if(/registration options/.test(input))output.updates.decisions={upsert:[{id:'registration',text:'Which excursion option?',status:'open'}],close:[]};
    if(/Dinner finishes/.test(input))output.updates.commitments={upsert:[{id:'visit-lysia',status:'ready'}],close:[]};
-   if(/one-hour route/.test(input)){output.transition='completed';output.updates.scene={...s.scene,date:'22/10/738',hour:1,location:'Crownspire infirmary'};}
+   if(/one-hour route/.test(input)){output.transition='completed';output.updates.scene={...s.scene,date:'22/10/738',time:'01:00',location:'Crownspire infirmary'};}
    if(/closed bridge/.test(input))output.transition='blocked';
    if(/established healer Lysia/.test(input))output.updates.scene={...s.scene,present:['Nera','Isolde Veyless','Lysia Solenne']};
    if(/I choose Observation only/.test(input))output.updates.decisions={upsert:[],close:s.decisions.map(i=>i.id)};
@@ -53,6 +53,6 @@ for(const suite of ['independent','chained'])for(const badReply of [false,true])
  }finally{globalThis.fetch=realFetch;console.log=realLog;await rm(dir,{recursive:true,force:true});}
 });
 test('Hard live checks detect a lost promise, skipped choice, wrong hour and invented participant',()=>{
- const row={expect:{location:'Inn',date:'21/10/738',hour:1,pendingDecision:true,readyCommitment:'promise'}},turn={contract:{action:'narrate'},after:{scene:{location:'Elsewhere',date:'22/10/738',hour:2,present:['Stranger']},decisions:[],commitments:[]}};
+ const row={expect:{location:'Inn',date:'21/10/738',time:'01:00',pendingDecision:true,readyCommitment:'promise'}},turn={contract:{action:'narrate'},after:{scene:{location:'Elsewhere',date:'22/10/738',time:'02:00',present:['Stranger']},decisions:[],commitments:[]}};
  assert.ok(checkTransition(row,turn).length>=6);
 });

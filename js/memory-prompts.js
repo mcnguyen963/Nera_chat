@@ -11,7 +11,7 @@ export function fillProtagonist(text, protagonist) { return String(text).replace
 export const LOREBOOK_TEMPLATE_MD = prompts.lorebookMarkdown;
 export const LOREBOOK_TEMPLATE_JSON = prompts.lorebookJson;
 export async function buildExtractionMessages({ settings, mem, entries, messages, range, count }) {
-  const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
+  const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+prompts.threadPolicy+"\n\n"+prompts.threadExtraction+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens}) - await count(prompt) - 500;
   const turns = computeTurns(messages);
   let fitted = null;

@@ -10,7 +10,8 @@ import {countTokens} from '../../js/vendor/gpt-tokenizer-2.9.0.js';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 test('Long-story UX benchmark',async()=>{
   const path=process.env.NERA_BENCHMARK_BACKUP;if(!path)throw new Error('Set NERA_BENCHMARK_BACKUP to a local story backup.');
-  const data=JSON.parse(await readFile(path,'utf8')),h=await harness({extraStubs:{'tokenizer.js':{countTokens:async text=>Math.ceil(countTokens(text)*1.02),tokenizerReady:()=>true}}});h.calls.loreEntries=data.lore ?? [];
+  // Preserve the production 300 ms context debounce; the general unit harness accelerates it to zero.
+  const data=JSON.parse(await readFile(path,'utf8')),h=await harness({timers:{setTimeout:(fn,ms)=>{if(ms===300 || ms===0)return setTimeout(fn,ms);},clearTimeout},extraStubs:{'tokenizer.js':{countTokens:async text=>Math.ceil(countTokens(text)*1.02),tokenizerReady:()=>true}}});h.calls.loreEntries=data.lore ?? [];
   const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('benchmark');await tick();
   // The offline settings adapter supplies revision 1; no production metadata is written.
   h.calls.sessionCallbacks.at(-1)({id:'benchmark',exists:()=>true,data:()=>({...data.session,id:'benchmark',storySettingsRevision:1})});
