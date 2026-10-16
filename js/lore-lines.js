@@ -24,7 +24,7 @@ export function sectionKey(book, value, protagonist = '') {
 }
 export function newLoreId(prefix = 'lore') { return prefix+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
 export function makeEntry(book, name, extra = {}) {
-  return { id:newLoreId(), book, kind:'card', name, aliases:[], alwaysLoad:false, draft:false, status:null, sections:Object.fromEntries(SECTION_KEYS[book].map(k => [k,{ text:'',lines:[],origin:extra.createdFrom === 'import' ? 'import' : 'user',kind:extra.createdFrom === 'import' ? 'background' : 'canon',cutoff:null }])), createdFrom:'user', ...extra };
+  return { id:newLoreId(), book, kind:'card', name, aliases:[], ...(book==='characters' ? {importance:3} : {}), alwaysLoad:false, draft:false, status:null, sections:Object.fromEntries(SECTION_KEYS[book].map(k => [k,{ text:'',lines:[],origin:extra.createdFrom === 'import' ? 'import' : 'user',kind:extra.createdFrom === 'import' ? 'background' : 'canon',cutoff:null }])), createdFrom:'user', ...extra };
 }
 export function parseMemoryLines(text,ctx={}) {
   const ops=[],skipped=[],adjusted=[],info=[];let sawNone=false;
