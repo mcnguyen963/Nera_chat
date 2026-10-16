@@ -273,10 +273,13 @@ function validateSavedStorySettings() {
 }
 
 function updateMemoryChip() {
+  const running = memoryUpdater.isRunning(session?.id);
+  const composerStatus = document.getElementById('composer-memory-status');
+  if (composerStatus) composerStatus.hidden = !running;
+  document.getElementById('composer-box')?.classList.toggle('memory-updating', running);
   const chip = document.getElementById('btn-memory'); if (!chip) return;chip.setAttribute('aria-controls','lorebook-overlay');chip.setAttribute('aria-expanded',String(managerOpen));
   const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
   const turn = turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
-  const running = memoryUpdater.isRunning(session?.id);
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
   chip.classList.toggle('running', running); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
   const status=dueRangeStatus(historyMessages ?? lastMessages,session?.memoryState,mem);
@@ -342,7 +345,9 @@ export function initChatView() {
     updateMemoryChip(); document.dispatchEvent(new CustomEvent('memory-refresh'));
     const d = e.detail;
     if(d.status==='rebuild-review')document.dispatchEvent(new CustomEvent('memory-rebuild-review',{detail:d}));
-    if (d.status === 'success' && (d.notes || d.manual || managerOpen)) {
+    if (d.status === 'running') {
+      document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: 'Extracting memory… Keep this page open.' } }));
+    } else if (d.status === 'success' && (d.notes || d.manual || managerOpen)) {
       const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.');
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text, action: d.notes ? 'Review' : null, event: 'lorebooks', options: { filter: 'review' } } }));
     } else if ((d.status==='idle' || d.status==='info') && d.manual && d.message) showTransientInfo(d.message);
