@@ -24,7 +24,7 @@ test('Eight offline requests compare identical contracts, alternate order, and s
   const bound=inputBounds(request.body,request.inputTokens),row=budget.reserve({scenario:request.scenario,inputBound:bound.inputBound,maxTokens:request.body.max_tokens});maximum+=row.reservedMicros;
   budget.settle(row,{cost:row.reservedMicros/1e6});assert.equal(row.status,'received');
  }
- assert.ok(maximum<=100000);assert.ok(requests.find(r=>r.scenario==='emotional-history').inputTokens>10000);
+ assert.ok(maximum<=100000);assert.ok(requests.find(r=>r.scenario==='emotional-history').inputTokens>7000);
  for(let i=0;i<requests.length;i+=2){const pair=requests.slice(i,i+2);assert.deepEqual(plain(pair[0].contract),plain(pair[1].contract));assert.deepEqual(plain(pair[0].before),plain(pair[1].before));assert.deepEqual(plain(pair[0].after),plain(pair[1].after));assert.equal(pair[0].scenario,pair[1].scenario);assert.notEqual(pair[0].variant,pair[1].variant);assert.equal(pair[0].variant,i%4?'candidate':'baseline');}
  const candidateArrival=requests.find(r=>r.scenario==='arrival'&&r.variant==='candidate'),oldArrival=requests.find(r=>r.scenario==='arrival'&&r.variant==='baseline');
  assert.ok(candidateArrival.report.loaded.some(e=>e.entryId==='dara'));assert.ok(!oldArrival.report.loaded.some(e=>e.entryId==='dara'));

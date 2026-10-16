@@ -1,3 +1,4 @@
+import {normalizeThreadMeta,threadLifecycle,threadIdentity,reopenThread} from './thread-lifecycle.js';
 import {stripThinking} from './thinking-text.js';
 import { evidenceFor, revisionOf, noteNeedsReview } from './continuity.js';
 import { computeTurns } from './turns.js';
@@ -27,7 +28,7 @@ export function makeEntry(book, name, extra = {}) {
 }
 export function parseMemoryLines(text,ctx={}) {
   const ops=[],skipped=[],adjusted=[],info=[];let sawNone=false;
-  const tags={char:'char',character:'char',characters:'char',chars:'char',chr:'char',loc:'loc',location:'loc',locations:'loc',place:'loc',places:'loc',fact:'fact',facts:'fact',world:'fact',event:'event',events:'event',open:'open',thread:'open',threads:'open',opened:'open',closed:'closed',close:'closed',resolved:'closed'};
+  const tags={char:'char',character:'char',characters:'char',chars:'char',chr:'char',loc:'loc',location:'loc',locations:'loc',place:'loc',places:'loc',fact:'fact',facts:'fact',world:'fact',event:'event',events:'event',open:'open',thread:'open',threads:'open',opened:'open',closed:'closed',close:'closed',resolved:'closed',expired:'expired',background:'background'};
   const assistants=ctx.range?.assistants ?? [],turns=computeTurns(ctx.messages ?? []);
   for(const [i,source] of stripThinking(text).split(/\r?\n/).entries()) {
     const line=source.trim().replace(/^(?:[-*+•]|\d+[.)])\s+/,'').replace(/`|\*\*|__/g,'').replace(/[｜│∣]/g,'|').trim();
@@ -40,11 +41,11 @@ export function parseMemoryLines(text,ctx={}) {
     let tag=tags[m[3].toLowerCase()];if(!tag){skip('unknown tag');continue;}
     const book=tag==='char'?'characters':tag==='loc'?'locations':tag==='fact'?'facts':'events';
     if(ctx.mem?.books?.[book]?.on===false){skip('book off');continue;}
-    let body=m[4],name,value,section='text';
+    let body=m[4],name,value,section='text',threadMeta;
     if(tag==='event' || (tag==='open' && /^Timeline\s*[|:]/i.test(body))){tag='event';name='Timeline';value=body.replace(/^(?:Timeline\s*)?[|:]\s*/i,'');}
     else if(tag==='fact' && !body.includes('|')){name='General';value=body;}
     else if(body.includes('|')){const at=body.indexOf('|');name=body.slice(0,at);value=body.slice(at+1);}
-    else if(['open','closed'].includes(tag)) {const at=body.search(/:| [—-] /);name=at<0?body:body.slice(0,at);value=at<0?'':body.slice(at).replace(/^(?::| [—-] )\s*/,'');}
+    else if(['open','closed','expired','background'].includes(tag)) {const at=body.search(/:| [—-] /);name=at<0?body:body.slice(0,at);value=at<0?'':body.slice(at).replace(/^(?::| [—-] )\s*/,'');}
     else {const match=body.match(/^([^:]+):\s*([^:]+):\s*(.*)$/);if(!match || !SECTION_MAP[book]?.[normalizeName(match[2])]){skip('missing separator');continue;}name=match[1];value=match[2]+': '+match[3];}
     name=name.trim().replace(/^["'“”[\]]+|["'“”[\]]+$/g,'');
     if(!name || name.length>60 || STOPLIST.has(normalizeName(name)) || normalizeName(name).length<2){skip('not a valid name');continue;}
@@ -60,8 +61,9 @@ export function parseMemoryLines(text,ctx={}) {
       if(section==='personality' && !ctx.allowPersonality){skip('personality is written by you');continue;}
     }
     value=value.trim();
+    if(['open','closed','expired','background'].includes(tag) && value.startsWith('{')){try{const data=JSON.parse(value);if(typeof data.text!=='string')throw new Error();value=data.text;threadMeta=normalizeThreadMeta(data.threadMeta);}catch{skip('invalid structured thread note');continue;}}
     if(section==='alias' && (normalizeName(value).length<2 || normalizeName(value).split(' ').every(w=>STOPLIST.has(w)))){skip('not a valid alias');continue;}
-    if((!value && !['open','closed'].includes(tag)) || value.length>400){skip('empty or oversized note');continue;}
+    if((!value && !['open','closed','expired','background'].includes(tag)) || value.length>400){skip('empty or oversized note');continue;}
     if(ops.length>=80){info.push('too many notes; first 80 kept');continue;}
     let turn=Math.max(Number(m[1]),Number(m[2] ?? m[1])),startTurn=Math.min(Number(m[1]),Number(m[2] ?? m[1])),assistant,evidence=[],original=null;
     const declaredStart=startTurn,declaredTurn=turn;
@@ -81,7 +83,7 @@ export function parseMemoryLines(text,ctx={}) {
       evidence=evidenceFor((ctx.messages ?? []).filter(m=>m.role!=='summary' && turns.turnById.get(m.id)>=startTurn && turns.turnById.get(m.id)<=turn));
     }
     const when=original?.when ?? latestScene(ctx.messages ?? [],assistant.order+1).scene?.when ?? null;
-    ops.push({tag,book,name,section,text:value,turn:assistant.turn,when,src:assistant.order,evidence,sourceRevision:original?.sourceRevision,line:i+1});
+    ops.push({tag,book,name,section,text:value,turn:assistant.turn,when,src:assistant.order,evidence,sourceRevision:original?.sourceRevision,...(threadMeta?{threadMeta}:{}),line:i+1});
   }
   if(sawNone && ops.length)info.push('NONE ignored because notes were present');
   return {ops,skipped,adjusted,info,sawNone,valid:ops.length>0 || sawNone && !skipped.some(s=>s.reason!=='not a note')};
@@ -94,9 +96,13 @@ export function applyOps(entries, ops, stampCtx = {}) {
   for (const op of ops) {
     if (stampCtx.mem?.books?.[op.book]?.on === false) { skipped.push({ ...op, reason:'book off' }); continue; }
     let e = op.tag === 'event' ? timeline() : match(op.book,op.name);
+    if(!e && op.tag==='open' && op.threadMeta){const key=threadIdentity(op.threadMeta);const matches=key?working.filter(e=>e.kind==='thread' && threadIdentity(e.threadMeta)===key):[];if(matches.length===1)e=matches[0];}
+    if(['expired','background'].includes(op.tag) && (!e || e.kind!=='thread')){skipped.push({...op,reason:'cannot archive an unknown thread'});continue;}
+    if(op.tag==='background' && e.createdFrom!=='auto' && !(e.sections.text?.lines?.some(l=>l.by==='auto') && !e.sections.text?.text?.trim())){skipped.push({...op,reason:'authored thread requires manual review'});continue;}
+    if(op.threadMeta && e?.kind==='thread' && ['closed','cancelled'].includes(e.status) && op.tag==='open' && op.threadMeta.dueDate===e.threadMeta?.dueDate && op.threadMeta.dueTime===e.threadMeta?.dueTime){skipped.push({...op,reason:'closed commitment needs new evidence or a rescheduled date'});continue;}
     if (stampCtx.reorganize && (!e || stampCtx.allowedIds && !stampCtx.allowedIds.includes(e.id))) { skipped.push({ ...op, reason:'name outside the notes' }); continue; }
     let text = op.text;
-    if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed')) { e = timeline(); text = `Resolved: ${op.name} — ${text}`; }
+    if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed' && !e.threadMeta)) { e = timeline(); text = `Resolved: ${op.name} — ${text}`; }
     if (!e && op.section === 'alias') { const clash = match(op.book,text); if (clash) { skipped.push({ ...op,reason:'name already used by '+clash.name }); continue; } }
     if (!e) {
       const timeline = op.tag === 'event' || op.tag === 'closed';
@@ -112,17 +118,31 @@ export function applyOps(entries, ops, stampCtx = {}) {
       if(!(e.aliases ?? []).some(n=>normalizeName(n)===normalizeName(text))){(e.aliases ??= []).push(text);aliases.push({entryId:e.id,alias:text});}
       continue;
     }
+    if(e.kind==='thread' && op.tag==='open' && !op.threadMeta && ['expired-unresolved','background-unresolved'].includes(e.threadMeta?.outcome))Object.assign(e,reopenThread(e));
+    if(op.tag==='expired'){const projected=threadLifecycle({...e,status:'open',threadMeta:(op.threadMeta ?? e.threadMeta)?{...(op.threadMeta ?? e.threadMeta),outcome:null}:null},latestScene(stampCtx.messages ?? [],Infinity,stampCtx.session?.memory?.startingScene).scene);if(!projected.threadExpired){skipped.push({...op,reason:'expiry is not supported by canonical story time'});continue;}e.threadMeta=projected.threadMeta;}
+    if(e.kind==='thread' && op.threadMeta && op.tag!=='expired')e.threadMeta=op.threadMeta;
     const s = e.sections[section];
     if (!s) { skipped.push({ ...op, reason:'unknown section' }); continue; }
-    if ((op.tag === 'open' || op.tag === 'closed') && e.kind === 'thread') { e.status = op.tag === 'closed' ? 'closed' : 'open'; statusChanges.push({ entryId:e.id, status:e.status }); }
-    if (!stampCtx.reorganize && s.lines.some(l=>normalizeName(l.text)===normalizeName(text) && !l.needsReview && !noteNeedsReview(l,stampCtx.messages ?? [],stampCtx.session ?? {})))continue;
+    if (['open','closed','expired','background'].includes(op.tag) && e.kind === 'thread') {e.status=op.tag==='open'?'open':'closed';e.threadMeta=normalizeThreadMeta({...e.threadMeta,outcome:op.tag==='open'?null:op.tag==='closed'?'resolved':op.tag==='expired'?'expired-unresolved':'background-unresolved'});statusChanges.push({entryId:e.id,status:e.status,threadMeta:e.threadMeta});}
+    if (!op.threadMeta && !['expired','background'].includes(op.tag) && !stampCtx.reorganize && s.lines.some(l=>normalizeName(l.text)===normalizeName(text) && !l.needsReview && !noteNeedsReview(l,stampCtx.messages ?? [],stampCtx.session ?? {})))continue;
     if(!text)continue;
     const original = stampCtx.reorganize ? [...(entries.find(x => x.id === e.id)?.sections[section]?.lines ?? [])].filter(l => l.turn === op.turn).sort((a,b) => a.at-b.at).at(-1) : null;
     const ln = { id:newLoreId('ln'), text, turn:op.turn, when:original?.when ?? op.when, src:original?.src ?? op.src, by:stampCtx.reorganize ? 'reorganize' : 'auto',at:now,evidence:op.evidence ?? [],sourceRevision:op.sourceRevision ?? stampCtx.sourceRevision ?? 0 };
     if (new TextEncoder().encode(JSON.stringify(e)).length + new TextEncoder().encode(JSON.stringify(ln)).length > 900000) { skipped.push({ ...op, reason:'card storage full' }); continue; }
     s.lines.push(ln);
-    if ((op.tag === 'open' || op.tag === 'closed') && e.kind === 'thread') { e.statusSource = ln; const status = statusChanges.findLast(c => c.entryId === e.id); if (status) status.source = ln; }
+    if (['open','closed','expired','background'].includes(op.tag) && e.kind === 'thread') {e.statusSource=ln;if(op.threadMeta)e.threadMetaSource=ln;const status=statusChanges.findLast(c=>c.entryId===e.id);if(status){status.source=ln;if(op.threadMeta)status.threadMetaSource=ln;}}
     if (!creates.includes(e)) appends.push({ entryId:e.id, section, line:ln });
+  }
+  if(!stampCtx.reorganize && stampCtx.mem?.books?.events?.on!==false) {
+    const scene=latestScene(stampCtx.messages ?? [],Infinity,stampCtx.session?.memory?.startingScene).scene;let expiredCount=0;
+    const assistant=[...(stampCtx.messages ?? [])].filter(m=>m.role==='assistant' && !m.truncated && m.acceptance!=='pending' && m.acceptance!=='rejected').at(-1);
+    for(const e of working.filter(e=>e.book==='events' && e.kind==='thread' && e.status!=='closed')) {
+      const candidate={...e,threadTimingNeedsReview:!!(e.threadMetaSource && noteNeedsReview(e.threadMetaSource,stampCtx.messages ?? [],stampCtx.session ?? {})),sections:{...e.sections,text:{...e.sections.text,lines:(e.sections.text.lines ?? []).filter(l=>!noteNeedsReview(l,stampCtx.messages ?? [],stampCtx.session ?? {}))}}};
+      const projected=threadLifecycle(candidate,scene);if(!projected.threadExpired || !assistant)continue;if(expiredCount++>=80)break;
+      const ln={id:newLoreId('ln'),text:'Scheduled window passed; outcome remains unconfirmed.',by:'auto',at:now,turn:computeTurns(stampCtx.messages).turnById.get(assistant.id),when:scene.when,src:assistant.order,evidence:[...(e.threadMetaSource?.evidence ?? []),...evidenceFor([assistant])],sourceRevision:stampCtx.sourceRevision ?? 0};
+      Object.assign(e,{status:'closed',threadMeta:projected.threadMeta,statusSource:ln});(e.sections.text.lines ??= []).push(ln);
+      statusChanges.push({entryId:e.id,status:'closed',source:ln,threadMeta:e.threadMeta});if(!creates.includes(e))appends.push({entryId:e.id,section:'text',line:ln});
+    }
   }
   return { creates, appends, aliases, statusChanges, skipped, entries:working };
 }

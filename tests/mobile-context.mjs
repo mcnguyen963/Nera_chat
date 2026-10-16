@@ -4,8 +4,9 @@ import {readFile} from 'node:fs/promises';
 import {appHarness} from './app-harness.mjs';
 const frozen=await readFile(new URL('./fixtures/mobile-context/memory-context.js',import.meta.url),'utf8');
 const count=async text=>Math.ceil(text.length/4)+(text.match(/\n\n/g)?.length ?? 0);
+// Preserve the frozen assembly while applying the intentionally added mandatory policy.
 async function builders(){
-  const current=appHarness(),before=appHarness({sources:{'memory-context.js':frozen}});
+  const current=appHarness(),before=appHarness({sources:{'memory-context.js':frozen.replace('const system=', 'narrator+="\\n\\n"+prompts.threadPolicy; const system=')}});
   return {optimized:(await current('memory-context.js')).buildMemoryContext,frozen:(await before('memory-context.js')).buildMemoryContext,makeEntry:(await current('lore-lines.js')).makeEntry};
 }
 const history=n=>Array.from({length:n},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',narratorTurn:Math.floor(i/2)+1,content:(i%5===0?'<OOC>note</OOC> ':'')+'Story '+i+' '+('varied text. '.repeat(i%7+1)),...(i%2?{scene:'date: Day 1 · time: night · place: Inn · present: Mira',planThread:'Preserve the map.'}:{})}));

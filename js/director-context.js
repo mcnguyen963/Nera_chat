@@ -45,7 +45,7 @@ export function directorTaskSettings(settings) {
 }
 export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens}={}) {
   count=cachedCount(count);
-  const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session).entries;
+  const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session,Infinity,before.scene).entries;
   const raw=messages.filter(m=>['user','assistant'].includes(m.role) && !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order);
   const latest=continuation ? {role:'user',content:'Continue the latest completed narration within player-agency boundaries.'} : raw.findLast(m=>m.role==='user');
   if(!latest)throw new Error('Director needs a user action.');
@@ -83,7 +83,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const planGuard=planOmitted ? '\nThe full fixed author plan is omitted from this small context and remains with the Narrator. Omission does not remove its constraints or authorize planned future events. Use the live ledger, selected control lore and explicit player action. When a transition depends on unavailable plan details, keep it unresolved and stop before that transition; do not guess. The author can place essential current constraints in the live ledger or control lore.' : '';
   const responseFormat=()=>directorResponseFormat(directorTaskSettings(settings),{entries:available,before:live,offeredIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],protagonist:mem.protagonist,focusLimit:settings.directorFocusLimit ?? 5});
   const schemaCost=async()=>isDirectorSchemaEndpoint(directorTaskSettings(settings)) ? await count(JSON.stringify(responseFormat())) : 0;
-  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];
+  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+'\n\n'+prompts.threadPolicy+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];
   const total=async()=>await schemaCost()+REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
   const limit=requestInputLimit(directorTaskSettings(settings));
   // Retain direct-action control lore ahead of older conversation when the

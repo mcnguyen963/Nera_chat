@@ -1,5 +1,5 @@
 import { prompts } from './system-prompts.js';
-export const STORY_SETTINGS_VERSION=5;
+export const STORY_SETTINGS_VERSION=6;
 export const STORY_SETTING_KEYS=Object.freeze(['narratorSystemPrompt','directorNarratorSystemPrompt','directorNarratorPromptNeedsReview','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages','narrationMode','narratorProfileId','directorProfileId','directorSystemPrompt','directorMaxInputTokens','directorMaxOutputTokens','directorRecentTurns','directorFocusLimit']);
 export function pickStorySettings(value={}) {
   return Object.fromEntries(STORY_SETTING_KEYS.filter(k=>Object.hasOwn(value,k)).map(k=>[k,structuredClone(value[k])]));
@@ -41,8 +41,15 @@ export function assertSnapshotRevisions(before,after) {
   if(!after || after.deleting || JSON.stringify(snapshotRevisions(before))!==JSON.stringify(snapshotRevisions(after)))throw new Error('The story changed while copying or exporting. Try again when both devices are idle.');
 }
 
-// Recognize old built-in defaults without modifying the original Classic field.
+// Upgrade exact known built-in defaults; preserve custom story prompts.
 export async function migrateStorySettings(value={}) {
+  value={...value};
+  if(globalThis.crypto?.subtle)for(const [field,defaultKey] of [['narratorSystemPrompt','narrator'],['directorNarratorSystemPrompt','directorNarratorDefault'],['directorSystemPrompt','director'],['memoryExtractionPrompt','memoryExtraction']]) {
+    if(typeof value[field]!=='string')continue;
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value[field].replace(/\r\n/g,'\n').trimEnd()));
+    const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+    if(prompts.threadDefaultHashes.split('\n').includes(field+' '+hash))value[field]=prompts[defaultKey];
+  }
   if(typeof value.directorSystemPrompt==='string' && globalThis.crypto?.subtle) {
     const text=value.directorSystemPrompt.replace(/\r\n/g,'\n').trimEnd();
     const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));

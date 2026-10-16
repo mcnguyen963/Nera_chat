@@ -20,9 +20,9 @@ async function setup({records=false,limit=30000,bookBudget=2200}={}) {
  const build=(extra={})=>builder.buildContextForRequest(session,settings,{messages,loreEntries:entries,directorTurn:turn,includeInspection:true,...extra});
  return {use,entries,settings,session,messages,turn,build,settingsApi};
 }
-test('Built-in Classic narrator remains byte-identical and Director default removes state reconstruction',async()=>{
+test('Both built-in narrator modes share the reviewed foundation and Director delegates state authority',async()=>{
  const {prompts}=await appHarness()('system-prompts.js');
- assert.equal(createHash('sha256').update(prompts.narrator+'\n').digest('hex'),'7674f903c2c2e5419802269896c68fe99b191df2bfd372c84db6bb04459808a0');
+ assert.match(prompts.narrator,/NO MANUFACTURED TENSION OR THREADS/);assert.match(prompts.directorNarratorDefault,/NO MANUFACTURED TENSION OR THREADS/);
  assert.doesNotMatch(prompts.directorNarratorDefault,/Rebuild the current state|chat wins|scene tag is the only state/);
  assert.match(prompts.directorNarratorDefault,/Read the current contract/);
  assert.doesNotMatch(prompts.directorNarratorDefault,/\{\{[A-Z_]+\}\}/);

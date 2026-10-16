@@ -2,17 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
-const state={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera','Isolde']},event:{id:'dinner',name:'Dinner',phase:'meal'},decisions:[],threads:[],commitments:[{id:'visit',text:'Visit Lysia after dinner',trigger:'Dinner finishes',status:'waiting'}]};
+const state={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera','Isolde']},event:{id:'dinner',name:'Dinner',phase:'meal'},decisions:[],threads:[],commitments:[{id:'visit',text:'Visit Lysia after dinner',trigger:'Dinner finishes',status:'waiting'}]};
 const settings={narrationMode:'director',directorProfileId:'small',profiles:[{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'small-model'}],activeProfileId:'large',endpoint:'https://narrator.test',apiKey:'large-key',modelId:'large-model',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,reasoning:{},narratorSystemPrompt:'Write well',maxContextTokens:40000,maxResponseTokens:2000,keepRecentMessagesAfterSummary:10};
 const contract=updates=>({version:1,action:'narrate',transition:'unchanged',objective:'Offer the next interaction',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates});
 const tokens={countTokens:async t=>Math.ceil(t.length/4)};
-test('Importing a minute clock requires a reviewed game hour before any Director call',async()=>{
- let calls=0,saves=0;const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_sid,t)=>{saves++;return t;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify(contract({})),finishReason:'stop'};}}}}),api=await use('director-turn.js'),states=await use('director-state.js');
- const history=[{id:'a',role:'assistant',order:1,content:'Lysia waits at the bench.',scene:'date: 21/10/738 · time: 15:45 · place: Inn · present: Nera, Isolde',sceneMeta:{kind:'manual'}},{id:'u',role:'user',order:2,content:'I ask about tomorrow.'}],session={id:'s',memory:{scene:true}};
- const seeded=states.seedDirectorState(session,history);assert.equal(seeded.scene.hour,null);
- await assert.rejects(api.prepareDirectorTurn(session,settings,history,[]),/Story clock is 15:45/);assert.equal(calls,0);assert.equal(saves,0);
- await api.prepareDirectorTurn({...session,directorState:{...seeded,scene:{...seeded.scene,hour:16}}},settings,history,[]);assert.equal(calls,1);assert.equal(saves,1);
- assert.equal(states.directorClockNeedsReview(session,[{...history[0],scene:'date: 21/10/738 · time: Hour 16 · place: Inn · present: Nera'}],seeded),null);
+test('Modern minute clocks seed directly and legacy live states require explicit review',async()=>{
+ const use=appHarness(),states=await use('director-state.js');
+ const history=[{id:'a',role:'assistant',order:1,scene:'date: 21/10/738 · time: 15:45 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}];
+ const seeded=states.seedDirectorState({memory:{}},history);assert.equal(seeded.version,2);assert.equal(seeded.scene.time,'15:45');assert.equal(states.directorClockNeedsReview({},history,seeded),null);
+ const legacy={...seeded,version:1,scene:{date:'21/10/738',hour:16,location:'Inn',present:['Nera']}};assert.equal(states.directorClockNeedsReview({},history,legacy),'Hour 16');
+ const converted=states.modernizeDirectorState(legacy,'21/10/738','16:00');assert.equal(converted.scene.time,'16:00');
 });
 test('Director reasoning exhaustion points to its own output setting without retries or state saves',async()=>{
  for(const finishReason of ['length','MAX_TOKENS','max_output_tokens']){
@@ -84,7 +83,7 @@ test('Explicit arrival boundaries recognize player directions without treating q
 });
 test('Director rejects a new NPC choice beyond an arrival boundary before saving and carries accepted boundaries to the Narrator',async()=>{
  let saved=0,beyond=true;
- const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_s,t)=>{saved++;return t;}},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify({...contract({scene:{date:'22/10/738',hour:1,location:'Infirmary'},...(beyond?{decisions:{upsert:[{id:'registration',text:'Which registration option?',status:'open'}],close:[]}}:{})}),transition:'completed'})})}}});
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async(_s,t)=>{saved++;return t;}},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify({...contract({scene:{date:'22/10/738',time:'01:00',location:'Infirmary'},...(beyond?{decisions:{upsert:[{id:'registration',text:'Which registration option?',status:'open'}],close:[]}}:{})}),transition:'completed'})})}}});
  const api=await use('director-turn.js'),messages=[{id:'u',role:'user',order:1,content:'I walk to the infirmary. Stop when we arrive.'}];
  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]),/beyond the requested arrival boundary/);assert.equal(saved,0);assert.equal(state.scene.location,'Inn');
  beyond=false;const turn=await api.prepareDirectorTurn({id:'s',directorState:state},settings,messages,[]);assert.equal(saved,1);assert.equal(turn.playerBoundary.kind,'arrival');
@@ -99,8 +98,8 @@ test('An arrival boundary still permits a genuine blocked or interrupted journey
 });
 test('Director never forwards an extra unvalidated scene or ledger beside the canonical updates',async()=>{
  const api=await appHarness()('director-state.js');
- const turn=api.parseDirectorContract(JSON.stringify({...contract({}),scene:{hour:99},decisions:[{id:'shadow',text:'Fake offer',status:'open'}],commitments:[]}),state);
- assert.equal(turn.after.scene.hour,20);assert.equal(turn.after.decisions.length,0);assert.equal(turn.contract.scene,undefined);assert.equal(turn.contract.decisions,undefined);assert.equal(turn.contract.commitments,undefined);
+ const turn=api.parseDirectorContract(JSON.stringify({...contract({}),scene:{time:'99:00'},decisions:[{id:'shadow',text:'Fake offer',status:'open'}],commitments:[]}),state);
+ assert.equal(turn.after.scene.time,'20:00');assert.equal(turn.after.decisions.length,0);assert.equal(turn.contract.scene,undefined);assert.equal(turn.contract.decisions,undefined);assert.equal(turn.contract.commitments,undefined);
 });
 test('Director ledger survives omitted updates across thirty turns and explicitly becomes ready without travel',async()=>{
  const api=await appHarness()('director-state.js');let next=state;
@@ -114,15 +113,15 @@ test('Explicit closure preserves evidence and missing items never close a pendin
  assert.equal(api.parseDirectorContract(JSON.stringify(contract({})),next).after.decisions.length,1);
  const closed=api.parseDirectorContract(JSON.stringify(contract({commitments:{upsert:[],close:['visit']}})),next).after;assert.equal(closed.commitments.length,0);assert.equal(api.activeDirectorState(closed).commitments.length,0);
 });
-test('Director validates JSON, game hours, dates, memory IDs and answer-only transitions',async()=>{
+test('Director validates JSON, modern clocks, dates, memory IDs and answer-only transitions',async()=>{
  const api=await appHarness()('director-state.js');
- for(const hour of [0,25,1.5,'9'])assert.throws(()=>api.validateDirectorState({...state,scene:{...state.scene,hour}}),/1–24/);
- assert.equal(api.validateDirectorState({...state,scene:{...state.scene,hour:24}}).scene.hour,24);
+ for(const time of ['24:00','8:60',1.5,'9'])assert.throws(()=>api.validateDirectorState({...state,scene:{...state.scene,time}}),/HH:mm/);
+ assert.equal(api.validateDirectorState({...state,scene:{...state.scene,time:'23:59'}}).scene.time,'23:59');
  assert.throws(()=>api.validateDirectorState({...state,scene:{...state.scene,date:'31/2/738'}}),/date/);
  assert.throws(()=>api.parseDirectorContract('{broken',state),/JSON/);
  assert.throws(()=>api.parseDirectorContract(JSON.stringify({...contract({}),memoryIds:['missing']}),state),/unknown memory/);
- assert.throws(()=>api.parseDirectorContract(JSON.stringify({...contract({scene:{hour:9,date:'22/10/738'}}),action:'answer'}),state),/unchanged/);
- assert.equal(api.parseDirectorContract(JSON.stringify({...contract({}),action:'answer'}),state).after.scene.hour,20);
+ assert.throws(()=>api.parseDirectorContract(JSON.stringify({...contract({scene:{time:'09:00',date:'22/10/738'}}),action:'answer'}),state),/unchanged/);
+ assert.equal(api.parseDirectorContract(JSON.stringify({...contract({}),action:'answer'}),state).after.scene.time,'20:00');
 });
 test('Director normalizes required-only cards and omitted empty ledger operations without losing state',async()=>{
  const api=await appHarness()('director-state.js'),entries=[{id:'nera'},{id:'isolde'}];
@@ -157,9 +156,9 @@ test('Director budget failure protects the live ledger and latest input',async()
 });
 test('Director calls once, saves only a pending contract, and Retry reuses it',async()=>{
  let calls=0,pending=null;const session={id:'s',directorState:state,historyRevision:1};
- const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};return pending;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify(contract({scene:{hour:21}})),finishReason:'stop',usage:{prompt_tokens:100}};}}}});
+ const use=appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};return pending;}},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify(contract({scene:{time:'21:00'}})),finishReason:'stop',usage:{prompt_tokens:100}};}}}});
  const api=await use('director-turn.js'),messages=[{id:'u',role:'user',order:1,content:'Finish dinner'}];const turn=await api.prepareDirectorTurn(session,settings,messages,[]);
- assert.equal(turn.after.scene.hour,21);assert.equal(session.directorState.scene.hour,20);assert.equal(calls,1);
+ assert.equal(turn.after.scene.time,'21:00');assert.equal(session.directorState.scene.time,'20:00');assert.equal(calls,1);
  const retried=await api.prepareDirectorTurn({...session,directorPending:turn.id},settings,messages,[]);assert.equal(retried.id,turn.id);assert.equal(calls,1);
 });
 test('Regenerate reuses completed contract and Continue waits at a pending player choice',async()=>{
@@ -176,18 +175,18 @@ test('Director failures and stale inputs never persist a contract',async()=>{
 test('Narrator context follows Director state and preserves existing retrieval alongside Director selections',async()=>{
  const use=appHarness({stubs:{'tokenizer.js':tokens,'messages.js':{getMessages:async()=>[]}}}),api=await use('context-builder.js'),lore=await use('lore-lines.js');
  const nera=lore.makeEntry('characters','Nera'),lysia=lore.makeEntry('characters','Lysia');lysia.sections.appearance.text='Silver healer coat';nera.sections.appearance.text='Player profile';
- const turn={before:state,after:{...state,scene:{...state.scene,location:'Infirmary',hour:6,date:'22/10/738'}},contract:{...contract({}),memoryIds:[lysia.id],requiredMemoryIds:[lysia.id]}};
+ const turn={before:state,after:{...state,scene:{...state.scene,location:'Infirmary',time:'06:00',date:'22/10/738'}},contract:{...contract({}),memoryIds:[lysia.id],requiredMemoryIds:[lysia.id]}};
  const built=await api.buildContextForRequest({id:'s',memory:{lorebooks:true,scene:true,protagonist:'Nera'},directorState:state},settings,{messages:[{id:'u',order:1,role:'user',content:'Visit Lysia'}],loreEntries:[nera,lysia],directorTurn:turn});
  assert.equal(built.report.mode,'director-narrator');assert.equal(built.report.scene.place,'Infirmary');assert.ok(built.apiMessages[0].content.includes('Director contract'));assert.ok(built.report.loaded.some(e=>e.entryId===lysia.id));
  assert.ok(built.apiMessages.some(m=>m.content.includes('Silver healer coat')));
  await assert.rejects(api.buildContextForRequest({id:'s',memory:{lorebooks:true,books:{characters:{budget:0}}}},settings,{messages:[{id:'u',role:'user',order:1,content:'Go'}],loreEntries:[lysia],directorTurn:turn}),/Required Director memories/);
 });
 
-test('A game-hour rollover requires a date change and preserves unknown time',async()=>{
- const api=await appHarness()('director-state.js'),last={...state,scene:{...state.scene,hour:24}};
- assert.throws(()=>api.parseDirectorContract(JSON.stringify(contract({scene:{hour:1}})),last),/following date/);
- assert.equal(api.parseDirectorContract(JSON.stringify(contract({scene:{hour:1,date:'22/10/738'}})),last).after.scene.hour,1);
- assert.equal(api.parseDirectorContract(JSON.stringify(contract({})),{...state,scene:{...state.scene,hour:null}}).after.scene.hour,null);
+test('A modern-clock rollover requires a date change and preserves unknown time',async()=>{
+ const api=await appHarness()('director-state.js'),last={...state,scene:{...state.scene,time:'23:59'}};
+ assert.throws(()=>api.parseDirectorContract(JSON.stringify(contract({scene:{time:'01:00'}})),last),/following date/);
+ assert.equal(api.parseDirectorContract(JSON.stringify(contract({scene:{time:'01:00',date:'22/10/738'}})),last).after.scene.time,'01:00');
+ assert.equal(api.parseDirectorContract(JSON.stringify(contract({})),{...state,scene:{...state.scene,time:null}}).after.scene.time,null);
 });
 test('Director Stop prevents a late provider result from persisting a contract',async()=>{
  const controller=new AbortController();let saved=0;
