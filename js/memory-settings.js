@@ -1,4 +1,5 @@
 import { normalizeCalendar } from './story-calendar.js';
+import { resolveModelProfile } from './model-profiles.js';
 import { canonicalScene } from './scene.js';
 export const memoryValidationRanges = {
   loreLookbackMessages: [0, Number.MAX_SAFE_INTEGER], batchTurns: [2, 100], lagTurns: [0, 50], updateMaxTokens: [256, 32000],
@@ -41,16 +42,6 @@ export function anyMemory(mem) { return memoryActive(mem) || mem?.autoUpdate ===
 
 // Resolve a task-local connection without switching the narrator's active profile.
 export function memoryTaskSettings(settings, mem, outputTokens = mem.updateMaxTokens) {
-  let task = { ...settings };
-  if (mem.updateProfileId) {
-    const profile = settings.profiles?.find(p => p.id === mem.updateProfileId);
-    if (!profile) throw new Error('The memory model profile no longer exists. Choose another profile in Memory settings.');
-    // Flat fields include the current profile's device-local overrides.
-    if (profile.id !== settings.activeProfileId) {
-      task = { ...task,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',streaming:profile.streaming ?? true,reasoning:profile.reasoning ?? {},
-        advancedParametersEnabled:profile.advancedParametersEnabled ?? ['temperature','topP','frequencyPenalty','presencePenalty'].some(key => profile[key] != null && profile[key] !== '') };
-      for (const key of ['temperature','topP','frequencyPenalty','presencePenalty']) task[key] = profile[key] ?? null;
-    }
-  }
+  const task=resolveModelProfile(settings,mem.updateProfileId,{role:'memory'});
   return { ...task,maxResponseTokens:outputTokens,reasoning:structuredClone(task.reasoning ?? {}) };
 }

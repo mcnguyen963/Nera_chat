@@ -181,3 +181,6 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 body > .settings-overlay { transform: var(--app-viewport-transform, none); }
 .toast { bottom: auto; top: calc(var(--app-offset-top, 0px) + var(--app-height, 100dvh) - 104px - var(--composer-safe-bottom)); }
 .story-starters button, .session-item, .thinking > summary { min-height: 44px; }
+
+.director-ledger-row { padding: 12px 0; border-bottom: 1px solid var(--border, #555); display: grid; gap: 8px; }
+.director-ledger-row textarea { min-height: 72px; width: 100%; }

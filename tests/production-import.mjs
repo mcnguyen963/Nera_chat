@@ -5,7 +5,19 @@ async function setup({fail=false}={}){const calls=[],sessions=[{id:'s',title:'St
 const file=(head={})=>({name:'story.jsonl',size:200,text:async()=>[JSON.stringify({character_name:'Story',nera:{version:2,session:head,lore:[{book:'characters',name:'Mira'},null]}}),'null','[1]',JSON.stringify({mes:'Hi',is_user:true})].join('\n')});
 test('D5 import publishes only after chunks and normalized lore; no imported revision',async()=>{const h=await setup();await h.api.importSillyTavern(file({historyRevision:999,memory:{autoUpdate:true,sceneFallback:true,updateMaxTokens:32000}}));assert.equal(h.calls[0][2].importing,true);assert.deepEqual(h.calls.slice(0,4).map(c=>c[0]),['create','chunks','lore','publish']);const patch=h.calls[3][2];assert.equal('historyRevision'in patch,false);assert.equal(patch.importing,false);assert.equal(patch.memory.autoUpdate,false);assert.equal(patch.memory.sceneFallback,false);assert.equal(patch.memory.updateMaxTokens,2000);assert.ok(h.lore[0].id);assert.ok(h.lore[0].sections.notes.lines);assert.equal(h.calls.at(-1)[1].droppedLore,1);});
 test('D5 failed import stays unpublished and requests resumable cleanup',async()=>{const h=await setup({fail:true});await assert.rejects(h.api.importSillyTavern(file()),/write failed/);assert.deepEqual(h.calls.map(c=>c[0]),['create','chunks','delete']);});
-test('R4 null lines are skipped and files over twenty MB rejected before reading',async()=>{const h=await setup();assert.equal(h.api.parseSillyTavernJsonl('null\n'+JSON.stringify({mes:'Hi',is_user:true})).messages.length,1);let read=false;await assert.rejects(h.api.importSillyTavern({size:21*1024*1024,text:async()=>{read=true;}}),/20 MB/);assert.equal(read,false);});
+test('R4 null lines are skipped and files over sixty-four MB rejected before reading',async()=>{const h=await setup();assert.equal(h.api.parseSillyTavernJsonl('null\n'+JSON.stringify({mes:'Hi',is_user:true})).messages.length,1);let read=false;await assert.rejects(h.api.importSillyTavern({size:65*1024*1024,text:async()=>{read=true;}}),/64 MB/);assert.equal(read,false);});
+test('Full story backups over twenty MB remain importable',async()=>{
+ const h=await setup(),backup={format:'nera-chat-backup',session:{title:'Long story'},messages:[{id:'u',order:1,role:'user',content:'Continue.'}],lore:[]};
+ // Whitespace reproduces pretty-printed backup overhead without an oversized document.
+ const text=JSON.stringify(backup)+' '.repeat(21*1024*1024);
+ await h.api.importSillyTavern({name:'long-backup.json',size:new TextEncoder().encode(text).length,text:async()=>text});
+ assert.equal(h.calls.find(c=>c[0]==='publish')[2].importing,false);
+});
+test('Story import verifies UTF-8 bytes when supplied file size is missing or inaccurate',async()=>{
+ const h=await setup(),text='é'.repeat(33*1024*1024);
+ await assert.rejects(h.api.importSillyTavern({name:'large.json',size:1,text:async()=>text}),/64 MB/);
+ assert.equal(h.calls.length,0);
+});
 test('P2 account download contains every story, reports progress and cancels without a download',async()=>{const h=await setup(),progress=[];h.sessions.push({id:'b',title:'B',storySettingsRevision:1});assert.equal(await h.api.exportAllStories({onProgress:p=>progress.push(p)}),2);const download=h.calls.at(-1);assert.equal(download[0],'download');assert.equal((download[1].match(/neraStorySeparator/g) ?? []).length,2);assert.equal(progress.at(-1).done,2);const controller=new AbortController();h.calls.length=0;await assert.rejects(h.api.exportAllStories({signal:controller.signal,onProgress:()=>controller.abort()}),e=>e.name==='AbortError');assert.equal(h.calls.length,0);});
 
 const importFile=(records)=>({name:'mixed.jsonl',size:500,text:async()=>records.map(record=>JSON.stringify(record)).join('\n')});

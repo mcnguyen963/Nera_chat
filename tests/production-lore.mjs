@@ -221,3 +221,23 @@ for(const change of ['account','category'])test('scoped Undo rejects changed '+c
  if(change==='account')h.controls.uid='another';else h.docs.get(h.sessionPath+'/lore/'+created).book='facts';const before=structuredClone(h.docs.get(h.sessionPath+'/lore/'+created));
  await assert.rejects(h.api.restoreBackup({id:'s',uid:'u'},id,[],{book:'characters'}),/changed|cancelled/);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+created),before);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
 });
+
+for(const format of ['md','json'])test(`Plan-only ${format} scoped import saves schedules, backs up and undoes without changing other books`,async()=>{
+ const h=await cardImportSetup(),use=appHarness(),l=await use('lore-lines.js');
+ const entry=structuredClone(l.makeEntry('plan','Festival',{schedule:{start:'20/11/738',end:'23/11/738',status:'pending',phases:[{id:'arrival',title:'Arrival',start:'20/11/738',end:'20/11/738',status:'pending',text:'Wait for the player to accept.'}]}}));
+ entry.sections.text.text='Future opportunity, not established history.';
+ const existing={...structuredClone(entry),id:'old-plan',name:'Old plan'};
+ h.docs.set(h.sessionPath+'/lore/'+existing.id,existing);
+ const source=format==='md'?h.f.toMarkdown([entry],{books:['plan']}):h.f.toJson([entry],{books:['plan']});
+ const parsed=format==='md'?h.f.fromMarkdown(source,{book:'plan'}):h.f.fromJson(source);
+ const plan=h.f.planImport([h.entry,h.other,existing],parsed,{book:'plan',mode:'replace',loreRevision:0});
+ const backup=await h.api.importLore({id:'s',uid:'u'},plan,[],{book:'plan'});
+ const created=plan.writes.find(w=>!w.delete).id,saved=h.docs.get(h.sessionPath+'/lore/'+created);
+ assert.deepEqual(saved.schedule,entry.schedule);assert.equal(saved.sections.text.text,entry.sections.text.text);
+ assert.equal(h.docs.has(h.sessionPath+'/lore/old-plan'),false);
+ assert.deepEqual(h.docs.get(h.sessionPath+'/lore/mira'),h.entry);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+ assert.ok(h.counts.backups>0);
+ await h.api.restoreBackup({id:'s',uid:'u'},backup,[],{book:'plan'});
+ assert.deepEqual({id:'old-plan',...h.docs.get(h.sessionPath+'/lore/old-plan')},existing);assert.equal(h.docs.has(h.sessionPath+'/lore/'+created),false);
+ assert.deepEqual(h.docs.get(h.sessionPath+'/lore/mira'),h.entry);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
+});
