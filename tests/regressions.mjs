@@ -2281,3 +2281,12 @@ test('Legacy Hour 24 live-state review requires an explicit modern date and cloc
  inputs[0].value='22/10/738';inputs[1].value='00:15';review.checked=true;await namedButton(root,'Save live state').click();
  assert.equal(saved.version,2);assert.equal(saved.scene.date,'22/10/738');assert.equal(saved.scene.time,'00:15');assert.equal(seed.scene.hour,24);
 });
+
+test('Editing an effectively expired thread preserves the raw saved baseline until an explicit lifecycle action',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),{makeEntry}=await h.use('lore-lines.js'),lore=await h.use('ui/lorebook-view.js');
+ const card=makeEntry('events','Visit Lysia',{id:'visit',kind:'thread',status:'open'});card.threadMeta={kind:'appointment',dueDate:'24/10/738',dueTime:'08:00',participants:['Lysia'],location:'Inn',outcome:null};h.calls.loreEntries=[card];
+ chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene:true,lorebooks:true}})});h.calls.latestCallbacks.at(-1)({messages:[{id:'a',order:1,role:'assistant',content:'The morning passes.',scene:'date: 28/10/738 · time: 09:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}],hasEarlier:false});
+ lore.initLorebookView();lore.openLorebooks();await new Promise(r=>setTimeout(r,0));lore.openLorebooks({entryId:'visit'});
+ const root=h.el('lorebook-overlay');assert.ok(namedButton(root,'Reopen as ongoing'));const title=root.querySelectorAll('input').find(i=>i.value==='Visit Lysia');title.value='Meeting with Lysia';await title.dispatchEvent({type:'input'});await namedButton(root,'Save').click();
+ const [,staged,base]=h.calls.cardWrites.at(-1);assert.equal(base.status,'open');assert.equal(staged.status,'open');assert.equal(staged.threadMeta.outcome,null);assert.equal(staged.name,'Meeting with Lysia');
+});
