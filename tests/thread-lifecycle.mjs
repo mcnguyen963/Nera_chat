@@ -98,3 +98,8 @@ test('Thread import previews respect Keep mine timing and validate selective-rec
  const whole=f.fromJson(f.toJson([incoming]));assert.equal((f.planImport([target],whole,{conflict:'mine'}).writes.find(w=>w.id==='visit')?.data ?? target).threadMeta.dueTime,'08:00');
  const doc=records.toRecordDocument(target);doc.subject.threadMeta.dueTime='25:99';assert.throws(()=>records.fromRecordDocument(doc),/thread date/);
 });
+test('Director midnight date normalization precedes expiry and remains speculative until narration completes',async()=>{
+ const s=await appHarness()('director-state.js'),before={...modern,scene:{...modern.scene,date:'26/10/738',time:'23:50'},commitments:[{id:'date',text:'Meet Lysia',status:'waiting',threadMeta:{...appointment,dueTime:'00:00'}}]};
+ const turn=s.parseDirectorContract(contract({scene:{time:'00:10'}}),before);assert.equal(turn.after.scene.date,'27/10/738');assert.equal(turn.contract.updates.scene.date,'27/10/738');assert.equal(turn.after.archive[0].threadMeta.outcome,'expired-unresolved');assert.equal(before.scene.date,'26/10/738');assert.equal(before.commitments.length,1);
+ assert.throws(()=>s.parseDirectorContract(contract({scene:{date:'25/10/738',time:'00:10'}}),before),/backwards/);
+});
