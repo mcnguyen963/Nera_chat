@@ -22,8 +22,8 @@ export async function preserveLegacyStorySeed(accountSettings) {
     return values;
   });
 }
-export async function ensureStorySettings(sid,uid=currentUid()) {
-  const ref=target(sid,uid);
+export async function ensureStorySettings(sid,uid=currentUid(),{cacheResult=true}={}) {
+  const ref=target(sid,uid),loadEpoch=epoch;
   const result=await runTransaction(db,async tx=>{
     const session=assertStory((await tx.get(parent(sid,uid))).data()),saved=await tx.get(ref);
     if(saved.exists()){const data=await readDocument(saved.data());if(data.revision!==(session.storySettingsRevision ?? 0))throw new Error('Story settings revisions disagree. Reload and review before generating.');return data;}
@@ -32,7 +32,7 @@ export async function ensureStorySettings(sid,uid=currentUid()) {
     const result={version:STORY_SETTINGS_VERSION,revision:1,values:await migrateStorySettings(seed.data().values)};
     tx.set(ref,result);tx.update(parent(sid,uid),{storySettingsRevision:1});return result;
   });
-  cache.set(uid+':'+sid,result);return structuredClone(result);
+  if(cacheResult && loadEpoch===epoch && uid===currentUid())cache.set(uid+':'+sid,result);return structuredClone(result);
 }
 export async function writeInitialStorySettings(sid,values=defaultStorySettings(),uid=currentUid()) {
   const result={version:STORY_SETTINGS_VERSION,revision:1,values:await migrateStorySettings(values)};
@@ -76,6 +76,11 @@ export async function selectStorySettings(sid,{force=false}={}) {
     if(run!==epoch || uid!==currentUid() || state.sessionId!==sid)return;
     state.storySettings=loaded;cache.set(uid+':'+sid,loaded);void saveStoryData(uid,sid,{storySettings:loaded});emit();
   }catch(error){if(run===epoch){state.storySettingsLoadFailed=true;emit();}throw error;}
+}
+export function invalidateStorySettingsLoads(){++epoch;}
+export async function readStorySettingsRefresh(sid){return ensureStorySettings(sid,currentUid(),{cacheResult:false});}
+export function applyStorySettingsRefresh(sid,loaded){
+  ++epoch;cache.set(currentUid()+':'+sid,loaded);state.storySettingsId=sid;state.storySettings=loaded;state.storySettingsLoadFailed=false;
 }
 export function effectiveActiveSettings() {
   if(!state.sessionId || state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed)throw new Error('Story prompts have not loaded. Reload the story before generating.');

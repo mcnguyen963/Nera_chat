@@ -30,7 +30,7 @@ export function withLocal(settings) {
 export const DEFAULT_SETTINGS = {
   memoryExtractionPrompt: DEFAULT_MEMORY_EXTRACTION_PROMPT,
   memoryReorganizePrompt: DEFAULT_MEMORY_REORGANIZE_PROMPT,
-  petCharacterIds: [],
+  petCharacterIds: ["lillith-v2.png"],
   petMovement: "roam",
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
@@ -189,6 +189,15 @@ function cacheSettings(settings) {
   }
 }
 
+let settingsEpoch=0;
+export async function readSettingsRefresh() {
+  const owner=currentUid(),run=++settingsEpoch;
+  const snap=await getDocFromServer(userSettingsRef());
+  if(!snap.exists())throw new Error('Settings did not load from the server.');
+  const settings=withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
+  if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');
+  return {settings,check(){if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');},apply(){this.check();++settingsEpoch;state.settings=settings;state.settingsSource='server';cacheSettings(settings);}};
+}
 export async function loadSettings({ requireServer = false } = {}) {
   const cached = readCachedSettings();
   const ref = userSettingsRef();
@@ -223,15 +232,14 @@ export async function loadSettings({ requireServer = false } = {}) {
 // Ignore local Firestore snapshots so stale/offline data cannot replace a
 // newer server value loaded at startup.
 export function watchSettings() {
-  let update = 0;
+  const owner=currentUid();let update = 0;
   return onSnapshot(userSettingsRef(), async (snap) => {
-    if (!snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
-    const sequence = ++update;
+    if (owner!==currentUid() || !snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
+    const sequence = ++update,run=settingsEpoch;
     try {
       const settings = withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
-      state.settingsSource='server';
-      if (sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
-      state.settings = settings;
+      if (owner!==currentUid() || run!==settingsEpoch || sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
+      state.settingsSource='server';state.settings = settings;
       cacheSettings(settings);
       document.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (error) {
@@ -258,7 +266,7 @@ export async function saveSettings(settings) {
     await setDoc(userSettingsRef(), storedSettings(snapshot));
     setPref('nera.streamVibrationMode',snapshot.streamVibrationMode);
     try {localStorage.removeItem(localKey());} catch {}
-    state.settings = snapshot;
+    ++settingsEpoch;state.settings = snapshot;
     cacheSettings(snapshot);
     document.dispatchEvent(new CustomEvent("settings-changed"));
   } finally {

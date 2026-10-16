@@ -363,6 +363,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .pet-idle-label { align-self: stretch; justify-content: flex-start; }
 .pet-layer { position: fixed; inset: 0; z-index: 25; padding: var(--safe-top) env(safe-area-inset-right, 0px) var(--safe-bottom) env(safe-area-inset-left, 0px); pointer-events: none; }
 .chat-pet { position: absolute; top: 0; left: 0; display: grid; place-items: center; width: var(--pet-box, 64px); height: var(--pet-box, 64px); padding: 0; border: 0; background: transparent; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; will-change: transform; }
+.chat-pet.pet-ios { will-change: auto; }
 .pet-sprite { display: block; width: var(--pet-size, 56px); aspect-ratio: 192 / 208; background-image: var(--pet-sheet); background-repeat: no-repeat; background-size: 800% auto; pointer-events: none; }
 .chat-pet.pet-drag-ready { cursor: grabbing; outline: 1px dashed #777; border-radius: 8px; touch-action: none; }
 .pet-menu { position: absolute; width: 190px; padding: 6px; background: #1c1c1c; border: 1px solid #363636; border-radius: 12px; box-shadow: 0 12px 35px #0009; pointer-events: auto; }
@@ -376,11 +377,11 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .pet-choice input { width: 18px; height: 18px; flex: none; margin: 0; }
 .pet-choice-preview { display: block; width: 88px; aspect-ratio: 192 / 208; flex: none; background-repeat: no-repeat; background-size: 800% auto; }
 /* Pet branding remains visible before account settings load. */
-.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/violet.webp")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
+.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/lillith-v2.png")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
 .login-card .brand-pet { width: 112px; }
 .welcome-pet { width: 192px; }
 .has-pet .welcome-pet { display: none; }
-.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/violet.webp")); background-repeat: no-repeat; background-size: 800% auto; }
+.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/lillith-v2.png")); background-repeat: no-repeat; background-size: 800% auto; }
 @media (max-width: 720px) {
   .pet-home-slot.pet-welcome-slot { width: 156px; height: 156px; }
   .pet-choice { min-width: min(160px, 100%); flex: 1 1 42%; }

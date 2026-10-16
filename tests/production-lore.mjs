@@ -241,3 +241,18 @@ for(const format of ['md','json'])test(`Plan-only ${format} scoped import saves 
  assert.deepEqual({id:'old-plan',...h.docs.get(h.sessionPath+'/lore/old-plan')},existing);assert.equal(h.docs.has(h.sessionPath+'/lore/'+created),false);
  assert.deepEqual(h.docs.get(h.sessionPath+'/lore/mira'),h.entry);assert.deepEqual(h.docs.get(h.sessionPath+'/lore/'+h.other.id),h.other);
 });
+
+test('cancelling a newer data hold preserves the older refresh hold and story isolation',async()=>{
+ const h=await setup([],card([])),older=h.api.holdLoreWrites('s'),newer=h.api.holdLoreWrites('s');
+ newer.release();let done=false;const write=h.api.commitExtraction('s',{appends:[],aliases:[],statusChanges:[],creates:[]},{endOrder:2,fromTurn:1,toTurn:1}).then(()=>done=true);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(done,false);
+ const other=h.api.holdLoreWrites('other');await other.ready;other.release();assert.equal(done,false);
+ older.release();await write;assert.equal(done,true);
+});
+
+test('Sync cancellation aborts an extraction queued behind its data hold without waiting for that hold to release',async()=>{
+ const h=await setup([],card([])),hold=h.api.holdLoreWrites('s'),controller=new AbortController();
+ const write=h.api.commitExtraction('s',{appends:[],aliases:[],statusChanges:[],creates:[]},{endOrder:2,fromTurn:1,toTurn:1,signal:controller.signal});
+ assert.equal(h.api.loreWritesPending(),true);controller.abort();await assert.rejects(write,e=>e.name==='AbortError');
+ assert.equal(h.api.loreWritesPending(),false);assert.equal(h.counts.loreWrites,0);assert.equal(h.docs.get(h.sessionPath).memoryState,undefined);hold.release();
+});

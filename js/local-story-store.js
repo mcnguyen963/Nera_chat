@@ -42,7 +42,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
       default:throw new Error('Unsupported local story operation.');
     }
   }});
-  entry={observe:onChange,get confirmed(){return queue.confirmed;},get view(){return queue.view;},get status(){return queue.status;},enqueue(kind,payload){return queue.enqueue({id:operationId(),kind,payload,source:requestSource(queue.view.session),createdAt:Date.now()});},flush:()=>queue.flush(),adopt:base=>{queue.adopt(base);void saveStoryData(owner,sid,{confirmed:base});},retry:()=>queue.retry(),close:()=>queue.close(),settled:()=>queue.settled(),
+  entry={observe:onChange,get confirmed(){return queue.confirmed;},get view(){return queue.view;},get status(){return queue.status;},enqueue(kind,payload){return queue.enqueue({id:operationId(),kind,payload,source:requestSource(queue.view.session),createdAt:Date.now()});},flush:()=>queue.flush(),adopt:(base,{persist=true}={})=>{queue.adopt(base);if(persist)void saveStoryData(owner,sid,{confirmed:base});},retry:()=>queue.retry(),close:()=>queue.close(),settled:()=>queue.settled(),
     async getTurn(_sid,id){if(queue.view.turns[id])return queue.view.turns[id];const turn=await getDirectorTurn(sid,id);if(currentUid()!==owner)throw new Error('Account changed.');if(turn){queue.cacheTurn(turn);await saveStoryData(owner,sid,{turns:queue.view.turns});}return turn;},
     saveTurn(_sid,turn){const view=entry.enqueue('director',{turn});return Promise.resolve(view.turns[turn.id]);},
   };

@@ -15,6 +15,30 @@ import { currentUid } from './auth.js';
 import { newLoreId, normalizeName } from './lore-lines.js';
 let waitForNarrator = () => Promise.resolve(), activeWrites = 0;
 const writeWaiters = new Set(), storyWrites = new Map(), storyWaiters = new Map();
+const holds = new Map(), admitted = new Map();
+// Reserve data access synchronously. Earlier writes drain; later writes wait for
+// release and are never included in the turn's drain dependency.
+export function holdLoreWrites(sid) {
+  let release;
+  const previous=holds.get(sid), done=new Promise(resolve=>release=resolve);
+  const hold={done,previous,released:false,release:()=>{
+    hold.released=true;
+    if(holds.get(sid)===hold){let next=previous;while(next?.released)next=next.previous;if(next)holds.set(sid,next);else holds.delete(sid);}
+    release();
+  }};
+  holds.set(sid,hold);
+  return {ready:Promise.all([previous?.done,...(admitted.get(sid) ?? [])]),release:hold.release};
+}
+async function admitWrite(sid,signal) {
+  while(holds.has(sid)) {
+    const done=holds.get(sid).done;
+    if(!signal){await done;continue;}
+    let abort;
+    try{await Promise.race([done,new Promise((_,reject)=>{abort=()=>reject(Object.assign(new Error('Stopped.'),{name:'AbortError'}));if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});})]);}
+    finally{signal.removeEventListener('abort',abort);}
+  }
+  if(signal?.aborted)throw Object.assign(new Error('Stopped.'),{name:'AbortError'});
+}
 export function waitForStoryWrites(sid) { if (!storyWrites.get(sid)) return Promise.resolve(); return new Promise(resolve => { if (!storyWaiters.has(sid)) storyWaiters.set(sid,new Set()); storyWaiters.get(sid).add(resolve); }); }
 export function configureLoreWrites(waitIdle) { waitForNarrator = waitIdle; }
 export function loreWritesPending() { return activeWrites > 0; }
@@ -24,8 +48,14 @@ function gateWrite(action) {
     const owner = args[0]?.uid ?? currentUid();
     const sid = typeof args[0] === 'object' ? args[0].id : args[0]; storyWrites.set(sid,(storyWrites.get(sid) ?? 0)+1);
     activeWrites++;
-    try { await waitForNarrator(sid); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); const result=await action({ id:sid,uid:owner },...args.slice(1));if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('local-lore-saved',{detail:{sessionId:sid}}));return result; }
-    finally { const remaining = storyWrites.get(sid)-1; if (remaining) storyWrites.set(sid,remaining); else { storyWrites.delete(sid); for (const resolve of storyWaiters.get(sid) ?? []) resolve(); storyWaiters.delete(sid); } if (--activeWrites === 0) { for (const resolve of writeWaiters) resolve(); writeWaiters.clear(); } }
+    // Admission is recorded before yielding, so a newly accepted Send sees it.
+    const signal=args[2]?.signal;
+    const waiting=holds.has(sid) ? admitWrite(sid,signal) : null;
+    let finish;
+    const record=()=>{const done=new Promise(resolve=>finish=resolve);if(!admitted.has(sid))admitted.set(sid,new Set());admitted.get(sid).add(done);return done;};
+    let done=waiting ? null : record();
+    try { if(waiting){await waiting;while(holds.has(sid))await admitWrite(sid,signal);done=record();}if(signal?.aborted)throw Object.assign(new Error('Stopped.'),{name:'AbortError'});await waitForNarrator(sid);if(signal?.aborted)throw Object.assign(new Error('Stopped.'),{name:'AbortError'}); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); const result=await action({ id:sid,uid:owner },...args.slice(1));if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('local-lore-saved',{detail:{sessionId:sid}}));return result; }
+    finally { if(done){admitted.get(sid)?.delete(done);if(!admitted.get(sid)?.size)admitted.delete(sid);finish();}const remaining = storyWrites.get(sid)-1; if (remaining) storyWrites.set(sid,remaining); else { storyWrites.delete(sid); for (const resolve of storyWaiters.get(sid) ?? []) resolve(); storyWaiters.delete(sid); } if (--activeWrites === 0) { for (const resolve of writeWaiters) resolve(); writeWaiters.clear(); } }
   };
 }
 const root = (sid,tree) => collection(db,'users',sid?.uid ?? currentUid(),'sessions',sid?.id ?? sid,tree);

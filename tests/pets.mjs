@@ -67,7 +67,7 @@ test('request callbacks require both the current turn and current session', () =
 
 // A deterministic DOM/clock fixture exercises the real controller without network,
 // Firebase, or browser credentials. Geometry helpers above cover route correctness.
-async function harness({ mobile = false, reduced = false, intersection = true } = {}) {
+async function harness({ mobile = false, reduced = false, intersection = true, ios = false } = {}) {
   let now = 100000, nextId = 0;
   const frames = new Map(), timers = new Map(), ids = new Map(), assets = [], observers = [], textNodes = [], intersections = [];
   const state = { settings: { petCharacterIds: [], petMovement: 'roam' }, sessionId: 'story', busy: false };
@@ -105,7 +105,7 @@ async function harness({ mobile = false, reduced = false, intersection = true } 
         x = welcome ? 150 : 40; y = welcome ? 160 : 100;
       } else if (this.id === 'chat-pet') {
         width = height = Number.parseFloat(this.style.getPropertyValue('--pet-box')) || 64;
-        const match = this.style.transform?.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
+        const match = this.style.transform?.match(/translate(?:3d)?\(([-\d.]+)px, ([-\d.]+)px/);
         if (match) { x = Number(match[1]); y = Number(match[2]); }
       } else if (this.rect) ({ x, y, width, height } = this.rect);
       return { x, y, left: x, top: y, width, height, right: x + width, bottom: y + height };
@@ -136,7 +136,7 @@ async function harness({ mobile = false, reduced = false, intersection = true } 
   class Image {
     set src(value) { assets.push(value); queueMicrotask(() => this.onload()); }
   }
-  const context = vm.createContext({ state, window, document, Image, URL, Date: Clock, Math,
+  const context = vm.createContext({ state, window, document, Image, URL, Date: Clock, Math, navigator:{userAgent:ios ? "iPhone" : "Desktop"},
     performance: { now: () => now },
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     ...(intersection ? {IntersectionObserver: class {
@@ -255,7 +255,7 @@ test('offscreen docked pets stop and scrolling them back into view restarts anim
   h.window.dispatchEvent({ type: 'resize' }); h.advance(16);
   assert.equal(root.hidden, true); assert.equal(h.frames.size, 0);
   list.rect.y = 70;
-  h.window.dispatchEvent({ type: 'resize' });
+  h.window.dispatchEvent({ type: 'resize' });h.advance(16);
   assert.equal(root.hidden, false); assert.ok(h.frames.size > 0);
 });
 
@@ -301,4 +301,21 @@ test('Q6 without IntersectionObserver viewport filtering preserves placement and
   for(let i=0;i<8;i++){h.pet.invalidatePetLayout();h.advance(16);}
   assert.equal(visible.rectReads,1);assert.equal(offscreen.rectReads,1);
   h.advance(22);assert.equal(visible.rectReads,2);assert.equal(offscreen.rectReads,2);
+});
+
+test('iPhone pet uses 2D positioning and skips unchanged position and size writes while animating',async()=>{
+ const h=await harness({mobile:true,ios:true});await h.select(['lillith-v2.png']);const root=h.ids.get('chat-pet');
+ assert.equal(root.classList.contains('pet-ios'),true);assert.match(root.style.transform,/^translate\(/);
+ let position=root.style.transform,writes=0,sizes=0;Object.defineProperty(root.style,'transform',{get:()=>position,set:value=>{position=value;writes++;}});
+ const set=root.style.setProperty.bind(root.style);root.style.setProperty=(...args)=>{sizes++;set(...args);};
+ h.state.busy=true;h.pet.updatePetPhase('writing',h.pet.startPetTurn());
+ for(let i=0;i<8;i++){h.advance(16);h.pet.invalidatePetLayout();}
+ assert.equal(writes,0);assert.equal(sizes,0);assert.ok(h.frames.size>0);assert.equal(root.dataset.activity,'writing');
+});
+test('scroll and keyboard resize bursts coalesce layout work while reduced motion keeps animation stopped',async()=>{
+ const h=await harness({mobile:true,reduced:true,ios:true});await h.select(['lillith-v2.png']);
+ const root=h.ids.get('chat-pet');
+ assert.equal(h.frames.size,0);const reads=root.rectReads ?? 0;
+ for(let i=0;i<20;i++){h.document.dispatchEvent({type:'scroll'});h.window.dispatchEvent({type:'resize'});}
+ assert.equal(h.frames.size,1);assert.equal(root.rectReads ?? 0,reads);h.advance(16);assert.equal(h.frames.size,0);assert.equal(root.hidden,false);
 });
