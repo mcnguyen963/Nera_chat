@@ -40,10 +40,12 @@ const entries=()=>{
   const sameMessages=threadViewMemo.messages?.length===messages.length && messages.every((m,i)=>m===threadViewMemo.messages[i]);
   if(threadViewMemo.raw===raw && sameMessages && threadViewMemo.revision===session.historyRevision && threadViewMemo.invalidations===session.memoryInvalidations && threadViewMemo.startingScene===session.memory?.startingScene)return threadViewMemo.value;
   const projected=new Map(usableLore(raw,messages,session).entries.map(e=>[e.id,e]));
-  const value=raw.map(e=>{if(e.kind!=='thread')return e;const p=projected.get(e.id);return {...e,status:p.status,threadMeta:p.threadMeta,threadTimingNeedsReview:p.threadTimingNeedsReview};});
-  threadViewMemo={raw,messages,revision:session.historyRevision,invalidations:session.memoryInvalidations,startingScene:session.memory?.startingScene,value};return value;
+  // Keep the editable baseline raw. Derived expiry must never become an implicit manual edit.
+  const value=raw;
+  threadViewMemo={raw,messages,revision:session.historyRevision,invalidations:session.memoryInvalidations,startingScene:session.memory?.startingScene,projected,value};return value;
 };
 const normSearch = s => String(s).normalize('NFD').replace(/\p{M}/gu,'').toLowerCase();
+const threadView=e=>threadViewMemo.projected?.get(e.id) ?? e;
 const linesOf = e => Object.values(e.sections).flatMap(s => s.lines);
 const dirty = () => staged && JSON.stringify(staged) !== JSON.stringify(base);
 const canLeave = () => !dirty() || confirm('Discard changes?');
@@ -142,7 +144,7 @@ function renderShell() {
 function renderRail() {
   if (!rail) return; rail.replaceChildren();
   for (const [key,label] of Object.entries(BOOK_LABELS)) {
-    const cards = entries().filter(e => e.book === key), drafts = cards.filter(e => e.draft).length, openThreads = cards.filter(e => e.kind === 'thread' && e.status !== 'closed').length;
+    const cards = entries().filter(e => e.book === key), drafts = cards.filter(e => e.draft).length, openThreads = cards.filter(e => e.kind === 'thread' && threadView(e).status !== 'closed').length;
     const b = button(label+' · '+cards.length,() => { if (!canLeave()) return; book = key; screen = 'list'; selected = null; staged = base = null; search = ''; renderShell(); },'btn lore-book'+(key === book ? ' selected' : ''));
     b.setAttribute('aria-controls','lorebook-columns');b.setAttribute('aria-expanded',String(key===book && screen==='list'));
     b.append(node('small',key === 'events' ? openThreads+' open threads' : drafts ? drafts+' to review' : live()?.session.memory?.books?.[key]?.on === false ? 'Not used' : '')); rail.append(b);
@@ -179,7 +181,7 @@ function renderList() {
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
 }
 function renderRows(rows) {
-  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || e.kind === 'thread' && (threadFilter === 'all' || e.status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases,threadSummary(e)].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
+  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || e.kind === 'thread' && (threadFilter === 'all' || threadView(e).status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
   if (!cards.length) {
     const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.',plan:'No scheduled plans yet. Add an event with dates and optional phases.' };
     rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : messages[book],'muted')); return;
@@ -239,7 +241,11 @@ function renderEditor() {
     if(!ready)editor.append(node('p','Enable Scene line and Modern date in Memory settings to load scheduled plans.','memory-warning'));
     renderPlanEditor(editor,staged,{date:ready ? latestScene(live()?.messages ?? [],Infinity,mem.startingScene).scene?.when : null,budget:normalizeMemory(live()?.session.memory).books.plan.budget,save:saveCard,remove:deleteCard,cancel:()=>{staged=structuredClone(base);renderEditor();}});return;
   }
-  if (staged.kind === 'thread') { const status = field('Status',''); const select = node('select'); for (const value of ['open','closed']) { const o = node('option',value); o.value = value; select.append(o); } select.value = staged.status; select.addEventListener('change',() => {if(select.value==='open')Object.assign(staged,reopenThread(staged));else{staged.status='closed';staged.threadMeta={...staged.threadMeta,outcome:'resolved'};}renderEditor();});status.input.replaceWith(select);editor.append(status.wrap);renderThreadEditor(editor,staged,{onChange:()=>select.value=staged.status}); }
+  if (staged.kind === 'thread') {
+    const displayed=threadView(staged);
+    if(displayed.threadExpired && !staged.threadMeta?.outcome && staged.threadMeta?.kind!=='ongoing')editor.append(node('p','Expired — unresolved. This is calculated from story time; the next memory update will archive it.','muted'),button('Reopen as ongoing',()=>{Object.assign(staged,reopenThread({...staged,threadMeta:displayed.threadMeta}));renderEditor();}));
+    if(displayed.threadTimingNeedsReview)editor.append(node('p','Timing evidence changed. Review the appointment before using its deadline.','memory-warning'));
+    const status = field('Saved status',''); const select = node('select'); for (const value of ['open','closed']) { const o = node('option',value); o.value = value; select.append(o); } select.value = staged.status; select.addEventListener('change',() => {if(select.value==='open')Object.assign(staged,reopenThread(staged));else{staged.status='closed';staged.threadMeta={...staged.threadMeta,outcome:'resolved'};}renderEditor();});status.input.replaceWith(select);editor.append(status.wrap);renderThreadEditor(editor,staged,{onChange:()=>select.value=staged.status}); }
   if (book === 'facts') editor.append(node('p',staged.schemaVersion===3 ? "World rules are selected by relevance within the World facts budget." : "World facts are sent every turn. Keep them short — rules, not stories.",'muted'));
   const protagonist = normalizeMemory(live()?.session.memory).protagonist, own = book === 'characters' && [staged.name,...staged.aliases].some(n => normalizeName(n) === normalizeName(protagonist));
   if(staged.schemaVersion===3)renderRecordEditor(editor,staged,{entries:entries(),messages:live()?.messages ?? [],session:live()?.session ?? {}});
