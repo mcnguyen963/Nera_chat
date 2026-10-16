@@ -24,6 +24,8 @@ Projection is local and deterministic: no per-turn model call or cloud scan was 
 
 No bulk lore migration is required. Legacy and selective-record lorebooks retain their format and provenance. Native JSON, whole-book Markdown and card import/export preserve thread timing/outcomes. Existing Plan schedules, phases and manual Complete/Reopen behavior remain unchanged.
 
+For modern clocks, an afternoon/evening-to-morning wrap with a missing or stale same-day date automatically advances the date and weekday before thread deadlines are evaluated. Month/year boundaries and leap days are handled locally. Correct future dates are not incremented twice; unknown dates remain unknown, OOC freezes state, and explicit past-date or ordinary backwards-clock errors remain rejected. Author clock corrections in Classic mode and legacy checkpoint semantics remain unchanged.
+
 Modern Director state uses version 2 and `scene.time: "HH:mm" | null`; the contract/turn envelope stays version 1. Settings version 6 accepts versions 1–5. Provider profiles, effort and price limits are unchanged.
 
 ## Validation

@@ -21,7 +21,7 @@ for(const [date,time] of [['Friday 21/10/738','25:99'],['31/4/738','15:40'],['Sa
 test('elapsed minutes cross midnight with date and weekday together',()=>{
   const old={...prior,time:'23:50'};
   assert.equal(check('Saturday 22/10/738','00:10',{prior:old,userText:'Wait for 20 minutes.'}).warnings.length,0);
-  assert.equal(check('Friday 21/10/738','00:10',{prior:old,userText:'Wait for 20 minutes.'}).scene,raw(old.when,old.time));
+  assert.equal(check('Friday 21/10/738','00:10',{prior:old,userText:'Wait for 20 minutes.'}).scene,raw('Saturday 22/10/738','00:10'));
   assert.equal(check('Saturday 22/10/738','00:20',{prior:old,userText:'Wait for twenty minutes.'}).scene,raw(old.when,old.time));
 });
 test('combined hours and minutes obey elapsed arithmetic',()=>{
@@ -83,4 +83,15 @@ test('manual scene correction permits backward time but rejects invalid clocks a
  assert.equal(scene.validateSceneEdit(raw('21/10/738','3:20 PM'),anchor),raw('Friday 21/10/738','15:20'));
  assert.throws(()=>scene.validateSceneEdit(raw('Saturday 21/10/738','15:20'),anchor),/weekday/);
  assert.throws(()=>scene.validateSceneEdit(raw('21/10/738','25:99'),anchor),/clock/);
+});
+
+for(const [before,after] of [['31/10/738','1/11/738'],['31/12/738','1/1/739'],['28/2/740','29/2/740'],['29/2/740','1/3/740']])test('stale same-date midnight tag automatically rolls '+before,()=>{
+ const p={...prior,when:calendar.formatStoryDate(calendar.parseStoryDate(before),anchor),time:'23:55'};
+ const r=check(p.when,'00:05',{prior:p,userText:'Wait ten minutes.'});assert.equal(scene.parseScene(r.scene).when,calendar.formatStoryDate(calendar.parseStoryDate(after),anchor));assert.equal(scene.parseScene(r.scene).time,'00:05');assert.equal(r.warnings.length,0);
+});
+test('midnight is next-day, future dates are not incremented twice, and unknown dates remain unknown',()=>{
+ assert.equal(calendar.midnightRolloverDate('Friday 21/10/738','23:59','21/10/738','00:00'),'Saturday 22/10/738');
+ assert.equal(calendar.midnightRolloverDate('21/10/738','23:59','22/10/738','00:10'),null);
+ assert.equal(calendar.midnightRolloverDate(null,'23:59',null,'00:10'),null);
+ assert.equal(calendar.midnightRolloverDate('21/10/738','15:40','21/10/738','15:30'),null);
 });

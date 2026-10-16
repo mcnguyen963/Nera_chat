@@ -1,7 +1,7 @@
 import { normalizeName } from './lore-lines.js';
 import { latestScene, parseScene, sceneLine } from './scene.js';
 import {normalizeThreadMeta,threadLifecycle,threadIdentity} from './thread-lifecycle.js';
-import { parseStoryDate, parseClock, clockText } from './story-calendar.js';
+import { parseStoryDate, parseClock, clockText, midnightRolloverDate } from './story-calendar.js';
 export const DIRECTOR_VERSION = 2;
 const groups = ['decisions','threads','commitments'];
 const statuses = ['open','active','waiting','ready','closed','cancelled'];
@@ -93,6 +93,10 @@ export function parseDirectorContract(content, before, entries = [], {protagonis
   if (Object.keys(raw.updates).some(k=>!allowed.has(k))) fail('unknown state update.');
   if(raw.updates.scene && (!object(raw.updates.scene) || Object.keys(raw.updates.scene).some(k=>!['date',before.version===2?'time':'hour','location','present'].includes(k))))fail('invalid scene update.');
   if (raw.updates.scene) after.scene = {...after.scene,...raw.updates.scene};
+  if(before.version===2 && raw.action==='narrate') {
+    const date=midnightRolloverDate(before.scene.date,before.scene.time,after.scene.date,after.scene.time);
+    if(date){after.scene.date=date;raw.updates.scene={...raw.updates.scene,date};}
+  }
   if (Object.hasOwn(raw.updates,'event')) after.event = raw.updates.event;
   for (const group of groups) {
     let ops = raw.updates[group];

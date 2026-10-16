@@ -29,6 +29,16 @@ export function parseClock(value) {
   return hour*60+minute;
 }
 export const clockText = minutes => `${String(Math.floor(minutes/60)).padStart(2,'0')}:${String(minutes%60).padStart(2,'0')}`;
+// An afternoon/evening clock followed by an earlier morning clock is an
+// overnight wrap, not a backwards correction. Unknown clocks/dates stay unknown.
+export function midnightRolloverDate(previousDate,previousTime,date,time) {
+  const before=parseStoryDate(previousDate),after=parseStoryDate(date),oldClock=parseClock(previousTime),clock=parseClock(time);
+  if(!before?.valid || !after?.valid || before.ordinal!==after.ordinal || oldClock===null || clock===null || oldClock<720 || clock>=720)return null;
+  let {year,month,day}=before;
+  if(++day>daysInMonth(year,month)){day=1;if(++month>12){month=1;year++;}}
+  if(year>9999)throw new Error('Story date exceeds the supported calendar.');
+  return (before.weekday===null?'':WEEKDAYS[(before.weekday+1)%7]+' ')+`${day}/${month}/${year}`;
+}
 export function normalizeCalendar(raw) {
   if(raw?.mode!=='modern')return {mode:'legacy',anchor:null};
   const date=parseStoryDate(raw.anchor);
@@ -44,7 +54,7 @@ export function calendarInstruction(raw) {
   const calendar=normalizeCalendar(raw);
   if(calendar.mode!=='modern')return '';
   formatStoryDate(parseStoryDate(calendar.anchor),calendar);
-  return `STORY CALENDAR\nUse date: Weekday D/M/YYYY and time: HH:mm (24-hour), for example Friday 21/10/738 and 15:40. The author weekday anchor is ${calendar.anchor}; use modern month lengths and leap years, and advance weekdays from this anchor. Carry unknown precision as unknown. Estimate plausible elapsed time for ordinary actions; obey explicit current timestamps and elapsed durations. Advance date and weekday together at midnight. Quoted, historical and future appointments are not current time. Pure OOC does not advance events or time.`;
+  return `STORY CALENDAR\nUse date: Weekday D/M/YYYY and time: HH:mm (24-hour), for example Friday 21/10/738 and 15:40. The author weekday anchor is ${calendar.anchor}; use modern month lengths and leap years, and advance weekdays from this anchor. Carry unknown precision as unknown. Estimate plausible elapsed time for ordinary actions; obey explicit current timestamps and elapsed durations. At midnight advance date and weekday; a stale same-date overnight clock wrap is normalized to the following date. Quoted, historical and future appointments are not current time. Pure OOC does not advance events or time.`;
 }
 export function modernSceneReminder(raw,current,planActive=false) {
   const calendar=normalizeCalendar(raw);
@@ -101,13 +111,17 @@ export function validateModernTimestamp(fields,{calendar,prior,narration='',user
   if(known(fields.when??fields.date)&&!date?.valid)return rejected('Invalid modern scene date; prior timestamp kept.');
   if(known(fields.time)&&clock===null)return rejected('Invalid modern scene clock; prior timestamp kept.');
   const oldDate=parseStoryDate(previousDate),oldClock=parseClock(previousTime);
-  const effectiveDate=date??(oldDate?.valid?oldDate:null),effectiveClock=clock??oldClock;
+  let effectiveDate=date??(oldDate?.valid?oldDate:null);const effectiveClock=clock??oldClock;
   if(!effectiveDate) {
     if(oldClock===null&&clock!==null&&!clockEvidence(userText,clock)&&!clockEvidence(narration,clock))return rejected('Unsupported new scene clock precision; prior timestamp kept.');
     return {date:null,time:effectiveClock===null?null:clockText(effectiveClock),provenance:{date:'unknown',time:clock!==null?'declared':'prior'},warnings:[]};
   }
-  const formatted=formatStoryDate(effectiveDate,calendar),expectedWeekday=parseStoryDate(formatted).weekday;
+  const suppliedFormatted=formatStoryDate(effectiveDate,calendar),expectedWeekday=parseStoryDate(suppliedFormatted).weekday;
   if(date?.weekday!==null&&date?.weekday!==undefined&&date.weekday!==expectedWeekday)return rejected('Scene weekday conflicts with the story anchor; prior timestamp kept.');
+  const correctionRequested=/\b(?:correct(?:ion)?|set|actually|rewind|flashback)\b/i.test(userText);
+  const rolled=correctionRequested?null:midnightRolloverDate(previousDate,previousTime,`${effectiveDate.day}/${effectiveDate.month}/${effectiveDate.year}`,effectiveClock===null?null:clockText(effectiveClock));
+  if(rolled)effectiveDate=parseStoryDate(rolled);
+  const formatted=formatStoryDate(effectiveDate,calendar);
   const sameDay=oldDate?.valid&&oldDate.ordinal===effectiveDate.ordinal;
   const userExact=exactEvidence(userText,effectiveDate,effectiveClock,sameDay);
   const narrativeExact=exactEvidence(narration,effectiveDate,effectiveClock,sameDay);
