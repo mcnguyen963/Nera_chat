@@ -1,3 +1,5 @@
+import { characterCardSlots, allocateCharacterPools } from './character-budget.js';
+import { characterImportance } from './character-importance.js';
 import { renderPlanUnit } from './scheduled-plan.js';
 import { maxOf } from './math-utils.js';
 import { prompts, renderLoreLabel } from './system-prompts.js';
@@ -119,15 +121,17 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     }
     const ranked = [...candidates.values()].sort((a,b) => a.priority-b.priority ||
       ((!transition && (book==='facts' && a.priority===4 || book==='events' && a.priority===2))
-        ? newestNote(b.entry)-newestNote(a.entry) : compareMention(a.mention,b.mention)) || stableId(a.entry.id,b.entry.id));
+        ? newestNote(b.entry)-newestNote(a.entry) : compareMention(a.mention,b.mention)) || (book==='characters' ? characterImportance(a.entry)-characterImportance(b.entry) : 0) || stableId(a.entry.id,b.entry.id));
+    const isReserved=entry=>entry.alwaysLoad || entry.id===pc?.id || sources.records && (entry.recordLayout?.records ?? []).some(r=>r.pinned);
+    const characterSlots=book==='characters' ? characterCardSlots(ranked.filter(item=>!isReserved(item.entry)),mem.books[book].maxCards,{protagonist:mem.protagonist,requiredIds:[...required]}) : null;
     let optional = 0;
     for (const [i,item] of ranked.entries()) {
       const {entry,reason,mention} = item;
       const priorityReason = book==='facts' && item.priority===1 ? 'scene mention'
         : book==='facts' && item.priority===4 ? 'other facts' : reason;
       const ranking = {rank:i+1,priorityReason,mention};
-      const reserved = entry.alwaysLoad || entry.id===pc?.id || sources.records && (entry.recordLayout?.records ?? []).some(r=>r.pinned);
-      if (['characters','locations'].includes(book) && !reserved && optional++ >= mem.books[book].maxCards)
+      const reserved = isReserved(entry);
+      if (['characters','locations'].includes(book) && !reserved && (characterSlots ? !characterSlots.has(item) : optional++ >= mem.books[book].maxCards))
         skipped.push({entryId:entry.id,book,name:entry.name,reason:`card limit (${mem.books[book].maxCards}) reached`,ranking});
       else selected[book].push({entry,reason,ranking});
     }
@@ -157,7 +161,8 @@ export function renderEntry(entry, lineIds = null, protagonist = '', { provenanc
   }
   return out.join('\n');
 }
-export async function fitBook(selected, budget, count, { protagonist = '', events = false, provenance = false } = {}) {
+export async function fitBook(selected, budget, count, { protagonist = '', events = false, provenance = false, requiredIds=[] } = {}) {
+  if(selected.length && selected.every(item=>item.entry.book==='characters'))return fitLegacyCharacters(selected,budget,count,{protagonist,provenance,requiredIds});
   const cap = Math.floor(Math.max(0,budget)*.98), included = [], skipped = []; let used = 0;
   for (const item of selected) {
     const base = renderEntry(item.entry,new Set(),protagonist,{provenance});
@@ -191,6 +196,24 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
   for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist,{provenance})); }
   const userLinesCut=selected.reduce((n,item)=>n+Object.values(item.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user' && !included.find(e=>e.entry.id===item.entry.id)?.lineIds.has(l.id)).length,0);
   return { included, skipped, text, tokens:actual,userLinesCut, cut:included.reduce((n,e) => n+e.linesCut,0) };
+}
+async function fitLegacyCharacters(selected,budget,count,options) {
+  const records=selected.map(item=>({...item,identity:false,lineIds:new Set(),queue:sortLines(Object.values(item.entry.sections).flatMap(s=>s.lines ?? [])).reverse().sort((a,b)=>Number(b.by==='user')-Number(a.by==='user'))}));
+  const renderOne=r=>r.identity ? renderEntry(r.entry,r.lineIds,options.protagonist,options) : '';
+  const fill=async(active,fits,protectedOnly=false)=>{
+    for(const r of active)if(!r.identity){r.identity=true;if(!await fits())r.identity=false;}
+    if(protectedOnly)return;
+    const queues=new Map(active.map(r=>[r,r.queue.filter(line=>!r.lineIds.has(line.id))]));
+    let pending=true;while(pending){pending=false;for(const r of active){if(!r.identity)continue;const queue=queues.get(r);while(queue.length){pending=true;const line=queue.shift();r.lineIds.add(line.id);if(await fits())break;r.lineIds.delete(line.id);}}}
+  };
+  const characterBudget=await allocateCharacterPools(records,Math.max(0,budget),count,renderOne,fill,options),included=[],skipped=[];
+  for(const r of records){
+    if(!r.identity){skipped.push({entryId:r.entry.id,book:'characters',name:r.entry.name,ranking:r.ranking,reason:'over budget; complete character background does not fit'});continue;}
+    included.push({...r,linesSent:r.lineIds.size,linesCut:r.queue.length-r.lineIds.size,tokens:await count(renderOne(r))});
+  }
+  const text=records.map(renderOne).filter(Boolean).join('\n\n');
+  const userLinesCut=records.reduce((n,r)=>n+r.queue.filter(line=>line.by==='user'&&!r.lineIds.has(line.id)).length,0);
+  return {text,included,skipped,tokens:await count(text),userLinesCut,cut:included.reduce((n,r)=>n+r.linesCut,0),characterBudget};
 }
 export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
 export function renderEventsBlock(fit, { provenance = false } = {}) {

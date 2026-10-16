@@ -2290,3 +2290,15 @@ test('Editing an effectively expired thread preserves the raw saved baseline unt
  const root=h.el('lorebook-overlay');assert.ok(namedButton(root,'Reopen as ongoing'));const title=root.querySelectorAll('input').find(i=>i.value==='Visit Lysia');title.value='Meeting with Lysia';await title.dispatchEvent({type:'input'});await namedButton(root,'Save').click();
  const [,staged,base]=h.calls.cardWrites.at(-1);assert.equal(base.status,'open');assert.equal(staged.status,'open');assert.equal(staged.threadMeta.outcome,null);assert.equal(staged.name,'Meeting with Lysia');
 });
+
+test('character importance editor defaults old cards to Minor and saves manual selection',async()=>{
+ const {h,lore,card,root}=await cardUI();delete card.importance;
+ for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ lore.openLorebooks({entryId:card.id});
+ const select=root.querySelectorAll('select').find(s=>s.attributes?.['aria-label']==='Importance');
+ assert.ok(select);assert.equal(select.value,'3');assert.equal(select.children.length,4);
+ assert.ok(root.querySelectorAll('.badge').some(b=>b.textContent==='Minor'));
+ select.value='1';await select.dispatchEvent({type:'change'});
+ assert.ok(root.querySelectorAll('p').some(p=>p.textContent==='Major influence, relationships, and long-term development.'));
+ await namedButton(root,'Save').click();assert.equal(h.calls.cardWrites.at(-1)[1].importance,1);
+});

@@ -1,3 +1,4 @@
+import { allocateCharacterPools, characterPoolReport } from './character-budget.js';
 import { renderEntry, sortLines } from './lore-select.js';
 import { SECTION_KEYS, normalizeName } from './lore-lines.js';
 import { resolveCore } from './character-core.js';
@@ -69,30 +70,35 @@ function sourceCoverage(source, chosen) {
   if(cursor<source.end)omitted.push(part(cursor,source.end));
   return {...source,included,omitted};
 }
-export async function fitCharacters(selected, budget, count, {protagonist='',currentText='',recentText=''} = {}) {
+export async function fitCharacters(selected, budget, count, {protagonist='',currentText='',recentText='',requiredIds=[]} = {}) {
   const cap=Math.max(0,budget), records=selected.map(item=>({...item,...resolveCharacterUnits(item.entry,currentText,recentText),chosen:[],identity:false}));
   const render=()=>records.filter(r=>r.identity).map(r=>renderCharacterSelection(r.entry,r.chosen,protagonist)).join('\n\n');
   const full=selected.map(i=>renderEntry(i.entry,null,protagonist)).join('\n\n'), fullFit=await count(full)<=cap;
   // Test the complete rendering on every proposal. Labels, dates, joins and
   // tokenizer boundaries all belong to the ceiling, even for tiny budgets.
-  for (const r of records) {r.identity=true;if(await count(render())>cap)r.identity=false;}
-  if (fullFit) for(const r of records) {r.identity=true;r.chosen=[...r.units];}
-  else for(let round=1;round<=5;round++) {
-    const queues=new Map(records.map(r=>[r,r.units.filter(u=>u.round===round)]));
-    let pending=true;
-    while(pending) {
-      pending=false;
-      for(const r of records) {
-        if(!r.identity)continue;
-        const q=queues.get(r);
-        while(q.length) {
-          pending=true;const unit=q.shift();r.chosen.push(unit);
-          if(await count(render())<=cap)break;
-          r.chosen.pop(); // An oversized unit does not block smaller units.
+  const renderOne=r=>r.identity ? renderCharacterSelection(r.entry,r.chosen,protagonist) : '';
+  const fill=async(active,fits,protectedOnly)=>{
+    for(const r of active)if(!r.identity){r.identity=true;if(!await fits())r.identity=false;}
+    for(let round=1;round<=(protectedOnly?1:5);round++) {
+      const queues=new Map(active.map(r=>[r,r.units.filter(u=>u.round===round && !r.chosen.includes(u))]));
+      let pending=true;
+      while(pending) {
+        pending=false;
+        for(const r of active) {
+          if(!r.identity)continue;
+          const q=queues.get(r);
+          while(q.length) {
+            pending=true;const unit=q.shift();r.chosen.push(unit);
+            if(await fits())break;
+            r.chosen.pop(); // An oversized unit does not block smaller units.
+          }
         }
       }
     }
-  }
+  };
+  let characterBudget;
+  if(fullFit){for(const r of records){r.identity=true;r.chosen=[...r.units];}characterBudget=await characterPoolReport(records,cap,count,renderOne,{protagonist});}
+  else characterBudget=await allocateCharacterPools(records,cap,count,renderOne,fill,{protagonist,requiredIds});
   const text=fullFit ? full : render(), included=[],skipped=[],report=[];
   for(const r of records) {
     const chosen=new Set(r.chosen.map(u=>u.id)),lineIds=new Set(r.chosen.flatMap(u=>u.sources.filter(s=>s.lineId!=null).map(s=>s.lineId)));
@@ -104,5 +110,5 @@ export async function fitCharacters(selected, budget, count, {protagonist='',cur
     report.push({entryId:r.entry.id,name:r.entry.name,identity:r.identity,full:fullFit,coreCoverage:{personality:coverage.has('personality'),constraints:coverage.has('constraints'),appearance:coverage.has('appearance')},missingCoverage:['personality','constraints','appearance'].filter(k=>!coverage.has(k)),invalidCores:r.invalid,text:rendered,units:r.units.map(u=>({id:u.id,round:u.round,selected:chosen.has(u.id),reason:chosen.has(u.id) ? u.reason : r.identity ? 'unit over budget' : 'identity over budget',currentMatches:u.current,recentMatches:u.recent,authorPreference:u.author,recency:u.recency,sources:u.sources.map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end,text:s.text,...sourceCoverage(s,r.chosen)}))}))});
   }
   const userLinesCut=records.reduce((n,r)=>n+Object.values(r.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user' && !included.find(i=>i.entry.id===r.entry.id)?.lineIds.has(l.id)).length,0);
-  return {text,included,skipped,tokens:await count(text),cut:included.reduce((n,r)=>n+r.linesCut,0),userLinesCut,selectionReport:{budget:cap,fullFit,characters:report}};
+  return {text,included,skipped,tokens:await count(text),cut:included.reduce((n,r)=>n+r.linesCut,0),userLinesCut,characterBudget,selectionReport:{budget:cap,fullFit,characters:report}};
 }
