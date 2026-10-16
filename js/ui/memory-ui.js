@@ -2,7 +2,22 @@ import {setIcon} from './icons.js';
 import {friendlyError} from '../errors.js';
 import {copyText} from './clipboard.js';
 export function node(tag, text, className) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; }
-export function button(text, action, className = 'btn') { const b = node('button',text,className); b.type = 'button'; if(text === '×') setIcon(b,'close',className.includes('settings-close') ? 'Close' : 'Remove'); else if(text.startsWith('‹ ')) setIcon(b,'back','Back to '+text.slice(2)); b.addEventListener('click',async () => { if(b.disabled)return;b.disabled=true;try { await action(b); } catch (e) { toast(e); } finally {b.disabled=false;} }); return b; }
+export function pendingButton(b, label = 'Working…') {
+  const text=b.textContent,children=[...(b.childNodes ?? b.children)],disabled=!!b.disabled;
+  b.disabled=true;b.setAttribute('aria-busy','true');b.textContent=label;
+  return ()=>{b.disabled=disabled;b.setAttribute('aria-busy','false');if(b.textContent===label){b.replaceChildren(...children);if(!children.length)b.textContent=text;}};
+}
+export function button(text, action, className = 'btn') {
+  const b=node('button',text,className);b.type='button';
+  if(text==='×')setIcon(b,'close',className.includes('settings-close')?'Close':'Remove');else if(text.startsWith('‹ '))setIcon(b,'back','Back to '+text.slice(2));
+  b.addEventListener('click',async()=>{
+    if(b.disabled)return;b.disabled=true;let restore;
+    try {
+      const result=action(b);
+      if(result?.then){b.disabled=false;restore=pendingButton(b,/^save\b/i.test(text)?'Saving…':/^create\b/i.test(text)?'Creating…':/^import\b/i.test(text)?'Importing…':/^export\b/i.test(text)?'Exporting…':/^delete\b/i.test(text)?'Deleting…':'Working…');await result;}
+    }catch(e){toast(e);}finally{if(restore)restore();else b.disabled=false;}
+  });return b;
+}
 export function field(label, value = '', { textarea = false, type = 'text' } = {}) { const wrap = node('label',label), input = node(textarea ? 'textarea' : 'input'); if (!textarea) input.type = type; else input.rows = 3; input.value = value ?? ''; wrap.append(input); if (textarea) input.addEventListener('input',() => { input.style.height = 'auto'; input.style.height = input.scrollHeight+'px'; }); input.addEventListener('focus',() => requestAnimationFrame(() => input.scrollIntoView({ block:'nearest' }))); return { wrap,input }; }
 export function toast(text, action, callback) { text=friendlyError(text); document.querySelector('.toast')?.remove(); const t = node('div',text,'toast action'); t.setAttribute('role','status'); if (action) t.append(button(action,() => { t.remove(); return callback?.(); },'toast-link')); document.body.append(t); setTimeout(() => t.remove(),6000); }
 export function sheet(root,title,{ close = () => true, className = '', back, compact = false } = {}) {
@@ -13,8 +28,8 @@ export function sheet(root,title,{ close = () => true, className = '', back, com
   const backdrop = node('div',null,'settings-backdrop'), dialog = node('div',null,'settings-dialog sheet '+className+(compact ? ' compact-sheet' : '')), header = node('header',null,'settings-header');
   const label = node('h2',title); label.id = root.id+'-title'; dialog.setAttribute('role','dialog'); dialog.setAttribute('aria-modal','true'); dialog.setAttribute('aria-labelledby',label.id); dialog.tabIndex = -1;
   const cleanup=()=>{document.removeEventListener('keydown',keys);observer?.disconnect();delete root._sheetCleanup;};
-  let observer;
-  const hide = () => { if (close() === false) return false; root.classList.add('hidden'); root.setAttribute('aria-hidden','true'); root.replaceChildren(); cleanup(); opener?.focus?.({preventScroll:true}); document.dispatchEvent(new CustomEvent('ui-surface-change')); return true; };
+  let observer,hidden=false;
+  const hide = () => { if(hidden || root._sheetCleanup!==cleanup)return true;if (close() === false) return false;hidden=true; root.classList.add('hidden'); root.setAttribute('aria-hidden','true'); root.replaceChildren(); cleanup(); opener?.focus?.({preventScroll:true}); document.dispatchEvent(new CustomEvent('ui-surface-change')); return true; };
   const goBack = () => back ? back(hide) : hide();
   const keys = e => {
     if (root.classList.contains('hidden') || document.querySelector('.memory-sub-sheet:not(.hidden)') && !root.classList.contains('memory-sub-sheet')) return;

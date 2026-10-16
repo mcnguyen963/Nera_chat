@@ -1,4 +1,6 @@
 import { openDirectorState } from './director-view.js';
+import { currentUid } from '../auth.js';
+import { beginSettingsSave } from './pending-settings.js';
 import {setIcon} from './icons.js';
 import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
@@ -41,6 +43,7 @@ let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
 let sessionId = null;
 let saving = false;
+let retainedDraft=false,viewVersion=0,draftOwner=null;
 let petChoicesReady = false;
 let petCatalog = [];
 let petLoadRequest = 0;
@@ -149,12 +152,13 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  reloadGlobalSettings();
-  showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");
+  if(retainedDraft && draftOwner===currentUid() && promptStoryId===state.sessionId){retainedDraft=false;if(options.panel)showPanel(options.panel);}
+  else {retainedDraft=false;reloadGlobalSettings();showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");}
   input("btn-close-settings").focus();
 }
 
 function reloadGlobalSettings() {
+  viewVersion++;draftOwner=currentUid();
   draft = structuredClone(state.settings);
   promptStoryId=state.sessionId;promptBase=null;
   try {const effective=resolveStorySettings(state.settings,state.storySettings);for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
@@ -174,13 +178,13 @@ function receiveSettingsChange() {
 }
 
 function closeSettingsPopup() {
-  if (saving) return false;
   capture();
-  if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
+  if (!saving && (globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
   modelPicker?.reset();
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
+  if(saving){retainedDraft=true;opener?.focus?.({preventScroll:true});return true;}
   sessionId = null;
   set("set-session-title", ""); set("set-session-plan", "");
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
@@ -481,40 +485,48 @@ async function handleSaveSettings() {
   let validated;
   try { validated = panel==='prompts' ? explicitStorySettings({...draft,rewriteRecentMessages:integerField(draft.rewriteRecentMessages,'set-rewrite-n')}) : validatedDraft(Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,state.settings[k]]))); }
   catch (error) { feedback(error.message, true); return; }
-  saving = true; el.save.disabled = true;
+  const version=viewVersion,owner=currentUid(),submitted=structuredClone(draft),savedPanel=panel;
+  const finishSave=beginSettingsSave(owner,savedPanel==='prompts'?promptStoryId:null);let committed=false;
+  saving = true; el.save.disabled = el.saveSession.disabled = true;feedback('Saving…');el.save.setAttribute('aria-busy','true');
   try {
-    if(panel==='prompts') {
+    if(savedPanel==='prompts') {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
       if(state.busy)throw new Error('Finish the current reply before saving story settings.');
       if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
       for(const key of ['narratorProfileId','directorProfileId'])if(validated[key] && !draft.profiles.some(p=>p.id===validated[key]))throw new Error('The selected '+(key==='narratorProfileId'?'Narrator':'Director')+' profile is missing. Choose another.');
       validated.directorNarratorPromptNeedsReview=false;
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
-      promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;
+      committed=true;
+      if(version!==viewVersion || owner!==currentUid())return;
+      capture();promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS){if(JSON.stringify(draft[key])===JSON.stringify(submitted[key]))draft[key]=result.values[key];original[key]=result.values[key];}renderAll();feedback('Story prompts saved ✓');refreshContextIndicator();return;
     }
     for(const key of STORY_SETTING_KEYS){if(state.settings[key]===undefined)delete validated[key];else validated[key]=state.settings[key];}
     const promptDraft=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,draft[k]])),promptOriginal=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,original[k]]));
     await saveSettings(validated);
-    draft = {...structuredClone(state.settings),...promptDraft};
+    committed=true;
+    if(version!==viewVersion || owner!==currentUid())return;
+    capture();const newer=Object.fromEntries(Object.entries(draft).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(submitted[key])));
+    original = {...structuredClone(state.settings),...promptOriginal};
+    draft = {...structuredClone(state.settings),...promptDraft,...newer};
     renderAll();
     capture();
-    original = {...structuredClone(draft),...promptOriginal};
-    feedback("Saved ✓");
+    feedback(globalDirty()?'Saved. New edits are unsaved.':'Saved ✓');
     refreshContextIndicator();
   } catch (error) {
+    if(version!==viewVersion || owner!==currentUid())return;
     if (error.code==='settings-reloaded') {
       receiveSettingsChange();
       if (globalDirty()) return;
     }
     feedback("Save failed: " + error.message, true);
   }
-  finally { saving = false; el.save.disabled = false; }
+  finally {finishSave(committed);saving = false; el.save.disabled = el.saveSession.disabled = false;el.save.setAttribute('aria-busy','false'); }
 }
 function feedback(message, error = false) {
   el.message.textContent = message;
   el.message.style.color = error ? "var(--danger)" : "var(--ok)";
 }
-function clearMessage() { if (el.message) el.message.textContent = ""; }
+function clearMessage() { if (el.message) {if(saving)feedback('Saving…');else el.message.textContent = "";} }
 
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
@@ -548,10 +560,13 @@ async function handleSaveSession() {
   if (!state.sessionId) return feedback("Select a story first.", true);
   if (state.busy) return feedback("Wait for the current reply or summary.", true);
   if (saving) return;
-  saving = true; el.saveSession.disabled = true;
+  const version=viewVersion,owner=currentUid(),requestedId=state.sessionId;
+  const finishSave=beginSettingsSave(owner,requestedId);let committed=false;
+  saving = true; el.saveSession.disabled = el.save.disabled = true;feedback('Saving…');el.saveSession.setAttribute('aria-busy','true');
   try {
-    const title = raw("set-session-title").trim() || "Untitled";
+    const titleInput=raw('set-session-title'),title = titleInput.trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
+    const submittedMemory=readMemory();
     const partial = {};
     if (title !== sessionOriginal.title) partial.title=title;
     if (longTermPlan !== sessionOriginal.longTermPlan) partial.longTermPlan=longTermPlan;
@@ -565,17 +580,19 @@ async function handleSaveSession() {
       Object.assign(partial,diffMemorySettings(normalizeMemory(sessionOriginal.memory),nextMemory));
       if (start != null && start !== sessionOriginal.memoryState?.extractedThroughOrder) partial['memoryState.extractedThroughOrder'] = start;
     }
-    const requestedId = state.sessionId;
+    if(requestedId!==state.sessionId || owner!==currentUid() || version!==viewVersion)throw new Error('Story changed. Reopen settings.');
     if (requestedId !== sessionId) throw new Error('Story changed. Reopen settings.');
     if (Object.keys(partial).length) await updateSession(requestedId, partial);
+    committed=true;
+    if(version!==viewVersion || requestedId!==state.sessionId || owner!==currentUid())return;
     sessionOriginal = { ...sessionOriginal, title, longTermPlan, ...(nextMemory ? { memory: nextMemory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
     document.dispatchEvent(new CustomEvent('memory-session-saved', { detail: { sessionId: requestedId, partial } }));
-    set("set-session-title", title);
-    if(nextMemory)fillMemory(normalizeMemory(sessionOriginal.memory));
+    if(raw('set-session-title')===titleInput)set("set-session-title", title);
+    if(nextMemory && JSON.stringify(readMemory())===JSON.stringify(submittedMemory))fillMemory(normalizeMemory(sessionOriginal.memory));
     feedback("Session saved ✓");
     refreshContextIndicator();
-  } catch (error) { feedback("Save failed: " + error.message, true); }
-  finally { saving = false; el.saveSession.disabled = false; }
+  } catch (error) {if(version===viewVersion && owner===currentUid())feedback("Save failed: " + error.message, true); }
+  finally {finishSave(committed);saving = false; el.saveSession.disabled = el.save.disabled = false;el.saveSession.setAttribute('aria-busy','false'); }
 }
 async function handleImport() {
   const file = input("file-import-st").files[0];
