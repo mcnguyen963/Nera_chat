@@ -25,7 +25,7 @@ Character sections:
 Rules:
 
 - Only add what changed or was revealed in these turns. Skip anything the notes already say.
-- Record confirmed outcomes only. A plan, hope, threat, rumor or claim is not a completed event. Write it as an [open] thread, or say who said it, until the story confirms it.
+- Record confirmed outcomes only. A plan, hope, threat, rumor or claim is not a completed event. Keep a durable attributed claim as a fact, not automatically an open thread. Record only substantive accepted commitments, meaningful goals and supported ongoing conflicts.
 - When a turn changes something the notes already say (class, rank, job, place, owner, relationship, injury), write ONE line on the same name and section with the new state and what it replaces: "now X (was Y)".
 - Add what stays the same only if the turns say so or the change could be misread: "rank still 6". Do not restate unchanged facts otherwise.
 - A later confirmed state replaces an earlier one for the same fact. Never write the old state as current.
@@ -35,6 +35,6 @@ Rules:
 - Never write personality notes; the author writes personality.
 - One short, concrete fact per line. No long quotes.
 - [event]: an important story event worth remembering much later — what happened, and to whom.
-- [open]: a new unresolved goal, promise, mystery or threat, or progress on an open one. [closed]: an open thread that was resolved.
+- [open]: a meaningful unresolved goal, substantive promise, real appointment or supported mystery/conflict, or progress on an existing one. Ordinary questions answered now, small talk and hypothetical intentions do not qualify. [closed]: an open thread that was resolved.
 - If there is nothing new, write nothing.
 - No headings, no bullets, no explanations, no JSON.

@@ -7,7 +7,7 @@ async function fixture(){
  const use=appHarness({stubs:{'tokenizer.js':{countTokens:count},'messages.js':{getMessages:async()=>[]}}}),l=await use('lore-lines.js'),schema=await use('director-schema.js'),state=await use('director-state.js'),context=await use('director-context.js');
  const entries=['Nera','Liora','Lysia'].map((name,i)=>{const e=l.makeEntry('characters',name);e.id='person-'+i;e.sections.notes.text=name+' source';return e;});
  const hidden=l.makeEntry('facts','Unselected fact');hidden.id='hidden';entries.push(hidden);
- const before={version:1,scene:{date:'21/10/738',hour:15,location:'Yard',present:['Nera','Liora']},event:null,decisions:[],threads:[],commitments:[]};
+ const before={version:2,scene:{date:'21/10/738',time:'15:00',location:'Yard',present:['Nera','Liora']},event:null,decisions:[],threads:[],commitments:[]};
  const settings={directorProfileId:'d',profiles:[{id:'d',endpoint:'https://openrouter.ai/api/v1/chat/completions',modelId:'test',apiKey:'offline'}],directorMaxInputTokens:20000,directorMaxOutputTokens:8192,directorRecentTurns:5,directorFocusLimit:5};
  const contract={version:1,action:'narrate',transition:'attempted',objective:'Seek Lysia; Liora can answer without a new player confirmation.',stopCondition:'Before the next player decision.',memoryIds:[],requiredMemoryIds:[],focusCharacterIds:['person-1'],encounterCharacterIds:['person-2'],updates:{}};
  return {use,l,schema,state,context,settings,entries,before,contract};
@@ -18,7 +18,7 @@ test('request-specific strict schema enumerates only offered IDs and encodes com
  const s=format.json_schema.schema;assert.deepEqual(plain(s.$defs.memoryId.enum),['person-0','person-1','person-2']);assert.deepEqual(plain(s.$defs.characterId.enum),['person-1','person-2']);assert.ok(!JSON.stringify(format).includes('hidden'));
  assert.ok(s.required.includes('encounterCharacterIds'));assert.equal(s.additionalProperties,false);assert.match(s.properties.focusCharacterIds.description,/At most 5/);
  const full=s.properties.updates.anyOf[1];assert.deepEqual(plain(full.required),['scene','event','decisions','threads','commitments']);assert.deepEqual(plain(full.properties.commitments.required),['upsert','close']);assert.match(full.properties.commitments.properties.close.description,/Must be empty/);
- assert.deepEqual(plain(s.$defs.ledgerItem.required),['id','text','status','trigger','source']);
+ assert.deepEqual(plain(s.$defs.ledgerItem.required),['id','text','status','trigger','source','threadMeta']);
  const local=h.schema.directorResponseFormat({endpoint:'http://local/v1/chat/completions'},{entries:h.entries,before:h.before,offeredIds:[]});assert.deepEqual(plain(local),{type:'json_object'});
 });
 test('native-compatible empty lore schemas avoid unsupported constraints; local checks reject references',async()=>{

@@ -53,7 +53,7 @@ export async function buildLegacyContext(session, settings, opts = {}) {
   // summary checkpoint. Callers normally provide their full cached history.
   const all = opts.messages ?? await getMessages(session.id);
 
-  const systemText = (settings.narratorSystemPrompt || "").replace(PLAN_THREAD_RECOVERY_RULE, "") + "\n\n" + AD_DIRECTIVE_RULE + "\n\n" + planInjectionBlock(opts.planOverride ?? session.longTermPlan) + "\n\n" + prompts.legacyPlanPresence + "\n\n" + prompts.legacyFixedPlan;
+  const systemText = (settings.narratorSystemPrompt || "").replace(PLAN_THREAD_RECOVERY_RULE, "") + "\n\n" + prompts.threadPolicy + "\n\n" + AD_DIRECTIVE_RULE + "\n\n" + planInjectionBlock(opts.planOverride ?? session.longTermPlan) + "\n\n" + prompts.legacyPlanPresence + "\n\n" + prompts.legacyFixedPlan;
   const systemTokens = await countSystemTokensCached(systemText);
 
   const parts = [{ role: "system", content: systemText }];

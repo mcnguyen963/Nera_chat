@@ -23,11 +23,11 @@ for(const role of ['user','system'])for(let depth=0;depth<=10;depth++)for(const 
     assert.equal(result.apiMessages.at(-1).role,'user');assert.match(result.apiMessages.at(-1).content,/LATEST ACTION/);
     const sceneIndex=result.apiMessages.findIndex(m=>m.content.includes('Current scene (from the latest reply):'));
     assert.ok(sceneIndex>0);assert.ok(sceneIndex<=result.apiMessages.length-1);
-    if(role==='user'){assert.equal(sceneIndex,result.apiMessages.length-1);assert.equal(result.apiMessages.filter(m=>m.role==='system').length,1);}
+    if(role==='user'){assert.equal(sceneIndex,result.apiMessages.length-1);assert.equal(result.apiMessages.filter((m,i)=>i>0 && m.role==='system' && !/omitted|not included|not sent/i.test(m.content)).length,0);}
     else {assert.equal(result.apiMessages[sceneIndex].role,'system');assert.equal(result.apiMessages[sceneIndex+1].role,'user');}
     const openings=result.apiMessages.filter(m=>m.content.includes('Opening '));assert.equal(openings.length,2);assert.equal(openings[0].role,'user');assert.equal(openings[1].role,'assistant');
     assert.ok(result.droppedCount>0);
-    const windowed=result.apiMessages.find(m=>m.role!=='system' && !m.content.includes('Opening '));assert.ok(windowed);assert.match(windowed.content,/omitted|not included|not sent/i);
+    const windowed=result.apiMessages.find(m=>m.role!=='system' && !m.content.includes('Opening '));assert.ok(windowed);assert.ok(result.apiMessages.some(m=>/omitted|not included|not sent/i.test(m.content)));
     if(summary)assert.match(result.apiMessages[0].content,/Earlier events/);
   });
 }

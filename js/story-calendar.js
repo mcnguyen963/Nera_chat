@@ -21,7 +21,7 @@ export function parseStoryDate(value) {
   return {year,month,day,weekday,valid,ordinal};
 }
 export function parseClock(value) {
-  const m=normalize(value).match(/^(\d{1,2}):(\d{2})\s*([ap]m)?$/);
+  const m=normalize(value).replace(/^(\d{1,2})\s*([ap]m)$/,'$1:00 $2').match(/^(\d{1,2}):(\d{2})\s*([ap]m)?$/);
   if(!m)return null;
   let hour=Number(m[1]);const minute=Number(m[2]);
   if(minute>59||(m[3]?hour<1||hour>12:hour>23))return null;

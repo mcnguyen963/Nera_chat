@@ -1,3 +1,4 @@
+import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule } from './scheduled-plan.js';
 import { readLoreCard, readLoreCards, subscribeVersionedLore, wrapLoreTransaction, versionRef, versionRoot } from './lore-version-store.js';
 import { reconcileRecords, toRecordDocument, fingerprint } from './lore-records.js';
@@ -57,6 +58,7 @@ export function subscribeLore(sid, callback, onError) { return subscribeVersione
 async function createEntryImpl(sid,entry) { if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
 export function mergeEntryEdits(current, staged, base) {
   const out = { ...current };
+  if(staged.kind==='thread' && cardFingerprint(staged.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null)){if(cardFingerprint(current.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null))throw new Error('Thread timing changed while editing. Reopen the thread.');out.threadMeta=normalizeThreadMeta(staged.threadMeta);out.threadMetaSource=null;}
   for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
   if (cardFingerprint(staged.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) {
     if (cardFingerprint(current.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) throw new Error('Core references changed while editing. Reopen the card and review again.');
@@ -283,13 +285,13 @@ async function commitExtractionImpl(sid,changes,range) {
         else{lines.push(a.line);cardNotes++;}
       }
       for(const al of changes.aliases.filter(a=>a.entryId===id))if(!(data.aliases ?? []).some(x=>normalizeName(x)===normalizeName(al.alias)))(data.aliases ??= []).push(al.alias);
-      for(const st of changes.statusChanges.filter(a=>a.entryId===id)){data.status=st.status;if(st.source)data.statusSource=st.source;}
+      for(const st of changes.statusChanges.filter(a=>a.entryId===id)){data.status=st.status;if(st.source)data.statusSource=st.source;if(st.threadMeta)data.threadMeta=st.threadMeta;if(st.threadMetaSource)data.threadMetaSource=st.threadMetaSource;}
       // A full card drops its proposed edits; other cards and the checkpoint still commit.
       try { guardSize(data,true); } catch (error) {
         if(error.message!=='card storage full')throw error;
         skipped.push({entryId:id,card:data.name,reason:'card full'});continue;
       }
-      tx.update(ref(sid,id),{sections:data.sections,aliases:data.aliases ?? [],status:data.status ?? null,...(data.statusSource ? {statusSource:data.statusSource} : {}),updatedAt:serverTimestamp()});written.push(data);notes+=cardNotes;
+      tx.update(ref(sid,id),{sections:data.sections,aliases:data.aliases ?? [],status:data.status ?? null,...(data.statusSource ? {statusSource:data.statusSource} : {}),...(data.threadMeta?{threadMeta:data.threadMeta}:{}),...(data.threadMetaSource?{threadMetaSource:data.threadMetaSource}:{}),updatedAt:serverTimestamp()});written.push(data);notes+=cardNotes;
     }
     for(const e of changes.creates){
       try {guardSize(e,true);}catch(error){if(error.message!=='card storage full')throw error;skipped.push({entryId:e.id,card:e.name,reason:'card full'});continue;}
