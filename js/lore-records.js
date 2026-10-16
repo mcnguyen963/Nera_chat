@@ -1,4 +1,5 @@
 import {normalizeThreadMeta} from './thread-lifecycle.js';
+import { characterImportance, validateImportance } from './character-importance.js';
 import { validateSchedule } from './scheduled-plan.js';
 import { cardFingerprint } from './lore-card-state.js';
 import { SECTION_KEYS, newLoreId } from './lore-lines.js';
@@ -64,6 +65,7 @@ export function validSupersession(entry,record) {
   return !!record.replacementApproval && resolveRecord(entry,record).valid && targets.length>0 && targets.every(r=>r && r.id!==record.id && resolveRecord(entry,r).valid) && record.replacementApproval===fingerprint({record:approvalPayload(entry,record),targets:targets.map(r=>approvalPayload(entry,r))});
 }
 export function reconcileRecords(entry) {
+  validateImportance(entry);
   if(entry.book==='plan')validateSchedule(entry.schedule);
   if(entry.recordLayout)validateRecords(entry);
   const records=structuredClone(entry.recordLayout?.records ?? []),sources=recordSources(entry);
@@ -93,7 +95,7 @@ export function reconcileRecords(entry) {
 }
 export function toRecordDocument(entry,previous=null) {
   const e=reconcileRecords(entry),{sections,recordLayout,schemaVersion,...subject}=e;
-  validateRecords(e);
+  validateRecords(e);if(e.book==='characters')subject.importance=characterImportance(e);
   const sources=recordSources(e),archivedSources=[...(previous?.recordLayout?.sourceArchive ?? []),...(recordLayout.sourceArchive ?? [])];
   if(previous)for(const source of recordSources(previous))if(source.data.text?.trim()&&!sources.some(s=>s.id===source.id&&fingerprint(s)===fingerprint(source)))archivedSources.push(source);
   const unique=[...new Map(archivedSources.map(s=>[s.id+':'+fingerprint(s),s])).values()];
@@ -110,6 +112,7 @@ export function fromRecordDocument(doc) {
   }
   if(doc.archivedSources!=null&&(!Array.isArray(doc.archivedSources)||doc.archivedSources.some(s=>typeof s.id!=='string'||typeof s.data?.text!=='string')))throw new Error('Invalid source archive');
   const entry={...doc.subject,schemaVersion:3,sections,recordLayout:{records:structuredClone(doc.records),sourceArchive:structuredClone(doc.archivedSources ?? [])}};
+  validateImportance(entry);if(entry.book==='characters')entry.importance=characterImportance(entry);
   validateRecords(entry);if(entry.book==='plan')validateSchedule(entry.schedule);return entry;
 }
 export function validateRecords(entry) {

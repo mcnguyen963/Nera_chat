@@ -1,3 +1,4 @@
+import { characterImportance, validateImportance } from './character-importance.js';
 import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule, mergePlanSchedule } from './scheduled-plan.js';
 import { toRecordDocument, fromRecordDocument, validateRecords } from './lore-records.js';
@@ -18,7 +19,7 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
   const out = { format:'nera-lorebooks',version:2,story:title,exportedAt:now.toISOString(),entries:entries.filter(e => books.includes(e.book)).map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,...sectionMeta(s,e) }])) })) };
   for (const book of books) {
     const list = entries.filter(e => e.book === book);
-    if (book === 'characters' || book === 'locations') out[book] = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],alwaysLoad:!!e.alwaysLoad,sections:Object.fromEntries(Object.entries(e.sections).filter(([,s]) => s.text || s.lines.length).map(([k,s]) => [k,{ text:s.text,lines:sortLines(s.lines).map(exportLine) }])) }));
+    if (book === 'characters' || book === 'locations') out[book] = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],...(e.book==='characters' ? {importance:characterImportance(e)} : {}),alwaysLoad:!!e.alwaysLoad,sections:Object.fromEntries(Object.entries(e.sections).filter(([,s]) => s.text || s.lines.length).map(([k,s]) => [k,{ text:s.text,lines:sortLines(s.lines).map(exportLine) }])) }));
     if (book === 'facts') out.facts = list.map(e => ({ name:e.name,text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) }));
     if (book === 'plan') out.plan = list.map(e=>({name:e.name,schedule:e.schedule,text:e.sections.text.text}));
     if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,status:e.status,...(e.threadMeta?{threadMeta:e.threadMeta}:{}),text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
@@ -28,8 +29,9 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
 export function normalizeLoreEntry(e){
       if(e?.schemaVersion===3&&e.subject)return fromRecordDocument(e);
       if(!e || typeof e!=='object' || !SECTION_KEYS[e.book] || typeof e.name!=='string' || !e.name.trim())throw new Error('Invalid version 2 lorebook entry.');
-      validateCoreReferences(e.coreReferences);
+      validateCoreReferences(e.coreReferences);validateImportance(e);
       const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
+      if(e.book==='characters')normalized.importance=characterImportance(e);
       if(e.book==='plan')validateSchedule(e.schedule);
       if(e.threadMeta!=null)normalized.threadMeta=normalizeThreadMeta(e.threadMeta);
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
@@ -55,7 +57,8 @@ export function fromJson(text) {
   for (const book of ['characters','locations','facts']) for (const [i,item] of (Array.isArray(data[book]) ? data[book] : []).entries()) {
     if (!item?.name?.trim()) { warnings.push({ line:1,reason:`missing name in ${book} card ${i+1}` }); continue; }
     const e = makeEntry(book,item.name.trim(),{ aliases:book === 'facts' ? [] : (item.aliases ?? []).map(String),alwaysLoad:book !== 'facts' && item.alwaysLoad === true,createdFrom:'import' });
-    warnUnknown(item,['name','aliases','alwaysLoad','sections','text','lines'],e.name);
+    if(book==='characters'){validateImportance({...item,book});e.importance=characterImportance(item);}
+    warnUnknown(item,['name','aliases','alwaysLoad','sections','text','lines',...(book==='characters'?['importance']:[])],e.name);
     if (book === 'facts') e.sections.text = section(item);
     else { warnUnknown(item.sections,SECTION_KEYS[book],e.name); for (const key of SECTION_KEYS[book]) if (item.sections?.[key] != null) e.sections[key] = section(item.sections[key]); }
     entries.push(e);
@@ -83,6 +86,7 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
       out.push('### '+(e.kind === 'thread' ? 'Thread: ' : '')+e.name);
       out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.schedule ? {schedule:{...e.schedule,phases:[]}} : {}),...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadMetaSource?{threadMetaSource:e.threadMetaSource}:{}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
       if (e.aliases?.length) out.push('aliases: '+JSON.stringify(e.aliases));
+      if(e.book==='characters')out.push('importance: '+characterImportance(e));
       if (e.alwaysLoad) out.push('always load: yes');
       if (e.kind === 'thread') out.push('status: '+e.status);
       out.push('');
@@ -139,7 +143,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
         const value = JSON.parse(provenance[2]);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
         if (provenance[1] === 'entry') {
-          for (const prop of ['id','draft','createdFrom','statusSource','threadMeta','threadMetaSource','coreReferences','schedule','createdAt','updatedAt']) if (prop in value) entry[prop] = prop==='threadMeta'?normalizeThreadMeta(value[prop]):value[prop];
+          for (const prop of ['id','draft','createdFrom','statusSource','threadMeta','threadMetaSource','coreReferences','schedule','createdAt','updatedAt','importance']) if (prop in value) entry[prop] = prop==='threadMeta'?normalizeThreadMeta(value[prop]):value[prop];
         } else if (provenance[1] === 'section') {
           for (const prop of ['origin','kind','cutoff','unavailable','sourceRevision']) if (prop in value) entry.sections[key][prop] = value[prop];
         } else if (entry.sections[key].lines.length && !noteMetadata.has(entry.sections[key].lines.at(-1))) noteMetadata.set(entry.sections[key].lines.at(-1),value);
@@ -147,8 +151,8 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
       continue;
     }
     if (metadata) {
-      const m = trimmed.match(/^(aliases|always load|status|name):\s*(.*)$/i);
-      if (m) { const prop = m[1].toLowerCase(); if(strictFields && prop==='status' && !/^(open|closed)$/i.test(m[2]))throw new Error('Thread status must be open or closed.');if(strictFields && prop==='always load' && !/^(yes|no|true|false|1|0)$/i.test(m[2]))throw new Error('Always load must be yes or no.'); if (prop === 'aliases') entry.aliases = m[2].startsWith('[') ? JSON.parse(m[2]) : m[2].split(',').map(n => n.trim()).filter(Boolean); if (prop === 'always load') entry.alwaysLoad = /^(yes|true|1)$/i.test(m[2]); if (prop === 'status' && entry.kind === 'thread') entry.status = /^closed$/i.test(m[2]) ? 'closed' : 'open'; continue; }
+      const m = trimmed.match(/^(aliases|always load|status|name|importance):\s*(.*)$/i);
+      if (m) { const prop = m[1].toLowerCase(); if(prop==='importance'){if(book!=='characters')throw new Error('Importance is only supported for characters.');if(!/^[1-4]$/.test(m[2]))throw new Error('Character importance must be an integer from 1 to 4.');entry.importance=Number(m[2]);} if(strictFields && prop==='status' && !/^(open|closed)$/i.test(m[2]))throw new Error('Thread status must be open or closed.');if(strictFields && prop==='always load' && !/^(yes|no|true|false|1|0)$/i.test(m[2]))throw new Error('Always load must be yes or no.'); if (prop === 'aliases') entry.aliases = m[2].startsWith('[') ? JSON.parse(m[2]) : m[2].split(',').map(n => n.trim()).filter(Boolean); if (prop === 'always load') entry.alwaysLoad = /^(yes|true|1)$/i.test(m[2]); if (prop === 'status' && entry.kind === 'thread') entry.status = /^closed$/i.test(m[2]) ? 'closed' : 'open'; continue; }
       metadata = false;
     }
     if (sectionMatch) {
@@ -169,6 +173,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
       else if (trimmed) warn(i+1,'update line could not be read');
     } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(line.startsWith('\\')?line.slice(1):line) : '');
   }
+  for(const e of entries)validateImportance(e);
   for(const e of entries)if(e.book==='plan'){for(const phase of e.schedule?.phases ?? [])phase.text=phase.text.trim();validateSchedule(e.schedule);}
   for (const e of entries) for (const s of Object.values(e.sections)) {
     validateCoreReferences(e.coreReferences);
@@ -251,6 +256,7 @@ export function serializeCard(entry,{format='md',storyId=null,title='',now=new D
   return text;
 }
 export function validateCard(entry) {
+  if(entry)validateImportance(entry);
   if (!entry || !SECTION_KEYS[entry.book] || typeof entry.name !== 'string' || !entry.name.trim()) throw new Error('A card needs a supported book and a name.');
   if (entry.book === 'events' ? !['timeline','thread'].includes(entry.kind) : entry.kind !== 'card') throw new Error('Unsupported card kind.');
   if (!Array.isArray(entry.aliases) || entry.aliases.some(a=>typeof a!=='string')) throw new Error('Aliases must be a list of names.');
@@ -280,7 +286,7 @@ function supportedCardFields(entry,warnings) {
     if(allowed.includes(key))return true;
     warnings.push({line:1,reason:`ignored unsupported field '${key}' in ${label}`});return false;
   }));
-  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','threadMeta','threadMetaSource','coreReferences','schemaVersion','recordLayout','schedule'],'card');
+  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','threadMeta','threadMetaSource','coreReferences','schemaVersion','recordLayout','schedule','importance'],'card');
   const note=l=>pick(l,['id','text','turn','when','src','by','at','evidence','sourceRevision','needsReview','origin','kind','cutoff'],'note');
   out.sections=Object.fromEntries(Object.entries(out.sections).map(([key,s])=>[key,{...pick(s,['text','lines','origin','kind','cutoff','unavailable','sourceRevision'],key),lines:s.lines.map(note)}]));
   if(out.statusSource)out.statusSource=note(out.statusSource);if(out.threadMetaSource)out.threadMetaSource=note(out.threadMetaSource);
@@ -337,6 +343,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   }
   const result=target ? structuredClone(target) : makeEntry(source.book,source.name,{kind:source.kind,createdFrom:'import'});
   for(const prop of ['name','alwaysLoad','draft','status'])result[prop]=source[prop];
+  if(source.book==='characters')result.importance=characterImportance(mode==='merge' && target ? target : source);
   const keepThreadMeta=source.kind==='thread' && mode==='merge' && target?.threadMeta && (!source.threadMeta || conflict!=='file');
   if(source.kind==='thread')result.threadMeta=normalizeThreadMeta(keepThreadMeta?target.threadMeta:source.threadMeta);
   result.threadMetaSource=keepThreadMeta?structuredClone(target.threadMetaSource ?? null):null;
@@ -349,7 +356,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   const changes=[],notes={added:[],edited:[],removed:[]};
   const targetNotes=new Map(Object.values(target?.sections ?? {}).flatMap(s=>s.lines).map(l=>[l.id,l]));
   const incomingSections=new Map(Object.entries(source.sections).flatMap(([key,s])=>s.lines.map(l=>[l.id,key])));
-  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences','schedule','threadMeta'])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
+  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences','schedule','threadMeta',...(source.book==='characters'?['importance']:[])])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
   for(const key of SECTION_KEYS[source.book]) {
     const incoming=source.sections[key],before=target?.sections[key] ?? makeEntry(source.book,'empty').sections[key];
     const next=incoming ? structuredClone(incoming) : {...before,text:'',lines:[],origin:'import',kind:'background',cutoff:null};

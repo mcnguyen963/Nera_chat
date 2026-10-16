@@ -1,3 +1,4 @@
+import { CHARACTER_IMPORTANCE, characterImportance } from '../character-importance.js';
 import {renderThreadEditor} from './thread-editor.js';
 import {usableLore} from '../continuity.js';
 import {reopenThread,threadSummary} from '../thread-lifecycle.js';
@@ -188,7 +189,7 @@ function renderRows(rows) {
   }
   for (const e of cards) {
     const row = button('',() => openCard(e),'lore-list-item'); row.setAttribute('role','option'); row.setAttribute('aria-selected',String(selected === e.id)); row.append(node('strong',e.name),node('small',e.aliases.join(', '),'muted'),node('span',sizes.has(e.id) ? (sizes.get(e.id)/1000).toFixed(1)+'k' : '…','muted'));
-    const badges = node('div',null,'lore-badges'); if(e.book==='plan')badges.append(badge(scheduleRange(e.schedule)),badge(e.schedule.status)); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newCount(e)) badges.append(badge('+'+newCount(e)+' new','new')); if (passes(e,'big')) badges.append(badge('Too big to send in full','warn')); if (passes(e,'deleted')) badges.append(badge('From deleted turns','warn')); row.append(badges); rows.append(row);
+    const badges = node('div',null,'lore-badges'); if(e.book==='characters')badges.append(badge(CHARACTER_IMPORTANCE.find(option=>option.value===characterImportance(e)).label)); if(e.book==='plan')badges.append(badge(scheduleRange(e.schedule)),badge(e.schedule.status)); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newCount(e)) badges.append(badge('+'+newCount(e)+' new','new')); if (passes(e,'big')) badges.append(badge('Too big to send in full','warn')); if (passes(e,'deleted')) badges.append(badge('From deleted turns','warn')); row.append(badges); rows.append(row);
     row.addEventListener('keydown',ev => { if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); const options = [...rows.children]; options[Math.max(0,Math.min(options.length-1,options.indexOf(row)+(ev.key === 'ArrowDown' ? 1 : -1)))].focus(); } });
   }
 }
@@ -235,6 +236,14 @@ function renderEditor() {
   if (book === 'characters' || book === 'locations') {
     renderNameChips(editor);
     const always = field('Always load','',{ type:'checkbox' }); always.input.checked = staged.alwaysLoad; always.input.addEventListener('change',() => staged.alwaysLoad = always.input.checked); editor.append(always.wrap,node('p',"Load this card every turn, even when it isn't mentioned.",'muted'));
+  }
+  if(book==='characters'){
+    const importance=field('Importance',''),select=node('select'),description=node('p','','muted');
+    for(const option of CHARACTER_IMPORTANCE){const item=node('option',option.value+' — '+option.label);item.value=String(option.value);select.append(item);}
+    select.value=String(characterImportance(staged));select.setAttribute('aria-label','Importance');
+    const describe=()=>description.textContent=CHARACTER_IMPORTANCE.find(option=>option.value===Number(select.value)).description;
+    select.addEventListener('change',()=>{staged.importance=Number(select.value);describe();});
+    importance.input.replaceWith(select);describe();editor.append(importance.wrap,description);
   }
   if(book==='plan'){
     const mem=normalizeMemory(live()?.session.memory),ready=mem.scene && mem.calendar.mode==='modern';

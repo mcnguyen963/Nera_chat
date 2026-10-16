@@ -1,3 +1,4 @@
+import { characterImportance, validateImportance } from './character-importance.js';
 import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule } from './scheduled-plan.js';
 import { readLoreCard, readLoreCards, subscribeVersionedLore, wrapLoreTransaction, versionRef, versionRoot } from './lore-version-store.js';
@@ -55,11 +56,16 @@ const clean = entry => {
 };
 export function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
 export function subscribeLore(sid, callback, onError) { return subscribeVersionedLore(sid,callback,onError); }
-async function createEntryImpl(sid,entry) { if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
+async function createEntryImpl(sid,entry) { validateImportance(entry); if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
 export function mergeEntryEdits(current, staged, base) {
+  validateImportance(staged);
   const out = { ...current };
   if(staged.kind==='thread' && cardFingerprint(staged.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null)){if(cardFingerprint(current.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null))throw new Error('Thread timing changed while editing. Reopen the thread.');out.threadMeta=normalizeThreadMeta(staged.threadMeta);out.threadMetaSource=null;}
   for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
+  if(staged.book==='characters' && characterImportance(staged)!==characterImportance(base)){
+    if(characterImportance(current)!==characterImportance(base))throw new Error('Character importance changed while editing. Reopen the card.');
+    out.importance=characterImportance(staged);
+  }
   if (cardFingerprint(staged.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) {
     if (cardFingerprint(current.coreReferences ?? []) !== cardFingerprint(base.coreReferences ?? [])) throw new Error('Core references changed while editing. Reopen the card and review again.');
     out.coreReferences = structuredClone(staged.coreReferences ?? []);

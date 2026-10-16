@@ -191,7 +191,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
   }
   const recordReports={},fits={};
-  let characterSelectionReport = null;
+  let characterSelectionReport = null, characterBudgetReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;
   const memoryText = () => mem.memoryBlock ? renderMemoryBlock({ scene:mem.scene ? current.scene : null,sceneFromTurn:turns.turnById.get(current.fromId),sceneFromOrder:current.fromOrder,staleScene:current.missingStreak>0,characters:chars,locations:places }) : [chars.text && renderLoreLabel('characters')+'\n'+chars.text,places.text && renderLoreLabel('places')+'\n'+places.text].filter(Boolean).join('\n\n');
   if (mem.memoryBlock) { memory = memoryText(); if (await cost() > limit) { memory = ''; warnings.push('Optional memory reminder omitted to preserve recent conversation.'); } }
@@ -200,9 +200,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'plan' ? '' : book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
-      ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
-      : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,events:book === 'events',provenance:false });
+    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
+      ? await fitCharacters(selection.selected[book],budget,count,{protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
+      : await fitBook(selection.selected[book],budget,count,{ protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],events:book === 'events',provenance:false });
     if (fit.selectionReport) characterSelectionReport = fit.selectionReport;
     if(fit.recordReport){recordReports[book]=fit.recordReport;for(const entry of fit.recordReport.entries)for(const record of entry.records)if(!record.selected&&(record.core||record.pinned))warnings.push(entry.name+': '+record.reason+'; '+(record.pinned?'pinned record':'approved core')+' omitted.');}
     const text = book === 'facts' ? renderFactsBlock(fit) : book === 'events' ? renderEventsBlock(fit,{provenance:false}) : fit.text;
@@ -227,6 +227,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
       fit = empty;
     }
     fits[book]=fit;
+    if(book==='characters')characterBudgetReport=fit.characterBudget ?? null;
     skipped.push(...fit.skipped);
     if(book==='plan' && fit.skipped.length)warnings.push(`${fit.skipped.length} scheduled plan phase(s) omitted for budget. Review Plan in the context viewer.`);
     if (fit.selectionReport) for (const c of fit.selectionReport.characters) {
@@ -320,5 +321,5 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if(director && settings.directorNarratorPromptNeedsReview)warnings.push('Preserved custom Director-mode Narrator instructions need review in Settings → Prompts.');
   if(director && !turn)warnings.push('Narrator selection is provisional; context preview does not call the Director.');
   if (inspection) Object.assign(inspection.sections,{system,...(director ? {replyBrief:briefText} : {}),summary:summaryText,memory:memory && mem.memoryBlock && mem.blockRole==='user' && latest ? '<memory>\n'+memory+'\n</memory>' : memory,replyContract:latest ? contract : '',reminder:latest ? reminder : '',gap:gapInfo()});
-  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(briefReport ? {replyBrief:briefReport} : {}),...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
+  return { apiMessages,...(inspection ? {inspection} : {}),usedTokens:actual,windowedCount:selected.size-(opts.continuationId ? 1 : 0),droppedCount:uncovered.length,report:{ ...(characterBudgetReport ? {characterBudget:characterBudgetReport} : {}),...(briefReport ? {replyBrief:briefReport} : {}),...(recordMode ? {recordSelection:recordReports} : {}),...(characterSelectionReport ? {characterSelection:characterSelectionReport} : {}),mode:director ? 'director-narrator' : memoryActive(mem) ? 'memory' : 'legacy',totals:{ input:actual,reserved:settings.maxResponseTokens,max:requestInputLimit(settings) },blocks,loaded,skipped,scene:mem.scene && current.scene ? { ...current.scene,fromTurn:turns.turnById.get(current.fromId),fromOrder:current.fromOrder } : null,gap:gaps[0] ?? null,gaps,warnings } };
 }

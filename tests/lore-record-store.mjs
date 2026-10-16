@@ -79,3 +79,26 @@ test('extracted notes commit to canonical storage and become selectable in the n
  const builder=await use('context-builder.js'),built=await builder.buildContextForRequest({...session,...docs.get(path)}, {narratorSystemPrompt:'Narrate.',maxContextTokens:10000,maxResponseTokens:1000,keepRecentMessagesAfterSummary:4},{messages:[...messages,{id:'u2',role:'user',order:3,content:'Where did Mira put the letter?'}],loreEntries:lore});
  const selected=built.report.recordSelection.characters.entries.map(e=>e.text).join('\n');assert.match(selected,/blue chest/);assert.match(built.apiMessages.map(m=>m.content).join('\n'),/blue chest/);
 });
+
+for(const migrated of [false,true])test(`character importance saves, copies, backs up and merges in ${migrated?'record':'legacy'} storage`,async()=>{
+ const h=await setup();
+ // An old untagged card is readable without a write or migration.
+ const raw=h.docs.get(h.path+'/lore/mira');delete raw.importance;
+ assert.equal((await h.store.getLore('s'))[0].importance,undefined);
+ if(migrated)await h.store.migrateRecords('s',await h.store.getLore('s'),{expectedRevision:0});
+ let base=(await h.store.getLore('s'))[0];
+ for(const importance of [1,2,3,4]){const edit=structuredClone(base);edit.importance=importance;await h.store.saveEntry('s',edit,base);base=(await h.store.getLore('s'))[0];assert.equal(base.importance,importance);}
+ h.docs.set('users/u/sessions/dst',migrated?{loreSchemaVersion:3,loreGeneration:'dst-generation',loreRevision:0}:{loreRevision:0});
+ await h.store.copyLore('s','dst',0);assert.equal((await h.store.getLore('dst'))[0].importance,4);
+ const backup=await h.store.writeBackup('s','test','Importance backup',[base]);const edit=structuredClone(base);edit.importance=1;await h.store.saveEntry('s',edit,base);
+ await h.store.restoreBackup('s',backup);assert.equal((await h.store.getLore('s'))[0].importance,4);
+ const source=h.l.makeEntry('characters','Duplicate',{importance:1});await h.store.createEntry('s',source);
+ await h.store.mergeEntries('s',source,(await h.store.getLore('s')).find(e=>e.id===base.id));
+ const merged=(await h.store.getLore('s')).find(e=>e.id===base.id);assert.equal(merged.importance,4);
+});
+
+test('ordinary card edits preserve concurrent importance changes and conflicting manual changes fail',async()=>{
+ const h=await setup(),base=h.entry,staged=structuredClone(base),current=structuredClone(base);staged.sections.notes.text='Changed';current.importance=1;
+ assert.equal(h.store.mergeEntryEdits(current,staged,base).importance,1);
+ staged.importance=2;assert.throws(()=>h.store.mergeEntryEdits(current,staged,base),/importance changed/);
+});
