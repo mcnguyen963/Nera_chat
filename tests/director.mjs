@@ -182,9 +182,9 @@ test('Narrator context follows Director state and preserves existing retrieval a
  await assert.rejects(api.buildContextForRequest({id:'s',memory:{lorebooks:true,books:{characters:{budget:0}}}},settings,{messages:[{id:'u',role:'user',order:1,content:'Go'}],loreEntries:[lysia],directorTurn:turn}),/Required Director memories/);
 });
 
-test('A modern-clock rollover requires a date change and preserves unknown time',async()=>{
+test('A modern-clock rollover advances a stale date and preserves unknown time',async()=>{
  const api=await appHarness()('director-state.js'),last={...state,scene:{...state.scene,time:'23:59'}};
- assert.throws(()=>api.parseDirectorContract(JSON.stringify(contract({scene:{time:'01:00'}})),last),/following date/);
+ assert.equal(api.parseDirectorContract(JSON.stringify(contract({scene:{time:'01:00'}})),last).after.scene.date,'22/10/738');
  assert.equal(api.parseDirectorContract(JSON.stringify(contract({scene:{time:'01:00',date:'22/10/738'}})),last).after.scene.time,'01:00');
  assert.equal(api.parseDirectorContract(JSON.stringify(contract({})),{...state,scene:{...state.scene,time:null}}).after.scene.time,null);
 });
