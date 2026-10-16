@@ -1,5 +1,8 @@
+import {flushStory} from './story-sync.js';
+import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
+import { validateDirectorState } from './director-state.js';
 import {ensureStorySettings,writeInitialStorySettings,preserveLegacyStorySeed} from './story-settings-store.js';
-import {assertSnapshotRevisions,explicitStorySettings} from './story-settings.js';
+import {assertSnapshotRevisions,migrateStorySettings} from './story-settings.js';
 import {state} from './state.js';
 import { maxOf } from './math-utils.js';
 import * as sessionsApi from './sessions.js';
@@ -52,17 +55,22 @@ export function parseSillyTavernJsonl(text) {
 }
 
 export async function importSillyTavern(file) {
-  if(file.size>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
-  const text=await file.text();if(new TextEncoder().encode(text).length>20*1024*1024)throw new Error('The story file is larger than 20 MB.');
+  // Full backups include lore and private reply metadata as well as messages.
+  // Long stories can exceed 20 MB without any single document being oversized.
+  const maxBytes=64*1024*1024;
+  if(file.size>maxBytes)throw new Error('The story file is larger than 64 MB.');
+  const text=await file.text();if(new TextEncoder().encode(text).length>maxBytes)throw new Error('The story file is larger than 64 MB.');
   let parsed;
-  try{const full=JSON.parse(text);if(full?.format==='nera-chat-backup' && Array.isArray(full.messages))parsed={title:full.session?.title,messages:full.messages,metadata:{session:full.session,lore:full.lore,storySettings:full.storySettings}};}catch{}
+  try{const full=JSON.parse(text);if(full?.format==='nera-chat-backup' && Array.isArray(full.messages))parsed={title:full.session?.title,messages:full.messages,metadata:{session:full.session,lore:full.lore,storySettings:full.storySettings,directorTurns:full.directorTurns}};}catch{}
   const {title,messages,metadata}=parsed ?? parseSillyTavernJsonl(text);
+  if(metadata?.session?.directorState)validateDirectorState(metadata.session.directorState);
+  if(metadata?.directorTurns && (!Array.isArray(metadata.directorTurns) || metadata.directorTurns.some(t=>t.version!==1)))throw new Error('Unsupported Director backup.');
   const lore=[];let droppedLore=0;
   for(const e of Array.isArray(metadata?.lore) ? metadata.lore : []){try{lore.push(normalizeLoreEntry(e));}catch{droppedLore++;}}
   const sessionId=await createSession(title || file.name.replace(/\.jsonl$/i,'') || 'Imported chat',{importing:true});
   try {
     const importedSettings=metadata?.storySettings?.values ?? metadata?.storySettings;
-    const values=importedSettings ? explicitStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
+    const values=importedSettings ? await migrateStorySettings(importedSettings) : await preserveLegacyStorySeed(state.settings);
     await writeInitialStorySettings(sessionId,values);
     await addMessagesBulk(sessionId,messages);
     // Importing a full V3 backup explicitly creates a new selective story.
@@ -79,6 +87,8 @@ export async function importSillyTavern(file) {
       memoryState:{extractedThroughOrder:hasUnorderedMessages ? 0 : Number.isSafeInteger(pointer)?Math.max(0,Math.min(maxOrder,pointer)):null,failureStreak:0,paused:false,lastError:null},
       activeSummaryMessageId:summary?.id ?? null,breakpointOrder:summary ? Math.max(0,Math.min(maxOrder,Number(source.breakpointOrder)||0)) : 0,
       importing:false};
+    const importedDirectorState=source.directorState ?? (metadata?.directorTurns ?? []).find(t=>t.id===source.directorPending)?.before;
+    if(importedDirectorState){const turns=(metadata.directorTurns ?? []).filter(t=>t.status==='completed');await importDirectorTurns(sessionId,turns);Object.assign(patch,{directorState:validateDirectorState(importedDirectorState),directorRevision:0,directorPending:null,directorCheckpoint:turns.some(t=>t.id===source.directorCheckpoint)?source.directorCheckpoint:null,directorStateHistoryOrder:source.directorStateHistoryOrder ?? maxOrder,directorAbandonedTurnIds:[...(source.directorAbandonedTurnIds ?? []),...(metadata.directorTurns ?? []).filter(t=>t.status!=='completed').map(t=>t.id)],directorNeedsReview:!!source.directorNeedsReview || !!source.directorPending});}
     await updateSession(sessionId,patch);
     const report={sessionId,droppedLore,message:'Imported. Background memory is off — turn it on in Memory settings.'+(droppedLore ? ' '+droppedLore+' invalid lore cards were skipped.' : '')};
     importReports.set(sessionId,report);if(importReports.size>3)importReports.delete(importReports.keys().next().value);
@@ -88,6 +98,7 @@ export async function importSillyTavern(file) {
 }
 
 export async function serializeStory(sessionId) {
+  await flushStory(sessionId);
   const owner=currentUid();
   await messagesApi.ensureChunked(sessionId);
   const storySettings=await ensureStorySettings(sessionId);
@@ -95,6 +106,7 @@ export async function serializeStory(sessionId) {
   if (!session) throw new Error("No active session to export.");
   assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
   const msgs = await getMessages(sessionId);
+  const directorTurns=session.directorState || session.directorPending ? await exportDirectorTurns(sessionId) : [];
   let lore;
   try{lore=await getLore(sessionId);}catch(error){if(error.code==='lore-read-changed')assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));throw error;}
   assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));
@@ -105,7 +117,7 @@ export async function serializeStory(sessionId) {
       user_name: "You",
       character_name: session.title,
       create_date: new Date().toISOString(),
-      nera:{ version:2,storySettings,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn"].filter(k => k in session).map(k => [k,session[k]])),lore },
+      nera:{ version:2,storySettings,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn","directorState","directorRevision","directorCheckpoint","directorPending","directorNeedsReview","directorStateHistoryOrder","directorAbandonedTurnIds"].filter(k => k in session).map(k => [k,session[k]])),lore,...(directorTurns.length ? {directorTurns} : {}) },
     }),
   ];
   for (const m of msgs) {
@@ -135,6 +147,7 @@ export async function exportAllStories({signal,onProgress=()=>{},save=download}=
 
 // Preserve MAIN's full JSON backup alongside the v2 story/account exports.
 export async function buildFullBackup(sessionId){
+  await flushStory(sessionId);
  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
  await messagesApi.ensureChunked(sessionId);check();
  const storySettings=await ensureStorySettings(sessionId);check();
@@ -142,8 +155,9 @@ export async function buildFullBackup(sessionId){
  if(!before || before.deleting || before.importing)throw new Error('This story no longer exists on the server.');
  assertSnapshotRevisions({...before,storySettingsRevision:storySettings.revision},before);
  const messages=await getMessages(sessionId),lore=await getLore(sessionId);check();
+ const directorTurns=before.directorState || before.directorPending ? await exportDirectorTurns(sessionId) : [];
  const after=await sessionsApi.getSessionFromServer(sessionId);check();
  if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('The story changed while exporting. Try again when both devices are idle.');
- return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,storySettings,messages,lore};
+ return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,storySettings,messages,lore,...(directorTurns.length ? {directorTurns} : {})};
 }
 export async function exportFullBackup(sessionId){const backup=await buildFullBackup(sessionId);download(JSON.stringify(backup,null,2)+'\n',(backup.session.title || 'session').replace(/[^\w\- ]+/g,'').trim()+'-backup.json','application/json');}

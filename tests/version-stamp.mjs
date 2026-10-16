@@ -54,6 +54,7 @@ test('CI tests each branch and deploys only main after the test gate', async () 
   assert.match(workflow,/node --experimental-vm-modules --test tests\/\*\.mjs/);
   assert.match(workflow,/build:\s+if: github.ref == 'refs\/heads\/main'\s+needs: test/);
   assert.match(workflow,/deploy:\s+if: github.ref == 'refs\/heads\/main'\s+needs: build/);
+  assert.doesNotMatch(workflow,/if: github.ref == 'refs\/heads\/feature\//);
   assert.match(workflow,/node scripts\/stamp-version.mjs _site "\$GITHUB_SHA"/);
   assert.doesNotMatch(workflow,/branches: \[feature\/story-memory\]/);
 });

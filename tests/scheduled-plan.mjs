@@ -101,3 +101,17 @@ test('Retry and regeneration replay saved jump; Continue and later drafts do not
   const draft=await h.b.buildContextForRequest(session,settings,{messages:later,loreEntries:entries,draftText:'Talk.'});assert.doesNotMatch(JSON.stringify(draft.apiMessages),/AUTHOR-CONFIRMED TIME SKIP/);
   const preview=await h.b.buildContextForRequest(session,settings,{messages:history,loreEntries:entries,draftText:'Skip.',draftPlanJump:jump});assert.match(JSON.stringify(preview.apiMessages),/CLOSING/);
 });
+
+ test('standalone Plan Markdown accepts a title or scoped event-only content without touching other books',async()=>{
+  const h=await setup(),e=event(h),other=h.l.makeEntry('characters','Nera');
+  const full=h.f.toMarkdown([e,other],{books:['plan']});
+  for(const text of [full,full.replace('## Plan','# Plan'),full.slice(full.indexOf('### Festival'))]) {
+    const parsed=h.f.fromMarkdown(text,{book:'plan'});
+    assert.deepEqual(plain(parsed.books),['plan']);
+    assert.deepEqual(plain(parsed.entries[0].schedule),plain(e.schedule));
+    const imported=h.f.planImport([other],parsed,{book:'plan',mode:'replace'});
+    assert.ok(imported.writes.every(w=>!w.delete && w.data.book==='plan'));
+  }
+  assert.throws(()=>h.f.fromMarkdown('An undated prose plan',{book:'plan'}),/schedule metadata/);
+  assert.throws(()=>h.f.fromMarkdown('### Festival\nNo dates',{book:'plan'}),/schedule metadata/);
+ });

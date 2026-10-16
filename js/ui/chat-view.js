@@ -1,3 +1,8 @@
+import {openStoryStore,storyStore,flushStory,closeStoryStores,forgetStoryStore} from '../local-story-store.js';
+import {loadStoryData,saveStoryData,storyQueueStorage} from '../chat-cache.js';
+import { prepareDirectorTurn } from '../director-turn.js';
+import { directorScene, directorSceneWarnings } from '../director-state.js';
+import { requestSource } from '../continuity.js';
 import { createPlanJumpControl } from './plan-jump.js';
 import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
@@ -5,7 +10,8 @@ import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
-import {selectStorySettings,effectiveActiveSettings} from '../story-settings-store.js';
+import {selectStorySettings,effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
+import {resolveModelProfile} from '../model-profiles.js';
 import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
 import {buildRewriteMessages} from '../rewrite.js';
@@ -18,18 +24,17 @@ import {effectivelyPaused} from '../continuity.js';
 import {copyText as copyClipboard} from './clipboard.js';
 import * as tokenizer from '../tokenizer.js';
 import {createBusyGate,bridgeHistory,waitForPreparation} from './busy-token.js';
+import {hasPendingSettings,waitForPendingSettings} from './pending-settings.js';
 import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
 import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene, sceneFromThinking } from '../scene.js';
-import { lintPlayerAgency, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
+import { lintPlayerAgency, lintDirectorGestures, lintDirectorHistory, lintDirectorResponseBoundary, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns, dueRangeStatus } from '../turns.js';
-import { getLore, subscribeLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
+import { getLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
-import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { db } from "../db.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
 import { buildContextForRequest, computeContextUsage, normalizeAdDirective } from "../context-builder.js";
@@ -60,10 +65,59 @@ let streamState = null;  // live streaming UI handle
 let busy = false;
 let planJumpControl=null;
 let tokenizerWarned=false;
-const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>document.dispatchEvent(new CustomEvent('turn-finished'))});
-const acquireBusy=kind=>busyGate.acquire(kind),releaseBusy=token=>busyGate.release(token);
+const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));scheduleIdleMaintenance();}});
+const releaseBusy=token=>busyGate.release(token);
+const acquireBusy=kind=>{const token=busyGate.acquire(kind);if(token && ['send','reply','continue','regenerate','rewrite'].includes(kind)){token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};el.stopBtn?.classList.remove('hidden');if(el.sendBtn)el.sendBtn.hidden=true;}return token;};
 class StaleTurn extends Error {}
 function assertActive(token){if(cacheWritesPaused || !session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
+async function waitForPendingChanges(token) {
+  if(hasPendingSettings(currentUid(),token.sid)){showTransientInfo('Waiting for settings to save…');token.waitingSettings=true;try{await waitForPendingSettings(currentUid(),token.sid);assertActive(token);}finally{token.waitingSettings=false;}}
+  if(loreWritesPending()){await waitForLoreWrites();assertActive(token);}
+}
+let storySettingsReady=Promise.resolve(),chatLoading=Promise.resolve();
+let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
+let syncStatus={pending:0,error:null,durable:true};
+let indicatorTimer=null,maintenanceTimer=null,pendingMaintenance=null;
+function scheduleIdleMaintenance(){
+  if(!pendingMaintenance || busy || maintenanceTimer!==null || storyStore(state.sessionId)?.status.pending || storyStore(state.sessionId)?.status.error)return;
+  maintenanceTimer=setTimeout(()=>{maintenanceTimer=null;const task=pendingMaintenance;pendingMaintenance=null;if(!task || busy || task.owner!==currentUid() || task.sid!==state.sessionId || task.key!==preparationKey(session))return;void runIdleMaintenance(task);},0);
+}
+
+function applyWorkingStory(view,status) {
+  if(!session || view.session.id!==state.sessionId)return;
+  const changed=historyMessages!==view.messages || preparationKey(session)!==preparationKey(view.session);
+  session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
+  syncStatus=status;latestReady=true;hasEarlier=false;
+  if(changed)renderMessages(historyMessages.slice(-Math.max(visibleCount,PAGE_SIZE)));
+  updateSyncStatus();queueCacheSave();void updateIndicator();scheduleIdleMaintenance();
+}
+function updateSyncStatus(){
+  const node=document.getElementById('chat-sync-status');if(!node)return;
+  node.textContent=!syncStatus.durable && syncStatus.pending?'Local only':syncStatus.error?'Changes not synced':syncStatus.pending?'Saving…':'';
+  node.title=!syncStatus.durable && syncStatus.pending?'Local storage is unavailable. Keep this page open until changes sync.':syncStatus.error?.message ?? '';node.hidden=!node.textContent;
+}
+async function ensureLocalStory() {
+  const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
+  const active=()=>sid===state.sessionId && owner===currentUid() && epoch===historyEpoch;
+  const observe=(view,status)=>{if(active())applyWorkingStory(view,status);};
+  let store=storyStore(sid);
+  if(!store){const messages=await ensureHistory();if(!active())throw new StaleTurn();
+    store=await openStoryStore(sid,{session:{...session,storySettingsRevision:state.storySettings?.revision ?? session.storySettingsRevision ?? 0},messages,turns:{}},observe);
+  }else{
+    // Reopening a cached story must reconnect its view, including queues opened
+    // by background sync. Never replace newer local work with an older snapshot.
+    const upToDate=['historyRevision','directorRevision','loreRevision','storySettingsRevision'].every(key=>(session[key] ?? 0)>=(store.view.session[key] ?? 0));
+    if(!store.status.pending && upToDate && preparationKey(store.view.session)!==preparationKey(session))store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+    store.observe=observe;observe(store.view,store.status);
+  }
+  if(!active())throw new StaleTurn();
+  return store;
+}
+function cancelGeneration(token,controller,vibration,petTurn){
+  if(!busyGate.stillActive(token))return;
+  token.cancelled=true;controller.abort('user');vibration.stop();
+  restoreStreamUI();finishPetTurn('ready',petTurn);releaseBusy(token);
+}
 async function historyAction(kind,run) {
   const token=acquireBusy(kind);if(!token){showTransientInfo('Wait for the current reply to finish.');return false;}
   try{await run(token);return true;}catch(error){if(!(error instanceof StaleTurn))showTransientError(error);return false;}finally{releaseBusy(token);}
@@ -112,44 +166,43 @@ const memoryStories = new Map();
 let lastMemoryReport = null;
 let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages: historyMessages ?? lastMessages, historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
 export async function prepareMemorySnapshot() {
   if (!session) throw new Error('Open a story first.');
   const sid = state.sessionId;
-  await reconcileStory();
+  await flushStory(sid);await reconcileStory();
   if (sid !== state.sessionId) throw new Error('Story changed while loading history.');
   return memorySnapshot();
 }
 function rememberMemoryStory() {
   if (session && anyMemory(normalizeMemory(session.memory))) memoryStories.set(session.id,{ ...memorySnapshot(),owner:currentUid() });
 }
-function syncLore() {
-  const wanted = session && (anyMemory(normalizeMemory(session.memory)) || managerOpen);
-  if (!wanted) {clearTimeout(loreRetryTimer); loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreReady = Promise.resolve(); updateMemoryChip(); return; }
-  if (loreSessionId === session.id) return;
-  loreUnsub?.();
-  const sid = session.id, owner = currentUid(); loreSessionId = sid; loreEntries = []; verifiedLoreRevision = null;
-  let ready, fail;
-  loreReady = new Promise((resolve,reject) => { ready = resolve; fail = reject; });
-  // A listener error is displayed and is also propagated to generation readiness.
-  loreReady.catch(() => {});
-  loreUnsub = subscribeLore(sid,entries => {
-    if (currentUid() !== owner || state.sessionId !== sid || loreSessionId !== sid) return;
-    loreRetry=0;loreStatus='ok';loreEntries = entries; ready(); rememberMemoryStory(); updateMemoryChip();
-    document.dispatchEvent(new CustomEvent('lore-changed',{ detail:{ sessionId:sid,entries } }));
-    void updateIndicator();
-  },error=>{if(currentUid()!==owner || state.sessionId!==sid)return;fail(error);loreUnsub?.();loreUnsub=null;loreSessionId=null;loreStatus='error';updateMemoryChip();clearTimeout(loreRetryTimer);const delay=[2000,5000,15000,60000][Math.min(loreRetry++,3)];loreRetryTimer=setTimeout(()=>{if(state.sessionId===sid && currentUid()===owner)syncLore();},delay);if(loreRetry===1)showTransientError('Could not load lorebooks: '+error.message+' Retrying…');});
+function syncLore(force=false) {
+  const wanted=session && (anyMemory(normalizeMemory(session.memory)) || state.storySettings?.values?.narrationMode==='director' || managerOpen);
+  if(!wanted){loreReady=Promise.resolve();return;}
+  if(loreSessionId===session.id && !force)return;
+  const sid=session.id,owner=currentUid(),revision=session.loreRevision ?? 0;loreSessionId=sid;
+  loreReady=(async()=>{
+    const cached=await loadStoryData(owner,sid);
+    const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
+    if(currentUid()!==owner || state.sessionId!==sid)return;
+    loreEntries=entries;verifiedLoreRevision=revision;loreStatus='ok';
+    void saveStoryData(owner,sid,{lore:{revision,entries}});
+    rememberMemoryStory();updateMemoryChip();document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));void updateIndicator();
+  })();
+  loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks: '+error.message);}});
 }
 // Fields that can change the context or the caches needed to build it.
 function preparationKey(story) {
   return JSON.stringify([story?.historyRevision ?? 0,story?.loreRevision ?? 0,
-    story?.storySettingsRevision ?? 0,story?.longTermPlan,story?.allowLlmPlanUpdates,
+    story?.storySettingsRevision ?? 0,story?.directorRevision ?? 0,story?.directorPending,story?.directorNeedsReview,story?.longTermPlan,story?.allowLlmPlanUpdates,
     story?.activeSummaryMessageId,story?.breakpointOrder,story?.memory,story?.memoryState]);
 }
-async function reconcileStory(token = null) {
+async function reconcileStory(token = null, forceServer = false) {
+  if(!forceServer && session){await ensureLocalStory();return prepareStoryDocument(session,token);}
   const sid = state.sessionId, owner = currentUid();
   const check = () => {
     if (token) assertActive(token);
@@ -176,7 +229,7 @@ async function prepareStoryDocument(fresh,token = null) {
   session = fresh;
   if (historyRevision !== (fresh.historyRevision ?? 0)) historyMessages = null;
   syncLore();
-  if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate) {
+  if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate || state.storySettings?.values?.narrationMode==='director') {
     try {await loreReady;check();} catch {check();syncLore();await loreReady;check();}
     if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) {
       const entries = await getLore(sid);check();
@@ -184,7 +237,7 @@ async function prepareStoryDocument(fresh,token = null) {
     }
   }
   check();
-  await ensureHistory(true);check();
+  await ensureHistory();check();
   if(fresh.memory?.autoUpdate && fresh.memoryState?.extractedThroughOrder==null && computeTurns(historyMessages).lastTurn<=normalizeMemory(fresh.memory).lagTurns){
     await updateSession(sid,{'memoryState.extractedThroughOrder':0});
     if(token)assertActive(token);
@@ -218,15 +271,16 @@ function updateMemoryChip() {
 
 export function initChatView() {
   document.getElementById('btn-copy-diagnostics')?.addEventListener('click',async()=>{try{await copyClipboard(JSON.stringify(diagnostics({...state,session}),null,2));showTransientInfo('Diagnostics copied.');}catch(error){showTransientError(error);}});
-  configureLoreWrites(() => {
-    if (!busy) return Promise.resolve();
+  configureLoreWrites(async (sid=state.sessionId) => {
+    await flushStory(sid);
+    if (!busy) return;
     return new Promise(resolve => {
       const done = () => { if (!busy) { document.removeEventListener('turn-finished', done); resolve(); } };
       document.addEventListener('turn-finished', done);
     });
   });
   memoryUpdater.configureMemoryUpdater({
-    get: memorySnapshot, busy: () => busy,
+    get: memorySnapshot, busy: () => busy || !!storyStore(state.sessionId)?.status.pending || !!storyStore(state.sessionId)?.status.error,
     prepare: async sid => { if (sid !== state.sessionId) throw new Error("Open the story before maintenance."); return reconcileStory(); },
     patch(sid, patch, entries,loreRevision) {
       const live = memorySnapshot(sid); if (!live) return;
@@ -234,7 +288,7 @@ export function initChatView() {
       live.session = { ...live.session,...(loreRevision!=null ? {loreRevision} : {}), memoryState: { ...live.session.memoryState, ...patch } };
       if (entries) live.entries = entries;
       memoryStories.set(sid,{ ...live,owner:currentUid() });
-      if (sid === state.sessionId) { session = live.session; if (entries) loreEntries = entries; updateMemoryChip(); void updateIndicator(); }
+      if (sid === state.sessionId) { session = live.session; if (entries) {loreEntries = entries;void saveStoryData(currentUid(),sid,{lore:{revision:session.loreRevision ?? 0,entries}});}const local=storyStore(sid);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});updateMemoryChip();void updateIndicator(); }
     },
     waitIdle(signal) {
       if (!busy || signal?.aborted) return Promise.resolve();
@@ -252,8 +306,10 @@ export function initChatView() {
     for(const [key,value] of Object.entries(partial)){const parts=key.split('.');if(parts.length===1){session[key]=value;continue;}let dest=session;for(const part of parts.slice(0,-1)){dest[part]={...dest[part]};dest=dest[part];}dest[parts.at(-1)]=value;}
     if ('memoryState.extractedThroughOrder' in partial) session.memoryState = { ...session.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] };
     delete session['memoryState.extractedThroughOrder'];
+    const local=storyStore(state.sessionId);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});
     syncLore(); rememberMemoryStory(); invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator();
   });
+  document.addEventListener('local-lore-saved',e=>{const sid=e.detail.sessionId,owner=currentUid();if(sid!==state.sessionId)return;void (async()=>{await flushStory(sid);const fresh=await getSessionFromServer(sid);if(state.sessionId!==sid || currentUid()!==owner)return;session={...session,...fresh};syncLore(true);await loreReady;const store=storyStore(sid);if(store && !store.status.pending)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});queueCacheSave();})().catch(showTransientError);});
   document.addEventListener('scene-preference', () => { invalidateRenderedMessages(); renderMessages(lastMessages); });
   const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
   document.getElementById('context-indicator')?.addEventListener('click', openViewer);
@@ -298,6 +354,7 @@ export function initChatView() {
   el.contextThreshold = document.getElementById("context-threshold");
   el.contextLabel = document.getElementById("context-label");
   el.contextLabel.title = indicatorHint;
+  document.getElementById('chat-sync-status')?.addEventListener('click',()=>storyStore(state.sessionId)?.retry());
   el.earlierBtn = document.createElement("button");
   el.earlierBtn.className = "btn earlier-messages";
   el.earlierBtn.type = "button";
@@ -381,12 +438,26 @@ export function initChatView() {
 
 // ---------- inline model / thinking selectors (composer) ----------
 
-// Model selection and reasoning are shared account preferences.
+// Saved connections are shared; Director mode can select both roles per story.
+const storyRoleProfiles=()=>state.storySettings?.values?.narrationMode==='director' || !!state.storySettings?.values?.narratorProfileId;
+async function saveQuickRoleProfile(key,value) {
+  try{
+    if(busy)throw new Error('Finish the current reply before changing profiles.');
+    if(!state.sessionId || state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed)throw new Error('Story settings have not loaded.');
+    if(!value && key==='directorProfileId')throw new Error('Choose a Director profile.');
+    if(value && !state.settings.profiles.some(p=>p.id===value))throw new Error('Choose an existing profile.');
+    await saveStorySettings(state.sessionId,state.storySettings.values,{[key]:value});
+  }catch(error){showTransientError(error.message);}
+  refreshQuickControls();
+}
 function initQuickControls() {
   el.quickProfile = document.getElementById("quick-profile");
+  el.quickDirector = document.getElementById('quick-director-profile');
   el.quickThinking = document.getElementById("quick-thinking");
+  el.quickDirector.addEventListener('change',()=>saveQuickRoleProfile('directorProfileId',el.quickDirector.value));
 
   el.quickProfile.addEventListener("change", async () => {
+    if(storyRoleProfiles())return saveQuickRoleProfile('narratorProfileId',el.quickProfile.value);
     const s = structuredClone(state.settings);
     if (!s) return;
     s.activeProfileId = el.quickProfile.value;
@@ -398,20 +469,24 @@ function initQuickControls() {
   el.quickThinking.addEventListener("change", async () => {
     const s = structuredClone(state.settings);
     if (!s) return;
+    const selected=state.storySettings?.values?.narratorProfileId;
+    let connection;
+    try{connection=resolveModelProfile(s,selected,{role:'Narrator'});}catch(error){showTransientError(error.message);refreshQuickControls();return;}
     const v = el.quickThinking.value;
     if (v === "off") {
-      s.reasoning = { ...s.reasoning, enabled: false };
+      connection.reasoning = { ...connection.reasoning, enabled: false };
     } else if (v === "max_tokens") {
-      s.reasoning = { ...s.reasoning, enabled: true, mode: "max_tokens" };
+      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "max_tokens" };
     } else {
-      s.reasoning = { ...s.reasoning, enabled: true, mode: "effort", effort: v };
+      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "effort", effort: v };
     }
     normalizeProfiles(s);
-    mirrorToActiveProfile(s);
+    if(selected && selected!==s.activeProfileId)s.profiles.find(p=>p.id===selected).reasoning=connection.reasoning;
+    else{s.reasoning=connection.reasoning;mirrorToActiveProfile(s);}
     try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
   });
 
-  document.addEventListener('story-settings-changed',()=>{refreshContextIndicator();});
+  document.addEventListener('story-settings-changed',async e=>{const sid=state.sessionId;if(e.detail?.sessionPatch){await chatLoading;if(sid!==state.sessionId)return;}if(session && state.storySettings){session={...session,...e.detail?.sessionPatch,storySettingsRevision:state.storySettings.revision};const local=storyStore(state.sessionId);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});}refreshQuickControls();refreshContextIndicator();});
   document.addEventListener("settings-changed", refreshQuickControls);
   document.addEventListener("settings-changed", updateIndicator);
   refreshQuickControls();
@@ -423,11 +498,15 @@ function fillQuickProfileSelect(s) {
     ...s.profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.id;
-      o.textContent = `${p.modelId || 'No model'} · ${p.name}`;
+      o.textContent = `${storyRoleProfiles()?'Narrator · ':''}${p.modelId || 'No model'} · ${p.name}`;
       return o;
     })
   );
-  el.quickProfile.value = s.activeProfileId;
+  if(storyRoleProfiles()){
+    const option=document.createElement('option');option.value='';option.textContent='Narrator · Active profile';el.quickProfile.replaceChildren(option,...Array.from(el.quickProfile.children));
+    const id=state.storySettings.values.narratorProfileId ?? '';
+    if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Narrator profile';el.quickProfile.append(missing);}el.quickProfile.value=id;
+  }else el.quickProfile.value = s.activeProfileId;
 }
 
 function quickThinkingValue(s) {
@@ -440,13 +519,21 @@ function refreshQuickControls() {
   const s = state.settings;
   if (!s) return;
   normalizeProfiles(s);
-  const p = activeProfile(s);
+  let connection=s;
+  try{connection=resolveModelProfile(s,state.storySettings?.values?.narratorProfileId,{role:'Narrator'});}catch{}
+  const p = activeProfile(connection);
   fillQuickProfileSelect(s);
-  el.quickThinking.value = quickThinkingValue(s);
+  el.quickThinking.value = quickThinkingValue(connection);
   el.quickProfile.title = p?.name
-    ? `${p.name} · ${s.modelId || "no model"}`
-    : s.modelId || "Model not set";
-  el.quickThinking.title = `Thinking: ${quickThinkingValue(s)}`;
+    ? `Narrator: ${p.name} · ${connection.modelId || "no model"}`
+    : connection.modelId || "Model not set";
+  el.quickThinking.title = `Narrator thinking: ${quickThinkingValue(connection)}`;
+  const director=state.storySettings?.values?.narrationMode==='director',id=state.storySettings?.values?.directorProfileId ?? '';
+  document.getElementById('quick-director-control').classList.toggle('hidden',!director);
+  el.quickDirector.replaceChildren();
+  const choice=document.createElement('option');choice.value='';choice.textContent='Director · Choose profile';el.quickDirector.append(choice);
+  for(const profile of s.profiles){const option=document.createElement('option');option.value=profile.id;option.textContent='Director · '+(profile.name || profile.modelId);el.quickDirector.append(option);}
+  if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Director profile';el.quickDirector.append(missing);}el.quickDirector.value=id;
 }
 
 export function setSession(sessionId) {
@@ -471,8 +558,8 @@ export function setSession(sessionId) {
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
-  state.sessionId = sessionId;
-  void selectStorySettings(sessionId).catch(error=>showTransientError(error.message));
+  state.sessionId = sessionId;syncStatus={pending:0,error:null,durable:true};updateSyncStatus();
+  storySettingsReady=selectStorySettings(sessionId);void storySettingsReady.catch(error=>showTransientError(error.message));
   session = null;
   streamState = null;
   planJumpControl?.reset();
@@ -533,6 +620,8 @@ export function setSession(sessionId) {
 }
 
 function chatSnapshot() {
+  const local=storyStore(state.sessionId);
+  if(local?.status.pending){const base=local.confirmed;return structuredClone({session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages});}
   return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
 }
 
@@ -553,7 +642,7 @@ export async function prepareChatLogout() {
   busyGate.active?.abort?.();
   rewriteController?.abort();
   memoryUpdater.stopAll();
-  historyCache.clear(); memoryStories.clear();
+  historyCache.clear(); memoryStories.clear();closeStoryStores();
   await Promise.allSettled([...pendingCacheWrites]);
 }
 
@@ -566,7 +655,7 @@ function queueCacheSave() {
     cacheSaveTimer = null;
     if(cacheWritesPaused || state.sessionId!==scheduledSid || currentUid()!==scheduledOwner)return;
     saveLocalCache(scheduledOwner, scheduledSid, chatSnapshot());
-  }, 250);
+  }, 1000);
 }
 
 function restoreCachedChat(sessionId, saved) {
@@ -583,79 +672,27 @@ function restoreCachedChat(sessionId, saved) {
 }
 
 function subscribeChat(sessionId) {
-  const owner = currentUid();
-  msgUnsub?.();sessUnsub?.();
-  void messagesApi.ensureContinuityMetadata(sessionId).catch(error => {
-    if (state.sessionId === sessionId && currentUid() === owner) showTransientError(error);
-  });
-  const reconnect=error=>{if(state.sessionId!==sessionId || currentUid()!==owner || cacheWritesPaused)return;chatStatus='reconnecting';msgUnsub?.();sessUnsub?.();void updateIndicator();if(chatRetryTimer)return;if(chatRetry===0)showTransientError(error);const delay=[2000,5000,15000,60000][Math.min(chatRetry++,3)];chatRetryTimer=setTimeout(()=>{chatRetryTimer=null;if(state.sessionId===sessionId && currentUid()===owner && !cacheWritesPaused)subscribeChat(sessionId);},delay);};
-
-  sessUnsub = onSnapshot(
-    doc(db, "users", currentUid(), "sessions", sessionId),
-    (snap) => {
-      if (state.sessionId !== sessionId || currentUid() !== owner) return;
-      // Pending/cached metadata can lag the server history query and our own
-      // committed writes. Wait for authoritative subscription metadata.
-      if(snap.metadata?.fromCache || snap.metadata?.hasPendingWrites){if(snap.metadata?.fromCache && navigator.onLine===false)el.contextLabel.textContent=el.contextLabel.textContent.replace(/ · offline$/,'')+' · offline';return;}
-      chatRetry=0;chatStatus='ok';el.contextLabel.textContent=el.contextLabel.textContent.replace(/ · (?:offline|reconnecting)$/,'');
-      if(!snap.exists() || snap.data().deleting){const deletedId=state.sessionId;forgetChatSession(deletedId);session=null;const clear=()=>{if(state.sessionId===deletedId){setSession(null);showTransientInfo('This story was deleted.');}};if(busy){busyGate.active?.abort?.();document.addEventListener('turn-finished',clear,{once:true});}else clear();return;}
-      const previous = session;
-      if (snap.exists() && (snap.data().historyRevision ?? 0) < (previous?.historyRevision ?? 0)) return;
-      sessionSnapshotVersion++;
-      session = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-      if (historyRevision !== (session?.historyRevision ?? 0)) historyMessages = null;
-      if (!session || !previous ||
-          session.longTermPlan !== previous.longTermPlan ||
-          session.allowLlmPlanUpdates !== previous.allowLlmPlanUpdates ||
-          session.activeSummaryMessageId !== previous.activeSummaryMessageId ||
-          session.breakpointOrder !== previous.breakpointOrder || JSON.stringify(session.memory) !== JSON.stringify(previous.memory)) {
-        updateIndicator();
-      }
-      if (!session || !previous || session.title !== previous.title ||
-          session.longTermPlan !== previous.longTermPlan || JSON.stringify(session.memory) !== JSON.stringify(previous.memory) || JSON.stringify(session.memoryState) !== JSON.stringify(previous.memoryState)) {
-        document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
-      }
-      syncLore(); rememberMemoryStory();updateRewriteControls();
-      if(JSON.stringify([previous?.memory,previous?.memoryState,previous?.loreRevision])!==JSON.stringify([session?.memory,session?.memoryState,session?.loreRevision]))document.dispatchEvent(new CustomEvent('memory-refresh'));
-      if (JSON.stringify(previous?.memory) !== JSON.stringify(session?.memory)) { invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator(); }
-      queueCacheSave();
-    },
-    reconnect
-  );
-
-  msgUnsub = messagesApi.subscribeLatestMessages(
-    sessionId,
-    ({ messages: latest, hasEarlier: olderExists }) => {
-      if (state.sessionId !== sessionId || currentUid() !== owner) return;
-      latestReady = true;
-      const ids = new Set(latest.map((m) => m.id));
-      const oldestOrder = latest[0]?.order ?? Infinity;
-      const deleted = new Set([...latestMessageIds].filter((id) =>
-        !ids.has(id) && (latest.length === 0 ||
-          (lastMessages.find((m) => m.id === id)?.order ?? Infinity) >= oldestOrder)
-      ));
-      latestMessageIds = ids;
-      lastMessages = lastMessages.filter((m) => !deleted.has(m.id));
-      if (historyMessages) historyMessages = historyMessages.filter((m) => !deleted.has(m.id));
-      if (lastMessages.length <= latest.length) hasEarlier = olderExists;
-      const merged = mergeMessages(lastMessages, latest);
-      renderMessages(visibleCount <= PAGE_SIZE ? merged.slice(-PAGE_SIZE) : merged);
-      if (historyMessages) historyMessages = mergeMessages(historyMessages, latest);
-      if (session && anyMemory(normalizeMemory(session.memory))) {
-        const epoch = historyEpoch;
-        const active = () => state.sessionId === sessionId && currentUid() === owner && historyEpoch === epoch;
-        void ensureHistory().then(() => {
-          if (active()) { invalidateRenderedMessages(); renderMessages(lastMessages); rememberMemoryStory(); void updateIndicator(); }
-        }).catch(error => { if (active()) console.error('Memory history:',error); });
-      }
-      updateIndicator(); // cached data — no extra Firestore reads
-      queueCacheSave();
-    },
-    reconnect
-  );
+  const owner=currentUid(),epoch=historyEpoch;
+  const active=()=>state.sessionId===sessionId && currentUid()===owner && epoch===historyEpoch;
+  msgUnsub?.();sessUnsub?.();msgUnsub=sessUnsub=null;
+  chatLoading=(async()=>{
+    await storySettingsReady;if(!active())return;
+    const [outbox,aux]=await Promise.all([storyQueueStorage.load(owner,sessionId),loadStoryData(owner,sessionId)]);
+    if(!active())return;
+    const recovered=outbox?.base ?? aux?.confirmed;
+    if(recovered && (outbox || !session || (recovered.session.historyRevision ?? 0)>(session.historyRevision ?? 0))){session=recovered.session;historyMessages=recovered.messages;historyRevision=session.historyRevision ?? 0;lastMessages=historyMessages.slice(-PAGE_SIZE);hasEarlier=false;latestReady=true;}
+    if(!session){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;if(!session || session.deleting)throw new Error('Story no longer exists.');}
+    if(session.storageVersion!==2 || session.continuityVersion!==2 || session.lookupVersion!==1){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;historyMessages=null;historyRevision=null;}
+    latestReady=true;syncLore();
+    await ensureLocalStory();if(!active())return;
+    if(refreshOnReload){refreshOnReload=false;await refreshStoryFromServer();if(!active())return;}
+    document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId,session}}));
+    void updateIndicator();
+  })().catch(error=>{if(active())showTransientError(error);});
 }
 
 export function forgetChatSession(sessionId) {
+  forgetStoryStore(sessionId);
   memoryUpdater.stop(sessionId); memoryStories.delete(sessionId);clearUnsaved(currentUid(),sessionId);
   historyCache.delete(currentUid()+':'+sessionId);
   void deleteChatCache(currentUid(), sessionId);
@@ -748,7 +785,7 @@ function renderMessages(msgs) {
   const savedStream = streamState?.savedId && msgs.some(m => m.id === streamState.savedId) ? streamState : null;
   const position = savedStream ? captureListPosition() : null;
   const renderHistory=historyMessages ?? msgs;
-  const timeline=sceneTimeline(renderHistory,{startingScene:session?.memory?.startingScene});
+  const timeline=timelineFor(renderHistory,session?.memory?.startingScene);
   const lastUserOrder=lastUserOrderOf(renderHistory);
   const latestAssistant=renderHistory.filter(m => m.role==='assistant').at(-1)?.id;
   const latestStory = msgs.filter(m => m.role !== 'summary').at(-1);
@@ -819,13 +856,15 @@ function renderMessages(msgs) {
 }
 
 export function sameRenderedMessage(a,b) {
-  return a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
+  return a.directorTurnId===b.directorTurnId && a.directorIncomplete===b.directorIncomplete && a.retired===b.retired && a.role===b.role && a.content===b.content && a.thinking===b.thinking && a.scene===b.scene &&
     (a.revision ?? 0)===(b.revision ?? 0) && a.acceptance===b.acceptance &&
     Boolean(a.editedAt)===Boolean(b.editedAt) && Boolean(a.ooc)===Boolean(b.ooc) && Boolean(a.truncated)===Boolean(b.truncated) &&
     JSON.stringify(a.planJump ?? null)===JSON.stringify(b.planJump ?? null) &&
     JSON.stringify(a.sceneMeta ?? null)===JSON.stringify(b.sceneMeta ?? null) && JSON.stringify(a.sceneCandidate ?? null)===JSON.stringify(b.sceneCandidate ?? null) &&
     (a.reviewWarnings ?? []).join('\n')===(b.reviewWarnings ?? []).join('\n');
 }
+let timelineMemo={src:null,start:null,value:null};
+function timelineFor(messages,start){if(timelineMemo.src!==messages || timelineMemo.start!==start)timelineMemo={src:messages,start,value:sceneTimeline(messages,{startingScene:start})};return timelineMemo.value;}
 let turnsMemo={src:null,value:null};
 export function turnsFor(list) { if (turnsMemo.src!==list) turnsMemo={src:list,value:computeTurns(list)}; return turnsMemo.value; }
 
@@ -867,7 +906,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
       createCopy.disabled = true;
       createCopy.textContent = "Creating…";
       try {
-        const newId = await duplicateSession(sourceId, null, m.id);
+        await flushStory(sourceId);const newId = await duplicateSession(sourceId, null, m.id);
         if (state.sessionId === sourceId && setSession(newId)) {
           document.dispatchEvent(new CustomEvent("sidebar:close"));
         }
@@ -884,17 +923,17 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
 
   if (m.role === "user" || m.role === "assistant" || m.role === "summary") {
     actions.appendChild(actionBtn("Edit", null, () => startEdit(m, wrap)));
+    if(m.role==='assistant' && m.directorTurnId)actions.appendChild(actionBtn('Re-plan',()=>{if(!busy)void regenerateMessage(m,true);}));
   }
   actions.appendChild(actionBtn("Delete", "del", async () => {
     if (busy) return;
     if ((isFolded(m) || isActiveSummary(m)) && !confirm('Deleting this will invalidate the summary. The next summary must rebuild it from history. Continue?')) return;
     if (!confirm("Delete this message permanently?")) return;
-    return historyAction('delete',async token=>{
-    const result = await messagesApi.deleteMessage(token.sid, m.id, m.order);
-    applyLocalChange(token,result,list=>list.filter(item=>item.id!==m.id));
-    renderMessages(lastMessages.filter((item) => item.id !== m.id));
-    reconcileDeletedMemory(m);
-    });
+    try {
+      const store=await ensureLocalStory();
+      if(m.directorTurnId && store.view.session.directorCheckpoint===m.directorTurnId){let id=m.directorTurnId,steps=0;while(id && steps++<100){const turn=await store.getTurn(state.sessionId,id);if(!turn || turn.assistantId!==m.id)break;id=turn.previousCheckpoint;}}
+      store.enqueue('delete',{id:m.id,order:m.order});reconcileDeletedMemory(m);
+    }catch(error){showTransientError(error);}
   }));
   if (retry) actions.appendChild(actionBtn('Retry reply', 'retry', () => retryReply(m)));
   if (m.role === "assistant") {
@@ -918,7 +957,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
     const review = document.createElement('div');review.className = 'muted';
     review.textContent = 'Needs review: '+(m.reviewWarnings?.length ? m.reviewWarnings : lintPlayerAgency(m.content,normalizeMemory(session?.memory).protagonist)).join(' ')+' Memory and summaries wait for acceptance.';
     const accept=actionBtn('Accept reply',()=>historyAction('accept',async token=>{
-      const result=await messagesApi.acceptMessage(token.sid,m.id,m.order,m.revision ?? 0);
+      await flushStory(token.sid);assertActive(token);const result=await messagesApi.acceptMessage(token.sid,m.id,m.order,m.revision ?? 0);
       applyLocalChange(token,result,list=>list.map(x=>x.id===m.id ? result.replacement : x));renderMessages(lastMessages);void updateIndicator();
     }));
     if (m.sceneCandidate?.scene) { const candidate=document.createElement('p'); candidate.textContent=m.sceneCandidate.scene;review.append(candidate); }
@@ -942,9 +981,10 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
       const save = actionBtn('Save', async () => {
         const token=acquireBusy('scene');if(!token){showTransientInfo('Wait for the current reply to finish.');return;}save.disabled=true;
         try {
-          const raw = field.value.trim() || null; const result = await messagesApi.updateMessageScene(token.sid,m.id,m.order,raw,sceneState);
+          const raw = field.value.trim() || null; const result = await (async()=>{await flushStory(token.sid);assertActive(token);return messagesApi.updateMessageScene(token.sid,m.id,m.order,raw,sceneState);})();
           applyLocalChange(token,result,list=>list.map(x=>x.id===m.id ? result.replacement : x));
-          renderMessages(lastMessages); await updateIndicator();
+          if(!historyMessages){await ensureHistory();storyStore(token.sid)?.adopt({session,messages:historyMessages,turns:storyStore(token.sid).view.turns});}
+          renderMessages(lastMessages); void updateIndicator();
         } catch (e) {if(!(e instanceof StaleTurn))showTransientError(e);} finally {save.disabled=false;releaseBusy(token);}
       });
       row.append(field, save, actionBtn('Cancel', () => row.replaceWith(chip))); chip.replaceWith(row); field.focus();
@@ -1034,7 +1074,8 @@ async function startEdit(m, wrap) {
     // Keep the field editable after gesture-time focus so iOS keeps its keyboard.
     save.disabled = true; status.textContent = 'Loading latest message…';
     try {
-      const fresh = await messagesApi.getMessageForEdit(source.sid, m.id, m.order);
+      const store=await ensureLocalStory();
+      const fresh = store.view.messages.find(item=>item.id===m.id);
       if (!active()) return false;
       if (!fresh) throw new Error('This message was deleted. Cancel to return to the conversation.');
       // A draft typed after a failed read must not silently overwrite a change.
@@ -1061,13 +1102,12 @@ async function startEdit(m, wrap) {
     if (!active() || save.disabled) return;
     if (!editor.ready && !await loadLatest()) return;
     if (!active()) return;
-    const token = acquireBusy('edit');
-    if (!token) { status.textContent = 'Wait for the current reply to finish.'; return; }
+    if(busy){status.textContent='Wait for the current reply to finish.';return;}
     save.disabled = true; cancel.disabled = true; status.textContent = 'Saving…';
     let conflicted = false;
     try {
-      const result = await messagesApi.editMessage(source.sid, m.id, ta.value, editor.base.order, {expectedRevision:editor.base.revision ?? 0});
-      applyLocalChange(token, result, list => list.map(item => item.id === m.id ? result.replacement : item));
+      const store=await ensureLocalStory();if(!active())return;
+      store.enqueue('edit',{id:m.id,order:editor.base.order,content:ta.value,expectedRevision:editor.base.revision ?? 0});
       finish();
     } catch (error) {
       if (!active()) return;
@@ -1075,7 +1115,6 @@ async function startEdit(m, wrap) {
       else status.textContent = friendlyError(error) + ' Your draft is kept. Try Save again.';
     } finally {
       if (active()) { save.disabled = conflicted; cancel.disabled = false; }
-      releaseBusy(token);
     }
   });
   const cancel = actionBtn("Cancel", "small", finish);
@@ -1151,14 +1190,18 @@ function showToast(text, ok) {
 // ---------- context indicator ----------
 
 const indicatorHint = 'Token count refreshes after you leave the message box.';
+let indicatorUsageCache=null;
 const indicatorRefresh = createIndicatorRefresh({
-  focused: () => !!el.input && document.activeElement === el.input,
+  focused: () => busy || !!editingState || !!el.input && document.activeElement === el.input,
   key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value,planJumpControl?.preview()]),
   compute: async () => {
     if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
     const source = session, settings = effectiveActiveSettings(), draftText = el.input.value;
-    const messages = !anyMemory(normalizeMemory(source.memory)) && !historyMessages && hasEarlier ? lastMessages : await ensureHistory();
-    return computeContextUsage(source, settings, messages, { loreEntries, draftText,draftPlanJump:planJumpControl?.preview() });
+    const messages = historyMessages ?? lastMessages;
+    const jump=planJumpControl?.preview(),key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText,jump]);
+    if(indicatorUsageCache?.key===key)return indicatorUsageCache.usage;
+    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText,draftPlanJump:jump });
+    indicatorUsageCache={key,usage};return usage;
   },
   apply: usage => { if (usage) applyIndicator(usage); },
   onError: error => { if (el.contextLabel) el.contextLabel.textContent = error.message; },
@@ -1166,7 +1209,8 @@ const indicatorRefresh = createIndicatorRefresh({
 export function scheduledPlanDraftJump() {return planJumpControl?.preview() ?? null;}
 export async function updateIndicator() {
   if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
-  return indicatorRefresh.request();
+  clearTimeout(indicatorTimer);
+  indicatorTimer=setTimeout(()=>{indicatorTimer=null;void indicatorRefresh.request();},300);
 }
 function applyIndicator(usage) {
   lastMemoryReport = usage.report;
@@ -1200,12 +1244,11 @@ function clearLocalSummary() {
   queueCacheSave();
 }
 
-async function regenerateMessage(message) {
-  const requestedSessionId = state.sessionId;
+async function regenerateMessage(message, replan = false) {
   if(busy)return;
-  while(loreWritesPending()){await waitForLoreWrites();if(requestedSessionId!==state.sessionId)return;}
   const token=acquireBusy('regenerate');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
     await reconcileStory();assertActive(token);
     const all = await ensureHistory();assertActive(token);
     const latest = all.filter((m) => m.role !== "summary").at(-1);
@@ -1214,10 +1257,10 @@ async function regenerateMessage(message) {
     }
     assertActive(token);
     const target=all.find(m=>m.id===message.id);
-    if(target.lastContinuation!=null) {
+    if(target.lastContinuation!=null && !replan) {
       const prefix=continuationPrefix(target);
-      await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:prefix,overwriteId:target.id},token);
-    } else await runAssistantTurn({reconciled:true,messages:all,upToOrder:target.order,overwriteId:target.id},token);
+      await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:prefix,overwriteId:target.id,...(target.directorTurnId ? {directorReuseId:target.directorTurnId} : {})},token);
+    } else await runAssistantTurn({reconciled:true,messages:all,upToOrder:target.order,overwriteId:target.id,replan},token);
   } catch (err) {
     if(!(err instanceof StaleTurn))showTransientError(err);
   } finally {releaseBusy(token);}
@@ -1248,10 +1291,10 @@ function updateRewriteControls() {
 async function handleContinue() {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))return;
   const sid=state.sessionId;
-  if(loreWritesPending())await waitForLoreWrites();
   if(busy || editingState || sid!==state.sessionId)return;
   const token=acquireBusy('continue');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
     await reconcileStory(token);assertActive(token);
     const all=await ensureHistory();assertActive(token);
     const target=continuationTarget(session,all);
@@ -1261,10 +1304,11 @@ async function handleContinue() {
 }
 
 async function handleRewrite() {
-  if (rewriteController) { rewriteController.abort(); return; }
+  if (rewriteController) {busyGate.active?.abort?.();return;}
   if (busy || state.busy || !session || editingState) return;
   if(!el.input.value.trim()){await handleContinue();return;}
-  const settings = effectiveActiveSettings();
+  let settings;
+  try{settings=effectiveActiveSettings();}catch(error){showTransientError(error.message);return;}
   if (!settings?.modelId || !settings?.apiKey) {
     showTransientError("Set your API key and Model ID in Settings first.");
     return;
@@ -1275,9 +1319,15 @@ async function handleRewrite() {
   const token=acquireBusy('rewrite');if(!token)return;
   clearOriginalDraft();
   const controller = rewriteController = new AbortController();
-  token.abort=()=>controller.abort('user');
   const vibration = createStreamVibration(settings.streamVibrationMode ?? "spaces");
   let accumulated = "", frame = null;
+  token.abort=()=>{
+    if(!busyGate.stillActive(token))return;
+    token.cancelled=true;controller.abort('user');vibration.stop();
+    if(frame!==null){cancelAnimationFrame(frame);frame=null;}
+    if(rewriteController===controller)rewriteController=null;
+    setComposerText(draft);releaseBusy(token);updateRewriteControls();
+  };
   const active = () => busyGate.stillActive(token) && !controller.signal.aborted && requestedSession === state.sessionId && requestedUid === currentUid();
   const paint = () => { frame = null; if (active()) setComposerText(storyText(accumulated)); };
   // History and prompt loading also respond to Stop, even before fetch begins.
@@ -1290,6 +1340,7 @@ async function handleRewrite() {
   controller.signal.addEventListener("abort", () => vibration.stop(), { once: true });
   updateRewriteControls();
   try {
+    await waitFor(waitForPendingChanges(token));if(!active())return;settings=effectiveActiveSettings();
     const history = settings.rewriteRecentMessages === 0 ? [] : await waitFor(ensureHistory());
     const messages = await waitFor(buildRewriteMessages(settings, history, draft));
     if (!active()) throw new Error("Rewrite stopped because the account or story changed.");
@@ -1310,26 +1361,39 @@ async function handleRewrite() {
     setComposerText(clean);
     originalDraft = draft;
   } catch (error) {
-    if (requestedSession === state.sessionId && requestedUid === currentUid()) setComposerText(draft);
-    if (!controller.signal.aborted) showTransientError(error.message || String(error));
+    if (busyGate.stillActive(token))setComposerText(draft);
+    if (busyGate.stillActive(token) && !controller.signal.aborted)showTransientError(error.message || String(error));
   } finally {
     if (frame !== null) cancelAnimationFrame(frame);
     vibration.stop();
-    rewriteController = null;
+    if(rewriteController===controller)rewriteController=null;
     releaseBusy(token);
     updateRewriteControls();
   }
 }
 
-export async function syncChatData(){
-  return historyAction('sync',async token=>{if(historyLoading)await historyLoading;assertActive(token);historyMessages=null;historyRevision=null;historyCache.clear();await reconcileStory(token);assertActive(token);historyCache.clear();renderMessages(historyMessages);queueCacheSave();await updateIndicator();showTransientInfo('Latest story data loaded.');});
+async function refreshStoryFromServer(token=null){
+  const sid=state.sessionId,owner=currentUid();
+  const check=()=>{if(token)assertActive(token);if(sid!==state.sessionId || owner!==currentUid())throw new StaleTurn();};
+  await flushStory(sid);check();if(historyLoading)await historyLoading;check();
+  await selectStorySettings(sid,{force:true});check();
+  messagesApi.clearMessageChunkCache(sid);historyMessages=null;historyRevision=null;historyCache.clear();loreSessionId=null;verifiedLoreRevision=null;loreEntries=[];
+  await reconcileStory(token,true);check();
+  const store=storyStore(sid);store?.adopt({session,messages:historyMessages,turns:{}});
+  renderMessages(historyMessages);queueCacheSave();void updateIndicator();
+}
+export async function syncChatData({pendingStateSave=false}={}){
+  // A dismissed live-state save can finish while Send is waiting for that save.
+  // Refresh before releasing its dependency, without acquiring a second lock.
+  if(pendingStateSave && hasPendingSettings(currentUid(),state.sessionId)){
+    if(busy && !busyGate.active?.waitingSettings)throw new Error('Finish the current reply before refreshing live state.');
+    await refreshStoryFromServer();return true;
+  }
+  return historyAction('sync',async token=>{await chatLoading;assertActive(token);await refreshStoryFromServer(token);showTransientInfo('Latest story data loaded.');});
 }
 
 async function retryReply(message) {
   if (busy || editingState || !session) return;
-  const sid = state.sessionId;
-  if (loreWritesPending()) await waitForLoreWrites();
-  if (busy || !session || sid !== state.sessionId) return;
   await runAssistantTurn({ expectLatestUserId:message.id });
 }
 
@@ -1342,47 +1406,23 @@ async function handleSend(e) {
   let saved = false;
   const text = draft.trim();
   if (!text) return;
-  const settings = effectiveActiveSettings();
-  if (!settings?.modelId || !settings?.apiKey) {
-    showTransientError("Set your API key and Model ID in the Settings tab first.");
-    return;
-  }
-  if (loreWritesPending()) await waitForLoreWrites();
   if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
-  const token=acquireBusy('send');if(!token)return;
+  pendingMaintenance=null;const token=acquireBusy('send');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
+    const settings=effectiveActiveSettings();
+    if(!settings?.modelId || !settings?.apiKey)throw new Error('Set your API key and Model ID in the Settings tab first.');
     const planJump=planJumpControl?.get();
     if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
-    const baseHistory=historyMessages,baseRevision=historyRevision,baseSession=session;
-    const snapshotVersion=sessionSnapshotVersion;
-    const userResult = await messagesApi.addMessage(session.id, { role: "user", content: text,...(planJump ? {planJump} : {}) });
-    const {session:committedUserSession,message:resultMessage,...flatUserMessage}=userResult;
-    const userMsg=resultMessage ?? flatUserMessage;
-    saved = true;
-    planJumpControl?.reset();
-    if(requestedOwner!==currentUid())throw new StaleTurn('Account changed; this action was cancelled.');
-    if(busyGate.stillActive(token) && el.input.value===draft)setComposerText('');
-    assertActive(token);
-    // Bridge until the snapshot arrives so the context build includes the user turn
-    // without re-reading the collection from Firestore.
-    if (!lastMessages.some((m) => m.id === userMsg.id)) {
-      lastMessages = lastMessages.concat([
-        { ...userMsg,role:"user",content:text },
-      ]);
-    }
-    const committed = committedUserSession ?? { ...baseSession,historyRevision:userMsg.historyRevision };
-    const raced = sessionSnapshotVersion !== snapshotVersion &&
-      JSON.stringify(session)!==JSON.stringify(baseSession) && preparationKey(session)!==preparationKey(committed);
-    if(raced) {
-      await reconcileStory(token);assertActive(token);
-    } else {
-      historyMessages=bridgeHistory(baseHistory,baseRevision,userMsg);
-      historyRevision=historyMessages ? userMsg.historyRevision : null;
-      const authoritative = sessionSnapshotVersion!==snapshotVersion && preparationKey(session)===preparationKey(committed) ? session : committed;
-      await prepareStoryDocument(authoritative,token);assertActive(token);
-    }
-    if(historyMessages.filter(m=>m.id===userMsg.id).length!==1)throw new Error('The saved message is missing from current history. Refresh the story and use Retry reply.');
-    validateSavedStorySettings();
+    await chatLoading;assertActive(token);const store=await ensureLocalStory();assertActive(token);
+    if(session.directorPending)store.enqueue('discardDirector',{});
+    const id=messagesApi.newMessageId();
+    const mem=normalizeMemory(session.memory);const initializeMemory=mem.autoUpdate && session.memoryState?.extractedThroughOrder==null && computeTurns(store.view.messages).lastTurn<=mem.lagTurns;
+    store.enqueue('add',{id,message:{role:'user',content:text,...(planJump?{planJump}:{})},...(initializeMemory?{sessionUpdate:{memoryState:{...session.memoryState,extractedThroughOrder:0}}}:{})});
+    saved=true;planJumpControl?.reset();
+    if(el.input.value===draft)setComposerText('');
+    const userMsg=store.view.messages.find(m=>m.id===id);
+    await loreReady;assertActive(token);validateSavedStorySettings();
     await runAssistantTurn({messages:historyMessages,reconciled:true,savedUserId:userMsg.id},token);
   } catch (err) {
     if (!saved && requestedOwner===currentUid() && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
@@ -1396,14 +1436,17 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply first.');return;}
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
-  let settings = effectiveActiveSettings();
+  let settings;
+  try{settings=effectiveActiveSettings();}catch(error){showTransientError(error.message);if(ownsToken)releaseBusy(token);return;}
   const sid = state.sessionId;
   if (!settings) {if(ownsToken)releaseBusy(token);return;}
-  const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
+  const controller=new AbortController();el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const vibration=createStreamVibration(settings.streamVibrationMode ?? 'spaces');
-  const petTurn = startPetTurn();
+  const petTurn = startPetTurn();token.abort=()=>cancelGeneration(token,controller,vibration,petTurn);
   let maintenanceUsed = false,turnStream=null;
   try {
+    await waitForPreparation(chatLoading,controller);assertActive(token);
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);settings=effectiveActiveSettings();
     if(!opts.reconciled)await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     if (opts.expectLatestUserId) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
@@ -1421,42 +1464,55 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     }
     let sourceSession = structuredClone(session);
     if(settings._storySettingsRevision!=null)sourceSession.storySettingsRevision=settings._storySettingsRevision;
+    const directorMode=settings.narrationMode==='director';
+    let directorTurn=null,lastDirectorRequest=null;
+    if(directorMode){
+      showTransientInfo('Directing…');
+      directorTurn=await waitForPreparation(prepareDirectorTurn(sourceSession,settings,sourceMessages,structuredClone(loreEntries),opts,{signal:controller.signal,getTurn:(...args)=>storyStore(sid).getTurn(...args),saveTurn:(...args)=>{assertActive(token);return storyStore(sid).saveTurn(...args);},check:()=>assertActive(token),onRequest:serialized=>{if(!busyGate.stillActive(token))return;lastDirectorRequest={requestBody:JSON.parse(serialized),sentAt:Date.now()};}}),controller);
+      assertActive(token);
+      if(directorTurn.contract.action==='wait'){showTransientInfo(directorTurn.contract.objective);finishPetTurn('ready',petTurn);return;}
+      opts={...opts,directorTurn};
+      showTransientInfo('Narrating…');
+    }
     let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
     assertActive(token);
     if(opts.savedUserId){
       validateSavedStorySettings();
-      if(preparationKey(session)!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
+      if(preparationKey({...session,directorPending:sourceSession.directorPending})!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
         throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
     }
     startStreamUI(prefix);turnStream=streamState;
-    let result,stopReason=null;
+    let result,stopReason=null;const narratorStarted=Date.now();
     try {
       result=await chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
-        const requestBody=JSON.parse(serialized);
-        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now()});
-      },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted)return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
+        if(!busyGate.stillActive(token))return;const requestBody=JSON.parse(serialized);
+        lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,timings:directorTurn.timings,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
+      },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
     } catch(error) {
       assertActive(token);
-      if(!['transport_loss','timeout','cancelled'].includes(error.classification) || !error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
+      if(error.classification==='cancelled' || !['transport_loss','timeout'].includes(error.classification) || !error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
       stopReason=error.aborted==='timeout' ? 'timeout' : error.aborted==='dropped' ? 'dropped' : 'stopped';
       result={...error.partial,finishReason:'length',originalFinishReason:error.finishReason ?? null,failureClassification:error.classification,originalError:error.message,usage:null};
     }
     vibration.stop();
     const {content,thinking,finishReason,usage}=result;
     assertActive(token);
+    if(directorMode && lastSentContext){lastSentContext.narratorElapsedMs=Date.now()-narratorStarted;lastSentContext.narratorUsage=usage ?? null;}
     const truncated = finishReason === 'length';
     lastProviderUsage = usage?.prompt_tokens != null ? { sessionId:sid,promptTokens:usage.prompt_tokens,estimate:built.usedTokens } : null;
     const fresh=session;
-    const mem=normalizeMemory(sourceSession.memory),sceneEnabled=mem.scene;
+    const mem=normalizeMemory(sourceSession.memory),sceneEnabled=directorMode || mem.scene;
     const out=readSceneOutput(content,{sceneEnabled}),clean=out.clean;
-    let planThread=sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
+    let planThread=!directorMode && sceneEnabled && sourceSession.longTermPlan?.trim() ? out.planThread : null;
     if (truncated && !clean) throw new Error('The output limit left no narrative reply. Raise Max response tokens or lower the reasoning budget.');
     if (!clean) throw new Error('The model returned no reply; nothing was saved.');
     const userText=opts.continuationId ? '' : normalizeAdDirective(sourceMessages.filter(m => m.role==='user' && m.order < (opts.upToOrder ?? Infinity)).at(-1)?.content ?? '');
-    const inputKind=classifyUserInput(userText),ooc=opts.continuationId ? false : inputKind==='ooc' || inputKind==='question' && !out.scene;
+    const inputKind=classifyUserInput(userText),ooc=directorMode ? directorTurn.contract.action==='answer' : opts.continuationId ? false : inputKind==='ooc' || inputKind==='question' && !out.scene;
     const prior=latestScene(sourceMessages,opts.upToOrder ?? Infinity,mem.startingScene);
     let acceptedScene={scene:null,sceneMeta:null},sceneWarning=null;
-    if (sceneEnabled && !ooc) {
+    if (directorMode) {
+      acceptedScene={scene:directorScene(truncated ? directorTurn.before : directorTurn.after),sceneMeta:{kind:'director',stale:false,source:'director',turnId:directorTurn.id},warnings:directorSceneWarnings(out.scene,directorTurn.after)};
+    } else if (sceneEnabled && !ooc) {
       acceptedScene=carryScene(prior);
       if (!truncated && out.scene) acceptedScene=validateSceneValues(out.scene,{narration:clean,userText,prior:prior.scene,calendar:mem.calendar});
       else if (!truncated) {
@@ -1474,12 +1530,14 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     }
     const reviewWarnings=sceneEnabled && !ooc && !truncated ? [
       ...lintPlayerAgency(clean,mem.protagonist),
+      ...(directorMode ? [...lintDirectorGestures(clean,{protagonist:mem.protagonist,userText}),...lintDirectorHistory(clean,{userText}),...lintDirectorResponseBoundary(clean)] : []),
       ...(!prior.scene?.time && !parseScene(acceptedScene.scene).time ? lintUnestablishedTime(clean,{prior:prior.scene,userText}) : []),
       ...(acceptedScene.warnings ?? []),...(out.count > 1 ? ['Several scene tags; the last one was used.'] : []),
       ...(sceneWarning ? [sceneWarning] : []),
       ...(acceptedScene.sceneMeta?.kind==='carried' ? ['No scene tag; previous scene carried.'] : [])] : [];
     let message={role:'assistant',content:clean,thinking,truncated,planThread,planBefore:sourceSession.longTermPlan ?? '',
       scene:acceptedScene.scene,sceneMeta:acceptedScene.sceneMeta,ooc,
+      ...(directorMode ? {directorTurnId:directorTurn.id,directorIncomplete:truncated} : {}),
       responseDiagnostics:{finishReason:result.originalFinishReason ?? finishReason,classification:result.failureClassification ?? null,error:result.originalError ?? null},
       ...(sceneEnabled ? {acceptance:'accepted',reviewWarnings} : {})};
     if(prefix) {
@@ -1488,19 +1546,20 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       }
       if(!planThread)message.planThread=prefix.planThread ?? null;
       message=appendContinuation(prefix,message);
+      if(directorMode){message.truncated=truncated;message.directorIncomplete=truncated;}
     }
     updatePetPhase('saving',petTurn);
     let saved;
-    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:prefix?.order ?? opts.upToOrder ?? null,continuation:!!prefix,sourceRevision:sourceSession.historyRevision ?? 0};
+    const pendingReply={sid,minOrder:(sourceSession.nextOrder ?? 0)+1,owner:currentUid(),message,id:opts.overwriteId ?? messagesApi.newMessageId(),overwriteId:opts.overwriteId ?? null,order:prefix?.order ?? opts.upToOrder ?? null,continuation:!!prefix,sourceRevision:sourceSession.historyRevision ?? 0,...(opts.replan || opts.replanReplacement ? {replanReplacement:true} : {}),...(directorMode ? {expectedSource:requestSource(sourceSession)} : {})};
     if(streamState)streamState.savedId=pendingReply.id;
     try {
-      const result=await saveNarration(pendingReply);
+      assertActive(token);const result=await saveNarration(pendingReply,false,token);
       saved=result.message;
       assertActive(token);const committed=result.session ?? {...fresh,historyRevision:result.historyRevision};
       if((committed.historyRevision ?? 0)>=(session.historyRevision ?? 0))session=committed;
       clearUnsaved(pendingReply.owner,sid);
     } catch(error) {
-      if(error instanceof StaleTurn)throw error;
+      if(error instanceof StaleTurn || token.cancelled || !busyGate.stillActive(token))throw new StaleTurn();
       pendingReply.conflict=error.name==='HistoryConflict';pendingReply.error=error.message;
       const key=unsavedKey(pendingReply.owner,sid);unsavedRevisions.set(key,(unsavedRevisions.get(key) ?? 0)+1);
       unsavedReplies.set(key,pendingReply);
@@ -1519,7 +1578,21 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
     lastMemoryReport = built.report;
+    if(directorMode && truncated)return;
     finishPetTurn('ready',petTurn);
+    pendingMaintenance={sid,owner:currentUid(),key:preparationKey(session),settings,opts,maintenanceUsed,petTurn};
+    scheduleIdleMaintenance();
+
+  } catch (err) {
+    if(err instanceof StaleTurn || token.cancelled || !busyGate.stillActive(token))return;
+    finishPetTurn('blocked',petTurn); restoreStreamUI(); refreshPetPlacement(); clampListScroll(); showTransientError(err);
+  } finally {vibration.stop();if(streamState===turnStream && streamState?.continuationId && !streamState.saveCompleted)restoreStreamUI();if(ownsToken)releaseBusy(token);}
+}
+
+async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
+  if(busy || storyStore(sid)?.status.pending || storyStore(sid)?.status.error)return;
+  const token=acquireBusy('maintenance');if(!token)return;
+  try {
     try {
     const backoff=summaryBackoff.get(sid) ?? 0;if(backoff)summaryBackoff.set(sid,backoff-1);
     const due=memoryUpdater.dueRangeFor?.(sid) ?? (memoryUpdater.maybeStartAfterTurn && null);
@@ -1538,25 +1611,21 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       finally {ui.done();}
     }
     } catch(error){if(!(error instanceof StaleTurn))showTransientInfo('Reply saved. Background memory was skipped: '+error.message);}
-
-  } catch (err) {
-    if(err instanceof StaleTurn)return;
-    finishPetTurn('blocked',petTurn); restoreStreamUI(); refreshPetPlacement(); clampListScroll(); showTransientError(err);
-  } finally {vibration.stop();if(streamState===turnStream && streamState?.continuationId && !streamState.saveCompleted)restoreStreamUI();if(ownsToken)releaseBusy(token);}
+  }finally{releaseBusy(token);}
 }
 
-async function saveNarration(reply,asNew=false) {
-  if(asNew && reply.continuation)throw new Error('A continuation must replace its original reply.');
-  const expectedSource={historyRevision:reply.sourceRevision};
-  if(reply.overwriteId && !asNew){
-    const result=await messagesApi.overwriteMessage(reply.sid,reply.overwriteId,reply.message,reply.order,{},expectedSource);
-    return {...result,message:result.replacement};
-  }
-  const saved=await messagesApi.addMessage(reply.sid,reply.message,{id:reply.id,expectedSource});
-  const {session:committed,message:payload,...flat}=saved;
-  const message=payload ?? flat;
-  return {message,session:committed,historyRevision:saved.historyRevision};
+async function saveNarration(reply,asNew=false,token=null) {
+  if(reply.owner!==currentUid() || reply.sid!==state.sessionId)throw new StaleTurn();
+  const store=await ensureLocalStory();if(token)assertActive(token);
+  assertSource(store.view.session,reply.expectedSource ?? {historyRevision:reply.sourceRevision});
+  if(reply.replanReplacement && reply.message.truncated)throw new Error('Replacement is incomplete. Continue it before saving.');
+  if(asNew && (reply.message.directorTurnId || reply.continuation))throw new Error('This reply must replace its original turn.');
+  const view=reply.overwriteId && !asNew
+    ? store.enqueue('overwrite',{id:reply.overwriteId,order:reply.order,message:reply.message})
+    : store.enqueue('add',{id:reply.id,message:reply.message});
+  return {message:view.messages.find(m=>m.id===(reply.overwriteId && !asNew?reply.overwriteId:reply.id)),session:view.session,historyRevision:view.session.historyRevision};
 }
+
 function clearUnsaved(owner,sid) {
   const key=unsavedKey(owner,sid);unsavedRevisions.set(key,(unsavedRevisions.get(key) ?? 0)+1);
   unsavedReplies.delete(key);void storeUnsavedReply(owner,sid,null);
@@ -1566,7 +1635,7 @@ function renderUnsavedReply() {
   unsavedNode?.remove();unsavedNode=null;
   const reply=unsavedReplies.get(unsavedKey(currentUid(),state.sessionId));if(!reply || !el.list)return;
   const wrap=document.createElement('div');wrap.className='msg assistant unsaved';
-  const label=document.createElement('div');label.className='msg-meta';label.textContent='Not saved'+(reply.conflict ? ' · story changed on another device' : '');
+  const label=document.createElement('div');label.className='msg-meta';label.textContent=(reply.replanReplacement ? 'Replacement cut off · original reply kept' : 'Not saved')+(reply.conflict ? ' · story changed on another device' : '');
   const body=document.createElement('div');body.className='msg-content';body.textContent=reply.message.content;
   const controls=document.createElement('div');controls.className='msg-actions';
   const retry=asNew=>historyAction('save-reply',async token=>{
@@ -1583,8 +1652,10 @@ function renderUnsavedReply() {
       clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[result.message]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');
     }catch(error){if(error.name==='HistoryConflict'){reply.conflict=true;void storeUnsavedReply(reply.owner,reply.sid,reply);renderUnsavedReply();}throw error;}
   });
-  controls.append(actionBtn('Save again',()=>retry(false)),actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(confirm('Discard this unsaved reply?')){clearUnsaved(reply.owner,reply.sid);updateWelcome();}}));
-  if(reply.conflict && !reply.continuation)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
+  if(reply.replanReplacement && reply.message.truncated)controls.append(actionBtn('Continue replacement',()=>historyAction('continue-replacement',async token=>{await reconcileStory(token);assertActive(token);const all=await ensureHistory();assertActive(token);const target=all.find(m=>m.id===reply.overwriteId);if(!target)throw new Error('The original reply was deleted. Copy the replacement text.');clearUnsaved(reply.owner,reply.sid);await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:{...target,...reply.message},overwriteId:target.id,directorReuseId:reply.message.directorTurnId,replanReplacement:true},token);})));
+  if(!(reply.replanReplacement && reply.message.truncated))controls.append(actionBtn('Save again',()=>retry(false)));
+  controls.append(actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(!confirm('Discard this unsaved reply?'))return;if(reply.replanReplacement)return historyAction('discard-replacement',async token=>{const local=await ensureLocalStory();assertActive(token);local.enqueue('discardDirector',{});await local.flush();assertActive(token);clearUnsaved(reply.owner,reply.sid);await reconcileStory(token);updateWelcome();});clearUnsaved(reply.owner,reply.sid);updateWelcome();}));
+  if(reply.conflict && !reply.continuation && !reply.message.directorTurnId)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
   wrap.append(label,body,controls);if(reply.message.thinking)wrap.append(buildThinking(reply.message.thinking));el.list.append(wrap);unsavedNode=wrap;
 }
 
@@ -1638,7 +1709,9 @@ async function handleSummarize() {
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing…");
   try {
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
     const settings=effectiveActiveSettings();
+    await waitForPreparation(flushStory(token.sid),controller);assertActive(token);
     await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     const r = await runSummarization(session, settings, {
       signal:controller.signal,
@@ -1676,7 +1749,9 @@ async function handleFullSummarize() {
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing full history…");
   try {
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
     const settings=effectiveActiveSettings();
+    await waitForPreparation(flushStory(token.sid),controller);assertActive(token);
     await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     const r = await runSummarization(session, settings, {
       signal:controller.signal,
@@ -1790,6 +1865,9 @@ function appendStream(kind, text) {
 
 function applyBusyUi(b) {
   busy = state.busy = b;
+  if(el.quickProfile)el.quickProfile.disabled=b;
+  if(el.quickDirector)el.quickDirector.disabled=b;
+  if(el.quickThinking)el.quickThinking.disabled=b;
   planJumpControl?.refresh();
   updateRewriteControls();
   updateMemoryChip();

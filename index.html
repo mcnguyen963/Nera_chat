@@ -81,6 +81,7 @@
           <span class="hamburger"><span></span><span></span><span></span></span>
         </button>
         <span id="top-bar-title" hidden>Your next story</span>
+        <button id="chat-sync-status" type="button" class="chat-sync-status" hidden aria-live="polite"></button>
         <button id="context-indicator" type="button" class="context-indicator" aria-label="View context" aria-describedby="context-label" title="View context">
           <svg class="context-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="context-track" cx="18" cy="18" r="14"/><circle id="context-fill" class="context-fill" cx="18" cy="18" r="14" pathLength="100"/></svg>
           <span id="context-threshold" hidden></span><span id="context-label" class="sr-only">No session selected</span>
@@ -121,7 +122,11 @@
             <textarea id="chat-input" form="composer" autocomplete="off" inputmode="text" enterkeyhint="enter" autocapitalize="sentences" spellcheck="true" placeholder="Where shall we begin?" aria-label="Your message" rows="1"></textarea>
             <div class="composer-row">
               <label class="composer-select composer-model">
-                <select id="quick-profile" aria-label="Model"></select>
+                <select id="quick-profile" aria-label="Narrator profile"></select>
+                <span class="composer-select-arrow" aria-hidden="true">⌄</span>
+              </label>
+              <label id="quick-director-control" class="composer-select composer-model hidden">
+                <select id="quick-director-profile" aria-label="Director profile"></select>
                 <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
               <label class="composer-select composer-thinking">
@@ -180,6 +185,7 @@
                   <div class="profile-control"><label for="set-profiles">Profile</label><div class="profile-row"><select id="set-profiles"></select><button id="btn-profile-copy" class="btn small" type="button">Copy</button><button id="btn-profile-delete" class="btn small danger" type="button">Delete</button></div></div>
                   <label>Profile name<input type="text" id="set-profile-name" /></label>
                 </div>
+                <button id="btn-role-test-profiles" class="btn small" type="button">Add Director/Narrator test profiles</button>
                 <h3>Connection &amp; thinking</h3>
                 <div class="settings-grid">
                   <label>Endpoint URL<input type="url" id="set-endpoint" inputmode="url" pattern="https?://.+" title="Enter an http or https URL" placeholder="https://openrouter.ai/api/v1/chat/completions" /></label>
@@ -243,12 +249,29 @@
               <section data-panel="prompts" class="settings-panel hidden">
                 <h2>Prompts · current story</h2>
                 <p class="muted">These prompts and rewrite preferences are saved independently for this story.</p>
+                <div class="settings-grid">
+                  <label>Narration mode<select id="set-narration-mode"><option value="classic">Classic</option><option value="director">Director–Narrator</option></select></label>
+                  <label>Narrator connection profile<select id="set-narrator-profile"></select></label>
+                  <label>Director connection profile<select id="set-director-profile"></select></label>
+                  <label>Focused NPCs<input id="set-director-focus" type="number" min="1" max="20" /></label>
+                  <label>Director input limit<input id="set-director-input" type="number" min="1000" max="200000" /></label>
+                  <label>Director output limit<input id="set-director-output" type="number" min="256" max="32000" /></label>
+                  <label>Director recent complete turns<input id="set-director-turns" type="number" min="1" max="20" /></label>
+                </div>
+                <p class="muted">Director mode uses game hours 1–24 and two model calls per turn. A memory update or summary may use a third call. Starts from the saved scene; add older promises in live state.</p>
+                <button type="button" id="btn-director-state" class="btn small">Review live state, decisions &amp; promises</button>
+                <label>Director instructions<textarea id="set-director-prompt" rows="8"></textarea></label>
+                <button type="button" class="btn small" data-reset-prompt="directorSystemPrompt" data-prompt-field="set-director-prompt">Reset Director instructions</button>
+                <label>Director-mode Narrator instructions<textarea id="set-director-narrator-prompt" rows="12"></textarea></label>
+                <p id="director-narrator-review" class="muted hidden">Your custom Narrator instructions were preserved. Review instructions that reconstruct scene state or decide progression; the Director now controls those facts.</p>
+                <button type="button" class="btn small" id="btn-review-director-narrator">Mark instructions reviewed</button>
+                <button type="button" class="btn small" data-reset-prompt="directorNarratorSystemPrompt" data-prompt-field="set-director-narrator-prompt">Reset Director-mode Narrator instructions</button>
                   <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
                   <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
                   <p id="rewrite-prompt-help" class="muted">The default comes from system prompts/rewrite.md.</p>
                   <button type="button" id="btn-reset-rewrite-prompt" class="btn small">Use default rewrite prompt</button>
                 <div class="settings-prompts">
-                  <label>System prompt<textarea id="set-narrator-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="narratorSystemPrompt" data-prompt-field="set-narrator-prompt">Reset to app default</button>
+                  <label>Classic Narrator instructions<textarea id="set-narrator-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="narratorSystemPrompt" data-prompt-field="set-narrator-prompt">Reset to app default</button>
                   <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="summarizerSystemPrompt" data-prompt-field="set-summarizer-prompt">Reset to app default</button>
                   <label>Memory update prompt<textarea id="set-memory-update-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryExtractionPrompt" data-prompt-field="set-memory-update-prompt">Reset to app default</button>
                   <label>Reorganize prompt<textarea id="set-memory-reorganize-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryReorganizePrompt" data-prompt-field="set-memory-reorganize-prompt">Reset to app default</button>

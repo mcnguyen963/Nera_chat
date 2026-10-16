@@ -1,6 +1,6 @@
 import {exportAllStories} from '../import-export.js';
 import {cachedSessionIds} from '../chat-cache.js';
-import {subSheet,node,button} from './memory-ui.js';
+import {subSheet,node,button,pendingButton} from './memory-ui.js';
 import { toast } from "./memory-ui.js";
 import { friendlyError } from "../errors.js";
 import { state } from "../state.js";
@@ -22,11 +22,11 @@ export function initSidebar() {
     if(state.busy || newBtn.disabled)return;
     const title = prompt("Session title:", "Untitled story");
     if (title === null) return;
-    newBtn.disabled=true;try {
+    const selectedId=state.sessionId,owner=currentUserInfo()?.uid,restore=pendingButton(newBtn,'Creating…');try {
     const id = await createSession(title.trim() || "Untitled story");
-    setSession(id);
-    document.dispatchEvent(new CustomEvent("sidebar:close"));
-    }catch(error){toast(error);}finally{newBtn.disabled=false;}
+    if(state.sessionId===selectedId && currentUserInfo()?.uid===owner && !state.busy){setSession(id);document.dispatchEvent(new CustomEvent("sidebar:close"));}
+    else toast('Story created.');
+    }catch(error){toast(error);}finally{restore();}
   });
 
   logoutBtn.addEventListener("click",async()=>{if(logoutBtn.disabled || state.busy)return;logoutBtn.disabled=true;try{await prepareChatLogout();await logout();}catch(error){toast('Sign out failed: '+friendlyError(error)+' Reload to continue.','Reload',()=>window.location.reload());}finally{logoutBtn.disabled=false;}});
@@ -116,7 +116,7 @@ function render(listEl, sessions) {
     renameBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if(renameBtn.disabled || state.busy)return;
-      const t=prompt("Rename session:",s.title || "");if(!t?.trim())return;renameBtn.disabled=true;try{await renameSession(s.id,t.trim());}catch(error){toast(error);}finally{renameBtn.disabled=false;}
+      const t=prompt("Rename session:",s.title || "");if(!t?.trim())return;const restore=pendingButton(renameBtn,'Saving…');try{await renameSession(s.id,t.trim());}catch(error){toast(error);}finally{restore();}
     });
 
     const delBtn = document.createElement("button");
@@ -128,13 +128,13 @@ function render(listEl, sessions) {
       if (state.busy) { toast('Wait for the reply to finish.');return; }
       if (!confirm(`Delete session "${s.title}" and all its messages? This cannot be undone.`)) return;
       if (state.sessionId === s.id && !setSession(null)) { toast('Wait for the reply to finish.');return; }
-      delBtn.disabled=true;
+      const restore=pendingButton(delBtn,'Deleting…');
       try {
         await deleteSession(s.id);
         forgetChatSession(s.id);
       } catch (error) {
         toast('Delete did not finish: '+friendlyError(error)+(error.deletionPending ? ' It will resume after reconnecting.' : ' Try again.'));
-      } finally {delBtn.disabled=false;}
+      } finally {restore();}
     });
 
     const copyBtn = document.createElement("button");
@@ -144,18 +144,16 @@ function render(listEl, sessions) {
     copyBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (state.busy) return;
-      copyBtn.disabled = true;
-      copyBtn.textContent = "…";
+      const selectedId=state.sessionId,owner=currentUserInfo()?.uid,restore=pendingButton(copyBtn,'Copying…');
       try {
         const newId = await duplicateSession(s.id);
         // Jump straight into the fresh copy (same event the importer uses).
-        document.dispatchEvent(new CustomEvent("session-imported", { detail: newId }));
-        document.dispatchEvent(new CustomEvent("sidebar:close"));
+        if(state.sessionId===selectedId && currentUserInfo()?.uid===owner && !state.busy){document.dispatchEvent(new CustomEvent("session-imported", { detail: newId }));document.dispatchEvent(new CustomEvent("sidebar:close"));}
+        else toast('Story copy created.');
       } catch (err) {
         toast("Copy failed: "+friendlyError(err));
       } finally {
-        copyBtn.disabled = false;
-        copyBtn.textContent = "Copy";
+        restore();
       }
     });
 

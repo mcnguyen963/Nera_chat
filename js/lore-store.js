@@ -22,7 +22,7 @@ function gateWrite(action) {
     const owner = args[0]?.uid ?? currentUid();
     const sid = typeof args[0] === 'object' ? args[0].id : args[0]; storyWrites.set(sid,(storyWrites.get(sid) ?? 0)+1);
     activeWrites++;
-    try { await waitForNarrator(); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); return await action({ id:sid,uid:owner },...args.slice(1)); }
+    try { await waitForNarrator(sid); if (owner !== currentUid()) throw new Error('Account changed; this memory action was cancelled.'); const result=await action({ id:sid,uid:owner },...args.slice(1));if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('local-lore-saved',{detail:{sessionId:sid}}));return result; }
     finally { const remaining = storyWrites.get(sid)-1; if (remaining) storyWrites.set(sid,remaining); else { storyWrites.delete(sid); for (const resolve of storyWaiters.get(sid) ?? []) resolve(); storyWaiters.delete(sid); } if (--activeWrites === 0) { for (const resolve of writeWaiters) resolve(); writeWaiters.clear(); } }
   };
 }
@@ -321,7 +321,7 @@ async function importLoreImpl(sid,plan,_existing,{isCurrent=()=>true,book=plan.b
   const scoped=book!=null;
   const check=()=>{if(sid.uid!==currentUid() || !isCurrent())throw new Error('Navigation or account changed; import cancelled. Refresh the preview.');};
   check();
-  if(scoped && (!['characters','locations','facts','events'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
+  if(scoped && (!['characters','locations','facts','events','plan'].includes(book) || plan.book!==book || !Number.isSafeInteger(loreRevision)))throw new Error('Invalid scoped import preview.');
   const writes=[...new Map(plan.writes.map(w=>[w.id,w])).values()];
   if(writes.some(w=>w.data?.schemaVersion===3) && (await getDocFromServer(sessionRef(sid))).data()?.loreSchemaVersion!==3)throw new Error('Migrate this story to selective lorebook records before importing version 3 JSON.');
   for(const w of writes) {

@@ -26,7 +26,7 @@ export class EvaluationBudget {
 export function inputBounds(body,estimatedTokens) {
   // Production tokenizer estimates compatibility; UTF-8 bytes bound ordinary
   // text tokenization, with generous framing and request overhead reserved too.
-  const byteTokens=1024+body.messages.reduce((n,m)=>n+new TextEncoder().encode(m.content).length+64,0);
+  const byteTokens=1024+(body.response_format ? new TextEncoder().encode(JSON.stringify(body.response_format)).length : 0)+body.messages.reduce((n,m)=>n+new TextEncoder().encode(m.content).length+64,0);
   return {estimatedTokens,inputBound:Math.max(byteTokens,estimatedTokens)};
 }
 export function eligibleEndpoints(data,inputBound=0,maxTokens=8192) {

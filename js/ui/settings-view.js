@@ -1,7 +1,11 @@
+import { openDirectorState } from './director-view.js';
+import { currentUid } from '../auth.js';
+import { beginSettingsSave } from './pending-settings.js';
 import {setIcon} from './icons.js';
 import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
-import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings} from '../story-settings.js';
+import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings,resolveStorySettings} from '../story-settings.js';
+import {addRoleTestProfiles} from '../model-profiles.js';
 import {loadRewriteDefaultPrompt} from '../rewrite.js';
 import {vibrationSupport} from '../stream-vibration.js';
 import {requestInputLimit} from '../request-budget.js';
@@ -39,6 +43,7 @@ let opener = null;
 let sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
 let sessionId = null;
 let saving = false;
+let retainedDraft=false,viewVersion=0,draftOwner=null;
 let petChoicesReady = false;
 let petCatalog = [];
 let petLoadRequest = 0;
@@ -80,7 +85,7 @@ export function initSettingsView() {
   });
   document.querySelectorAll("[data-settings-panel]").forEach((button) =>
     button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
-  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);clearMessage();}));
+  document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);if(button.dataset.resetPrompt==='directorNarratorSystemPrompt'){draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();}clearMessage();}));
   for(const id of ['set-reasoning-maxtokens','set-max-resp'])input(id).addEventListener('input',syncOptionalControls);
   el.profiles.addEventListener("change", () => {
     capture();
@@ -102,6 +107,10 @@ export function initSettingsView() {
     mirrorFromActiveProfile(draft);
     renderProfile();
   });
+  input('btn-role-test-profiles').addEventListener('click',()=>{
+    capture();draft.profiles=addRoleTestProfiles(draft).profiles;renderProfile();
+    feedback('Test profiles added. Save, then select them in Prompts.');
+  });
   input("btn-profile-delete").addEventListener("click", () => {
     if (draft.profiles.length === 1) return feedback("Keep at least one profile.", true);
     capture();
@@ -116,6 +125,8 @@ export function initSettingsView() {
   input("set-pet-movement").addEventListener("change", () => { capture(); clearMessage(); });
   input("btn-restore-pet").addEventListener("click", () => document.dispatchEvent(new CustomEvent("pet-restore")));
   document.addEventListener("pet-settings-open", (event) => openSettingsPopup(event.detail?.trigger, { panel: "pets" }));
+  input('btn-director-state').addEventListener('click',openDirectorState);
+  input('btn-review-director-narrator').addEventListener('click',()=>{capture();draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();feedback('Instructions reviewed. Save story prompts to apply.');});
   el.save.addEventListener("click", handleSaveSettings);
   el.reset.addEventListener("click", resetPanel);
   el.saveSession.addEventListener("click", handleSaveSession);
@@ -141,15 +152,16 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
   el.overlay.classList.remove("hidden");
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  reloadGlobalSettings();
-  showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");
+  if(retainedDraft && draftOwner===currentUid() && promptStoryId===state.sessionId){retainedDraft=false;if(options.panel)showPanel(options.panel);}
+  else {retainedDraft=false;reloadGlobalSettings();showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");}
   input("btn-close-settings").focus();
 }
 
 function reloadGlobalSettings() {
+  viewVersion++;draftOwner=currentUid();
   draft = structuredClone(state.settings);
   promptStoryId=state.sessionId;promptBase=null;
-  try {const effective=effectiveActiveSettings();for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
+  try {const effective=resolveStorySettings(state.settings,state.storySettings);for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
   renderAll(); capture();
   original = structuredClone(draft);
   clearMessage();
@@ -166,13 +178,13 @@ function receiveSettingsChange() {
 }
 
 function closeSettingsPopup() {
-  if (saving) return false;
   capture();
-  if ((globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
+  if (!saving && (globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
   modelPicker?.reset();
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
+  if(saving){retainedDraft=true;opener?.focus?.({preventScroll:true});return true;}
   sessionId = null;
   set("set-session-title", ""); set("set-session-plan", "");
   for (const id of ["current-password", "new-password", "confirm-new-password"]) set(id, "");
@@ -235,11 +247,27 @@ function renderAll() {
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set('set-model-context',draft.modelContextTokens ?? '');
+  const directorDefaults=defaultStorySettings();
+  set('set-narration-mode',draft.narrationMode ?? 'classic');set('set-director-input',draft.directorMaxInputTokens ?? 20000);set('set-director-output',draft.directorMaxOutputTokens ?? 4000);set('set-director-turns',draft.directorRecentTurns ?? 5);set('set-director-focus',draft.directorFocusLimit ?? 5);set('set-director-prompt',draft.directorSystemPrompt ?? directorDefaults.directorSystemPrompt);
+  const directorProfiles=input('set-director-profile');directorProfiles.replaceChildren();
+  const empty=document.createElement('option');empty.value='';empty.textContent='Choose a profile';directorProfiles.append(empty);
+  for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;directorProfiles.append(option);}
+  if(draft.directorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.directorProfileId)){const missing=document.createElement('option');missing.value=draft.directorProfileId;missing.textContent='Missing profile — choose another';directorProfiles.append(missing);}directorProfiles.value=draft.directorProfileId ?? '';
+  const narratorProfiles=input('set-narrator-profile');narratorProfiles.replaceChildren();
+  const current=document.createElement('option');current.value='';current.textContent='Use active profile';narratorProfiles.append(current);
+  for(const profile of draft.profiles ?? []){const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name || profile.modelId || profile.id;narratorProfiles.append(option);}
+  if(draft.narratorProfileId && !(draft.profiles ?? []).some(p=>p.id===draft.narratorProfileId)){const missing=document.createElement('option');missing.value=draft.narratorProfileId;missing.textContent='Missing profile — choose another';narratorProfiles.append(missing);}narratorProfiles.value=draft.narratorProfileId ?? '';
   set("set-narrator-prompt", draft.narratorSystemPrompt);
+  set("set-director-narrator-prompt",draft.directorNarratorSystemPrompt ?? directorDefaults.directorNarratorSystemPrompt);renderNarratorReview();
   set("set-summarizer-prompt", draft.summarizerSystemPrompt);
   set("set-memory-update-prompt", draft.memoryExtractionPrompt);
   set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
   set('set-rewrite-n',draft.rewriteRecentMessages ?? 10);set('set-stream-vibration',draft.streamVibrationMode ?? 'spaces');renderRewritePrompt();
+}
+function renderNarratorReview() {
+  const pending=draft.directorNarratorPromptNeedsReview===true;
+  input('director-narrator-review').classList.toggle('hidden',!pending);
+  input('btn-review-director-narrator').classList.toggle('hidden',!pending);
 }
 function renderRewritePrompt() {
   const request = ++rewritePromptRequest;
@@ -347,7 +375,11 @@ function capture() {
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.modelContextTokens=raw('set-model-context').trim();
+  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.narratorProfileId=raw('set-narrator-profile');draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
+  for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5],['directorFocusLimit','set-director-focus',5]])draft[key]=Number(raw(id) || fallback);
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
+  draft.directorNarratorSystemPrompt=raw("set-director-narrator-prompt");
+  draft.directorNarratorPromptNeedsReview ??= false;
   draft.summarizerSystemPrompt = raw("set-summarizer-prompt");
   draft.memoryExtractionPrompt = raw("set-memory-update-prompt");
   draft.memoryReorganizePrompt = raw("set-memory-reorganize-prompt");
@@ -377,6 +409,7 @@ function resetPanel() {
     renderPetChoices(draft.petCharacterIds);
   } else if (panel === "prompts") {
     draft.rewriteRecentMessages=DEFAULT_SETTINGS.rewriteRecentMessages;draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;set('set-rewrite-n',draft.rewriteRecentMessages);renderRewritePrompt();
+    draft.directorNarratorSystemPrompt=defaultStorySettings().directorNarratorSystemPrompt;draft.directorNarratorPromptNeedsReview=false;set('set-director-narrator-prompt',draft.directorNarratorSystemPrompt);renderNarratorReview();
     draft.narratorSystemPrompt = DEFAULT_SETTINGS.narratorSystemPrompt;
     draft.summarizerSystemPrompt = DEFAULT_SETTINGS.summarizerSystemPrompt;
     draft.memoryExtractionPrompt = DEFAULT_SETTINGS.memoryExtractionPrompt;
@@ -452,36 +485,48 @@ async function handleSaveSettings() {
   let validated;
   try { validated = panel==='prompts' ? explicitStorySettings({...draft,rewriteRecentMessages:integerField(draft.rewriteRecentMessages,'set-rewrite-n')}) : validatedDraft(Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,state.settings[k]]))); }
   catch (error) { feedback(error.message, true); return; }
-  saving = true; el.save.disabled = true;
+  const version=viewVersion,owner=currentUid(),submitted=structuredClone(draft),savedPanel=panel;
+  const finishSave=beginSettingsSave(owner,savedPanel==='prompts'?promptStoryId:null);let committed=false;
+  saving = true; el.save.disabled = el.saveSession.disabled = true;feedback('Saving…');el.save.setAttribute('aria-busy','true');
   try {
-    if(panel==='prompts') {
+    if(savedPanel==='prompts') {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
+      if(state.busy)throw new Error('Finish the current reply before saving story settings.');
+      if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
+      for(const key of ['narratorProfileId','directorProfileId'])if(validated[key] && !draft.profiles.some(p=>p.id===validated[key]))throw new Error('The selected '+(key==='narratorProfileId'?'Narrator':'Director')+' profile is missing. Choose another.');
+      validated.directorNarratorPromptNeedsReview=false;
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
-      promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS)draft[key]=result.values[key];renderAll();capture();for(const key of STORY_SETTING_KEYS)original[key]=draft[key];feedback('Story prompts saved ✓');refreshContextIndicator();return;
+      committed=true;
+      if(version!==viewVersion || owner!==currentUid())return;
+      capture();promptBase=structuredClone(result.values);for(const key of STORY_SETTING_KEYS){if(JSON.stringify(draft[key])===JSON.stringify(submitted[key]))draft[key]=result.values[key];original[key]=result.values[key];}renderAll();feedback('Story prompts saved ✓');refreshContextIndicator();return;
     }
-    for(const key of STORY_SETTING_KEYS)validated[key]=state.settings[key];
+    for(const key of STORY_SETTING_KEYS){if(state.settings[key]===undefined)delete validated[key];else validated[key]=state.settings[key];}
     const promptDraft=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,draft[k]])),promptOriginal=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,original[k]]));
     await saveSettings(validated);
-    draft = {...structuredClone(state.settings),...promptDraft};
+    committed=true;
+    if(version!==viewVersion || owner!==currentUid())return;
+    capture();const newer=Object.fromEntries(Object.entries(draft).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(submitted[key])));
+    original = {...structuredClone(state.settings),...promptOriginal};
+    draft = {...structuredClone(state.settings),...promptDraft,...newer};
     renderAll();
     capture();
-    original = {...structuredClone(draft),...promptOriginal};
-    feedback("Saved ✓");
+    feedback(globalDirty()?'Saved. New edits are unsaved.':'Saved ✓');
     refreshContextIndicator();
   } catch (error) {
+    if(version!==viewVersion || owner!==currentUid())return;
     if (error.code==='settings-reloaded') {
       receiveSettingsChange();
       if (globalDirty()) return;
     }
     feedback("Save failed: " + error.message, true);
   }
-  finally { saving = false; el.save.disabled = false; }
+  finally {finishSave(committed);saving = false; el.save.disabled = el.saveSession.disabled = false;el.save.setAttribute('aria-busy','false'); }
 }
 function feedback(message, error = false) {
   el.message.textContent = message;
   el.message.style.color = error ? "var(--danger)" : "var(--ok)";
 }
-function clearMessage() { if (el.message) el.message.textContent = ""; }
+function clearMessage() { if (el.message) {if(saving)feedback('Saving…');else el.message.textContent = "";} }
 
 async function fillSession(event) {
   if (el.overlay.classList.contains("hidden") || !state.sessionId) {
@@ -515,10 +560,13 @@ async function handleSaveSession() {
   if (!state.sessionId) return feedback("Select a story first.", true);
   if (state.busy) return feedback("Wait for the current reply or summary.", true);
   if (saving) return;
-  saving = true; el.saveSession.disabled = true;
+  const version=viewVersion,owner=currentUid(),requestedId=state.sessionId;
+  const finishSave=beginSettingsSave(owner,requestedId);let committed=false;
+  saving = true; el.saveSession.disabled = el.save.disabled = true;feedback('Saving…');el.saveSession.setAttribute('aria-busy','true');
   try {
-    const title = raw("set-session-title").trim() || "Untitled";
+    const titleInput=raw('set-session-title'),title = titleInput.trim() || "Untitled";
     const longTermPlan = raw("set-session-plan");
+    const submittedMemory=readMemory();
     const partial = {};
     if (title !== sessionOriginal.title) partial.title=title;
     if (longTermPlan !== sessionOriginal.longTermPlan) partial.longTermPlan=longTermPlan;
@@ -532,17 +580,19 @@ async function handleSaveSession() {
       Object.assign(partial,diffMemorySettings(normalizeMemory(sessionOriginal.memory),nextMemory));
       if (start != null && start !== sessionOriginal.memoryState?.extractedThroughOrder) partial['memoryState.extractedThroughOrder'] = start;
     }
-    const requestedId = state.sessionId;
+    if(requestedId!==state.sessionId || owner!==currentUid() || version!==viewVersion)throw new Error('Story changed. Reopen settings.');
     if (requestedId !== sessionId) throw new Error('Story changed. Reopen settings.');
     if (Object.keys(partial).length) await updateSession(requestedId, partial);
+    committed=true;
+    if(version!==viewVersion || requestedId!==state.sessionId || owner!==currentUid())return;
     sessionOriginal = { ...sessionOriginal, title, longTermPlan, ...(nextMemory ? { memory: nextMemory } : {}), ...('memoryState.extractedThroughOrder' in partial ? { memoryState: { ...sessionOriginal.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] } } : {}) };
     document.dispatchEvent(new CustomEvent('memory-session-saved', { detail: { sessionId: requestedId, partial } }));
-    set("set-session-title", title);
-    if(nextMemory)fillMemory(normalizeMemory(sessionOriginal.memory));
+    if(raw('set-session-title')===titleInput)set("set-session-title", title);
+    if(nextMemory && JSON.stringify(readMemory())===JSON.stringify(submittedMemory))fillMemory(normalizeMemory(sessionOriginal.memory));
     feedback("Session saved ✓");
     refreshContextIndicator();
-  } catch (error) { feedback("Save failed: " + error.message, true); }
-  finally { saving = false; el.saveSession.disabled = false; }
+  } catch (error) {if(version===viewVersion && owner===currentUid())feedback("Save failed: " + error.message, true); }
+  finally {finishSave(committed);saving = false; el.saveSession.disabled = el.save.disabled = false;el.saveSession.setAttribute('aria-busy','false'); }
 }
 async function handleImport() {
   const file = input("file-import-st").files[0];

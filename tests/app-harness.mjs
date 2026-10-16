@@ -1,4 +1,5 @@
 import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 
@@ -6,15 +7,16 @@ import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 export function appHarness({ stubs = {}, sources = {}, globals = {} } = {}) {
   const cache = new Map();
   const context = vm.createContext({ URL, fetch:promptFetch, console, structuredClone,
-    TextEncoder, TextDecoder, Date, Map, Set, AbortController, setTimeout, clearTimeout, ...globals });
+    TextEncoder, TextDecoder, crypto:webcrypto, Uint8Array, Date, Map, Set, AbortController, setTimeout, clearTimeout, ...globals });
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
     const pending = create(path); cache.set(path, pending); return pending;
   }
   async function create(path) {
-    const stub = stubs[path] ?? (path==='story-settings-store.js' && stubs['sessions.js'] && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] ? {ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},preserveLegacyStorySeed:async()=>({})} : null);
+    const stub = stubs[path] ?? (path==='director-store.js' && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] && (stubs['sessions.js'] || stubs['messages.js']) ? {exportDirectorTurns:async()=>[],importDirectorTurns:async()=>{},getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{},resetDirectorState:async()=>{},discardPendingDirector:async()=>{}} : null) ?? (path==='story-settings-store.js' && stubs['sessions.js'] && !stubs['https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'] ? {ensureStorySettings:async()=>({version:1,revision:1,values:{}}),writeInitialStorySettings:async()=>{},preserveLegacyStorySeed:async()=>({})} : null);
     if(path==='sessions.js' && stub && !stub.getSessionFromServer)stub.getSessionFromServer=stub.getSession;
     if(path==='messages.js' && stub && !stub.ensureChunked)stub.ensureChunked=async()=>{};
+    if(path==='chat-cache.js' && stub){stub.loadStoryData ??= async()=>null;stub.saveStoryData ??= async()=>true;}
     const module = stub
       ? new vm.SyntheticModule(Object.keys(stub), function () {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);
