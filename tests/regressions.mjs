@@ -112,6 +112,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
+      await calls.onSettingsSave?.(settings);
       if (calls.fail) throw new Error('write denied');
       calls.writes.push(structuredClone(settings));
     },
@@ -129,10 +130,10 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     // The real pet controller is exercised independently in pets.mjs.
     'lore-store.js': {
-      getLore:async () => {calls.loreCallbacks ??= [entries=>fixtureLore?.(entries)];calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {}, loreWritesPending: () => false, waitForLoreWrites: async () => {},
+      getLore:async () => {calls.loreCallbacks ??= [entries=>fixtureLore?.(entries)];calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {}, loreWritesPending: () => calls.lorePending===true, waitForLoreWrites: async () => calls.onLoreWait?.(),
       subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
-      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); }, deleteEntry: async () => 'backup', mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
+      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); return await calls.onCardSave?.(...args); }, deleteEntry: async (...args) => {await calls.onCardDelete?.(...args);return 'backup';}, mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
     },
     'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
@@ -2138,4 +2139,136 @@ test('Own story-settings metadata patches preserve Director review requirements 
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Opening'}]);h.state.storySettings.revision=2;
  await h.document.dispatchEvent({type:'story-settings-changed',detail:{sessionPatch:{directorNeedsReview:true}}});
  assert.equal(chat.memorySnapshot().session.directorNeedsReview,true);assert.equal((await h.use('local-story-store.js')).storyStore('improvement').view.session.directorNeedsReview,true);
+});
+
+test('Settings stays dismissible during a delayed save and keeps edits typed after submission',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+ h.el('set-model').value='submitted-model';let finish;
+ h.calls.onSettingsSave=()=>new Promise(resolve=>finish=resolve);
+ const save=h.fire('btn-save-settings');for(let i=0;i<20&&!finish;i++)await new Promise(r=>setImmediate(r));
+ assert.match(h.el('settings-saved-msg').textContent,/Saving/);
+ assert.equal(h.el('btn-save-settings').disabled,true);assert.equal(h.el('btn-save-session').disabled,true);
+ h.el('set-model').value='next-draft';await h.fire('btn-close-settings');
+ assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
+ view.openSettingsPopup();assert.equal(h.el('set-model').value,'next-draft');
+ finish();await save;
+ assert.equal(h.state.settings.modelId,'submitted-model');assert.equal(h.el('set-model').value,'next-draft');
+ h.calls.onSettingsSave=null;await h.fire('btn-save-settings');assert.equal(h.state.settings.modelId,'next-draft');
+});
+
+test('A dismissed failed settings save preserves the draft for reopening',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+ h.el('set-model').value='keep-on-error';let fail;h.calls.onSettingsSave=()=>new Promise((_r,reject)=>fail=reject);
+ const save=h.fire('btn-save-settings');for(let i=0;i<20&&!fail;i++)await new Promise(r=>setImmediate(r));
+ await h.fire('btn-close-settings');fail(Error('Offline'));await save;view.openSettingsPopup();
+ assert.equal(h.el('set-model').value,'keep-on-error');assert.match(h.el('settings-saved-msg').textContent,/Offline/);
+ assert.equal(h.el('btn-save-settings').disabled,false);
+});
+
+test('Shared dialog buttons acknowledge delayed actions and keep Close usable',async()=>{
+ const h=await harness(),ui=await h.use('ui/memory-ui.js');let finish,calls=0;
+ const dialog=ui.subSheet('Save example'),save=ui.button('Save',()=>{calls++;return new Promise(resolve=>finish=resolve);});dialog.dialog.append(save);
+ const pending=save.click();assert.equal(save.textContent,'Saving…');assert.equal(save.disabled,true);
+ await save.click();assert.equal(calls,1);assert.equal(dialog.hide(),true);finish();await pending;
+ assert.equal(save.textContent,'Save');assert.equal(save.disabled,false);
+});
+
+test('A late card save cannot replace a different editor after navigation',async()=>{
+ const {h,lore,other,root}=await cardUI();let finish;h.calls.onCardSave=()=>new Promise(resolve=>finish=resolve);
+ const text=root.querySelectorAll('textarea').find(t=>t.value==='Before');text.value='Submitted';await text.dispatchEvent({type:'input'});
+ const save=namedButton(root,'Save').click();assert.ok(finish);lore.openLorebooks({entryId:other.id});
+ finish();await save;
+ assert.ok(root.querySelectorAll('h2').some(i=>i.textContent==='Other'));assert.ok(!root.querySelectorAll('textarea').some(t=>t.value==='Submitted'));
+});
+
+test('A card save preserves newer typing and merges notes returned by the save',async()=>{
+ const {h,card,root}=await cardUI();let finish;h.calls.onCardSave=()=>new Promise(resolve=>finish=resolve);
+ const text=root.querySelectorAll('textarea').find(t=>t.value==='Before');text.value='Submitted';await text.dispatchEvent({type:'input'});
+ const save=namedButton(root,'Save').click();text.value='New draft';await text.dispatchEvent({type:'input'});
+ const result=structuredClone(h.calls.cardWrites[0][1]);result.sections.notes.lines.push({id:'fresh',text:'Concurrent note',by:'auto',turn:1,src:1,at:1});finish(result);await save;
+ assert.ok(root.querySelectorAll('textarea').some(t=>t.value==='New draft'));
+ h.calls.onCardSave=null;await namedButton(root,'Save').click();const next=h.calls.cardWrites[1];
+ assert.equal(next[1].sections.notes.text,'New draft');assert.ok(next[1].sections.notes.lines.some(l=>l.id==='fresh'));assert.equal(next[2].sections.notes.text,'Submitted');
+ assert.equal(next[1].id,card.id);
+});
+
+test('Send waiting on a lore operation acknowledges immediately and can be cancelled before it resumes',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h);let finish;
+ h.calls.lorePending=true;h.calls.onLoreWait=()=>new Promise(resolve=>finish=resolve);h.el('chat-input').value='First draft';
+ const first=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.ok(finish);
+ assert.equal(h.el('btn-stop').classList.contains('hidden'),false);assert.equal(h.state.busy,true);
+ await h.fire('btn-stop');assert.equal(h.state.busy,false);assert.equal(h.el('chat-input').value,'First draft');
+ h.calls.lorePending=false;h.el('chat-input').value='New action';h.calls.response='New reply';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ finish();await first;
+ assert.equal(h.calls.requests.length,1);assert.ok(!chat.memorySnapshot().messages.some(m=>m.content==='First draft'));assert.ok(chat.memorySnapshot().messages.some(m=>m.content==='New reply'));
+});
+
+test('Deleting a card preserves a newly selected editor and Undo targets the original story',async()=>{
+ const {h,lore,other,root}=await cardUI();let finish;h.calls.onCardDelete=()=>new Promise(resolve=>finish=resolve);
+ const pending=namedButton(root,'Delete card').click();assert.ok(finish);lore.openLorebooks({entryId:other.id});finish();await pending;
+ assert.ok(root.querySelectorAll('h2').some(n=>n.textContent==='Other'));
+ h.state.sessionId='another-story';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();
+ assert.equal(h.calls.cardRestores[0][0].id,'improvement');
+});
+
+test('A late dialog completion cannot close a replacement dialog or steal its focus',async()=>{
+ const h=await harness(),ui=await h.use('ui/memory-ui.js'),root=h.el('example-sheet');
+ const old=ui.sheet(root,'First');assert.equal(old.hide(),true);const next=ui.sheet(root,'Second');
+ assert.equal(h.document.activeElement,next.dialog);old.hide();assert.equal(root.classList.contains('hidden'),false);assert.equal(h.document.activeElement,next.dialog);
+});
+
+test('Finishing story creation does not interrupt navigation made while it was pending',async()=>{
+ const h=await harness();(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/sidebar.js')).initSidebar();
+ h.calls.prompt='New story';let finish;h.calls.onCreate=()=>new Promise(resolve=>finish=resolve);
+ const pending=h.fire('btn-new-session');assert.equal(h.el('btn-new-session').textContent,'Creating…');
+ h.state.sessionId='another-story';finish('created-story');await pending;
+ assert.equal(h.state.sessionId,'another-story');assert.equal(h.el('btn-new-session').disabled,false);
+});
+
+for(const type of ['director','catch-up'])test(type+' preparation opens a dismissible dialog before a delayed snapshot',async()=>{
+ let finish;const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:()=>new Promise(resolve=>finish=resolve),memorySnapshot:()=>null,syncChatData:async()=>{}}}});
+ h.state.sessionId='story';let pending;
+ if(type==='director')pending=(await h.use('ui/director-view.js')).openDirectorState();
+ else {const memory=await h.use('ui/memory-settings-view.js');memory.initMemorySettings(()=>{});pending=h.fire('mem-catch-up');}
+ const root=h.document.body.querySelector('.memory-sub-sheet');assert.ok(root);assert.equal(root.classList.contains('hidden'),false);await new Promise(r=>setImmediate(r));assert.ok(finish);
+ await root.querySelectorAll('button').find(b=>b.dataset.iconLabel==='Close').click();assert.equal(root.classList.contains('hidden'),true);
+ finish({session:{id:'story'},messages:[],entries:[]});await pending;await new Promise(r=>setImmediate(r));assert.equal(root.querySelectorAll('input').length,0);assert.equal(h.calls.catchUps,undefined);
+});
+
+for(const outcome of ['success','failure','cancel'])test('Send after dismissing a settings save handles '+outcome+' without stale settings or a frozen composer',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h),view=await h.use('ui/settings-view.js');h.settings.mirrorToActiveProfile(h.state.settings);view.initSettingsView();view.openSettingsPopup();
+ h.el('set-model').value='saved-new-model';let finish,fail;h.calls.onSettingsSave=()=>new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+ const save=h.fire('btn-save-settings');for(let i=0;i<20&&!finish;i++)await new Promise(r=>setImmediate(r));await h.fire('btn-close-settings');
+ h.el('chat-input').value='Use saved settings';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await new Promise(r=>setImmediate(r));
+ assert.equal(h.calls.requests.length,0);assert.equal(h.el('btn-stop').classList.contains('hidden'),false);
+ if(outcome==='cancel'){await h.fire('btn-stop');assert.equal(h.state.busy,false);}
+ if(outcome==='failure')fail(Error('Save failed'));else finish();await save;await send;
+ if(outcome==='success'){assert.equal(h.calls.requests.length,1);assert.equal(h.calls.requests[0].model,'saved-new-model');}
+ else {assert.equal(h.calls.requests.length,0);assert.equal(h.el('chat-input').value,'Use saved settings');assert.ok(!chat.memorySnapshot().messages.some(m=>m.content==='Use saved settings'));}
+ assert.equal(h.state.busy,false);
+});
+
+test('Stop rewriting releases immediately and late cleanup cannot replace a newly typed draft',async()=>{
+ const h=await rewriteChatHarness();let late;h.calls.streamReader={read:()=>new Promise(resolve=>late=resolve),cancel:()=>new Promise(()=>{})};
+ const rewrite=h.fire('btn-rewrite');for(let i=0;i<30&&!late;i++)await new Promise(r=>setImmediate(r));assert.ok(late);
+ const stop=h.fire('btn-stop');assert.equal(h.state.busy,false);assert.equal(h.el('chat-input').readOnly,false);
+ h.el('chat-input').value='New draft after Stop';await stop;late({done:true});await rewrite;
+ assert.equal(h.el('chat-input').value,'New draft after Stop');assert.equal(h.state.busy,false);
+});
+
+test('A failed dismissed Director save restores its draft when reopened',async()=>{
+ const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let fail;
+ const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),syncChatData:async()=>{}},'director-store.js':{resetDirectorState:()=>new Promise((_r,reject)=>fail=reject),discardPendingDirector:async()=>{}}}});
+ h.state.sessionId='story';const view=await h.use('ui/director-view.js');await view.openDirectorState();
+ let root=h.document.body.querySelector('.memory-sub-sheet');root.querySelectorAll('input')[1].value='21';const save=namedButton(root,'Save live state').click();assert.ok(fail);
+ await root.querySelectorAll('button').find(b=>b.dataset.iconLabel==='Close').click();fail(Error('Offline'));await save;await view.openDirectorState();
+ root=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);assert.equal(Number(root.querySelectorAll('input')[1].value),21);
+});
+
+test('A submitted live-state refresh can complete while Send is waiting on its settings dependency',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h),pending=await h.use('ui/pending-settings.js');
+ const finish=pending.beginSettingsSave('test-user','improvement');h.el('chat-input').value='Continue after save';
+ const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await new Promise(r=>setImmediate(r));assert.equal(h.calls.requests.length,0);
+ const sync=await chat.syncChatData({pendingStateSave:true});assert.equal(sync,true);assert.equal(h.state.busy,true);
+ finish(true);await send;assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);
 });

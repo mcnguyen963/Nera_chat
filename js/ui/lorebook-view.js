@@ -25,6 +25,7 @@ import { latestScene } from '../scene.js';
 import { planReorganize, runReorganizeBatch } from '../memory-reorganize.js';
 import { countTokens } from '../tokenizer.js';
 import { node, button, field, sheet, subSheet, toast, copy, download } from './memory-ui.js';
+import { rebaseSavedDraft } from './save-draft.js';
 let opened = false, sid = null, book = 'characters', screen = 'books', filter = 'all', selected = null, base = null, staged = null, editor = null, list = null, rail = null, view = null, search = '', threadFilter = 'open', newPrefill = null;
 let focusRestore = null, editorVersion = 0, deletedHistoryReady = false, historyLoadToken = 0;
 const reorganizing = new Set(), sizes = new Map();
@@ -180,7 +181,8 @@ function renderRows(rows) {
 }
 async function newCard(prefill = '',kind = 'card') {
   if (!canLeave()) return;
-  const s = subSheet('+ New '+(book === 'facts' ? 'topic' : book === 'events' && kind !== 'timeline' ? 'thread' : 'card'),{compact:true});
+  const ctx=cardFlowContext();let dismissed=false;
+  const s = subSheet('+ New '+(book === 'facts' ? 'topic' : book === 'events' && kind !== 'timeline' ? 'thread' : 'card'),{compact:true,close:()=>{dismissed=true;return true;}});
   const name = field('Name',prefill), status = node('p','','memory-warning');
   const body = node('div',null,'memory-content'); body.append(name.wrap,status);
   let planStart,planEnd;
@@ -190,13 +192,15 @@ async function newCard(prefill = '',kind = 'card') {
     planStart=field('Start date · D/M/YYYY',initial);planEnd=field('End date · D/M/YYYY',initial);body.append(planStart.wrap,planEnd.wrap);
   }
   const save = button('Create',async () => {
+    ctx.check();
     const value = name.input.value.trim().slice(0,60); if (!value) return;
     const exists = entries().find(e => e.book === book && [e.name,...e.aliases].some(n => normalizeName(n) === normalizeName(value)));
     if (exists) { status.replaceChildren(node('span',`A card named ${value} already exists.`),button('Open it',() => { s.hide(); openCard(exists); })); return; }
     const e = makeEntry(book,value,{ kind:book === 'events' ? kind === 'timeline' ? 'timeline' : 'thread' : 'card',status:book === 'events' && kind !== 'timeline' ? 'open' : null });
     if(book==='plan'){e.schedule={start:planDate(planStart.input.value),end:planDate(planEnd.input.value),status:'pending',phases:[]};validateSchedule(e.schedule);}
     if (state.busy) throw new Error('Wait for the current reply or summary.');
-    save.disabled = true; await store.createEntry(sid,e); s.hide(); openCard(e);
+    save.disabled = true; await store.createEntry(ctx.source,e);
+    if(!dismissed && ctx.isCurrent()){s.hide();openCard(e);}else if(currentUid()===ctx.source.uid)toast('Created '+e.name+'.');
   },'btn primary'); body.append(save,button('Cancel',s.hide)); name.input.addEventListener('keydown',e => { if (e.key === 'Enter') save.click(); }); s.dialog.append(body); name.input.focus();
 }
 function openCard(e) {
@@ -212,7 +216,7 @@ function renderEditor() {
   editor.append(button('‹ '+BOOK_LABELS[book],() => { if (!canLeave()) return; staged = base = null; selected = null; screen = 'list'; renderShell(); },'btn small mobile-back'),node('h2',staged.name),node('p','','concurrent-notice muted'));
   editor.append(button('Export card…',exportCard),button('Import into this card…',()=>cardTransfer(selected)));
   if (staged.draft) {
-    const banner = node('div',null,'lore-banner'); banner.append(node('p',`This card was created by a memory update (turn ${linesOf(staged)[0]?.turn ?? '?'}). Check it's a new character, not someone you already have.`),button('Keep',async () => { if (state.busy) throw new Error('Wait for the current reply or summary.'); const original = entries().find(e => e.id === staged.id) ?? base; await store.saveEntry(sid,{ ...original,draft:false },original); base.draft = false; staged.draft = false; renderEditor(); toast('Saved'); }),button('Merge into…',mergeCard),button('Delete',deleteCard)); editor.append(banner);
+    const banner = node('div',null,'lore-banner'); banner.append(node('p',`This card was created by a memory update (turn ${linesOf(staged)[0]?.turn ?? '?'}). Check it's a new character, not someone you already have.`),button('Keep',async () => { if (state.busy) throw new Error('Wait for the current reply or summary.'); const ctx=cardFlowContext(),original = entries().find(e => e.id === staged.id) ?? base;await store.saveEntry(ctx.source,{ ...original,draft:false },original);if(ctx.isCurrent()){base.draft=false;staged.draft=false;banner.remove();}if(currentUid()===ctx.source.uid)toast('Saved'); }),button('Merge into…',mergeCard),button('Delete',deleteCard)); editor.append(banner);
   }
   if (staged.kind !== 'timeline' && !['characters', 'locations'].includes(book)) { const name = field(staged.kind === 'thread' ? 'Title' : 'Main name',staged.name); name.input.maxLength = 60; name.input.addEventListener('input',() => staged.name = name.input.value); editor.append(name.wrap); }
   if (book === 'characters' || book === 'locations') {
@@ -289,17 +293,22 @@ async function saveCard() {
   if (!staged.name.trim()) throw new Error('Enter a name.');
   if (linesOf(staged).some(l => !l.text.trim())) throw new Error('Finish or delete empty update lines.');
   const saved = structuredClone(staged), original = structuredClone(base);
+  const sourceSid=sid,owner=currentUid(),version=editorVersion;
   if (state.busy) throw new Error('Wait for the current reply or summary.');
-  const result=await store.saveEntry(sid,saved,original); base = structuredClone(result ?? saved); staged = structuredClone(result ?? saved); sizes.delete(saved.id); toast('Saved'); renderEditor();
+  const result=await store.saveEntry(sourceSid,saved,original);sizes.delete(saved.id);
+  if(owner!==currentUid())return;
+  toast('Saved');
+  if(!opened || sid!==sourceSid || state.sessionId!==sourceSid || selected!==saved.id || editorVersion!==version)return;
+  staged=rebaseSavedDraft(staged,saved,result ?? saved);base=structuredClone(result ?? saved);renderEditor();
 }
 async function removeDeletedNotes(affected,shownCount) {
   if (state.busy || reorganizing.size) throw new Error('Wait for the current reply or memory action.');
-  const sourceSid = sid;
+  const sourceSid = sid,source={id:sid,uid:currentUid()};
   if (!confirm('Remove all '+shownCount+' notes from deleted turns?')) return;
   while (opened && sid === sourceSid && state.sessionId === sourceSid) {
     try {
       const backup = await store.removeDeletedLines(sourceSid,affected,deletedOrders(),shownCount);
-      if (backup) await undoAction(backup,'Removed '+shownCount+' notes.');
+      if (backup) await undoAction(backup,'Removed '+shownCount+' notes.',source);
       else toast('There are no notes from deleted turns to remove.');
       prepareDeletedHistory(); return;
     } catch (error) {
@@ -310,11 +319,18 @@ async function removeDeletedNotes(affected,shownCount) {
     }
   }
 }
-async function undoAction(id,text) { toast(text,'Undo',async () => { await store.restoreBackup(sid,id,entries()); toast('Restored'); }); }
-async function deleteCard() { if (state.busy) throw new Error('Wait for the current reply or summary.'); const e = entries().find(e => e.id === selected) ?? staged; if (!confirm(`Delete the card '${e.name}' and its ${linesOf(e).length} notes?`)) return; const backup = await store.deleteEntry(sid,e); staged = base = null; selected = null; screen = 'list'; renderShell(); await undoAction(backup,'Deleted '+e.name+'.'); }
+async function undoAction(id,text,source={id:sid,uid:currentUid()}) { if(currentUid()!==source.uid)return;toast(text,'Undo',async () => {if(currentUid()!==source.uid)throw new Error('Account changed; Undo cancelled.');await store.restoreBackup(source,id,memorySnapshot(source.id)?.entries ?? []);toast('Restored');}); }
+async function deleteCard() {
+  if(state.busy)throw new Error('Wait for the current reply or summary.');
+  const ctx=cardFlowContext(),e=entries().find(e=>e.id===selected) ?? staged;
+  if(!confirm(`Delete the card '${e.name}' and its ${linesOf(e).length} notes?`))return;
+  const backup=await store.deleteEntry(ctx.source,e);
+  if(ctx.isCurrent()){staged=base=null;selected=null;screen='list';renderShell();}
+  await undoAction(backup,'Deleted '+e.name+'.',ctx.source);
+}
 async function reconcileBackground(key) {
   if(dirty()){toast('Save or cancel your changes before reconciling background.');return;}
-  const storyId=sid,entry=entries().find(e=>e.id===selected),section=entry?.sections[key];if(!section)return;
+  const ctx=cardFlowContext(),storyId=sid,entry=entries().find(e=>e.id===selected),section=entry?.sections[key];if(!section)return;
   const dialog=subSheet('RECONCILE BACKGROUND'),body=node('div',null,'memory-content');
   body.append(node('h3','Current background'),node('p',section.text),node('h3','Supporting notes'));
   for(const line of sortLines(section.lines))body.append(node('p',`T${line.turn ?? '?'} · ${line.text}`));
@@ -323,17 +339,17 @@ async function reconcileBackground(key) {
     if(state.busy){toast('Wait for the current reply or summary.');return;}
     b.disabled=true;try{
       const backup=await store.reconcileBackground(storyId,entry,key,replacement.input.value,section.text);
-      dialog.hide();staged=base=null;
-      toast('Background replaced; supporting notes retained.','Undo',()=>store.restoreBackup(storyId,backup,memorySnapshot(storyId)?.entries ?? []));
+      dialog.hide();if(ctx.isCurrent()){staged=base=null;selected=null;screen='list';renderShell();}
+      await undoAction(backup,'Background replaced; supporting notes retained.',ctx.source);
     }catch(error){toast(error.message);}finally{b.disabled=false;}
   },'btn primary'));dialog.dialog.append(body);
 }
 async function mergeCard() {
   if (dirty()) { toast('Save or cancel your changes before merging.'); return; }
   if (state.busy) throw new Error('Wait for the current reply or summary.');
-  const source = entries().find(e => e.id === selected) ?? staged, s = subSheet('Merge '+source.name+' into…'), body = node('div',null,'memory-content'), search = field('Search names…',''), results = node('div');
+  const ctx=cardFlowContext(),source = entries().find(e => e.id === selected) ?? staged, s = subSheet('Merge '+source.name+' into…'), body = node('div',null,'memory-content'), search = field('Search names…',''), results = node('div');
   const status=node('select');for(const value of ['open','closed']){const o=node('option',value);o.value=value;status.append(o);}status.value=source.status ?? 'open';if(source.kind==='thread')body.append(node('p','Choose the surviving thread status.'),status);
-  const render = () => { results.replaceChildren(); for (const target of entries().filter(e => e.book === source.book && e.kind === source.kind && e.id !== source.id && normSearch(e.name).includes(normSearch(search.input.value)))) results.append(button(target.name,async () => { if (!confirm(`Merge '${source.name}' into '${target.name}'? Its notes move over and '${source.name}' becomes another name for ${target.name}.`)) return; const backup = await store.mergeEntries(sid,source,target,source.kind==='thread' ? status.value : null); s.hide(); staged = base = null; openCard(target); await undoAction(backup,'Merged into '+target.name+'.'); })); }; search.input.addEventListener('input',render); body.append(search.wrap,results); s.dialog.append(body); render();
+  const render = () => { results.replaceChildren(); for (const target of entries().filter(e => e.book === source.book && e.kind === source.kind && e.id !== source.id && normSearch(e.name).includes(normSearch(search.input.value)))) results.append(button(target.name,async () => { if (!confirm(`Merge '${source.name}' into '${target.name}'? Its notes move over and '${source.name}' becomes another name for ${target.name}.`)) return; ctx.check();const backup = await store.mergeEntries(ctx.source,source,target,source.kind==='thread' ? status.value : null);s.hide();if(ctx.isCurrent()){staged=base=null;openCard(target);}await undoAction(backup,'Merged into '+target.name+'.',ctx.source); })); }; search.input.addEventListener('input',render); body.append(search.wrap,results); s.dialog.append(body); render();
 }
 function renderTransfer(scope = null) {
   const ctx=cardFlowContext();
@@ -500,7 +516,7 @@ async function renderBackups() {
 async function reorganize(cards) {
   if (!cards.length) return;
   if (dirty()) { toast('Save or cancel your changes before reorganizing.'); return; }
-  const snapshot = await prepareMemorySnapshot(), mem = normalizeMemory(snapshot.session.memory), snapshotAt = Date.now(), controller = new AbortController();
+  const ctx=cardFlowContext(),snapshot = await prepareMemorySnapshot();ctx.check();const mem = normalizeMemory(snapshot.session.memory), snapshotAt = Date.now(), controller = new AbortController();
   let holdingPreview=false;const releaseLocked=()=>{for(const id of locked)reorganizing.delete(id);if(staged)renderEditor();};
   const locked = cards.map(e => e.id), s = subSheet(cards.length === 1 ? 'Reorganize '+cards[0].name : 'Reorganize book',{ close:() => { controller.abort();holdingPreview=false;releaseLocked();return true; } });
   const body = node('div',null,'memory-content'); s.dialog.append(body);
@@ -575,7 +591,7 @@ async function reorganize(cards) {
     body.append(button('Discard',s.hide),button(previews.length>1 ? 'Save selected' : 'Save',async b => {
       if (state.busy) { toast('Wait for the current reply or summary.'); return; } const chosen = previews.filter(p => p.include); if (!chosen.length) return;
       if (chosen.some(p => Object.values(p.sections).some(ls => ls.some(l => !l.text.trim())))) { toast('Finish or delete empty lines.'); return; }
-      b.disabled=true;try{const backup=await store.replaceLines(sid,chosen,snapshotAt);s.hide();staged=base=null;screen='list';renderShell();await undoAction(backup,`${chosen.length === 1 ? chosen[0].entry.name : 'Books'} reorganized: ${beforeCount} → ${afterCount} lines${userCount ? ` + ${userCount} of your notes kept` : ''}.`);}finally{holdingPreview=false;releaseLocked();}
+      b.disabled=true;try{ctx.check();const backup=await store.replaceLines(ctx.source,chosen,snapshotAt);s.hide();if(ctx.isCurrent()){staged=base=null;screen='list';renderShell();}await undoAction(backup,`${chosen.length === 1 ? chosen[0].entry.name : 'Books'} reorganized: ${beforeCount} → ${afterCount} lines${userCount ? ` + ${userCount} of your notes kept` : ''}.`,ctx.source);}finally{holdingPreview=false;releaseLocked();}
     },'btn primary'));
   }
 }

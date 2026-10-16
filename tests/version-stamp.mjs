@@ -48,12 +48,13 @@ test('site assembly versions nested vendor modules and writes a release manifest
   } finally { await rm(root,{recursive:true,force:true}); }
 });
 
-test('CI tests each branch and deploys only the Director branch after the test gate', async () => {
+test('CI tests each branch and deploys only main after the test gate', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml',import.meta.url),'utf8');
   assert.match(workflow,/node-version: '20'/);
   assert.match(workflow,/node --experimental-vm-modules --test tests\/\*\.mjs/);
-  assert.match(workflow,/build:\s+if: github.ref == 'refs\/heads\/feature\/director-narrator'\s+needs: test/);
-  assert.match(workflow,/deploy:\s+if: github.ref == 'refs\/heads\/feature\/director-narrator'\s+needs: build/);
+  assert.match(workflow,/build:\s+if: github.ref == 'refs\/heads\/main'\s+needs: test/);
+  assert.match(workflow,/deploy:\s+if: github.ref == 'refs\/heads\/main'\s+needs: build/);
+  assert.doesNotMatch(workflow,/if: github.ref == 'refs\/heads\/feature\//);
   assert.match(workflow,/node scripts\/stamp-version.mjs _site "\$GITHUB_SHA"/);
   assert.doesNotMatch(workflow,/branches: \[feature\/story-memory\]/);
 });

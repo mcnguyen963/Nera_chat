@@ -23,7 +23,7 @@ jobs:
         run: node --experimental-vm-modules --test tests/*.mjs
 
   build:
-    if: github.ref == 'refs/heads/feature/director-narrator'
+    if: github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -80,7 +80,7 @@ jobs:
           path: _site
 
   deploy:
-    if: github.ref == 'refs/heads/feature/director-narrator'
+    if: github.ref == 'refs/heads/main'
     needs: build
     permissions:
       pages: write

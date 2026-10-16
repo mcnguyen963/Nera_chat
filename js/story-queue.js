@@ -14,6 +14,10 @@ export function createStoryQueue({owner,sid,base,operations=[],storage,commit,cu
     running=(async()=>{
       await journal;
       while(pending.length && !closed && currentOwner()===owner && !error) {
+        // An edit can arrive while the previous acknowledgement is being
+        // journaled. Its own record must be durable before transport starts.
+        await journal;
+        if(closed || currentOwner()!==owner || error)break;
         const op=pending[0];
         try {
           const next=await commit(op,confirmed);

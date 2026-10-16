@@ -88,7 +88,13 @@ export function refreshMemoryProfiles(selected = get('updateProfileId')?.value ?
   if(selected && !profiles.some(p=>p.id===selected)){const missing=option(selected,'Unavailable profile — choose another');missing.disabled=true;options.push(missing);}
   select.replaceChildren(...options);select.value=selected;
 }
-async function manualUpdate(retry=false){try{await prepareMemorySnapshot();await updateNow(state.sessionId,{retry});} catch (e) { toast(e.message); } }
+let preparingUpdate=false;
+async function manualUpdate(retry=false){
+  if(preparingUpdate || isRunning(state.sessionId) || state.busy)return;
+  const sid=state.sessionId;preparingUpdate=true;updateMemorySettingsHints();get('update-status').textContent='Preparing memory…';
+  try{await prepareMemorySnapshot();if(sid===state.sessionId)await updateNow(sid,{retry});}catch(e){toast(e.message);}
+  finally{preparingUpdate=false;updateMemorySettingsHints();}
+}
 export function updateMemorySettingsHints() {
   const mem = readMemory(), available = Math.floor(.9*requestInputLimit(state.settings ?? {maxContextTokens:120000}));
   const budget = mem.lorebooks ? Object.values(mem.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
@@ -113,7 +119,7 @@ export function updateMemorySettingsHints() {
   get('hints').textContent = hints.join('\n\n');
   const savedOn = live?.session.memory?.autoUpdate === true, paused = effectivelyPaused(live?.session.memoryState);
   get('update-actions').classList.toggle('hidden',!savedOn);
-  for (const key of ['update-now','catch-up','retry']) { get(key).disabled = !!state.busy || isRunning(state.sessionId); get(key).title = state.busy ? 'Wait for the current reply or summary.' : isRunning(state.sessionId) ? 'A memory update is already running.' : ''; }
+  for (const key of ['update-now','catch-up','retry']) { get(key).disabled = !!state.busy || preparingUpdate || isRunning(state.sessionId); get(key).title = state.busy ? 'Wait for the current reply or summary.' : preparingUpdate || isRunning(state.sessionId) ? 'A memory update is already running.' : ''; }
   get('retry').classList.toggle('hidden',!paused);
   const rebuildOrder=live?.session.memoryState?.rebuildFromOrder;get('reextract')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);if(get('reextract') && rebuildOrder!=null)get('reextract').textContent=rebuildLabel(live);get('dismiss-rebuild')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);
   get('choose-start')?.classList.toggle('hidden',pointer!=null);
@@ -140,13 +146,16 @@ export async function chooseMemoryStart(mem,previous,session,force=false) {
   });
 }
 async function catchUpDialog() {
+  const sid=state.sessionId,controller=new AbortController();let started=false;
+  const s=subSheet('Catch up…',{close:()=>{controller.abort();if(started)stop(sid);return true;}});
+  const body=node('div',null,'memory-content'),progress=node('p','Preparing memory…');body.append(progress);s.dialog.append(body);
   try {
     const live = await prepareMemorySnapshot(), mem = normalizeMemory(live.session.memory), turns = computeTurns(live.messages);
+    if(controller.signal.aborted)return;
+    if(state.sessionId!==sid){s.hide();return;}
     const eligible = turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a => a.order > (live.session.memoryState?.extractedThroughOrder ?? 0));
     const calls = Math.ceil(eligible.length/mem.batchTurns), tokens = live.messages.filter(m => m.order>(live.session.memoryState?.extractedThroughOrder ?? 0)).reduce((n,m) => n+(m.tokenCount ?? 0),0);
-    const controller = new AbortController();let started=false;
-    const s = subSheet('Catch up…',{ close:() => { controller.abort(); if(started)stop(live.session.id); return true; } });
-    const body = node('div',null,'memory-content'), progress = node('p',`Catch up on ${eligible.length} turns? This makes about ${calls} model calls (about ${tokens.toLocaleString()} input tokens). You can stop at any time.`);
-    body.append(progress,button('Catch up',async b => {if(state.busy){toast('Finish the current turn first');return;}if(isRunning(live.session.id)){toast('Wait for the current memory update.');return;}started=true;b.disabled=true;try {const finished=await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent=finished ? 'Finished. Saved updates are kept.' : 'Stopped. Saved updates are kept. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'No further turns were updated.');}catch(e){progress.textContent='Catch up failed: '+e.message;}finally{started=false;b.disabled=false;b.textContent='Catch up';} }),button('Stop',s.hide)); s.dialog.append(body);
-  } catch (e) { toast(e.message); }
+    progress.textContent=`Catch up on ${eligible.length} turns? This makes about ${calls} model calls (about ${tokens.toLocaleString()} input tokens). You can stop at any time.`;
+    body.append(button('Catch up',async b => {if(state.busy){toast('Finish the current turn first');return;}if(isRunning(live.session.id)){toast('Wait for the current memory update.');return;}started=true;b.disabled=true;try {const finished=await catchUp(live.session.id,{ signal:controller.signal,onProgress:({ range,index }) => { progress.textContent = `Updating turns ${range.fromTurn}–${range.toTurn} (${index} of ${calls})…`; } }); progress.textContent=finished ? 'Finished. Saved updates are kept.' : 'Stopped. Saved updates are kept. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'No further turns were updated.');}catch(e){progress.textContent='Catch up failed: '+e.message;}finally{started=false;b.disabled=false;b.textContent='Catch up';} }),button('Stop',s.hide));
+  } catch (e) {if(!controller.signal.aborted)progress.textContent='Could not prepare memory: '+e.message;}
 }

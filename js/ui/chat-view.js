@@ -24,6 +24,7 @@ import {effectivelyPaused} from '../continuity.js';
 import {copyText as copyClipboard} from './clipboard.js';
 import * as tokenizer from '../tokenizer.js';
 import {createBusyGate,bridgeHistory,waitForPreparation} from './busy-token.js';
+import {hasPendingSettings,waitForPendingSettings} from './pending-settings.js';
 import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
 import { normalizeMemory, anyMemory } from '../memory-settings.js';
@@ -66,9 +67,13 @@ let planJumpControl=null;
 let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));scheduleIdleMaintenance();}});
 const releaseBusy=token=>busyGate.release(token);
-const acquireBusy=kind=>{const token=busyGate.acquire(kind);if(token && ['send','reply','continue','regenerate'].includes(kind))token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};return token;};
+const acquireBusy=kind=>{const token=busyGate.acquire(kind);if(token && ['send','reply','continue','regenerate','rewrite'].includes(kind)){token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};el.stopBtn?.classList.remove('hidden');if(el.sendBtn)el.sendBtn.hidden=true;}return token;};
 class StaleTurn extends Error {}
 function assertActive(token){if(cacheWritesPaused || !session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
+async function waitForPendingChanges(token) {
+  if(hasPendingSettings(currentUid(),token.sid)){showTransientInfo('Waiting for settings to save…');token.waitingSettings=true;try{await waitForPendingSettings(currentUid(),token.sid);assertActive(token);}finally{token.waitingSettings=false;}}
+  if(loreWritesPending()){await waitForLoreWrites();assertActive(token);}
+}
 let storySettingsReady=Promise.resolve(),chatLoading=Promise.resolve();
 let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
 let syncStatus={pending:0,error:null,durable:true};
@@ -1240,11 +1245,10 @@ function clearLocalSummary() {
 }
 
 async function regenerateMessage(message, replan = false) {
-  const requestedSessionId = state.sessionId;
   if(busy)return;
-  while(loreWritesPending()){await waitForLoreWrites();if(requestedSessionId!==state.sessionId)return;}
   const token=acquireBusy('regenerate');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
     await reconcileStory();assertActive(token);
     const all = await ensureHistory();assertActive(token);
     const latest = all.filter((m) => m.role !== "summary").at(-1);
@@ -1287,10 +1291,10 @@ function updateRewriteControls() {
 async function handleContinue() {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))return;
   const sid=state.sessionId;
-  if(loreWritesPending())await waitForLoreWrites();
   if(busy || editingState || sid!==state.sessionId)return;
   const token=acquireBusy('continue');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
     await reconcileStory(token);assertActive(token);
     const all=await ensureHistory();assertActive(token);
     const target=continuationTarget(session,all);
@@ -1300,7 +1304,7 @@ async function handleContinue() {
 }
 
 async function handleRewrite() {
-  if (rewriteController) { rewriteController.abort(); return; }
+  if (rewriteController) {busyGate.active?.abort?.();return;}
   if (busy || state.busy || !session || editingState) return;
   if(!el.input.value.trim()){await handleContinue();return;}
   let settings;
@@ -1315,9 +1319,15 @@ async function handleRewrite() {
   const token=acquireBusy('rewrite');if(!token)return;
   clearOriginalDraft();
   const controller = rewriteController = new AbortController();
-  token.abort=()=>controller.abort('user');
   const vibration = createStreamVibration(settings.streamVibrationMode ?? "spaces");
   let accumulated = "", frame = null;
+  token.abort=()=>{
+    if(!busyGate.stillActive(token))return;
+    token.cancelled=true;controller.abort('user');vibration.stop();
+    if(frame!==null){cancelAnimationFrame(frame);frame=null;}
+    if(rewriteController===controller)rewriteController=null;
+    setComposerText(draft);releaseBusy(token);updateRewriteControls();
+  };
   const active = () => busyGate.stillActive(token) && !controller.signal.aborted && requestedSession === state.sessionId && requestedUid === currentUid();
   const paint = () => { frame = null; if (active()) setComposerText(storyText(accumulated)); };
   // History and prompt loading also respond to Stop, even before fetch begins.
@@ -1330,6 +1340,7 @@ async function handleRewrite() {
   controller.signal.addEventListener("abort", () => vibration.stop(), { once: true });
   updateRewriteControls();
   try {
+    await waitFor(waitForPendingChanges(token));if(!active())return;settings=effectiveActiveSettings();
     const history = settings.rewriteRecentMessages === 0 ? [] : await waitFor(ensureHistory());
     const messages = await waitFor(buildRewriteMessages(settings, history, draft));
     if (!active()) throw new Error("Rewrite stopped because the account or story changed.");
@@ -1350,12 +1361,12 @@ async function handleRewrite() {
     setComposerText(clean);
     originalDraft = draft;
   } catch (error) {
-    if (requestedSession === state.sessionId && requestedUid === currentUid()) setComposerText(draft);
-    if (!controller.signal.aborted) showTransientError(error.message || String(error));
+    if (busyGate.stillActive(token))setComposerText(draft);
+    if (busyGate.stillActive(token) && !controller.signal.aborted)showTransientError(error.message || String(error));
   } finally {
     if (frame !== null) cancelAnimationFrame(frame);
     vibration.stop();
-    rewriteController = null;
+    if(rewriteController===controller)rewriteController=null;
     releaseBusy(token);
     updateRewriteControls();
   }
@@ -1371,15 +1382,18 @@ async function refreshStoryFromServer(token=null){
   const store=storyStore(sid);store?.adopt({session,messages:historyMessages,turns:{}});
   renderMessages(historyMessages);queueCacheSave();void updateIndicator();
 }
-export async function syncChatData(){
+export async function syncChatData({pendingStateSave=false}={}){
+  // A dismissed live-state save can finish while Send is waiting for that save.
+  // Refresh before releasing its dependency, without acquiring a second lock.
+  if(pendingStateSave && hasPendingSettings(currentUid(),state.sessionId)){
+    if(busy && !busyGate.active?.waitingSettings)throw new Error('Finish the current reply before refreshing live state.');
+    await refreshStoryFromServer();return true;
+  }
   return historyAction('sync',async token=>{await chatLoading;assertActive(token);await refreshStoryFromServer(token);showTransientInfo('Latest story data loaded.');});
 }
 
 async function retryReply(message) {
   if (busy || editingState || !session) return;
-  const sid = state.sessionId;
-  if (loreWritesPending()) await waitForLoreWrites();
-  if (busy || !session || sid !== state.sessionId) return;
   await runAssistantTurn({ expectLatestUserId:message.id });
 }
 
@@ -1392,15 +1406,12 @@ async function handleSend(e) {
   let saved = false;
   const text = draft.trim();
   if (!text) return;
-  const settings = effectiveActiveSettings();
-  if (!settings?.modelId || !settings?.apiKey) {
-    showTransientError("Set your API key and Model ID in the Settings tab first.");
-    return;
-  }
-  if (loreWritesPending()) await waitForLoreWrites();
   if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
   pendingMaintenance=null;const token=acquireBusy('send');if(!token)return;
   try {
+    await waitForPendingChanges(token);assertActive(token);
+    const settings=effectiveActiveSettings();
+    if(!settings?.modelId || !settings?.apiKey)throw new Error('Set your API key and Model ID in the Settings tab first.');
     const planJump=planJumpControl?.get();
     if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
     await chatLoading;assertActive(token);const store=await ensureLocalStory();assertActive(token);
@@ -1435,6 +1446,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   let maintenanceUsed = false,turnStream=null;
   try {
     await waitForPreparation(chatLoading,controller);assertActive(token);
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);settings=effectiveActiveSettings();
     if(!opts.reconciled)await waitForPreparation(reconcileStory(token),controller);assertActive(token);
     if (opts.expectLatestUserId) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
@@ -1697,6 +1709,7 @@ async function handleSummarize() {
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing…");
   try {
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
     const settings=effectiveActiveSettings();
     await waitForPreparation(flushStory(token.sid),controller);assertActive(token);
     await waitForPreparation(reconcileStory(token),controller);assertActive(token);
@@ -1736,6 +1749,7 @@ async function handleFullSummarize() {
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const ui = streamSummaryUI("Summarizing full history…");
   try {
+    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
     const settings=effectiveActiveSettings();
     await waitForPreparation(flushStory(token.sid),controller);assertActive(token);
     await waitForPreparation(reconcileStory(token),controller);assertActive(token);
