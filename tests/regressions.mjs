@@ -644,16 +644,16 @@ test('Summarizer respects input and output budgets without a one-third context c
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
   const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', summarizerSystemPrompt:'Summarize the established events.', modelId: 'test', streaming: false,
-    maxContextTokens: 8000,maxResponseTokens:100,summarizerMaxTokens:4000,summarizerChunkTokens:900,
+    maxContextTokens: 14000,maxResponseTokens:100,summarizerMaxTokens:7000,summarizerChunkTokens:900,
     keepRecentMessagesAfterSummary: 0 };
   const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
     role: i%2 ? 'assistant' : 'user', content: 'event '.repeat(65) }));
   await runSummarization({ id: 's' }, settings, { messages });
   assert.ok(h.calls.requests.length > 1);
   for (const request of h.calls.requests) {
-    assert.ok(request.max_tokens > Math.floor(settings.maxContextTokens / 3));
+    assert.ok(request.max_tokens > Math.floor(settings.maxContextTokens / 3),JSON.stringify({max:request.max_tokens,model:request.model,input:request.messages.reduce((n,m)=>n+m.content.length,0)}));
     assert.ok(request.max_tokens <= settings.summarizerMaxTokens);
-    assert.ok(request.messages.reduce((sum, message) => sum + message.content.length, 0) <= 8000);
+    assert.ok(request.messages.reduce((sum, message) => sum + message.content.length, 0) <= 14000);
   }
 });
 
@@ -1939,31 +1939,31 @@ test(`numeric scene collection ${time} via ${mode} survives reload and next requ
 
 test('Director-mode Send saves the player first, persists the contract before narration, and ignores conflicting scene tags',async()=>{
  let pending=null,h;
- const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
  h=await harness({extraStubs:{'director-store.js':{discardPendingDirector:async()=>{},getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn,source)=>{assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);pending={...turn,source,status:'pending'};return pending;}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'director-profile',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'narrator-profile',profiles:[{id:'narrator-profile',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'director-profile',endpoint:'https://director.test',apiKey:'small-key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,memory:{scene:true}})});
  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'At dinner',scene:'date: 21/10/738 · time: Hour 20 · place: Inn · present: Nera'}],hasEarlier:false});h.calls.messageOrder=2;
- h.calls.onRequest=body=>{if(body.model==='director'){assert.equal(pending,null);h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'completed',objective:'Finish dinner',stopCondition:'Stop before the next player action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{hour:21}}});}else{assert.ok(pending);h.calls.response='The plates are cleared.\n<scene>date: 22/10/738 · time: Hour 4 · place: Palace · present: Stranger</scene>';}};
+ h.calls.onRequest=body=>{if(body.model==='director'){assert.equal(pending,null);h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'completed',objective:'Finish dinner',stopCondition:'Stop before the next player action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'21:00'}}});}else{assert.ok(pending);h.calls.response='The plates are cleared.\n<scene>date: 22/10/738 · time: Hour 4 · place: Palace · present: Stranger</scene>';}};
  h.el('chat-input').value='Finish dinner';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
  assert.equal(h.calls.requests.length,2,JSON.stringify({pending,requests:h.calls.requests.map(r=>r.model),messages:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(h.calls.requests[0].model,'director');assert.equal(h.calls.requests[1].model,'narrator');
- const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];assert.match(saved.scene,/Hour 21/);assert.match(saved.scene,/place: Inn/);assert.ok(saved.directorTurnId);assert.ok(saved.reviewWarnings.some(w=>/disagreed/.test(w)));
+ const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];assert.match(saved.scene,/time: 21:00/);assert.match(saved.scene,/place: Inn/);assert.ok(saved.directorTurnId);assert.ok(saved.reviewWarnings.some(w=>/disagreed/.test(w)));
  assert.ok(chat.memorySnapshot().sentContext.director.requestBody);assert.equal(h.state.busy,false);
 });
 
 test('Cut-off Director Re-plan preserves the original reply and provides Continue replacement recovery',async()=>{
- let h,pending;const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ let h,pending;const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
  const old={id:'old-director',version:1,status:'completed',before:seed,after:seed,contract:{version:1,action:'narrate',transition:'unchanged',objective:'Dinner',stopCondition:'Stop',memoryIds:[],requiredMemoryIds:[],updates:{}},assistantId:'a',previousCheckpoint:null};
  h=await harness({extraStubs:{'director-store.js':{getDirectorTurn:async(_sid,id)=>id===old.id?old:pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};h.calls.sessionDocs.story.directorPending=t.id;return pending;},discardPendingDirector:async()=>{}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'large',profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,directorCheckpoint:old.id,memory:{scene:true}})});
  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Dinner'},{id:'a',order:2,role:'assistant',content:'Original dinner reply',directorTurnId:old.id,narratorTurn:1}],hasEarlier:false});
- h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({...old.contract,updates:{scene:{hour:21}}}):'Incomplete replacement'},finish_reason:body.model==='director'?'stop':'length'}]};};
+ h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({...old.contract,updates:{scene:{time:'21:00'}}}):'Incomplete replacement'},finish_reason:body.model==='director'?'stop':'length'}]};};
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Re-plan').click();
  for(let i=0;i<100 && h.state.busy;i++)await new Promise(resolve=>setTimeout(resolve,0));
- assert.equal((h.calls.overwrites ?? []).length,0);assert.equal(chat.memorySnapshot().session.directorState.scene.hour,20);
+ assert.equal((h.calls.overwrites ?? []).length,0);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'20:00');
  assert.ok(h.el('message-list').querySelectorAll('button').some(b=>b.textContent==='Continue replacement'),JSON.stringify({requests:h.calls.requests.map(r=>r.model),messages:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(h.state.busy,false);
  h.calls.onRequest=()=>{h.calls.responseData={choices:[{message:{content:'The replacement finishes.'},finish_reason:'stop'}]};};
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Continue replacement').click();
@@ -2108,24 +2108,24 @@ test('Automatic maintenance waits until pending cloud saves finish',async()=>{
 });
 
 for(const stage of ['director','narrator'])test('Cancel during '+stage+' releases the turn; an unchanged retry reuses any completed Director contract',async()=>{
- const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
  let h,pending,finishDirector,late;
  h=await harness({extraStubs:{'director-store.js':{getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn,source)=>{pending={...turn,source,status:'pending'};return pending;},discardPendingDirector:async()=>{pending=null;}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:true,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,memory:{scene:true,protagonist:'Nera'}})});
  await h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Look around'}],hasEarlier:false});
- h.calls.onMessageSaved=result=>{if(result.role==='assistant' && result.directorTurnId)Object.assign(result.session,{directorState:{...seed,scene:{...seed.scene,hour:21}},directorRevision:1,directorCheckpoint:result.directorTurnId,directorPending:null,directorNeedsReview:false,directorStateHistoryOrder:result.order});};
- const contract={version:1,action:'narrate',transition:'completed',objective:'Describe the room',stopCondition:'Stop before the next voluntary action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{hour:21}}};
+ h.calls.onMessageSaved=result=>{if(result.role==='assistant' && result.directorTurnId)Object.assign(result.session,{directorState:{...seed,scene:{...seed.scene,time:'21:00'}},directorRevision:1,directorCheckpoint:result.directorTurnId,directorPending:null,directorNeedsReview:false,directorStateHistoryOrder:result.order});};
+ const contract={version:1,action:'narrate',transition:'completed',objective:'Describe the room',stopCondition:'Stop before the next voluntary action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'21:00'}}};
  h.calls.onRequest=async body=>{if(body.model==='director'){if(stage==='director')await new Promise(resolve=>finishDirector=resolve);h.calls.response=JSON.stringify(contract);}};
  h.calls.streamReader={read:()=>new Promise(resolve=>late=resolve),cancel:()=>new Promise(()=>{})};
  const retry=()=>h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();const first=retry();
  for(let i=0;i<30 && !(stage==='director'?finishDirector:late);i++)await new Promise(r=>setImmediate(r));
- assert.equal(h.state.busy,true);await h.fire('btn-stop');assert.equal(h.state.busy,false);assert.equal(chat.memorySnapshot().session.directorState.scene.hour,20);
+ assert.equal(h.state.busy,true);await h.fire('btn-stop');assert.equal(h.state.busy,false);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'20:00');
  if(stage==='narrator')assert.ok(chat.memorySnapshot().session.directorPending);
  h.calls.streamReader=null;h.state.settings.streaming=false;h.calls.onRequest=body=>{h.calls.response=body.model==='director'?JSON.stringify(contract):'The room settles.';};
  await retry();if(finishDirector)finishDirector();if(late)late({done:true});await first;
- assert.equal(h.calls.requests.filter(r=>r.model==='director').length,stage==='director'?2:1);assert.equal(chat.memorySnapshot().session.directorState.scene.hour,21);assert.equal(h.state.busy,false);
+ assert.equal(h.calls.requests.filter(r=>r.model==='director').length,stage==='director'?2:1);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:00');assert.equal(h.state.busy,false);
 });
 
 test('A page reload refreshes cached history from Firebase before the next turn',async()=>{
@@ -2257,12 +2257,12 @@ test('Stop rewriting releases immediately and late cleanup cannot replace a newl
 });
 
 test('A failed dismissed Director save restores its draft when reopened',async()=>{
- const seed={version:1,scene:{date:'21/10/738',hour:20,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let fail;
+ const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let fail;
  const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),syncChatData:async()=>{}},'director-store.js':{resetDirectorState:()=>new Promise((_r,reject)=>fail=reject),discardPendingDirector:async()=>{}}}});
  h.state.sessionId='story';const view=await h.use('ui/director-view.js');await view.openDirectorState();
- let root=h.document.body.querySelector('.memory-sub-sheet');root.querySelectorAll('input')[1].value='21';const save=namedButton(root,'Save live state').click();assert.ok(fail);
+ let root=h.document.body.querySelector('.memory-sub-sheet');root.querySelectorAll('input')[1].value='21:15';const save=namedButton(root,'Save live state').click();assert.ok(fail);
  await root.querySelectorAll('button').find(b=>b.dataset.iconLabel==='Close').click();fail(Error('Offline'));await save;await view.openDirectorState();
- root=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);assert.equal(Number(root.querySelectorAll('input')[1].value),21);
+ root=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);assert.equal(root.querySelectorAll('input')[1].value,'21:15');
 });
 
 test('A submitted live-state refresh can complete while Send is waiting on its settings dependency',async()=>{
@@ -2271,4 +2271,13 @@ test('A submitted live-state refresh can complete while Send is waiting on its s
  const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await new Promise(r=>setImmediate(r));assert.equal(h.calls.requests.length,0);
  const sync=await chat.syncChatData({pendingStateSave:true});assert.equal(sync,true);assert.equal(h.state.busy,true);
  finish(true);await send;assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);
+});
+
+test('Legacy Hour 24 live-state review requires an explicit modern date and clock before saving',async()=>{
+ const seed={version:1,scene:{date:'21/10/738',hour:24,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let saved;
+ const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),syncChatData:async()=>{}},'director-store.js':{resetDirectorState:async(_sid,value)=>{saved=value;},discardPendingDirector:async()=>{}}}});
+ h.state.sessionId='story';await (await h.use('ui/director-view.js')).openDirectorState();
+ const root=h.document.body.querySelector('.memory-sub-sheet'),inputs=root.querySelectorAll('input'),review=inputs.find(i=>i.type==='checkbox');assert.ok(review);assert.equal(inputs[0].value,'');assert.equal(inputs[1].value,'');
+ inputs[0].value='22/10/738';inputs[1].value='00:15';review.checked=true;await namedButton(root,'Save live state').click();
+ assert.equal(saved.version,2);assert.equal(saved.scene.date,'22/10/738');assert.equal(saved.scene.time,'00:15');assert.equal(seed.scene.hour,24);
 });

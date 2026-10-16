@@ -1,4 +1,6 @@
 import { prompts } from './system-prompts.js';
+import {latestScene} from './scene.js';
+import {projectThreads} from './thread-lifecycle.js';
 // Shared provenance and chronology contract. Classification is additive for old data.
 export const CONTINUITY_RULE = prompts.continuity;
 export const revisionOf = m => m.revision ?? 0;
@@ -24,7 +26,7 @@ export function snapshotNeedsReview(section, entry, session = {}, upToOrder = In
   const meta = sectionMeta(section,entry);
   return !!(section.unavailable || meta.kind === 'snapshot' && (meta.cutoff?.order >= upToOrder));
 }
-export function usableLore(entries, messages, session, upToOrder = Infinity) {
+export function usableLore(entries, messages, session, upToOrder = Infinity, sceneOverride = null) {
   const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && noteNeedsReview(entry.statusSource,messages,session,upToOrder) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
     const meta = sectionMeta(s,entry);
     const unavailable = snapshotNeedsReview(s,entry,session,upToOrder);
@@ -36,7 +38,13 @@ export function usableLore(entries, messages, session, upToOrder = Infinity) {
     });
     return [key,{ ...s,...meta,text:unavailable ? '' : s.text,lines }];
   })) }));
-  return { entries:available, skipped };
+  const safe=available.map(e=>{
+    if(e.kind!=='thread')return e;
+    const timingStale=e.threadMetaSource && noteNeedsReview(e.threadMetaSource,messages,session,upToOrder);
+    const closureStale=e.statusSource && noteNeedsReview(e.statusSource,messages,session,upToOrder);
+    return {...e,...(timingStale?{threadMeta:null,threadTimingNeedsReview:true}:closureStale && e.threadMeta?{threadMeta:{...e.threadMeta,outcome:null}}:{})};
+  });
+  return { entries:projectThreads(safe,sceneOverride ?? latestScene(messages,upToOrder,session?.memory?.startingScene).scene), skipped };
 }
 // Firestore map order is not story state. Compare nested maps by their contents.
 function orderedValue(value) {

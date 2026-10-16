@@ -261,17 +261,17 @@
                 <p class="muted">Director mode uses game hours 1–24 and two model calls per turn. A memory update or summary may use a third call. Starts from the saved scene; add older promises in live state.</p>
                 <button type="button" id="btn-director-state" class="btn small">Review live state, decisions &amp; promises</button>
                 <label>Director instructions<textarea id="set-director-prompt" rows="8"></textarea></label>
-                <button type="button" class="btn small" data-reset-prompt="directorSystemPrompt" data-prompt-field="set-director-prompt">Reset Director instructions</button>
+                <button type="button" class="btn small" data-reset-prompt="directorSystemPrompt" data-prompt-field="set-director-prompt">Use updated Director defaults</button>
                 <label>Director-mode Narrator instructions<textarea id="set-director-narrator-prompt" rows="12"></textarea></label>
                 <p id="director-narrator-review" class="muted hidden">Your custom Narrator instructions were preserved. Review instructions that reconstruct scene state or decide progression; the Director now controls those facts.</p>
                 <button type="button" class="btn small" id="btn-review-director-narrator">Mark instructions reviewed</button>
-                <button type="button" class="btn small" data-reset-prompt="directorNarratorSystemPrompt" data-prompt-field="set-director-narrator-prompt">Reset Director-mode Narrator instructions</button>
+                <button type="button" class="btn small" data-reset-prompt="directorNarratorSystemPrompt" data-prompt-field="set-director-narrator-prompt">Use updated Director Narrator defaults</button>
                   <label>Recent messages for rewrite<input type="text" id="set-rewrite-n" inputmode="numeric" data-min="0" required /></label>
                   <label>Rewrite system prompt<textarea id="set-rewrite-prompt" rows="12"></textarea></label>
                   <p id="rewrite-prompt-help" class="muted">The default comes from system prompts/rewrite.md.</p>
                   <button type="button" id="btn-reset-rewrite-prompt" class="btn small">Use default rewrite prompt</button>
                 <div class="settings-prompts">
-                  <label>Classic Narrator instructions<textarea id="set-narrator-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="narratorSystemPrompt" data-prompt-field="set-narrator-prompt">Reset to app default</button>
+                  <label>Classic Narrator instructions<textarea id="set-narrator-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="narratorSystemPrompt" data-prompt-field="set-narrator-prompt">Use updated Classic Narrator defaults</button>
                   <label>Summarizer system prompt<textarea id="set-summarizer-prompt" rows="12"></textarea></label><button type="button" class="btn small" data-reset-prompt="summarizerSystemPrompt" data-prompt-field="set-summarizer-prompt">Reset to app default</button>
                   <label>Memory update prompt<textarea id="set-memory-update-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryExtractionPrompt" data-prompt-field="set-memory-update-prompt">Reset to app default</button>
                   <label>Reorganize prompt<textarea id="set-memory-reorganize-prompt" rows="12"></textarea><small>The app reads the line format described in this prompt. If you edit it, keep the line format.</small></label><button type="button" class="btn small" data-reset-prompt="memoryReorganizePrompt" data-prompt-field="set-memory-reorganize-prompt">Reset to app default</button>

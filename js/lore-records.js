@@ -1,3 +1,4 @@
+import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule } from './scheduled-plan.js';
 import { cardFingerprint } from './lore-card-state.js';
 import { SECTION_KEYS, newLoreId } from './lore-lines.js';
@@ -112,6 +113,7 @@ export function fromRecordDocument(doc) {
   validateRecords(entry);if(entry.book==='plan')validateSchedule(entry.schedule);return entry;
 }
 export function validateRecords(entry) {
+  if(entry.kind==='thread' && entry.threadMeta!=null)normalizeThreadMeta(entry.threadMeta);
   const records=entry.recordLayout?.records;if(!Array.isArray(records))throw new Error('Invalid records');
   const ids=new Set();
   for(const r of records) {

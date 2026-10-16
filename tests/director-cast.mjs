@@ -6,7 +6,7 @@ const count=async t=>Math.ceil(t.length/4);
 async function fixture(){
  const use=appHarness({stubs:{'tokenizer.js':{countTokens:count},'messages.js':{getMessages:async()=>[]}}}),l=await use('lore-lines.js'),cast=await use('director-cast.js'),states=await use('director-state.js');
  const entries=['Nera','Ada','Bea','Cora','Dara','Ena','Fara','Lysia'].map((name,i)=>{const e=l.makeEntry('characters',name);e.id='c'+i;e.sections.personality.text=name+' personality';e.sections.notes.text='PRIVATE_DETAIL_'+name;return e;});
- const before={version:1,scene:{date:'21/10/738',hour:15,location:'Class A classroom',present:entries.slice(0,7).map(e=>e.name)},event:null,decisions:[],threads:[],commitments:[]};
+ const before={version:2,scene:{date:'21/10/738',time:'15:00',location:'Class A classroom',present:entries.slice(0,7).map(e=>e.name)},event:null,decisions:[],threads:[],commitments:[]};
  const contract={version:1,action:'narrate',transition:'unchanged',objective:'Attend class',stopCondition:'Stop before the player answers',memoryIds:[],requiredMemoryIds:[],updates:{}};
  return {use,l,cast,states,entries,before,contract};
 }
@@ -61,7 +61,7 @@ test('the previous built-in Director prompt upgrades while custom prompts and fo
 test('Director timings cover preparation, provider, validation and save; retries reuse the saved cast without a model call',async()=>{
  let calls=0,saved;const use=appHarness({stubs:{'tokenizer.js':{countTokens:count},'director-store.js':{getDirectorTurn:async()=>saved,savePendingDirectorTurn:async(_sid,t,source)=>(saved={...t,status:'pending',source})},'llm-client.js':{chatCompletion:async()=>{calls++;return {content:JSON.stringify({version:1,action:'narrate',transition:'unchanged',objective:'Wait in class.',stopCondition:'Before the player answers.',memoryIds:[],requiredMemoryIds:[],focusCharacterIds:['ada'],updates:{}}),finishReason:'stop',usage:{cost:.001}};}}}});
  const l=await use('lore-lines.js'),ada=l.makeEntry('characters','Ada');ada.id='ada';
- const before={version:1,scene:{date:'21/10/738',hour:15,location:'Class A',present:['Nera','Ada']},event:null,decisions:[],threads:[],commitments:[]},session={id:'s',memory:{protagonist:'Nera'},directorState:before},messages=[{id:'u',order:1,role:'user',content:'I attend class.'}],settings={directorProfileId:'d',profiles:[{id:'d',endpoint:'https://test',apiKey:'x',modelId:'test'}],directorMaxInputTokens:20000,directorMaxOutputTokens:8192,directorRecentTurns:5};
+ const before={version:2,scene:{date:'21/10/738',time:'15:00',location:'Class A',present:['Nera','Ada']},event:null,decisions:[],threads:[],commitments:[]},session={id:'s',memory:{protagonist:'Nera'},directorState:before},messages=[{id:'u',order:1,role:'user',content:'I attend class.'}],settings={directorProfileId:'d',profiles:[{id:'d',endpoint:'https://test',apiKey:'x',modelId:'test'}],directorMaxInputTokens:20000,directorMaxOutputTokens:8192,directorRecentTurns:5};
  const api=await use('director-turn.js'),turn=await api.prepareDirectorTurn(session,settings,messages,[ada]);
  for(const key of ['contextPreparationMs','providerMs','validationMs','pendingPersistenceMs'])assert.ok(turn.timings[key]>=0);
  assert.equal(turn.usage.cost,.001);const retry=await api.prepareDirectorTurn({...session,directorPending:turn.id},settings,messages,[ada]);assert.equal(calls,1);assert.deepEqual(plain(retry.cast),plain(turn.cast));
