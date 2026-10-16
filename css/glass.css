@@ -184,3 +184,12 @@ body > .settings-overlay { transform: var(--app-viewport-transform, none); }
 
 .director-ledger-row { padding: 12px 0; border-bottom: 1px solid var(--border, #555); display: grid; gap: 8px; }
 .director-ledger-row textarea { min-height: 72px; width: 100%; }
+
+/* iOS header controls avoid overlapping blur and animated pet layers. */
+@supports (-webkit-touch-callout: none) {
+  .top-bar .icon-control, .top-bar .context-indicator {
+    background: #12141a;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

@@ -5,6 +5,12 @@ export function createBusyGate({current,onChange,onRelease}) {
     stillActive(token){const c=current();return !!token && active===token && token.sid===c.sid && token.epoch===c.epoch && token.owner===c.owner;},
     get active(){return active;}};
 }
+// The timer belongs to the accepted turn; release invalidates it as well.
+export function protectStop(token,{isActive,onReady,schedule=setTimeout,cancel=clearTimeout,delay=500}) {
+  token.stopReady=false;
+  const timer=schedule(()=>{if(isActive(token)){token.stopReady=true;onReady();}},delay);
+  return ()=>cancel(timer);
+}
 export function bridgeHistory(base,revision,message) {
   if(!base || revision!==message.historyRevision-1)return null;
   const map=new Map(base.map(m=>[m.id,m]));map.set(message.id,message);return [...map.values()].sort((a,b)=>a.order-b.order);

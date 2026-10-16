@@ -6,6 +6,10 @@ const PET_FILE = /^[a-z0-9][a-z0-9._-]*\.(?:webp|png)$/i;
 const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 const MOBILE = window.matchMedia("(max-width: 720px)");
 const sheets = new Map();
+const IOS = /iP(?:hone|ad|od)/.test(globalThis.navigator?.userAgent ?? '') ||
+  (globalThis.navigator?.platform === 'MacIntel' && globalThis.navigator?.maxTouchPoints > 1);
+let paintedPosition=null,homeDirty=true,layoutFrame=0;
+function setPetStyle(key,value){if(root.style.getPropertyValue(key)!==value)root.style.setProperty(key,value);}
 let root, sprite, layer, menu, slot, idleLabel;
 let character = null, loaded = false, hiddenForVisit = false, pinned = false;
 let activity = "idle", phase = "idle", frame = 0, frameAt = 0, raf = 0;
@@ -95,6 +99,7 @@ export function initPetView() {
   root.id = "chat-pet";
   root.type = "button";
   root.className = "chat-pet";
+  if(IOS)root.classList.add("pet-ios");
   root.hidden = true;
   root.setAttribute("aria-haspopup", "menu");
   sprite = document.createElement("span");
@@ -166,10 +171,12 @@ export function initPetView() {
     updateVisibility();
   });
   const invalidate = () => {
-    layoutDirty = true;
-    if (point) floatingSize();
-    if (REDUCED_MOTION.matches) placeHome();
-    if (!raf) updateVisibility();
+    layoutDirty = homeDirty = true;
+    // Scroll/keyboard bursts share one layout pass, including reduced motion
+    // and a docked pet which has stopped animating offscreen.
+    if(!raf && !layoutFrame)layoutFrame=requestAnimationFrame(()=>{
+      layoutFrame=0;updateVisibility();
+    });
   };
   window.addEventListener("resize", invalidate);
   document.addEventListener("scroll", invalidate, { capture: true, passive: true });
@@ -192,7 +199,7 @@ export function initPetView() {
     const textChanges = typeof MutationObserver === "undefined" ? null : new MutationObserver((records) => {
       // Streaming text-node updates do not change the obstacle elements.
       if (!records || records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1))) syncTextObstacles();
-      layoutDirty = true;
+      layoutDirty = homeDirty = true;
     });
     const list = document.getElementById("message-list");
     if (list) textChanges?.observe(list, { childList: true, subtree: true });
@@ -212,7 +219,7 @@ export function initPetView() {
   syncPetSettings();
 }
 
-export function invalidatePetLayout() { layoutDirty = true; }
+export function invalidatePetLayout() { layoutDirty = homeDirty = true; }
 
 export function startPetTurn() {
   const selected = selectedCharacters();
@@ -321,21 +328,22 @@ function homePoint() {
   if (!rect || !rect.width) return null;
   return { x: rect.left, y: rect.top };
 }
-function placeHome() {
-  point = null; journey = null;
-  const home = homePoint();
+function placeHome(home=homePoint()) {
+  point = null; journey = null;homeDirty=false;
   const welcome = slot?.classList.contains("pet-welcome-slot");
-  root?.style.setProperty("--pet-box", `${welcome ? (MOBILE.matches ? 156 : 208) : 64}px`);
-  root?.style.setProperty("--pet-size", `${welcome ? (MOBILE.matches ? 144 : 192) : 56}px`);
+  setPetStyle("--pet-box", `${welcome ? (MOBILE.matches ? 156 : 208) : 64}px`);
+  setPetStyle("--pet-size", `${welcome ? (MOBILE.matches ? 144 : 192) : 56}px`);
   if (home) paintPosition(home);
 }
 function floatingBox() { return MOBILE.matches ? 70 : 88; }
 function floatingSize() {
-  root.style.setProperty("--pet-box", `${floatingBox()}px`);
-  root.style.setProperty("--pet-size", `${MOBILE.matches ? 64 : 80}px`);
+  setPetStyle("--pet-box", `${floatingBox()}px`);
+  setPetStyle("--pet-size", `${MOBILE.matches ? 64 : 80}px`);
 }
 function paintPosition(position) {
-  root.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`;
+  if(paintedPosition?.x===position.x && paintedPosition?.y===position.y)return;
+  paintedPosition={x:position.x,y:position.y};
+  root.style.transform = IOS ? `translate(${position.x}px, ${position.y}px)` : `translate3d(${position.x}px, ${position.y}px, 0)`;
 }
 function isSuspended() {
   return document.hidden || document.body.classList.contains("settings-open") ||
@@ -343,8 +351,13 @@ function isSuspended() {
     document.getElementById("chat-tab")?.classList.contains("hidden") ||
     document.getElementById("top-menu")?.hidden === false;
 }
-function updateVisibility() {
+function measureVisibility(){
+  const rect=slot.getBoundingClientRect(),list=document.getElementById('message-list')?.getBoundingClientRect();
+  return {home:rect.width ? {x:rect.left,y:rect.top} : null,homeVisible:rect.width && rect.top>=(list?.top ?? 0) && rect.bottom<=(list?.bottom ?? window.innerHeight)};
+}
+function updateVisibility(measured=null) {
   if (!root) return;
+  measured ??= measureVisibility();
   suspended = isSuspended();
   const enabled = loaded && !!character && !hiddenForVisit;
   document.body.classList.toggle("has-pet", enabled);
@@ -353,12 +366,10 @@ function updateVisibility() {
     root.hidden = true; closeMenu(); stop(); cancelPointer(); journey = null;
     return;
   }
-  const rect = slot.getBoundingClientRect();
-  const list = document.getElementById("message-list")?.getBoundingClientRect();
-  const homeVisible = rect.width && rect.top >= (list?.top ?? 0) && rect.bottom <= (list?.bottom ?? window.innerHeight);
+  const {homeVisible}=measured;
   root.hidden = !enabled || suspended || (!point && !slot.classList.contains("pet-welcome-slot") && !homeVisible);
   if (root.hidden) { closeMenu(); stop(); if (!pointer?.scrolling) cancelPointer(); journey = null; }
-  else { if (!point) placeHome(); drawFrame(); start(); }
+  else { if (!point) placeHome(measured.home); drawFrame(); start(); }
 }
 function syncPetSettings() {
   if (!root) return;
@@ -453,7 +464,8 @@ function drawFrame() {
   const width = Number.parseFloat(root.style.getPropertyValue("--pet-size")) || 56;
   const height = width * 208 / 192;
   const col = REDUCED_MOTION.matches ? 0 : frame % animation.frames;
-  sprite.style.backgroundPosition = `${-col * width}px ${-animation.row * height}px`;
+  const position=`${-col * width}px ${-animation.row * height}px`;
+  if(sprite.style.backgroundPosition!==position)sprite.style.backgroundPosition=position;
 }
 function stop() { cancelAnimationFrame(raf); raf = 0; frameAt = 0; }
 function start() {
@@ -463,8 +475,9 @@ function tick(now) {
   raf = 0;
   if (!loaded || root.hidden || isSuspended() || REDUCED_MOTION.matches) return;
   const clock = Date.now();
-  if (layoutDirty && validatePosition()) { updateVisibility(); if (root.hidden) return; }
-  if (!point) placeHome();
+  const measured=layoutDirty || homeDirty ? measureVisibility() : null;
+  if (layoutDirty && validatePosition()) { updateVisibility(measured); if (root.hidden) return; }
+  if (!point && homeDirty) placeHome(measured?.home);
   if (journey) {
     const t = Math.min(1, (now - journey.at) / journey.duration);
     point = { x: journey.from.x + (journey.to.x - journey.from.x) * t, y: journey.from.y + (journey.to.y - journey.from.y) * t };

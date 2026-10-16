@@ -1,5 +1,6 @@
 import {openStoryStore,storyStore,flushStory,closeStoryStores,forgetStoryStore} from '../local-story-store.js';
-import {loadStoryData,saveStoryData,storyQueueStorage} from '../chat-cache.js';
+import {loadStoryData,saveStoryData,storyQueueStorage,replaceStoryCache} from '../chat-cache.js';
+import { getDirectorTurn } from '../director-store.js';
 import { prepareDirectorTurn } from '../director-turn.js';
 import { directorScene, directorSceneWarnings } from '../director-state.js';
 import { requestSource } from '../continuity.js';
@@ -10,7 +11,7 @@ import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
-import {selectStorySettings,effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
+import {selectStorySettings,effectiveActiveSettings,saveStorySettings,readStorySettingsRefresh,applyStorySettingsRefresh,invalidateStorySettingsLoads} from '../story-settings-store.js';
 import {resolveModelProfile} from '../model-profiles.js';
 import {maxOf} from '../math-utils.js';
 import {storyText} from '../story-text.js';
@@ -23,7 +24,7 @@ import {loadUnsavedReply,storeUnsavedReply} from '../unsaved-replies.js';
 import {effectivelyPaused} from '../continuity.js';
 import {copyText as copyClipboard} from './clipboard.js';
 import * as tokenizer from '../tokenizer.js';
-import {createBusyGate,bridgeHistory,waitForPreparation} from './busy-token.js';
+import {createBusyGate,bridgeHistory,waitForPreparation,protectStop} from './busy-token.js';
 import {hasPendingSettings,waitForPendingSettings} from './pending-settings.js';
 import {pickMaintenance} from '../maintenance.js';
 import { assertSource, noteNeedsReview } from '../continuity.js';
@@ -32,7 +33,7 @@ import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, valid
 import { lintPlayerAgency, lintDirectorGestures, lintDirectorHistory, lintDirectorResponseBoundary, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns, dueRangeStatus } from '../turns.js';
-import { getLore, configureLoreWrites, loreWritesPending, waitForLoreWrites } from '../lore-store.js';
+import { getLore, configureLoreWrites, holdLoreWrites } from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 import { state } from "../state.js";
@@ -45,7 +46,7 @@ import { updateSession, duplicateSession, getSessionFromServer } from "../sessio
 import { currentUid } from "../auth.js";
 import { loadChatCache, saveChatCache, deleteChatCache } from "../chat-cache.js";
 import {
-  saveSettings,
+  saveSettings,readSettingsRefresh,
   normalizeProfiles,
   activeProfile,
   mirrorFromActiveProfile,
@@ -66,13 +67,28 @@ let busy = false;
 let planJumpControl=null;
 let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));scheduleIdleMaintenance();}});
-const releaseBusy=token=>busyGate.release(token);
-const acquireBusy=kind=>{const token=busyGate.acquire(kind);if(token && ['send','reply','continue','regenerate','rewrite'].includes(kind)){token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};el.stopBtn?.classList.remove('hidden');if(el.sendBtn)el.sendBtn.hidden=true;}return token;};
+const releaseBusy=token=>{
+  if(busyGate.active!==token)return false;
+  token.stopTimer?.();const released=busyGate.release(token);token.loreHold?.release();return released;
+};
+const acquireBusy=kind=>{
+  const token=busyGate.acquire(kind);if(!token)return null;
+  token.loreHold=holdLoreWrites(token.sid);
+  if(['send','reply','continue','regenerate','rewrite'].includes(kind)){
+    token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};
+    el.stopBtn?.classList.remove('hidden');if(el.sendBtn)el.sendBtn.hidden=true;
+    if(kind==='send'){
+      if(el.stopBtn)el.stopBtn.disabled=true;
+      token.stopTimer=protectStop(token,{isActive:t=>busyGate.stillActive(t),onReady:()=>{if(el.stopBtn)el.stopBtn.disabled=false;}});
+    }else if(el.stopBtn)el.stopBtn.disabled=false;
+  }
+  return token;
+};
 class StaleTurn extends Error {}
 function assertActive(token){if(cacheWritesPaused || !session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
 async function waitForPendingChanges(token) {
   if(hasPendingSettings(currentUid(),token.sid)){showTransientInfo('Waiting for settings to save…');token.waitingSettings=true;try{await waitForPendingSettings(currentUid(),token.sid);assertActive(token);}finally{token.waitingSettings=false;}}
-  if(loreWritesPending()){await waitForLoreWrites();assertActive(token);}
+  await token.loreHold?.ready;assertActive(token);await loreReloading;assertActive(token);
 }
 let storySettingsReady=Promise.resolve(),chatLoading=Promise.resolve();
 let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
@@ -148,7 +164,7 @@ let historyStartOrder = 0;
 let historyLoading = null;
 let historyEpoch = 0;
 let historyRevision = null;
-let loreReady = Promise.resolve();
+let loreReady = Promise.resolve(),loreReloading=Promise.resolve(),dataEpoch=0,loreLoadVersion=0,loreReloadVersion=0;
 let verifiedLoreRevision = null;
 const historyCache = new Map(); // three most recently visited sessions in memory
 let cacheSaveTimer = null;
@@ -184,16 +200,16 @@ function syncLore(force=false) {
   const wanted=session && (anyMemory(normalizeMemory(session.memory)) || state.storySettings?.values?.narrationMode==='director' || managerOpen);
   if(!wanted){loreReady=Promise.resolve();return;}
   if(loreSessionId===session.id && !force)return;
-  const sid=session.id,owner=currentUid(),revision=session.loreRevision ?? 0;loreSessionId=sid;
+  const sid=session.id,owner=currentUid(),epoch=dataEpoch,run=++loreLoadVersion,revision=session.loreRevision ?? 0;loreSessionId=sid;
   loreReady=(async()=>{
     const cached=await loadStoryData(owner,sid);
     const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
-    if(currentUid()!==owner || state.sessionId!==sid)return;
+    if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch || run!==loreLoadVersion)return;
     loreEntries=entries;verifiedLoreRevision=revision;loreStatus='ok';
     void saveStoryData(owner,sid,{lore:{revision,entries}});
     rememberMemoryStory();updateMemoryChip();document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));void updateIndicator();
   })();
-  loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks: '+error.message);}});
+  loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid && epoch===dataEpoch && run===loreLoadVersion){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks: '+error.message);}});
 }
 // Fields that can change the context or the caches needed to build it.
 function preparationKey(story) {
@@ -202,11 +218,11 @@ function preparationKey(story) {
     story?.activeSummaryMessageId,story?.breakpointOrder,story?.memory,story?.memoryState]);
 }
 async function reconcileStory(token = null, forceServer = false) {
-  if(!forceServer && session){await ensureLocalStory();return prepareStoryDocument(session,token);}
-  const sid = state.sessionId, owner = currentUid();
+  if(!forceServer && session){const epoch=dataEpoch;await ensureLocalStory();if(epoch!==dataEpoch)throw new StaleTurn();return prepareStoryDocument(session,token);}
+  const sid = state.sessionId, owner = currentUid(),epoch=dataEpoch;
   const check = () => {
     if (token) assertActive(token);
-    if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while reconciling.');
+    if (currentUid() !== owner || state.sessionId !== sid || epoch!==dataEpoch) throw new StaleTurn('Account or story changed while reconciling.');
   };
   if (!sid) throw new Error('Open a story first.');
   await messagesApi.ensureContinuityMetadata(sid);check();
@@ -219,10 +235,10 @@ async function reconcileStory(token = null, forceServer = false) {
   return prepareStoryDocument(newer ? session : fresh,token);
 }
 async function prepareStoryDocument(fresh,token = null) {
-  const sid = state.sessionId, owner = currentUid(), key = preparationKey(fresh);
+  const sid = state.sessionId, owner = currentUid(),epoch=dataEpoch, key = preparationKey(fresh);
   const check = () => {
     if (token) assertActive(token);
-    if (currentUid() !== owner || state.sessionId !== sid) throw new Error('Account or story changed while loading.');
+    if (currentUid() !== owner || state.sessionId !== sid || epoch!==dataEpoch) throw new StaleTurn('Account or story changed while loading.');
     if (preparationKey(session) !== key) throw new Error('Story changed while preparing the reply. Refresh and retry.');
   };
   if (!fresh || fresh.deleting) throw new Error('Story no longer exists.');
@@ -241,7 +257,7 @@ async function prepareStoryDocument(fresh,token = null) {
   if(fresh.memory?.autoUpdate && fresh.memoryState?.extractedThroughOrder==null && computeTurns(historyMessages).lastTurn<=normalizeMemory(fresh.memory).lagTurns){
     await updateSession(sid,{'memoryState.extractedThroughOrder':0});
     if(token)assertActive(token);
-    if(currentUid()!==owner || state.sessionId!==sid)throw new Error('Story changed while setting memory start.');
+    if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch)throw new StaleTurn('Story changed while setting memory start.');
     // Do not overwrite memory state supplied by a newer subscription.
     if(preparationKey(session)===key)session={...session,memoryState:{...session.memoryState,extractedThroughOrder:0}};
     else if(preparationKey(session)!==preparationKey({...fresh,memoryState:{...fresh.memoryState,extractedThroughOrder:0}}))throw new Error('Story changed while setting memory start. Refresh and retry.');
@@ -271,14 +287,7 @@ function updateMemoryChip() {
 
 export function initChatView() {
   document.getElementById('btn-copy-diagnostics')?.addEventListener('click',async()=>{try{await copyClipboard(JSON.stringify(diagnostics({...state,session}),null,2));showTransientInfo('Diagnostics copied.');}catch(error){showTransientError(error);}});
-  configureLoreWrites(async (sid=state.sessionId) => {
-    await flushStory(sid);
-    if (!busy) return;
-    return new Promise(resolve => {
-      const done = () => { if (!busy) { document.removeEventListener('turn-finished', done); resolve(); } };
-      document.addEventListener('turn-finished', done);
-    });
-  });
+  configureLoreWrites(sid=>flushStory(sid));
   memoryUpdater.configureMemoryUpdater({
     get: memorySnapshot, busy: () => busy || !!storyStore(state.sessionId)?.status.pending || !!storyStore(state.sessionId)?.status.error,
     prepare: async sid => { if (sid !== state.sessionId) throw new Error("Open the story before maintenance."); return reconcileStory(); },
@@ -309,7 +318,20 @@ export function initChatView() {
     const local=storyStore(state.sessionId);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});
     syncLore(); rememberMemoryStory(); invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator();
   });
-  document.addEventListener('local-lore-saved',e=>{const sid=e.detail.sessionId,owner=currentUid();if(sid!==state.sessionId)return;void (async()=>{await flushStory(sid);const fresh=await getSessionFromServer(sid);if(state.sessionId!==sid || currentUid()!==owner)return;session={...session,...fresh};syncLore(true);await loreReady;const store=storyStore(sid);if(store && !store.status.pending)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});queueCacheSave();})().catch(showTransientError);});
+  document.addEventListener('local-lore-saved',e=>{
+    const sid=e.detail.sessionId,owner=currentUid(),epoch=dataEpoch;
+    if(sid!==state.sessionId)return;
+    const run=++loreReloadVersion;
+    const active=()=>state.sessionId===sid && currentUid()===owner && epoch===dataEpoch && run===loreReloadVersion;
+    loreReloading=(async()=>{
+      await flushStory(sid);const fresh=await getSessionFromServer(sid);if(!active())return;
+      session={...session,...fresh};syncLore(true);await loreReady;if(!active())return;
+      const store=storyStore(sid);
+      if(store && !store.status.pending)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+      queueCacheSave();
+    })();
+    void loreReloading.catch(error=>{if(active())showTransientError(error);});
+  });
   document.addEventListener('scene-preference', () => { invalidateRenderedMessages(); renderMessages(lastMessages); });
   const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
   document.getElementById('context-indicator')?.addEventListener('click', openViewer);
@@ -348,7 +370,7 @@ export function initChatView() {
   el.restoreDraftBtn.addEventListener('click',()=>{if(busy || originalDraft===null)return;setComposerText(originalDraft);clearOriginalDraft();updateRewriteControls();});
   el.input.addEventListener('input',()=>{clearOriginalDraft();updateRewriteControls();});
   document.addEventListener('sync-chat',()=>{void syncChatData();});
-  el.stopBtn=document.getElementById("btn-stop");el.stopBtn.addEventListener("click",()=>busyGate.active?.abort?.());
+  el.stopBtn=document.getElementById("btn-stop");el.stopBtn.addEventListener("click",()=>{const token=busyGate.active;if(token && token.stopReady!==false)token.abort?.();});
   el.summarizeBtn = document.getElementById("btn-summarize");
   el.contextFill = document.getElementById("context-fill");
   el.contextThreshold = document.getElementById("context-threshold");
@@ -558,6 +580,7 @@ export function setSession(sessionId) {
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
+  const loadEpoch=++dataEpoch;++loreLoadVersion;loreReloading=Promise.resolve();
   state.sessionId = sessionId;syncStatus={pending:0,error:null,durable:true};updateSyncStatus();
   storySettingsReady=selectStorySettings(sessionId);void storySettingsReady.catch(error=>showTransientError(error.message));
   session = null;
@@ -604,7 +627,7 @@ export function setSession(sessionId) {
     return true;
   }
   void loadChatCache(currentUid(), sessionId).then((saved) => {
-    if (state.sessionId !== sessionId || currentUid() !== owner) return;
+    if (state.sessionId !== sessionId || currentUid() !== owner || loadEpoch!==dataEpoch) return;
     if (saved?.session && Array.isArray(saved.recent)) {
       historyCache.set(currentUid()+':'+sessionId, saved);
       if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
@@ -614,7 +637,7 @@ export function setSession(sessionId) {
       subscribeChat(sessionId);
     }
   }).catch(() => {
-    if (state.sessionId === sessionId) subscribeChat(sessionId);
+    if (state.sessionId === sessionId && owner===currentUid() && loadEpoch===dataEpoch) subscribeChat(sessionId);
   });
   return true;
 }
@@ -820,7 +843,7 @@ function renderMessages(msgs) {
     const turnLabel=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) : null;
     const sceneState=timeline.get(m.id),renderedScene=sceneState?.effective;
     const pending=m.id===latestAssistant && !isAcceptedTurn(m,{lastUserOrder,sceneOn:session?.memory?.scene === true});
-    const retry = !busy && m.role === 'user' && m.id === latestStory?.id;
+    const retry = m.role === 'user' && m.id === latestStory?.id;
     if (!entry || !entry.message || entry.retry !== retry || entry.turnLabel!==turnLabel || entry.renderedScene!==renderedScene || entry.pending!==pending || !sameRenderedMessage(entry.message, m)) {
       const node = renderMessage(m, retry, sceneState, pending);
       node.dataset.messageId = m.id;
@@ -880,6 +903,7 @@ function updateWelcome() {
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
+  updateMessageControls();
   refreshPetPlacement();
 }
 
@@ -1008,7 +1032,8 @@ function actionBtn(text, cls, onClick) {
   b.type = "button";
   b.textContent = text;
   if (cls) b.className = cls;
-  b.addEventListener("click", (e) => { e.stopPropagation(); return onClick?.(); });
+  if(cls==='retry')b.hidden=busy;
+  b.addEventListener("click", (e) => { e.stopPropagation(); if(!b.disabled)return onClick?.(); });
   return b;
 }
 
@@ -1372,22 +1397,56 @@ async function handleRewrite() {
   }
 }
 
-async function refreshStoryFromServer(token=null){
-  const sid=state.sessionId,owner=currentUid();
-  const check=()=>{if(token)assertActive(token);if(sid!==state.sessionId || owner!==currentUid())throw new StaleTurn();};
-  await flushStory(sid);check();if(historyLoading)await historyLoading;check();
-  await selectStorySettings(sid,{force:true});check();
-  messagesApi.clearMessageChunkCache(sid);historyMessages=null;historyRevision=null;historyCache.clear();loreSessionId=null;verifiedLoreRevision=null;loreEntries=[];
-  await reconcileStory(token,true);check();
-  const store=storyStore(sid);store?.adopt({session,messages:historyMessages,turns:{}});
-  renderMessages(historyMessages);queueCacheSave();void updateIndicator();
+async function refreshStoryFromServer(token=null,{pendingStateSave=false}={}){
+  const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
+  const hold=token?.loreHold ?? holdLoreWrites(sid);
+  const check=()=>{if(token)assertActive(token);if(sid!==state.sessionId || owner!==currentUid() || epoch!==historyEpoch || cacheWritesPaused)throw new StaleTurn();};
+  // Invalidate earlier async cache/lore loads even if this refresh later fails.
+  ++dataEpoch;++loreLoadVersion;invalidateStorySettingsLoads();indicatorRefresh.invalidate();
+  clearTimeout(cacheSaveTimer);cacheSaveTimer=null;
+  try {
+    await memoryUpdater.stopAndWait(sid);check();
+    if(!pendingStateSave){if(token)token.waitingSettings=true;try{await waitForPendingSettings(owner,sid);}finally{if(token)token.waitingSettings=false;}}check();
+    await hold.ready;check();await flushStory(sid);check();
+    if(historyLoading)await historyLoading;check();
+    await Promise.all([...pendingCacheWrites]);check();
+    // Revisions bracket the dependent reads, so a remote write cannot produce
+    // a mixed story snapshot. Nothing displayed is cleared on read failure.
+    for(let attempt=0;attempt<3;attempt++){
+      const fresh=await getSessionFromServer(sid);check();
+      if(!fresh || fresh.deleting)throw new Error('Story no longer exists.');
+      const [account,prompts,messageData,entries,turns]=await Promise.all([
+        readSettingsRefresh(),readStorySettingsRefresh(sid),messagesApi.readMessageSnapshot(sid),getLore(sid),
+        Promise.all([...new Set([fresh.directorPending,fresh.directorCheckpoint].filter(Boolean))].map(async id=>[id,await getDirectorTurn(sid,id)])),
+      ]);check();
+      const latest=await getSessionFromServer(sid);check();
+      if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))continue;
+      account.check();
+      const messages=messageData.messages,view={session:latest,messages,turns:Object.fromEntries(turns.filter(([,turn])=>turn))};
+      const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false};
+      await replaceStoryCache(owner,sid,snapshot,{confirmed:view,turns:view.turns,storySettings:prompts,lore:{revision:latest.loreRevision ?? 0,entries},chunkRanges:messageData.chunkRanges});check();
+      account.apply();applyStorySettingsRefresh(sid,prompts);messagesApi.applyMessageSnapshot(sid,messageData);
+      session=latest;historyMessages=messages;historyRevision=latest.historyRevision ?? 0;historyStartOrder=0;
+      loreEntries=entries;verifiedLoreRevision=latest.loreRevision ?? 0;loreSessionId=sid;loreStatus='ok';
+      loreReady=Promise.resolve();loreReloading=Promise.resolve();latestReady=true;hasEarlier=false;
+      historyCache.set(owner+':'+sid,snapshot);memoryStories.delete(sid);
+      storyStore(sid)?.adopt(view,{persist:false});
+      renderMessages(snapshot.recent);rememberMemoryStory();
+      document.dispatchEvent(new CustomEvent('settings-changed'));
+      document.dispatchEvent(new CustomEvent('story-settings-changed'));
+      document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));
+      document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId:sid,session}}));
+      void updateIndicator();return;
+    }
+    throw new Error('Story changed during Sync. Try again when the other device is idle.');
+  }finally{if(!token)hold.release();}
 }
 export async function syncChatData({pendingStateSave=false}={}){
-  // A dismissed live-state save can finish while Send is waiting for that save.
-  // Refresh before releasing its dependency, without acquiring a second lock.
+  if(editingState){showTransientInfo('Finish editing before Sync.');return false;}
+  // A dismissed live-state save can finish while Send waits on that save.
   if(pendingStateSave && hasPendingSettings(currentUid(),state.sessionId)){
     if(busy && !busyGate.active?.waitingSettings)throw new Error('Finish the current reply before refreshing live state.');
-    await refreshStoryFromServer();return true;
+    await refreshStoryFromServer(busyGate.active,{pendingStateSave:true});return true;
   }
   return historyAction('sync',async token=>{await chatLoading;assertActive(token);await refreshStoryFromServer(token);showTransientInfo('Latest story data loaded.');});
 }
@@ -1863,18 +1922,30 @@ function appendStream(kind, text) {
 
 // ---------- helpers ----------
 
+function updateMessageControls() {
+  for(const [id,{node}] of renderedMessages){
+    if(editingState?.id===id)continue;
+    for(const button of node.querySelectorAll('button')){
+    if(button.className?.includes('message-copy'))continue;
+    button.disabled=busy;
+    if(button.className==='retry')button.hidden=busy;
+    }
+  }
+}
+let busyUiQueued=false;
 function applyBusyUi(b) {
   busy = state.busy = b;
+  if(el.sendBtn)el.sendBtn.disabled=b;
+  if(!b){if(el.sendBtn)el.sendBtn.hidden=false;el.stopBtn?.classList.add('hidden');if(el.stopBtn)el.stopBtn.disabled=false;}
   if(el.quickProfile)el.quickProfile.disabled=b;
   if(el.quickDirector)el.quickDirector.disabled=b;
   if(el.quickThinking)el.quickThinking.disabled=b;
-  planJumpControl?.refresh();
-  updateRewriteControls();
-  updateMemoryChip();
-  el.sendBtn.disabled=b;
-  if(!b){el.sendBtn.hidden=false;el.stopBtn?.classList.add('hidden');}
-  el.summarizeBtn.disabled = b;
-  if (!editingState) renderMessages(lastMessages);
+  if(el.summarizeBtn)el.summarizeBtn.disabled=b;
+  if(busyUiQueued)return;
+  busyUiQueued=true;
+  requestAnimationFrame(()=>{
+    busyUiQueued=false;planJumpControl?.refresh();updateRewriteControls();updateMemoryChip();updateMessageControls();
+  });
 }
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.

@@ -44,6 +44,16 @@ export async function saveChatCache(uid,sessionId,value) {
     tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;
   });
 }
+export async function replaceStoryCache(uid,sid,snapshot,data) {
+  const db=await database();if(!db)return;
+  await new Promise((resolve,reject)=>{
+    const tx=db.transaction([STORE,'storyData'],'readwrite'),key=`${uid}:${sid}`;
+    tx.objectStore(STORE).put({key,uid,savedAt:Date.now(),value:snapshot});
+    const aux=tx.objectStore('storyData'),request=aux.get(key);
+    request.onsuccess=()=>aux.put({key,value:{...request.result?.value,...data}});
+    tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error ?? new Error('Could not cache refreshed story.'));
+  });
+}
 export async function clearChatCache(uid) {
   const db=await database();if(!db)return;
   await new Promise(resolve=>{const tx=db.transaction(STORE,'readwrite'),store=tx.objectStore(STORE),req=store.getAllKeys();req.onsuccess=()=>{for(const key of req.result)if(key.startsWith(uid+':') || key==='meta:'+uid)store.delete(key);};tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;});

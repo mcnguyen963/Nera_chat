@@ -42,3 +42,14 @@ test('Clearing device chat caches removes only the current account entries', asy
   await module.namespace.clearChatCache('u');
   assert.deepEqual([...entries.keys()], ['other:A']);
 });
+
+test('Sync replaces the open story history and auxiliary caches in one transaction and retains other stories and accounts',async()=>{
+ const {indexedDBFixture}=await import('./indexeddb-fixture.mjs');
+ const {appHarness}=await import('./app-harness.mjs');
+ const db=indexedDBFixture({sessions:[['u:A',{key:'u:A',value:{session:{id:'A',historyRevision:1}}}],['u:B',{key:'u:B',value:{session:{id:'B'}}}],['other:A',{key:'other:A',value:{session:{id:'other'}}}]],storyData:[['u:A',{key:'u:A',value:{confirmed:{session:{id:'A'}},turns:{stale:{}},unrelated:'keep'}}],['u:B',{key:'u:B',value:{lore:{entries:['keep']}}}]]});
+ const use=appHarness({globals:{indexedDB:db.indexedDB}}),cache=await use('chat-cache.js');
+ const snapshot={session:{id:'A',historyRevision:8},recent:[],history:[],hasEarlier:false};const data={confirmed:{session:snapshot.session,messages:[],turns:{}},turns:{},storySettings:{revision:4},lore:{revision:2,entries:[]},chunkRanges:[]};
+ await cache.replaceStoryCache('u','A',snapshot,data);
+ assert.equal(db.stores.get('sessions').get('u:A').value.session.historyRevision,8);assert.equal(db.stores.get('storyData').get('u:A').value.storySettings.revision,4);assert.equal(db.stores.get('storyData').get('u:A').value.unrelated,'keep');
+ assert.deepEqual(db.stores.get('storyData').get('u:A').value.turns,{});assert.equal(db.stores.get('sessions').get('u:B').value.session.id,'B');assert.equal(db.stores.get('sessions').get('other:A').value.session.id,'other');assert.deepEqual(db.stores.get('storyData').get('u:B').value.lore.entries,['keep']);
+});

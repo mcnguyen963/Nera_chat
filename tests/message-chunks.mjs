@@ -89,7 +89,8 @@ async function setup(legacyCount = 0) {
       if (tail) paths = paths.slice(-tail.value);
       reads.documents += paths.length;
       if (target.path.endsWith('/messages')) reads.legacy += paths.length;
-      const docs = paths.map(snapshot);
+      const docs = paths.map(path=>{const snap=snapshot(path),data=snap.data();return {...snap,data:()=>structuredClone(data)};});
+      await fault.afterCollectionRead?.(target.path);
       return { docs, empty: docs.length === 0 };
     },
     updateDoc: async (target, value) => apply('update', target, value),
@@ -146,7 +147,7 @@ async function setup(legacyCount = 0) {
       ? new vm.SyntheticModule(Object.keys(stub), function () {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);
       }, { context, identifier: path })
-      : new vm.SourceTextModule(await readFile(new URL('../js/' + path, import.meta.url), 'utf8'),
+      : new vm.SourceTextModule((await readFile(new URL('../js/' + path, import.meta.url), 'utf8'))+(path==='messages.js' ? `\nexport function cachedChunksFixture(sid){return chunkCache.get(currentUid()+':'+sid)?.flatMap(c=>c.data().messages ?? []);}` : ''),
         { context, identifier: path, initializeImportMeta:promptImportMeta });
     modules.set(path, module);
     return module;
@@ -1278,4 +1279,20 @@ test('Local Director completion and regeneration agree with the real transaction
  const replacement={...message,content:'The clock rings.'};local=applyStoryOperation(local,{id:'rewrite',kind:'overwrite',payload:{id:'reply',message:replacement},createdAt:3});
  const overwritten=await h.api.overwriteMessage('s','reply',replacement,saved.order,{},h.source.requestSource(saved.session),{operationId:'rewrite-once'});
  assert.deepEqual(JSON.parse(JSON.stringify(h.source.requestSource(local.session))),JSON.parse(JSON.stringify(h.source.requestSource(overwritten.session))));
+});
+
+test('a delayed history load cannot replace chunk records installed by Sync',async()=>{
+ const h=await setup(2);await h.api.ensureContinuityMetadata('s');
+ let release,started;const began=new Promise(resolve=>started=resolve),wait=new Promise(resolve=>release=resolve);let reads=0;
+ h.fault.afterCollectionRead=async path=>{if(path.endsWith('/messageChunks') && ++reads===1){started();await wait;}};
+ const older=h.api.getMessages('s');await began;
+ for(const [path,data]of h.documents)if(path.includes('/messageChunks/'))h.documents.set(path,{...data,messages:data.messages.map(m=>({...m,content:'Fresh after Sync'}))});
+ const fresh=await h.api.readMessageSnapshot('s');h.api.applyMessageSnapshot('s',fresh);release();await older;
+ assert.ok(h.api.cachedChunksFixture('s').every(m=>m.content==='Fresh after Sync'));
+});
+test('an old account history response cannot populate another account chunk cache',async()=>{
+ const h=await setup(2);await h.api.ensureContinuityMetadata('s');
+ let release,started;const began=new Promise(resolve=>started=resolve),wait=new Promise(resolve=>release=resolve);
+ h.fault.afterCollectionRead=async path=>{if(path.endsWith('/messageChunks')){started();await wait;}};
+ const older=h.api.getMessages('s');await began;h.fault.owner='other';release();await assert.rejects(older,/Account changed/);assert.equal(h.api.cachedChunksFixture('s'),undefined);
 });

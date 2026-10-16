@@ -288,28 +288,40 @@ export async function addMessagesBulk(sessionId, items) {
   return messages.map(({ id, order, tokenCount }) => ({ id, order, tokenCount }));
 }
 
-const chunkCache=new Map();
+const chunkCache=new Map(),chunkLoads=new Map();
+const nextChunkLoad=key=>{const run=(chunkLoads.get(key) ?? 0)+1;chunkLoads.set(key,run);return run;};
 export async function restoreMessageChunkCache(sid,messages){
-  const owner=currentUid(),saved=await loadStoryData(owner,sid);if(owner!==currentUid())return;
+  const owner=currentUid(),key=owner+':'+sid,run=nextChunkLoad(key),saved=await loadStoryData(owner,sid);if(owner!==currentUid() || chunkLoads.get(key)!==run)return;
   if(saved?.chunkRanges)chunkCache.set(owner+':'+sid,saved.chunkRanges.map(({id,firstOrder,lastOrder})=>{const group=messages.filter(m=>m.order>=firstOrder && m.order<=lastOrder);return {id,data:()=>chunkRecord(group,firstOrder,lastOrder)};}));
 }
 function cacheRecords(owner,sid,records){
-  const old=chunkCache.get(owner+':'+sid);if(!old)return;
+  const old=chunkCache.get(owner+':'+sid);if(!old)return;nextChunkLoad(owner+':'+sid);
   const byId=new Map(old.map(c=>[c.id,c]));for(const r of records)byId.set(r.id,{id:r.id,data:()=>r.data});
   const chunks=[...byId.values()];chunkCache.set(owner+':'+sid,chunks);
   void saveStoryData(owner,sid,{chunkRanges:chunks.map(c=>({id:c.id,firstOrder:c.data().firstOrder,lastOrder:c.data().lastOrder}))});
 }
-export function clearMessageChunkCache(sid){chunkCache.delete(currentUid()+':'+sid);}
+export function clearMessageChunkCache(sid){const key=currentUid()+':'+sid;nextChunkLoad(key);chunkCache.delete(key);}
 function flatten(snap) {
   return snap.docs.flatMap((d) => d.data().messages ?? []).sort((a, b) => a.order - b.order);
 }
 
-export async function getMessages(sessionId) {
+export async function readMessageSnapshot(sessionId) {
+  const owner=currentUid();
   await ensureChunked(sessionId);
-  const snap=await getDocsFromServer(query(chunksCol(sessionId), orderBy("firstOrder", "asc")));
-  chunkCache.set(currentUid()+':'+sessionId,snap.docs);
-  void saveStoryData(currentUid(),sessionId,{chunkRanges:snap.docs.map(c=>({id:c.id,firstOrder:c.data().firstOrder,lastOrder:c.data().lastOrder}))});
-  return flatten(snap);
+  if(owner!==currentUid())throw new Error('Account changed while loading history.');
+  const snap=await getDocsFromServer(query(chunksCol(sessionId),orderBy('firstOrder','asc')));
+  if(owner!==currentUid())throw new Error('Account changed while loading history.');
+  return {messages:flatten(snap),chunkRanges:snap.docs.map(c=>({id:c.id,firstOrder:c.data().firstOrder,lastOrder:c.data().lastOrder})),records:snap.docs};
+}
+export function applyMessageSnapshot(sid,snapshot){const key=currentUid()+':'+sid;nextChunkLoad(key);chunkCache.set(key,snapshot.records);}
+export async function getMessages(sessionId) {
+  const owner=currentUid(),key=owner+':'+sessionId,run=nextChunkLoad(key);
+  const snapshot=await readMessageSnapshot(sessionId);
+  if(owner===currentUid() && chunkLoads.get(key)===run){
+    chunkCache.set(key,snapshot.records);
+    void saveStoryData(owner,sessionId,{chunkRanges:snapshot.chunkRanges});
+  }
+  return snapshot.messages;
 }
 
 // Server discovery runs before retrying a potentially committed save.
