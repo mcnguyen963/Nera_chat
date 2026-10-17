@@ -508,6 +508,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
       (m.id === (summaryReset ? data.activeSummaryMessageId : null) ||
        (m.coveredRange?.toOrder ?? m.coveredRange?.to ?? Infinity) >= order);
     const shouldRetire = summaryReset || contentChanged && current.role !== 'summary';
+    const retiredSummaryIds = shouldRetire ? [...new Set([...freshChunks.values()].flatMap(chunk=>chunk?.messages ?? []).filter(retire).map(m=>m.id))] : [];
     const finalChunks = new Map(freshChunks);
     if (shouldRetire) {
       for (const record of records) record.data = chunkRecord(record.data.messages.map(m => retire(m) ? {...m,retired:true} : m),record.data.firstOrder,record.data.lastOrder);
@@ -537,7 +538,7 @@ async function changeMessage(sessionId, messageId, order, change, sessionUpdate 
     const after={id:sessionId,...data};
     for(const [key,value] of Object.entries(patch)) {if(key==='updatedAt')continue;if(key.startsWith('memoryState.'))after.memoryState={...after.memoryState,[key.slice(12)]:value};else after[key]=value;}
     cacheUpdate=[...finalChunks].map(([id,data])=>({id,data}));
-    return writeReceipt(tx,sessionId,options.operationId,{session:after,replacement,summaryReset,historyRevision,memoryInvalidations:patch.memoryInvalidations,memoryStatePatch:Object.fromEntries(Object.entries(patch).filter(([k])=>k.startsWith('memoryState.')).map(([k,v])=>[k.slice(12),v])) },owner);
+    return writeReceipt(tx,sessionId,options.operationId,{session:after,replacement,summaryReset,baseHistoryRevision:data.historyRevision ?? 0,retiredSummaryIds,historyRevision,memoryInvalidations:patch.memoryInvalidations,memoryStatePatch:Object.fromEntries(Object.entries(patch).filter(([k])=>k.startsWith('memoryState.')).map(([k,v])=>[k.slice(12),v])) },owner);
   });
   if(cacheUpdate)cacheRecords(owner,sessionId,cacheUpdate);else chunkCache.delete(owner+':'+sessionId);
   return result;
@@ -564,11 +565,11 @@ export async function deleteMessage(sessionId, messageId, order, options = {}) {
   return changeMessage(sessionId, messageId, order, () => null, {}, options.expectedSource ?? null, false, true,options);
 }
 
-export async function updateMessageScene(sessionId, messageId, order, scene, prior = null) {
+export async function updateMessageScene(sessionId, messageId, order, scene, prior = null, options = {}) {
   if (String(scene ?? '').length > 2000) throw new Error('The scene line exceeds 2000 characters. Shorten it before saving.');
   const raw = scene?.trim() ? canonicalScene(scene) : null;
   if (scene?.trim() && !raw) throw new Error('Could not read that scene. Use: date: … · time: … · place: … · present: …');
-  return changeMessage(sessionId, messageId, order, (message,session) => ({ ...message,lastContinuation:null, scene:raw ? validateSceneEdit(raw,session.memory?.calendar) : null,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }));
+  return changeMessage(sessionId, messageId, order, (message,session) => ({ ...message,lastContinuation:null, scene:raw ? validateSceneEdit(raw,session.memory?.calendar) : null,sceneMeta:raw ? {kind:'manual',stale:false} : {kind:'carried',stale:true,fromId:prior?.fromId ?? null,fromOrder:prior?.fromOrder ?? null},sceneCandidate:null }),{},options.expectedSource ?? null,false,false,options);
 }
 
 export function acceptMessage(sessionId,messageId,order,expectedRevision) {

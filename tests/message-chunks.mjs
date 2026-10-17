@@ -1214,7 +1214,9 @@ test('Explicit Re-plan replaces a pending contract while competing replacement a
 });
 test('Director live-state reset is guarded and completed items leave the live ledger',async()=>{
  const h=await setup();const user=await h.api.addMessage('s',{role:'user',content:'Begin'}),source=h.source.requestSource(h.documents.get(h.sessionPath));
- await h.director.resetDirectorState('s',{...directorSeed,commitments:[{...directorSeed.commitments[0],status:'closed'}]},source);
+ const saved=await h.director.resetDirectorState('s',{...directorSeed,commitments:[{...directorSeed.commitments[0],status:'closed'}]},source);
+ assert.deepEqual(saved.source,source);assert.deepEqual(saved.patch.directorState,saved.state);assert.equal(saved.patch.directorRevision,source.directorRevision+1);assert.equal(saved.patch.directorCheckpoint,saved.checkpoint.id);
+ assert.deepEqual(h.documents.get(h.sessionPath+'/directorTurns/'+saved.checkpoint.id),structuredClone(saved.checkpoint));assert.equal(saved.checkpoint.manual,true);
  assert.equal(h.documents.get(h.sessionPath).directorState.commitments.length,0);
  await assert.rejects(h.director.resetDirectorState('s',directorSeed,source),/changed/);
  const copy=await h.sessions.duplicateSession('s',null,user.id);assert.equal(h.documents.get('users/u/sessions/'+copy).directorState.scene.hour,20);
@@ -1296,4 +1298,27 @@ test('an old account history response cannot populate another account chunk cach
  let release,started;const began=new Promise(resolve=>started=resolve),wait=new Promise(resolve=>release=resolve);
  h.fault.afterCollectionRead=async path=>{if(path.endsWith('/messageChunks')){started();await wait;}};
  const older=h.api.getMessages('s');await began;h.fault.owner='other';release();await assert.rejects(older,/Account changed/);assert.equal(h.api.cachedChunksFixture('s'),undefined);
+});
+
+test('Warm scene saves reuse the confirmed session without preliminary reads and retain transaction conflict checks',async()=>{
+ const h=await setup(),reply=await h.api.addMessage('s',{role:'assistant',content:'Story'});
+ await h.api.getMessages('s');const session=structuredClone(h.documents.get(h.sessionPath)),reads=h.reads.documents,transactions=h.transactions.length;
+ const result=await h.api.updateMessageScene('s',reply.id,reply.order,'date: Day 1 · time: night · place: Inn · present: Mira',null,{session});
+ assert.equal(h.reads.documents,reads+2);assert.equal(h.transactions.length,transactions+1);
+ assert.equal(result.baseHistoryRevision,session.historyRevision);assert.equal(result.historyRevision,session.historyRevision+1);
+ assert.deepEqual(structuredClone(result.retiredSummaryIds),[]);assert.equal(result.session.historyRevision,result.historyRevision);
+ await assert.rejects(h.api.updateMessageScene('s',reply.id,reply.order,null,null,{session}),error=>error.name==='HistoryConflict');
+});
+
+test('Scene receipts include retired summaries, the fallback checkpoint and extracted-memory rebuild metadata',async()=>{
+ const h=await setup(),story=[];for(let i=0;i<6;i++)story.push(await h.api.addMessage('s',{role:i%2?'assistant':'user',content:'Fact '+i}));
+ await h.api.addMessage('s',{role:'summary',content:'Earlier facts',coveredRange:{fromOrder:1,toOrder:2}},{id:'early'});
+ await h.api.addMessage('s',{role:'summary',content:'Old facts',coveredRange:{fromOrder:1,toOrder:6}},{id:'late',sessionUpdate:{activeSummaryMessageId:'late',breakpointOrder:6}});
+ h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:6};await h.api.getMessages('s');
+ const session=structuredClone(h.documents.get(h.sessionPath)),reads=h.reads.documents;
+ const result=await h.api.updateMessageScene('s',story[3].id,4,'date: Day 1 · time: night · place: Hall · present: Mira',null,{session});
+ assert.equal(h.reads.documents,reads+2);assert.deepEqual(structuredClone(result.retiredSummaryIds),['late']);
+ assert.equal(result.session.activeSummaryMessageId,'early');assert.equal(result.session.breakpointOrder,2);
+ assert.equal(result.session.memoryState.needsRebuild,true);assert.equal(result.session.memoryState.rebuildFromOrder,4);
+ assert.equal(result.session.memoryInvalidations.at(-1).revision,result.historyRevision);
 });
