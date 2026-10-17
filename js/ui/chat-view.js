@@ -91,11 +91,12 @@ async function waitForPendingChanges(token) {
   await token.loreHold?.ready;assertActive(token);await loreReloading;assertActive(token);
 }
 let storySettingsReady=Promise.resolve(),chatLoading=Promise.resolve();
-let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
+// Disabled: page reloads use the local cache; full refresh is explicit Sync only.
+// let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
 let syncStatus={pending:0,error:null,durable:true};
 let indicatorTimer=null,maintenanceTimer=null,pendingMaintenance=null;
 const turnCheckpoints=new Map();
-let freshnessRequested=false,freshnessJob=null;
+// let freshnessRequested=false,freshnessJob=null;
 function checkpointTurn(token){
   let owner;try{owner=currentUid();}catch{return;}
   if(token.owner!==owner)return;
@@ -106,8 +107,12 @@ function checkpointTurn(token){
     scheduleIdleMaintenance();void checkActiveStoryFreshness();
   });
 }
-function requestStoryFreshness(){freshnessRequested=true;void checkActiveStoryFreshness();}
+function requestStoryFreshness(){
+  // Disabled: foreground events must not download the story or acquire the chat lock.
+  // freshnessRequested=true;void checkActiveStoryFreshness();
+}
 async function checkActiveStoryFreshness(){
+  /* Disabled automatic freshness checks. Keep explicit Sync available.
   if(!freshnessRequested || freshnessJob || !session || cacheWritesPaused || busy || editingState || document.hidden || hasPendingSettings(currentUid(),state.sessionId))return;
   const store=storyStore(state.sessionId);if(!store || store.status.pending || store.status.running || store.status.paused)return;
   freshnessRequested=false;
@@ -123,16 +128,20 @@ async function checkActiveStoryFreshness(){
   })();
   try{await freshnessJob;}catch(error){if(active())showTransientError(error);}
   finally{freshnessJob=null;if(freshnessRequested)void checkActiveStoryFreshness();}
+  */
 }
 function scheduleIdleMaintenance(){
   const store=storyStore(state.sessionId);
-  if(!pendingMaintenance || busy || maintenanceTimer!==null || turnCheckpoints.has(store) || store?.requiresReconciliation || store?.status.pending || store?.status.running || store?.status.paused || store?.status.error)return;
+  // Disabled as a global blocker: store?.requiresReconciliation
+  if(!pendingMaintenance || busy || maintenanceTimer!==null || turnCheckpoints.has(store) || store?.status.pending || store?.status.running || store?.status.paused || store?.status.error)return;
   maintenanceTimer=setTimeout(()=>{maintenanceTimer=null;const task=pendingMaintenance;pendingMaintenance=null;if(!task || busy || task.owner!==currentUid() || task.sid!==state.sessionId || task.key!==preparationKey(session))return;void runIdleMaintenance(task);},0);
 }
 
 const directStorySaves=new Set();
 const revisionFields=['historyRevision','directorRevision','loreRevision','storySettingsRevision'];
 function applyWorkingStory(view,status) {
+  // Keep a stale cache from undoing a confirmed scene/state edit on screen.
+  // This does not prevent queue admissions or require a full Sync.
   if(storyStore(state.sessionId)?.requiresReconciliation || status.paused && directStorySaves.has(currentUid()+':'+state.sessionId))return;
   if(!status.pending && session && revisionFields.some(key=>(view.session[key] ?? 0)<(session[key] ?? 0)))return;
   if(!session || view.session.id!==state.sessionId)return;
@@ -152,7 +161,20 @@ async function ensureLocalStory({pendingStateSave=false,saveHold=null,token=busy
   const active=()=>sid===state.sessionId && owner===currentUid() && epoch===historyEpoch;
   const observe=(view,status)=>{if(active())applyWorkingStory(view,status);};
   let store=storyStore(sid);
-  if(store?.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
+  // Disabled: a stale local receipt must not force a full account/lore/settings Sync.
+  // if(store?.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
+  if(store?.requiresReconciliation && !store.status.pending && !store.status.paused){
+    // Recover only the affected story header and history, once, on demand.
+    const fresh=await getSessionFromServer(sid);if(!active())throw new StaleTurn();
+    if(token)assertActive(token);
+    if(store.status.pending || store.status.paused)return store;
+    if(!fresh || fresh.deleting)throw new Error('Story no longer exists.');
+    session=fresh;historyMessages=null;historyRevision=null;
+    const messages=await ensureHistory();if(!active())throw new StaleTurn();
+    if(token)assertActive(token);
+    if(store.status.pending || store.status.paused)return store;
+    store.adopt({session,messages,turns:store.view.turns},{reconciled:true});
+  }
   if(!store){const messages=await ensureHistory();if(!active())throw new StaleTurn();
     store=await openStoryStore(sid,{session:{...session,storySettingsRevision:state.storySettings?.revision ?? session.storySettingsRevision ?? 0},messages,turns:{}},observe);
   }else{
@@ -163,7 +185,7 @@ async function ensureLocalStory({pendingStateSave=false,saveHold=null,token=busy
     store.observe=observe;observe(store.view,store.status);
   }
   if(!active())throw new StaleTurn();
-  if(store.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
+  // if(store.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
   return store;
 }
 function cancelGeneration(token,controller,vibration,petTurn){
@@ -195,7 +217,8 @@ async function saveStoryState(write,apply,{token=null,sid=state.sessionId,owner=
     const result=await write(store.confirmed);committed=true;check();
     if(!apply(result,store,baseline)){
       store.invalidate();historyMessages=null;historyRevision=null;historyCache.delete(key);
-      if(reconcile)await refreshStoryFromServer(busyGate.active?.waitingSettings ? busyGate.active : token,{pendingStateSave:true,saveHold:hold});
+      // Disabled: saving state must not trigger a full Sync or delay a waiting Send.
+      // if(reconcile)await refreshStoryFromServer(busyGate.active?.waitingSettings ? busyGate.active : token,{pendingStateSave:true,saveHold:hold});
     }
     check();rememberMemoryStory();invalidateRenderedMessages();renderMessages(lastMessages);
     queueCacheSave();void updateIndicator();return result;
@@ -229,6 +252,8 @@ export async function saveDirectorLiveState(sid,value,expected,{owner=currentUid
     const matches=story=>{try{assertSource(story,result.source);return true;}catch{return false;}};
     const applied={...result.source,directorRevision:result.patch.directorRevision,directorCheckpoint:result.patch.directorCheckpoint};
     const alreadyApplied=story=>{try{assertSource(story,applied);return true;}catch{return false;}};
+    // Apply this confirmed state edit even when an unrelated dependency changed.
+    if((session.directorRevision ?? 0)<=result.patch.directorRevision)session={...session,...result.patch};
     if(store.status.pending || !historyMessages || historyRevision!==result.source.historyRevision ||
       !matches(store.confirmed.session) || !matches(session) && !alreadyApplied(session))return false;
     session={...session,...result.patch};
@@ -281,7 +306,7 @@ const memoryStories = new Map();
 let lastMemoryReport = null;
 let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { storyEpoch:historyEpoch,session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || !!storyStore(sid)?.requiresReconciliation || !!storyStore(sid)?.status.paused || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { storyEpoch:historyEpoch,session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || /* Disabled refresh lock: !!storyStore(sid)?.requiresReconciliation || */ !!storyStore(sid)?.status.paused || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
@@ -338,7 +363,8 @@ async function prepareStoryDocument(fresh,token = null) {
   const check = () => {
     if (token) assertActive(token);
     if (currentUid() !== owner || state.sessionId !== sid || epoch!==dataEpoch) throw new StaleTurn('Account or story changed while loading.');
-    if (preparationKey(session) !== key) throw new Error('Story changed while preparing the reply. Refresh and retry.');
+    // Disabled: unrelated revision/status changes must not cancel reply preparation.
+    // if (preparationKey(session) !== key) throw new Error('Story changed while preparing the reply. Refresh and retry.');
   };
   if (!fresh || fresh.deleting) throw new Error('Story no longer exists.');
   session = fresh;
@@ -359,14 +385,15 @@ async function prepareStoryDocument(fresh,token = null) {
     if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch)throw new StaleTurn('Story changed while setting memory start.');
     // Do not overwrite memory state supplied by a newer subscription.
     if(preparationKey(session)===key)session={...session,memoryState:{...session.memoryState,extractedThroughOrder:0}};
-    else if(preparationKey(session)!==preparationKey({...fresh,memoryState:{...fresh.memoryState,extractedThroughOrder:0}}))throw new Error('Story changed while setting memory start. Refresh and retry.');
+    // else if(preparationKey(session)!==preparationKey({...fresh,memoryState:{...fresh.memoryState,extractedThroughOrder:0}}))throw new Error('Story changed while setting memory start. Refresh and retry.');
   }
   rememberMemoryStory();
   return memorySnapshot();
 }
 function validateSavedStorySettings() {
-  if(state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed ||
-    state.storySettings.revision !== (session.storySettingsRevision ?? 0)) {
+  // Disabled: revision mismatch alone must not block generation using loaded local prompts.
+  // state.storySettings.revision !== (session.storySettingsRevision ?? 0)
+  if(state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed) {
     throw new Error('Story prompts changed or have not loaded. Your message was saved. Refresh the story and use Retry reply.');
   }
 }
@@ -388,10 +415,12 @@ function updateMemoryChip() {
 
 
 export function initChatView() {
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestStoryFreshness();});
-  window.addEventListener('pageshow',requestStoryFreshness);
-  window.addEventListener('focus',requestStoryFreshness);
-  window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();requestStoryFreshness();});
+  // Disabled automatic full Sync; reconnecting still retries pending saves.
+  // document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestStoryFreshness();});
+  // window.addEventListener('pageshow',requestStoryFreshness);
+  // window.addEventListener('focus',requestStoryFreshness);
+  // window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();requestStoryFreshness();});
+  window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();});
   document.addEventListener('settings-save-finished',()=>{void checkActiveStoryFreshness();});
   document.getElementById('btn-copy-diagnostics')?.addEventListener('click',async()=>{try{await copyClipboard(JSON.stringify(diagnostics({...state,session}),null,2));showTransientInfo('Diagnostics copied.');}catch(error){showTransientError(error);}});
   configureLoreWrites(sid=>flushStory(sid));
@@ -753,8 +782,8 @@ export function setSession(sessionId) {
 
 function chatSnapshot() {
   const local=storyStore(state.sessionId);
-  if(local?.status.pending){const base=local.confirmed;return structuredClone({session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages});}
-  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages });
+  if(local?.status.pending){const base=local.confirmed;return structuredClone({session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages,historyRevision:base.session.historyRevision ?? 0});}
+  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages,historyRevision });
 }
 
 function saveLocalCache(owner, sid, snapshot) {
@@ -795,7 +824,8 @@ function restoreCachedChat(sessionId, saved) {
   session = saved.session;
   syncLore(); rememberMemoryStory();
   historyMessages = saved.history ?? null;
-  historyRevision = saved.session.historyRevision ?? 0;
+  // A single history read may finish after newer metadata; retain its own revision.
+  historyRevision = Object.hasOwn(saved,'historyRevision') ? saved.historyRevision : saved.session.historyRevision ?? 0;
   hasEarlier = saved.hasEarlier;
   latestReady = true;
   renderMessages(saved.recent);
@@ -818,7 +848,7 @@ function subscribeChat(sessionId) {
     if(session.storageVersion!==2 || session.continuityVersion!==2 || session.lookupVersion!==1){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;historyMessages=null;historyRevision=null;}
     latestReady=true;syncLore();
     await ensureLocalStory();if(!active())return;
-    if(refreshOnReload){refreshOnReload=false;await refreshStoryFromServer();if(!active())return;}
+    // if(refreshOnReload){refreshOnReload=false;await refreshStoryFromServer();if(!active())return;}
     document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId,session}}));
     void updateIndicator();
   })().catch(error=>{if(active())showTransientError(error);}).finally(()=>{if(active())requestStoryFreshness();});
@@ -860,16 +890,17 @@ async function ensureHistory(forceServer = false) {
     return historyMessages;
   }
   const pending = (async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    // Disabled repeated bulk downloads: for (let attempt = 0; attempt < 4; attempt++) {
+    {
       const revision = session?.historyRevision ?? 0;
       const messages = await messagesApi.getMessages(sessionId);
       checkScope();
       // A subscription or a local save may arrive while the read is in flight.
       // Keep a newly bridged/loaded cache if it already matches that revision;
-      // otherwise discard this read and refresh within the same shared job.
+      // otherwise keep this single read tagged with its captured revision.
       if (revision !== (session?.historyRevision ?? 0)) {
         if (historyMessages && historyRevision === (session?.historyRevision ?? 0)) return historyMessages;
-        continue;
+        // continue; // Disabled: retain the single fetched history instead of downloading again.
       }
       historyMessages = messages;
       historyRevision = revision;
@@ -882,7 +913,7 @@ async function ensureHistory(forceServer = false) {
       queueCacheSave();
       return historyMessages;
     }
-    throw new Error('History is updating repeatedly. Try again after the current writes finish.');
+    // throw new Error('History is updating repeatedly. Try again after the current writes finish.');
   })().finally(() => {
     // A session switch can start another read before this one settles.
     if (historyLoading === pending) {historyLoading = null;updateRewriteControls();}
@@ -1527,7 +1558,8 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
     await Promise.all([...pendingCacheWrites]);check();
     // Revisions bracket the dependent reads, so a remote write cannot produce
     // a mixed story snapshot. Nothing displayed is cleared on read failure.
-    for(let attempt=0;attempt<3;attempt++){
+    // Disabled repeated bulk Sync: for(let attempt=0;attempt<3;attempt++){
+    {
       const fresh=await getSessionFromServer(sid);check();
       if(!fresh || fresh.deleting)throw new Error('Story no longer exists.');
       const [account,prompts,messageData,entries,turns]=await Promise.all([
@@ -1535,7 +1567,9 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
         Promise.all([...new Set([fresh.directorPending,fresh.directorCheckpoint].filter(Boolean))].map(async id=>[id,await directorStore.getDirectorTurn(sid,id)])),
       ]);check();
       const latest=await getSessionFromServer(sid);check();
-      if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))continue;
+      // if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))continue;
+      // A manual Sync keeps the previous local snapshot if this one is inconsistent.
+      if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))throw new Error('Story changed during Sync. Local data was kept.');
       account.check();
       const messages=messageData.messages,view={session:latest,messages,turns:Object.fromEntries(turns.filter(([,turn])=>turn))};
       const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false};
@@ -1560,7 +1594,7 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId:sid,session}}));
       void updateIndicator();return;
     }
-    throw new Error('Story changed during Sync. Try again when the other device is idle.');
+    // throw new Error('Story changed during Sync. Try again when the other device is idle.');
   }finally{if(refreshingStory===refreshScope)refreshingStory=null;store?.resume();if(!token && !saveHold)hold.release();}
 }
 export async function syncChatData({pendingStateSave=false}={}){
@@ -1660,8 +1694,9 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     assertActive(token);
     if(opts.savedUserId){
       validateSavedStorySettings();
-      if(preparationKey({...session,directorPending:sourceSession.directorPending})!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
-        throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
+      // Disabled: build from the captured context without cancelling for background changes.
+      // if(preparationKey({...session,directorPending:sourceSession.directorPending})!==preparationKey(sourceSession) || JSON.stringify(effectiveActiveSettings())!==JSON.stringify(settings))
+      //   throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
     }
     startStreamUI(prefix);turnStream=streamState;
     let result,stopReason=null;const narratorStarted=Date.now();
@@ -1772,7 +1807,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
 }
 
 async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
-  if(busy || turnCheckpoints.has(storyStore(sid)) || storyStore(sid)?.requiresReconciliation || storyStore(sid)?.status.pending || storyStore(sid)?.status.running || storyStore(sid)?.status.paused || storyStore(sid)?.status.error)return;
+  // Disabled as a global blocker: storyStore(sid)?.requiresReconciliation
+  if(busy || turnCheckpoints.has(storyStore(sid)) || storyStore(sid)?.status.pending || storyStore(sid)?.status.running || storyStore(sid)?.status.paused || storyStore(sid)?.status.error)return;
   const token=acquireBusy('maintenance');if(!token)return;
   try {
     try {

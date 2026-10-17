@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 const FIRESTORE='https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 const planFixture=l=>{const e=l.makeEntry('plan','Festival',{schedule:{start:'1/10/738',end:'20/10/738',status:'pending',phases:[{id:'intro',title:'Introduction',start:'1/10/738',end:'5/10/738',text:'Introduce A, B, C.',status:'pending'}]}});e.id='festival';e.sections.text.text='Shared festival goals.';return e;};
+test('a changed lore revision fails one read without repeating the collection download',async()=>{
+ let revision=0,collectionReads=0,headerReads=0;
+ const use=appHarness({stubs:{[FIRESTORE]:{
+  doc:()=>({}),collection:()=>({}),onSnapshot:()=>()=>{},
+  getDocFromServer:async()=>{headerReads++;const captured=revision;return {data:()=>({loreRevision:captured})};},
+  getDocsFromServer:async()=>{collectionReads++;revision++;return {docs:[]};},
+ },'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'}}});
+ const store=await use('lore-version-store.js');
+ await assert.rejects(store.readLoreCards('s'),error=>error.code==='lore-read-changed');
+ assert.equal(collectionReads,1);assert.equal(headerReads,2);
+});
 async function setup(){
  const path='users/u/sessions/s',docs=new Map([[path,{loreRevision:0}]]),control={failStage:false,failActivation:false,uid:'u'},listeners=[];
  const ref=(_db,...p)=>({path:p.join('/'),id:p.at(-1)});

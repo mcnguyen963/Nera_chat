@@ -1785,20 +1785,29 @@ test('save-first Send uses valid history and lore without separate reads',async(
   assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.calls.requests.length,1);
   assert.equal(h.calls.requests[0].messages.filter(m=>m.content==='Saved action').length,1);
 });
-test('save-first Send keeps the saved user when prompt revision or cache refresh fails, and Retry adds no user',async()=>{
-  for(const failure of ['prompts','history','lore']){
-    const {h,chat,send}=await sendFixture();
-    if(failure==='prompts')h.calls.sessionDocs.improvement.storySettingsRevision=2;
-    if(failure==='history'){h.calls.historyRevision=2;h.calls.onHistoryRead=()=>{throw Error('History offline');};}
-    if(failure==='lore'){h.calls.sessionDocs.improvement.loreRevision=2;h.calls.onLoreRead=()=>{throw Error('Lore offline');};}
-    await send();assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.el('chat-input').value,'');assert.equal(h.state.busy,false);
-    assert.ok(h.el('message-list').querySelectorAll('button').some(b=>b.textContent==='Retry reply'));
-    h.calls.onHistoryRead=null;h.calls.onLoreRead=null;
-    if(failure==='prompts')h.state.storySettings.revision=2;
-    await chat.prepareMemorySnapshot();
-    await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
-    assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.calls.requests.length,1);
-  }
+test('save-first Send uses loaded local prompts despite a newer settings revision without forced refresh',async()=>{
+ const {h,chat,before,send}=await sendFixture();h.calls.sessionDocs.improvement.storySettingsRevision=2;
+ await send();assert.equal(h.calls.requests.length,1);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);assert.equal(h.el('chat-input').value,'');assert.equal(h.state.busy,false);
+ assert.equal(h.calls.sessionReads ?? 0,before.story);assert.equal(h.calls.historyReads ?? 0,before.history);assert.equal(h.calls.loreReads ?? 0,before.lore);
+ assert.equal(chat.memorySnapshot().messages.at(-1).role,'assistant');
+});
+
+test('background memory status changes while building context do not cancel a saved Send',async()=>{
+ const source=await readFile(new URL('../js/context-builder.js',import.meta.url),'utf8');let h,changed=false;
+ h=await harness({globals:{changeMemoryStatus:()=>{if(changed)return;changed=true;h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,memoryState:{failureStreak:1,lastError:'Background status'}})});}},sources:{'context-builder.js':source.replace('export async function buildContextForRequest(', 'async function capturedBuildContext(')+`
+export async function buildContextForRequest(...args){const result=await capturedBuildContext(...args);globalThis.changeMemoryStatus();return result;}
+`}});
+ await openImprovementChat(h,{},[{id:'u',role:'user',order:1,content:'Opening'}]);h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(changed,true);assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);
+});
+
+test('history changes during a read do not repeat the bulk download or label it as newer history',async()=>{
+ const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
+ const h=await harness({sources:{'ui/chat-view.js':source+`
+export async function readHistoryOnceFixture(){historyMessages=null;historyRevision=null;return ensureHistory(true);}`}}),chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Cached'}]);await settle();
+ const before=h.calls.historyReads ?? 0;h.calls.serverHistory=[{id:'server',role:'assistant',order:1,content:'Captured history'}];
+ h.calls.onHistoryRead=()=>h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,historyRevision:(h.calls.sessionDocs.improvement.historyRevision ?? 0)+1})});
+ const messages=await chat.readHistoryOnceFixture();assert.equal(h.calls.historyReads,before+1);assert.equal(messages[0].content,'Captured history');assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(h.state.busy,false);
 });
 test('save-first Send preserves automatic memory-start initialization',async()=>{
   const h=await harness();const chat=await openImprovementChat(h,{storySettingsRevision:1,memory:{autoUpdate:true,lagTurns:2},memoryState:{}},[]);
@@ -2134,12 +2143,12 @@ for(const stage of ['director','narrator'])test('Cancel during '+stage+' release
  assert.equal(h.calls.requests.filter(r=>r.model==='director').length,stage==='director'?2:1);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:00');assert.equal(h.state.busy,false);
 });
 
-test('A page reload refreshes cached history from Firebase before the next turn',async()=>{
+test('A page reload keeps cached history until explicit Sync',async()=>{
  const h=await harness({globals:{performance:{getEntriesByType:()=>[{type:'reload'}]}}}),chat=await h.use('ui/chat-view.js');h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});h.calls.serverHistory=[{id:'u',order:1,role:'user',content:'Fresh server history'}];
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Cached history'}],hasEarlier:false});
- for(let i=0;i<30 && !h.calls.historyReads;i++)await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));
- assert.equal(chat.memorySnapshot().messages[0].content,'Fresh server history');assert.equal(h.calls.requests.length,0);
+ await h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Cached history'}],hasEarlier:false});await settle();
+ assert.equal(chat.memorySnapshot().messages[0].content,'Cached history');assert.equal(h.calls.historyReads ?? 0,0);assert.equal(h.state.busy,false);
+ assert.equal(await chat.syncChatData(),true);assert.equal(chat.memorySnapshot().messages[0].content,'Fresh server history');assert.equal(h.calls.historyReads,1);assert.equal(h.calls.requests.length,0);
 });
 test('Own story-settings metadata patches preserve Director review requirements without a listener',async()=>{
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Opening'}]);h.state.storySettings.revision=2;
@@ -2428,10 +2437,11 @@ test('a delayed older lore load cannot overwrite the Sync replacement',async()=>
  h.calls.loreEntries=previous;old.resolve();await settle();assert.equal(chat.memorySnapshot().entries[0].id,'fresh');
 });
 
-test('Sync retries a changing remote revision and publishes only the coherent replacement',async()=>{
- const published=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},replaceStoryCache:async(...args)=>published.push(args)}}),chat=await openImprovementChat(h);
+test('Manual Sync reads a changing remote snapshot once and preserves local data until the next explicit Sync',async()=>{
+ const published=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},replaceStoryCache:async(...args)=>published.push(args)}}),chat=await openImprovementChat(h,{},[{id:'local',role:'assistant',order:1,content:'Keep local'}]);
  h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);let reads=0;
  h.calls.onMessagesRefresh=()=>{if(++reads===1){h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:5};h.calls.serverHistory=[{id:'new',order:5,role:'user',content:'New revision'}];}};
+ assert.equal(await chat.syncChatData(),false);assert.equal(reads,1);assert.equal(published.length,0);assert.equal(chat.memorySnapshot().messages[0].content,'Keep local');assert.equal(h.state.busy,false);
  assert.equal(await chat.syncChatData(),true);assert.equal(reads,2);assert.equal(published.length,1);assert.equal(chat.memorySnapshot().session.historyRevision,5);assert.equal(chat.memorySnapshot().messages[0].content,'New revision');
 });
 test('repeated remote changes during Sync leave local work visible and release Send',async()=>{
@@ -2510,40 +2520,34 @@ for(const failure of ['messages','cache','permission','offline'])test('Sync conf
  store.close();
 });
 
-for(const event of ['visibilitychange','online','pageshow','focus'])test('active-story freshness refreshes changed Firebase messages on '+event,async()=>{
+for(const event of ['visibilitychange','online','pageshow','focus'])test('foreground '+event+' keeps local chat usable without automatic Firebase refresh',async()=>{
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Old message'}]);await settle();
  h.document.hidden=false;
- h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:4};
- h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'New phone reply'}];
- if(event==='visibilitychange'){h.document.hidden=false;await h.document.dispatchEvent({type:event});}
- else for(const callback of h.calls.windowListeners[event])callback();
- for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='New phone reply';i++)await settle();
- assert.equal(chat.memorySnapshot().messages.at(-1).content,'New phone reply');assert.equal(h.calls.requests.length,0);
+ h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:4};h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'New phone reply'}];
+ const reads={session:h.calls.sessionReads,history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads};
+ if(event==='visibilitychange')await h.document.dispatchEvent({type:event});
+ else for(const callback of h.calls.windowListeners[event] ?? [])callback();
+ await settle();assert.equal(chat.memorySnapshot().messages.at(-1).content,'Old message');assert.equal(h.state.busy,false);assert.equal(h.el('btn-send').disabled,false);
+ assert.deepEqual({session:h.calls.sessionReads,history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads},reads);
 });
 
-test('automatic freshness keeps conflicting local work and refreshes after a pending settings save ends',async()=>{
- const h=await harness(),chat=await openImprovementChat(h);await settle();h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
- h.document.hidden=false;
+test('finishing a settings save does not start automatic full Sync',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h);await settle();h.document.hidden=false;
  const pending=await h.use('ui/pending-settings.js'),finish=pending.beginSettingsSave('test-user','improvement');
  h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:5};h.calls.serverHistory=[{id:'phone',role:'assistant',order:1,content:'Phone'}];
- const reads=h.calls.sessionReads;await h.document.dispatchEvent({type:'visibilitychange'});assert.equal(h.calls.sessionReads,reads);
- finish(true);for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='Phone';i++)await settle();
- assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone');
- h.calls.addMessage=async()=>{throw Object.assign(Error('Changed'),{code:'story-conflict'});};
- const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'local',message:{role:'user',content:'Local'}});await assert.rejects(store.flush());
- const historyReads=h.calls.historyReads;await h.document.dispatchEvent({type:'visibilitychange'});await settle();
- assert.equal(store.status.pending,1);assert.equal(h.calls.historyReads,historyReads);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Local');
+ const reads=h.calls.sessionReads;await h.document.dispatchEvent({type:'visibilitychange'});finish(true);await settle();
+ assert.equal(h.calls.sessionReads,reads);assert.equal(h.calls.historyReads ?? 0,0);assert.equal(h.state.busy,false);
 });
 
-test('opening a visible cached story checks Firebase without waiting for a page reload',async()=>{
+test('opening a visible cached story keeps local data until explicit Sync',async()=>{
  const h=await harness({chatCache:{loadChatCache:async()=>({session:{id:'s',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:1},recent:[{id:'old',role:'assistant',order:1,content:'Cached'}],history:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false}),saveChatCache:async()=>{},deleteChatCache:async()=>{}}});
  h.document.hidden=false;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('s');await new Promise(r=>setTimeout(r,0));
  h.calls.sessionCallbacks.at(-1)({id:'s',data:()=>({historyRevision:1})});
  h.calls.sessionDocs.s={...h.calls.sessionDocs.s,historyRevision:3};h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'Phone version'}];
  await h.calls.latestCallbacks.at(-1)({messages:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false});
- for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='Phone version';i++)await settle();
- assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone version');assert.equal(h.calls.requests.length,0);
+ await settle();assert.equal(chat.memorySnapshot().messages.at(-1).content,'Cached');assert.equal(h.calls.historyReads ?? 0,0);assert.equal(h.state.busy,false);
+ assert.equal(await chat.syncChatData(),true);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone version');assert.equal(h.calls.historyReads,1);assert.equal(h.calls.requests.length,0);
  const reads=h.calls.historyReads;await h.document.dispatchEvent({type:'visibilitychange'});await settle();assert.equal(h.calls.historyReads,reads);
 });
 
@@ -2662,20 +2666,21 @@ test('Warm Director save waits for Firebase and applies state/checkpoint before 
  assert.deepEqual({history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads,session:h.calls.sessionReads},before);assert.equal(h.calls.directorReads ?? 0,0);
 });
 
-for(const outcome of ['failure','reconcile-failure'])test('Dismissed Director '+outcome+' stops waiting Send and distinguishes an unconfirmed draft from a committed write',async()=>{
- const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open();h.calls.onDirectorSave=()=>wait.promise;
+for(const outcome of ['failure','reconcile-failure'])test('Dismissed Director '+outcome+' keeps failed drafts and lets confirmed saves continue without full Sync',async()=>{
+ const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open(),loreBefore=h.calls.loreReads ?? 0;h.calls.onDirectorSave=()=>wait.promise;
  if(outcome==='reconcile-failure'){h.calls.beforeDirectorReturn=()=>{h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,loreRevision:4})});};h.calls.onLoreRead=async()=>{throw Error('Refresh offline');};h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);}
  const saving=namedButton(root,'Save live state').click();await settle();await root.querySelector('.settings-close').click();h.el('chat-input').value='Keep waiting draft';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
  if(outcome==='failure')wait.reject(Error('Offline'));else wait.resolve();await saving;await send;
- assert.equal(h.calls.requests.length,0);assert.equal(h.el('chat-input').value,'Keep waiting draft');assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);
- assert.equal(store.requiresReconciliation,outcome==='reconcile-failure');assert.ok(h.document.body.querySelectorAll('.toast').some(t=>outcome==='failure'?/failed/.test(t.textContent):/was saved/.test(t.textContent)));
+ assert.equal(h.calls.requests.length,outcome==='failure'?0:1);assert.equal(h.el('chat-input').value,outcome==='failure'?'Keep waiting draft':'');assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);assert.equal(store.requiresReconciliation,false);
+ if(outcome==='failure')assert.ok(h.document.body.querySelectorAll('.toast').some(t=>/failed/.test(t.textContent)));
+ else {assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');assert.equal(h.calls.loreReads ?? 0,loreBefore);assert.equal(h.calls.historyReads,1);}
  if(outcome==='failure'){await open();const latest=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);assert.equal(latest.querySelectorAll('input')[1].value,'21:15');assert.equal(chat.memorySnapshot().session.directorState.scene.time,'20:00');}
 });
 
 test('A newer scene-save snapshot stays authoritative and requires coherent reconciliation before queued mutations',async()=>{
  const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>{h.calls.historyRevision=4;h.calls.sessionCallbacks.at(-1)({data:()=>({...result.session,historyRevision:4,loreRevision:3,directorRevision:2})});};
  const before=h.calls.historyReads ?? 0;await (await edit()).click();assert.equal(h.calls.historyReads ?? 0,before);assert.equal(chat.memorySnapshot().session.historyRevision,4);assert.equal(chat.memorySnapshot().session.loreRevision,3);
- assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(store.requiresReconciliation,true);assert.match(chat.memorySnapshot().messages[1].scene,/Saved Hall/);assert.throws(()=>store.enqueue('delete',{id:'u'}),/Refresh/);
+ assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(store.requiresReconciliation,true);assert.match(chat.memorySnapshot().messages[1].scene,/Saved Hall/);
  h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.serverHistory=h.calls.history.map(m=>m.id==='u'?{...m,content:'Remote current action'}:m);
  h.el('chat-input').value='Continue after reconciliation';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
  assert.equal(store.requiresReconciliation,false);assert.ok(h.calls.historyReads>before);assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Remote current action')));
