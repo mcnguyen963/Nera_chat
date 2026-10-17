@@ -52,9 +52,11 @@ export async function resetDirectorState(sid,value,expected) {
     check(uid);const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,expected);
     if(s.directorPending)throw new Error('Finish or discard the pending narration before editing live state.');
     const revision=(s.directorRevision ?? 0)+1;
-    tx.set(directorTurnRef(sid,id,uid),{version:1,id,status:'completed',manual:true,createdAt:Date.now(),previousCheckpoint:s.directorCheckpoint ?? null,order:s.nextOrder ?? 0,before:s.directorState ?? state,after:state});
-    tx.update(ref,{directorState:state,directorRevision:revision,directorCheckpoint:id,directorStateHistoryOrder:s.nextOrder ?? 0,directorNeedsReview:false,updatedAt:serverTimestamp()});
-    return state;
+    const checkpoint={version:1,id,status:'completed',manual:true,createdAt:Date.now(),previousCheckpoint:s.directorCheckpoint ?? null,order:s.nextOrder ?? 0,before:s.directorState ?? state,after:state};
+    const patch={directorState:state,directorRevision:revision,directorCheckpoint:id,directorStateHistoryOrder:s.nextOrder ?? 0,directorNeedsReview:false};
+    check(uid);tx.set(directorTurnRef(sid,id,uid),checkpoint);
+    tx.update(ref,{...patch,updatedAt:serverTimestamp()});
+    return {state,patch,checkpoint,source:requestSource(s)};
   });
 }
 export async function discardPendingDirector(sid,expected,options={}) {

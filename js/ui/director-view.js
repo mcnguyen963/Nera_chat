@@ -5,26 +5,26 @@ import { state } from '../state.js';
 import { currentUid } from '../auth.js';
 import { requestSource } from '../continuity.js';
 import { seedDirectorState, validateDirectorState, directorClockNeedsReview } from '../director-state.js';
-import { resetDirectorState, discardPendingDirector } from '../director-store.js';
+import { discardPendingDirector } from '../director-store.js';
 import * as chat from './chat-view.js';
-const {prepareMemorySnapshot,syncChatData}=chat;
+const {prepareMemorySnapshot,syncChatData,saveDirectorLiveState}=chat;
 import { node, button, subSheet, toast } from './memory-ui.js';
 import {beginSettingsSave,waitForPendingSettings} from './pending-settings.js';
 const failedDrafts=new Map();
 export async function openDirectorState() {
   if(state.busy)return toast('Finish the current reply first.');
-  const requestedSid=state.sessionId,requestedUid=currentUid();let closed=false;
+  const requestedSid=state.sessionId,requestedUid=currentUid(),requestedEpoch=chat.memorySnapshot?.()?.storyEpoch;let closed=false;
   const dialog=subSheet('Director · live state',{close:()=>{closed=true;return true;}}),body=node('div',null,'memory-content');
   body.append(node('p','Loading live state…','muted'));dialog.dialog.append(body);
   try {
     await waitForPendingSettings(requestedUid,requestedSid);if(closed)return;
     const live=await prepareMemorySnapshot(),sid=requestedSid,uid=requestedUid;
     if(closed)return;
-    if(!live || state.sessionId!==sid || currentUid()!==uid){dialog.hide();return;}
+    if(!live || state.sessionId!==sid || currentUid()!==uid || requestedEpoch!=null && live.storyEpoch!==requestedEpoch){dialog.hide();return;}
     const key=JSON.stringify([uid,sid]),source=JSON.stringify(requestSource(live.session)),failed=failedDrafts.get(key);
     const value=structuredClone(failed?.source===source?failed.value:live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));
     body.replaceChildren();
-    const guard=()=>{if(sid!==state.sessionId || uid!==currentUid() || state.busy)throw new Error('Story changed or another action is running. Reopen live state.');};
+    const guard=()=>{if(sid!==state.sessionId || uid!==currentUid() || state.busy || live.storyEpoch!=null && chat.memorySnapshot?.()?.storyEpoch!==live.storyEpoch)throw new Error('Story changed or another action is running. Reopen live state.');};
     const field=(label,value,tag='input')=>{const wrap=node('label',label),input=node(tag);input.value=value ?? '';if(tag==='textarea')input.rows=3;wrap.append(input);body.append(wrap);return input;};
     body.append(node('p',live.session.directorNeedsReview?'History changed. Review and save the current state before continuing.':'Changes apply to this story. Older promises can be added below.','muted'));
     const importedClock=directorClockNeedsReview(live.session,live.messages,value);
@@ -55,8 +55,8 @@ export async function openDirectorState() {
       for(const group of ['decisions','threads','commitments'])next[group]=read.map(fn=>fn()).filter(r=>r.group===group && r.item.text).map(r=>r.item);
       validateDirectorState(next);failedDrafts.set(key,{source,value:structuredClone(next)});
       const finish=beginSettingsSave(uid,sid);let saved=false;
-      try{await resetDirectorState(sid,next,requestSource(live.session));if(state.sessionId===sid && currentUid()===uid)await syncChatData({pendingStateSave:true});saved=true;failedDrafts.delete(key);dialog.hide();toast('Director state saved.');}
-      catch(e){if(closed)toast('Director save failed. Reopen live state to retry.');else error.textContent=e.message;}
+      try{await saveDirectorLiveState(sid,next,requestSource(live.session),{owner:uid,epoch:live.storyEpoch});saved=true;failedDrafts.delete(key);dialog.hide();toast('Director state saved.');}
+      catch(e){if(e.saveCommitted)failedDrafts.delete(key);if(closed)toast(e.saveCommitted?e.message:'Director save failed. Reopen live state to retry.');else error.textContent=e.message;}
       finally{finish(saved);}
     },'btn primary'));
   }catch(error){if(!closed){body.replaceChildren(node('p',error.message,'auth-message'));}}

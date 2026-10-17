@@ -1,6 +1,6 @@
 import {openStoryStore,storyStore,flushStory,closeStoryStores,forgetStoryStore} from '../local-story-store.js';
 import {loadStoryData,saveStoryData,storyQueueStorage,replaceStoryCache} from '../chat-cache.js';
-import { getDirectorTurn } from '../director-store.js';
+import * as directorStore from '../director-store.js';
 import { prepareDirectorTurn } from '../director-turn.js';
 import { directorScene, directorSceneWarnings } from '../director-state.js';
 import { requestSource } from '../continuity.js';
@@ -117,7 +117,7 @@ async function checkActiveStoryFreshness(){
     await chatLoading;if(!active())return;
     const fresh=await getSessionFromServer(sid);if(!active())return;
     if(busy || editingState || hasPendingSettings(owner,sid) || store.status.pending || store.status.running){freshnessRequested=true;return;}
-    if(!fresh || fresh.deleting || preparationKey(fresh)!==preparationKey(session) || fresh.directorCheckpoint!==session.directorCheckpoint){
+    if(store.requiresReconciliation || !fresh || fresh.deleting || preparationKey(fresh)!==preparationKey(session) || fresh.directorCheckpoint!==session.directorCheckpoint){
       await historyAction('refresh',token=>refreshStoryFromServer(token));
     }
   })();
@@ -126,11 +126,15 @@ async function checkActiveStoryFreshness(){
 }
 function scheduleIdleMaintenance(){
   const store=storyStore(state.sessionId);
-  if(!pendingMaintenance || busy || maintenanceTimer!==null || turnCheckpoints.has(store) || store?.status.pending || store?.status.running || store?.status.paused || store?.status.error)return;
+  if(!pendingMaintenance || busy || maintenanceTimer!==null || turnCheckpoints.has(store) || store?.requiresReconciliation || store?.status.pending || store?.status.running || store?.status.paused || store?.status.error)return;
   maintenanceTimer=setTimeout(()=>{maintenanceTimer=null;const task=pendingMaintenance;pendingMaintenance=null;if(!task || busy || task.owner!==currentUid() || task.sid!==state.sessionId || task.key!==preparationKey(session))return;void runIdleMaintenance(task);},0);
 }
 
+const directStorySaves=new Set();
+const revisionFields=['historyRevision','directorRevision','loreRevision','storySettingsRevision'];
 function applyWorkingStory(view,status) {
+  if(storyStore(state.sessionId)?.requiresReconciliation || status.paused && directStorySaves.has(currentUid()+':'+state.sessionId))return;
+  if(!status.pending && session && revisionFields.some(key=>(view.session[key] ?? 0)<(session[key] ?? 0)))return;
   if(!session || view.session.id!==state.sessionId)return;
   const changed=historyMessages!==view.messages || preparationKey(session)!==preparationKey(view.session);
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
@@ -143,21 +147,23 @@ function updateSyncStatus(){
   node.textContent=!syncStatus.durable && syncStatus.pending?'Local only':syncStatus.error?'Changes not synced':syncStatus.pending?'Saving…':syncStatus.synced?'Synced':'';
   node.title=!syncStatus.durable && syncStatus.pending?'Local storage is unavailable. Keep this page open until changes sync.':syncStatus.error?.code==='story-conflict'?'Story changed on another device. Use Sync data to load the latest version.':syncStatus.error?.message ?? '';node.hidden=!node.textContent;
 }
-async function ensureLocalStory() {
+async function ensureLocalStory({pendingStateSave=false,saveHold=null,token=busyGate.active}={}) {
   const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
   const active=()=>sid===state.sessionId && owner===currentUid() && epoch===historyEpoch;
   const observe=(view,status)=>{if(active())applyWorkingStory(view,status);};
   let store=storyStore(sid);
+  if(store?.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
   if(!store){const messages=await ensureHistory();if(!active())throw new StaleTurn();
     store=await openStoryStore(sid,{session:{...session,storySettingsRevision:state.storySettings?.revision ?? session.storySettingsRevision ?? 0},messages,turns:{}},observe);
   }else{
     // Reopening a cached story must reconnect its view, including queues opened
     // by background sync. Never replace newer local work with an older snapshot.
     const upToDate=['historyRevision','directorRevision','loreRevision','storySettingsRevision'].every(key=>(session[key] ?? 0)>=(store.view.session[key] ?? 0));
-    if(!store.status.pending && upToDate && preparationKey(store.view.session)!==preparationKey(session))store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+    if(!store.status.pending && !store.status.paused && upToDate && historyMessages && historyRevision===(session.historyRevision ?? 0) && preparationKey(store.view.session)!==preparationKey(session))store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
     store.observe=observe;observe(store.view,store.status);
   }
   if(!active())throw new StaleTurn();
+  if(store.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
   return store;
 }
 function cancelGeneration(token,controller,vibration,petTurn){
@@ -168,6 +174,67 @@ function cancelGeneration(token,controller,vibration,petTurn){
 async function historyAction(kind,run) {
   const token=acquireBusy(kind);if(!token){showTransientInfo('Wait for the current reply to finish.');return false;}
   try{await run(token);return true;}catch(error){if(!(error instanceof StaleTurn))showTransientError(error);return false;}finally{releaseBusy(token);}
+}
+// Direct state edits remain server-confirmed and exclude new queue admissions
+// until their receipts have been applied. Cache I/O and token estimates are deferred.
+async function saveStoryState(write,apply,{token=null,sid=state.sessionId,owner=currentUid(),epoch=historyEpoch,reconcile=false}={}) {
+  const key=owner+':'+sid;
+  const check=()=>{
+    if(token)assertActive(token);
+    if(owner!==currentUid() || sid!==state.sessionId || epoch!==historyEpoch || cacheWritesPaused)throw new StaleTurn('Story changed while saving.');
+    if(busy && busyGate.active!==token && !busyGate.active?.waitingSettings)throw new Error('Finish the current reply before saving state.');
+  };
+  check();if(directStorySaves.has(key))throw new Error('State is already saving.');
+  directStorySaves.add(key);pendingMaintenance=null;
+  const hold=token?.loreHold ?? holdLoreWrites(sid);let store=null,committed=false;
+  try {
+    await chatLoading;check();await hold.ready;check();await loreReloading;check();
+    store=await ensureLocalStory({pendingStateSave:true,saveHold:hold,token});check();
+    await store.pause();check();await store.flush({whilePaused:true});check();
+    const baseline=preparationKey(session);
+    const result=await write(store.confirmed);committed=true;check();
+    if(!apply(result,store,baseline)){
+      store.invalidate();historyMessages=null;historyRevision=null;historyCache.delete(key);
+      if(reconcile)await refreshStoryFromServer(busyGate.active?.waitingSettings ? busyGate.active : token,{pendingStateSave:true,saveHold:hold});
+    }
+    check();rememberMemoryStory();invalidateRenderedMessages();renderMessages(lastMessages);
+    queueCacheSave();void updateIndicator();return result;
+  } catch(error) {
+    if(committed || error.code==='story-conflict' || error.name==='HistoryConflict'){
+      store?.invalidate();
+      if(owner===currentUid() && sid===state.sessionId && epoch===historyEpoch){historyMessages=null;historyRevision=null;historyCache.delete(key);}
+    }
+    if(committed)throw Object.assign(new Error('State was saved. Refresh the story before continuing.'),{saveCommitted:true,cause:error});
+    throw error;
+  } finally {directStorySaves.delete(key);store?.resume();if(!token)hold.release();}
+}
+function applySceneSave(result,store,baseline) {
+  const retired=new Set(result.retiredSummaryIds ?? []);
+  const mutate=list=>list.map(m=>m.id===result.replacement.id && (m.revision ?? 0)<=(result.replacement.revision ?? 0) ? result.replacement : retired.has(m.id) ? {...m,retired:true} : m);
+  // The saved scene remains visible even when a newer snapshot needs reloading.
+  lastMessages=mutate(lastMessages);
+  const base=result.baseHistoryRevision,after=result.session;
+  const safe=after && historyMessages && historyRevision===base && !store.status.pending &&
+    (store.confirmed.session.historyRevision ?? 0)===base &&
+    (preparationKey(session)===baseline || preparationKey(session)===preparationKey(after)) &&
+    revisionFields.every(key=>(session[key] ?? 0)<=(after[key] ?? 0)) &&
+    ['loreRevision','storySettingsRevision'].every(key=>(session[key] ?? 0)===(after[key] ?? 0));
+  if(!safe)return false;
+  session={...session,...after};historyMessages=mutate(historyMessages);historyRevision=result.historyRevision;
+  store.adopt({session,messages:historyMessages,turns:store.view.turns},{serverConfirmed:true});
+  return true;
+}
+export async function saveDirectorLiveState(sid,value,expected,{owner=currentUid(),epoch=historyEpoch}={}) {
+  return saveStoryState(()=>directorStore.resetDirectorState(sid,value,expected),(result,store)=>{
+    const matches=story=>{try{assertSource(story,result.source);return true;}catch{return false;}};
+    const applied={...result.source,directorRevision:result.patch.directorRevision,directorCheckpoint:result.patch.directorCheckpoint};
+    const alreadyApplied=story=>{try{assertSource(story,applied);return true;}catch{return false;}};
+    if(store.status.pending || !historyMessages || historyRevision!==result.source.historyRevision ||
+      !matches(store.confirmed.session) || !matches(session) && !alreadyApplied(session))return false;
+    session={...session,...result.patch};
+    store.adopt({session,messages:historyMessages,turns:{...store.view.turns,[result.checkpoint.id]:result.checkpoint}},{serverConfirmed:true});
+    return true;
+  },{sid,owner,epoch,reconcile:true});
 }
 function applyLocalChange(token,result,mutate) {
   assertActive(token);
@@ -214,7 +281,7 @@ const memoryStories = new Map();
 let lastMemoryReport = null;
 let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
-  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
+  if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { storyEpoch:historyEpoch,session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || !!storyStore(sid)?.requiresReconciliation || !!storyStore(sid)?.status.paused || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
 }
@@ -250,7 +317,7 @@ function preparationKey(story) {
     story?.activeSummaryMessageId,story?.breakpointOrder,story?.memory,story?.memoryState]);
 }
 async function reconcileStory(token = null, forceServer = false) {
-  if(!forceServer && session){const epoch=dataEpoch;await ensureLocalStory();if(epoch!==dataEpoch)throw new StaleTurn();return prepareStoryDocument(session,token);}
+  if(!forceServer && session){const epoch=historyEpoch;await ensureLocalStory();if(epoch!==historyEpoch)throw new StaleTurn();return prepareStoryDocument(session,token);}
   const sid = state.sessionId, owner = currentUid(),epoch=dataEpoch;
   const check = () => {
     if (token) assertActive(token);
@@ -1048,10 +1115,8 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
       const save = actionBtn('Save', async () => {
         const token=acquireBusy('scene');if(!token){showTransientInfo('Wait for the current reply to finish.');return;}save.disabled=true;
         try {
-          const raw = field.value.trim() || null; const result = await (async()=>{await flushStory(token.sid);assertActive(token);return messagesApi.updateMessageScene(token.sid,m.id,m.order,raw,sceneState);})();
-          applyLocalChange(token,result,list=>list.map(x=>x.id===m.id ? result.replacement : x));
-          if(!historyMessages){await ensureHistory();storyStore(token.sid)?.adopt({session,messages:historyMessages,turns:storyStore(token.sid).view.turns});}
-          renderMessages(lastMessages); void updateIndicator();
+          const raw = field.value.trim() || null;
+          await saveStoryState(confirmed=>messagesApi.updateMessageScene(token.sid,m.id,m.order,raw,sceneState,{session:confirmed.session}),applySceneSave,{token});
         } catch (e) {if(!(e instanceof StaleTurn))showTransientError(e);} finally {save.disabled=false;releaseBusy(token);}
       });
       row.append(field, save, actionBtn('Cancel', () => row.replaceWith(chip))); chip.replaceWith(row); field.focus();
@@ -1440,10 +1505,10 @@ async function handleRewrite() {
   }
 }
 
-async function refreshStoryFromServer(token=null,{pendingStateSave=false,discardConflicts=false}={}){
+async function refreshStoryFromServer(token=null,{pendingStateSave=false,discardConflicts=false,saveHold=null}={}){
   const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
   const refreshScope={sid,owner};refreshingStory=refreshScope;
-  const hold=token?.loreHold ?? holdLoreWrites(sid);
+  const hold=saveHold ?? token?.loreHold ?? holdLoreWrites(sid);
   const check=()=>{if(token)assertActive(token);if(sid!==state.sessionId || owner!==currentUid() || epoch!==historyEpoch || cacheWritesPaused)throw new StaleTurn();};
   // Invalidate earlier async cache/lore loads even if this refresh later fails.
   ++dataEpoch;++loreLoadVersion;invalidateStorySettingsLoads();indicatorRefresh.invalidate();
@@ -1467,17 +1532,17 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       if(!fresh || fresh.deleting)throw new Error('Story no longer exists.');
       const [account,prompts,messageData,entries,turns]=await Promise.all([
         readSettingsRefresh(),readStorySettingsRefresh(sid),messagesApi.readMessageSnapshot(sid),getLore(sid),
-        Promise.all([...new Set([fresh.directorPending,fresh.directorCheckpoint].filter(Boolean))].map(async id=>[id,await getDirectorTurn(sid,id)])),
+        Promise.all([...new Set([fresh.directorPending,fresh.directorCheckpoint].filter(Boolean))].map(async id=>[id,await directorStore.getDirectorTurn(sid,id)])),
       ]);check();
       const latest=await getSessionFromServer(sid);check();
       if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))continue;
       account.check();
       const messages=messageData.messages,view={session:latest,messages,turns:Object.fromEntries(turns.filter(([,turn])=>turn))};
       const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false};
-      await replaceStoryCache(owner,sid,snapshot,{confirmed:view,turns:view.turns,storySettings:prompts,lore:{revision:latest.loreRevision ?? 0,entries},chunkRanges:messageData.chunkRanges},{discardPending});
+      await replaceStoryCache(owner,sid,snapshot,{confirmed:view,requiresReconciliation:false,turns:view.turns,storySettings:prompts,lore:{revision:latest.loreRevision ?? 0,entries},chunkRanges:messageData.chunkRanges},{discardPending});
       // Keep the queue aligned with the committed cache even if navigation
       // changes while IndexedDB finishes. Its scoped observer publishes later.
-      store?.adopt(view,{persist:false,discardPending,serverConfirmed:true,notify:false});
+      store?.adopt(view,{persist:false,reconciled:true,discardPending,serverConfirmed:true,notify:false});
       if(discardPending){
         if(pendingMaintenance?.sid===sid && pendingMaintenance.owner===owner)pendingMaintenance=null;
         await clearUnsaved(owner,sid);
@@ -1496,7 +1561,7 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       void updateIndicator();return;
     }
     throw new Error('Story changed during Sync. Try again when the other device is idle.');
-  }finally{if(refreshingStory===refreshScope)refreshingStory=null;store?.resume();if(!token)hold.release();}
+  }finally{if(refreshingStory===refreshScope)refreshingStory=null;store?.resume();if(!token && !saveHold)hold.release();}
 }
 export async function syncChatData({pendingStateSave=false}={}){
   if(editingState){showTransientInfo('Finish editing before Sync.');return false;}
@@ -1707,7 +1772,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
 }
 
 async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
-  if(busy || turnCheckpoints.has(storyStore(sid)) || storyStore(sid)?.status.pending || storyStore(sid)?.status.running || storyStore(sid)?.status.paused || storyStore(sid)?.status.error)return;
+  if(busy || turnCheckpoints.has(storyStore(sid)) || storyStore(sid)?.requiresReconciliation || storyStore(sid)?.status.pending || storyStore(sid)?.status.running || storyStore(sid)?.status.paused || storyStore(sid)?.status.error)return;
   const token=acquireBusy('maintenance');if(!token)return;
   try {
     try {

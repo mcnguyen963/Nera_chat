@@ -28,7 +28,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
   if(!base)throw new Error('Story history has not loaded.');
   base={...base,turns:{...aux?.turns,...base.turns}};
   await messages.restoreMessageChunkCache?.(sid,base.messages);
-  let entry;
+  let entry,requiresReconciliation=!!aux?.requiresReconciliation;
   const queue=createStoryQueue({owner,sid,base,operations,storage:storyQueueStorage,currentOwner:ownerNow,onChange:(view,status)=>entry?.observe?.(view,status),commit:async(op,confirmed)=>{
     if(currentUid()!==owner)throw new Error('Account changed.');
     const p=op.payload,options={operationId:op.id,session:confirmed.session,expectedSource:op.source};
@@ -42,7 +42,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
       default:throw new Error('Unsupported local story operation.');
     }
   }});
-  entry={observe:onChange,get confirmed(){return queue.confirmed;},get view(){return queue.view;},get status(){return queue.status;},enqueue(kind,payload){return queue.enqueue({id:operationId(),kind,payload,source:requestSource(queue.view.session),createdAt:Date.now()});},flush:options=>queue.flush(options),checkpoint:()=>queue.checkpoint(),pause:()=>queue.pause(),resume:()=>queue.resume(),adopt:(base,{persist=true,...options}={})=>{queue.adopt(base,options);if(persist)void saveStoryData(owner,sid,{confirmed:base});},retry:()=>queue.retry(),close:()=>queue.close(),settled:()=>queue.settled(),
+  entry={observe:onChange,get requiresReconciliation(){return requiresReconciliation;},invalidate(){requiresReconciliation=true;void saveStoryData(owner,sid,{requiresReconciliation:true});},get confirmed(){return queue.confirmed;},get view(){return queue.view;},get status(){return queue.status;},enqueue(kind,payload){if(requiresReconciliation)throw new Error('Refresh the story before making more changes.');return queue.enqueue({id:operationId(),kind,payload,source:requestSource(queue.view.session),createdAt:Date.now()});},flush:options=>queue.flush(options),checkpoint:()=>queue.checkpoint(),pause:()=>queue.pause(),resume:()=>queue.resume(),adopt:(base,{persist=true,reconciled=false,...options}={})=>{queue.adopt(base,{...options,notify:false});if(reconciled)requiresReconciliation=false;if(options.notify!==false)entry.observe?.(queue.view,queue.status);if(persist)void saveStoryData(owner,sid,{confirmed:base,requiresReconciliation});},retry:()=>queue.retry(),close:()=>queue.close(),settled:()=>queue.settled(),
     async getTurn(_sid,id){if(queue.view.turns[id])return queue.view.turns[id];const turn=await getDirectorTurn(sid,id);if(currentUid()!==owner)throw new Error('Account changed.');if(turn){queue.cacheTurn(turn);await saveStoryData(owner,sid,{turns:queue.view.turns});}return turn;},
     saveTurn(_sid,turn){const view=entry.enqueue('director',{turn});return Promise.resolve(view.turns[turn.id]);},
   };

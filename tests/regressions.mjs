@@ -1291,11 +1291,11 @@ test('Q3 P0.14 omitted history indicator shows turns not sent with actionable to
 test('B16 kept Stop and timeout partial replies use their actual stop reason',async()=>{
  for(const reason of ['user','timeout']){const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.onRequest=async()=>{throw Object.assign(Error('Interrupted'),{aborted:reason,partial:{content:'Partial story.',thinking:''}});};await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();assert.equal(h.calls.messages.at(-1)[1].truncated,true);assert.ok(h.el('message-list').children.some(n=>reason==='timeout'?/timed out after 120 s/.test(n.textContent ?? ''):/Partial reply saved \(stopped\)/.test(n.textContent ?? '')));assert.ok(!h.el('message-list').children.some(n=>/output limit/.test(n.textContent ?? '')));}
 });
-test('B14 scene-save revision jumps invalidate cached full history',async()=>{
+test('B14 scene-save revision jumps defer coherent reconciliation until dependent work',async()=>{
  const h=await harness(),initial=[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Reply',scene:'date: Day 1 · time: night · place: Inn'}],chat=await openImprovementChat(h,{memory:{scene:true}},initial);await chat.prepareMemorySnapshot();
  const readsBefore=h.calls.historyReads ?? 0;h.calls.serverHistory=[{...initial[0],content:'Remote action'},initial[1]];
- h.calls.updateScene=async()=>{h.calls.historyRevision=4;h.calls.sessionDocs.improvement.historyRevision=4;return {replacement:{...initial[1],scene:'date: Day 1 · time: night · place: Hall'},historyRevision:4,session:h.calls.sessionDocs.improvement};};
- await h.el('message-list').querySelector('.scene-chip').click();await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save').click();assert.ok(h.calls.historyReads>readsBefore,JSON.stringify({messages:chat.memorySnapshot().messages,ui:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(chat.memorySnapshot().messages[0].content,'Remote action');
+ h.calls.updateScene=async()=>{h.calls.historyRevision=4;h.calls.sessionDocs.improvement.historyRevision=4;return {replacement:{...initial[1],scene:'date: Day 1 · time: night · place: Hall'},baseHistoryRevision:3,historyRevision:4,session:h.calls.sessionDocs.improvement};};
+ await h.el('message-list').querySelector('.scene-chip').click();await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save').click();assert.equal(h.calls.historyReads ?? 0,readsBefore);assert.equal(chat.memorySnapshot().historyComplete,false);assert.match(chat.memorySnapshot().messages[1].scene,/Hall/);assert.equal(h.state.busy,false);h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);await chat.prepareMemorySnapshot();assert.ok(h.calls.historyReads>readsBefore);assert.equal(chat.memorySnapshot().messages[0].content,'Remote action');
 });
 test('B2 indicator and post-turn usage both receive the current lore entries',async()=>{
  const source=await readFile(new URL('../js/context-builder.js',import.meta.url),'utf8');const observations=[];const h=await harness({globals:{recordUsage:opts=>observations.push(opts)},sources:{'context-builder.js':source.replace('  messages ??= await getMessages(session.id);','  globalThis.recordUsage(opts);\n  messages ??= await getMessages(session.id);')}});
@@ -2264,7 +2264,7 @@ test('Stop rewriting releases immediately and late cleanup cannot replace a newl
 
 test('A failed dismissed Director save restores its draft when reopened',async()=>{
  const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let fail;
- const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),syncChatData:async()=>{}},'director-store.js':{resetDirectorState:()=>new Promise((_r,reject)=>fail=reject),discardPendingDirector:async()=>{}}}});
+ const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),saveDirectorLiveState:()=>new Promise((_r,reject)=>fail=reject),syncChatData:async()=>{}},'director-store.js':{discardPendingDirector:async()=>{}}}});
  h.state.sessionId='story';const view=await h.use('ui/director-view.js');await view.openDirectorState();
  let root=h.document.body.querySelector('.memory-sub-sheet');root.querySelectorAll('input')[1].value='21:15';const save=namedButton(root,'Save live state').click();assert.ok(fail);
  await root.querySelectorAll('button').find(b=>b.dataset.iconLabel==='Close').click();fail(Error('Offline'));await save;await view.openDirectorState();
@@ -2281,7 +2281,7 @@ test('A submitted live-state refresh can complete while Send is waiting on its s
 
 test('Legacy Hour 24 live-state review requires an explicit modern date and clock before saving',async()=>{
  const seed={version:1,scene:{date:'21/10/738',hour:24,location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};let saved;
- const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),syncChatData:async()=>{}},'director-store.js':{resetDirectorState:async(_sid,value)=>{saved=value;},discardPendingDirector:async()=>{}}}});
+ const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:async()=>({session:{id:'story',directorState:seed},messages:[],entries:[]}),saveDirectorLiveState:async(_sid,value)=>{saved=value;},syncChatData:async()=>{}},'director-store.js':{discardPendingDirector:async()=>{}}}});
  h.state.sessionId='story';await (await h.use('ui/director-view.js')).openDirectorState();
  const root=h.document.body.querySelector('.memory-sub-sheet'),inputs=root.querySelectorAll('input'),review=inputs.find(i=>i.type==='checkbox');assert.ok(review);assert.equal(inputs[0].value,'');assert.equal(inputs[1].value,'');
  inputs[0].value='22/10/738';inputs[1].value='00:15';review.checked=true;await namedButton(root,'Save live state').click();
@@ -2569,4 +2569,146 @@ test('Sync waits for discarded unsaved reply cleanup before reporting completion
  const sync=chat.syncChatData().then(result=>{finished=true;return result;});
  for(let i=0;i<30 && !clearing;i++)await settle();assert.equal(clearing,true);assert.equal(finished,false);
  cleanup.resolve();assert.equal(await sync,true);assert.equal(store.status.pending,0);
+});
+
+const saveSeed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+const editedScene='date: Day 1 · time: night · place: Saved Hall · present: Nera';
+async function sceneSaveHarness(options={}) {
+ const h=await harness(options),messages=[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Reply',scene:'date: Day 1 · time: morning · place: Inn · present: Nera',revision:0}];
+ const chat=await openImprovementChat(h,{memory:{scene:true,lorebooks:true}},messages);await chat.prepareMemorySnapshot();
+ h.calls.updateScene=async(sid,id,_order,scene,_prior,options)=>{
+   h.calls.sceneSaves=(h.calls.sceneSaves ?? 0)+1;h.calls.sceneOptions=options;await h.calls.onSceneSave?.();
+   const baseHistoryRevision=options.session.historyRevision ?? 0,historyRevision=baseHistoryRevision+1;
+   const replacement={...messages[1],scene,sceneMeta:{kind:'manual',stale:false},revision:1};
+   const session={...options.session,historyRevision,...h.calls.sceneSessionPatch};
+   h.calls.historyRevision=historyRevision;h.calls.sessionDocs[sid]=session;
+   h.calls.history=h.calls.history.map(m=>m.id===id?replacement:m);
+   const result={replacement,session,baseHistoryRevision,historyRevision,retiredSummaryIds:h.calls.retiredSummaries ?? []};
+   await h.calls.beforeSceneReturn?.(result);return structuredClone(result);
+ };
+ const edit=async()=>{await h.el('message-list').querySelector('.scene-chip').click();const input=h.el('message-list').querySelector('input');input.value=editedScene;return namedButton(h.el('message-list'),'Save');};
+ return {h,chat,edit,store:(await h.use('local-story-store.js')).storyStore('improvement')};
+}
+async function directorSaveHarness(options={}) {
+ let h;const turns=new Map();
+ h=await harness({...options,extraStubs:{...options.extraStubs,'director-store.js':{
+   getDirectorTurn:async(_sid,id)=>{h.calls.directorReads=(h.calls.directorReads ?? 0)+1;return turns.get(id);},
+   savePendingDirectorTurn:async(_sid,turn,source)=>{const saved={...turn,source,status:'pending'};turns.set(turn.id,saved);return saved;},discardPendingDirector:async()=>{},
+   resetDirectorState:async(sid,value,expected)=>{
+     h.calls.directorSaves=(h.calls.directorSaves ?? 0)+1;await h.calls.onDirectorSave?.();
+     const api=await h.use('continuity.js'),session=h.calls.sessionDocs[sid];api.assertSource(session,expected);
+     const source=api.requestSource(session),id='manual_saved',patch={directorState:structuredClone(value),directorRevision:source.directorRevision+1,directorCheckpoint:id,directorStateHistoryOrder:session.nextOrder ?? 0,directorNeedsReview:false};
+     const checkpoint={version:1,id,manual:true,status:'completed',previousCheckpoint:session.directorCheckpoint ?? null,before:session.directorState,after:patch.directorState,order:patch.directorStateHistoryOrder};
+     turns.set(id,checkpoint);h.calls.sessionDocs[sid]={...session,...patch};
+     const result={state:value,source,patch,checkpoint};await h.calls.beforeDirectorReturn?.(result);return structuredClone(result);
+   },
+ }}});
+ const chat=await openImprovementChat(h,{directorState:saveSeed,memory:{scene:true,lorebooks:true}},[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'Reply'}]);
+ await chat.prepareMemorySnapshot();const store=(await h.use('local-story-store.js')).storyStore('improvement');
+ const open=async()=>{await (await h.use('ui/director-view.js')).openDirectorState();const root=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);root.querySelectorAll('input')[1].value='21:15';return root;};
+ return {h,chat,store,open,turns};
+}
+
+test('Warm scene save waits for Firebase, rejects duplicates, bridges local history and sends the edited scene without downloads',async()=>{
+ const {h,chat,store,edit}=await sceneSaveHarness(),wait=deferred(),save=await edit();h.calls.onSceneSave=()=>wait.promise;
+ const before={history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads,session:h.calls.sessionReads};
+ const pending=save.click();await settle();assert.equal(save.disabled,true);assert.equal(h.state.busy,true);assert.equal(store.status.paused,true);
+ await save.click();assert.equal(h.calls.sceneSaves,1);assert.match(chat.memorySnapshot().messages[1].scene,/Inn/);
+ wait.resolve();await pending;assert.equal(save.disabled,false);assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);
+ assert.equal(chat.memorySnapshot().historyComplete,true);assert.equal(store.confirmed.messages[1].scene,editedScene);assert.equal(h.calls.sceneOptions.session.historyRevision,0);
+ assert.deepEqual({history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads,session:h.calls.sessionReads},before);
+ h.el('chat-input').value='Continue from the saved room';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Saved Hall')));assert.equal(h.calls.historyReads,before.history);
+ chat.setSession(null);chat.setSession('improvement');assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='a').scene,editedScene);
+});
+
+test('Scene save applies summary retirements and fallback/memory metadata to history and the idle store',async()=>{
+ const {h,chat,store,edit}=await sceneSaveHarness();
+ const summaries=[{id:'early',role:'summary',order:3,content:'Earlier',coveredRange:{toOrder:1}},{id:'late',role:'summary',order:4,content:'Obsolete',coveredRange:{toOrder:2}}];
+ await h.calls.latestCallbacks.at(-1)({messages:[...h.calls.history,...summaries],hasEarlier:false});
+ h.calls.retiredSummaries=['late'];h.calls.sceneSessionPatch={activeSummaryMessageId:'early',breakpointOrder:1,memoryState:{extractedThroughOrder:2,needsRebuild:true,rebuildFromOrder:2},memoryInvalidations:[{fromOrder:2,toOrder:2,revision:1}]};
+ const before=h.calls.historyReads;await (await edit()).click();
+ assert.equal(h.calls.historyReads,before);assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='late').retired,true);
+ assert.equal(store.confirmed.messages.find(m=>m.id==='late').retired,true);assert.equal(store.confirmed.session.activeSummaryMessageId,'early');assert.equal(store.confirmed.session.memoryState.needsRebuild,true);
+});
+
+for(const kind of ['scene','director'])test(kind+' save flushes pending uploads before its direct write and blocks new admissions',async()=>{
+ const ctx=kind==='scene'?await sceneSaveHarness():await directorSaveHarness(),{h,store,chat}=ctx;
+ const wait=deferred();let uploading=false;h.calls.editMessage=async(_sid,id,content)=>{uploading=true;await wait.promise;const replacement={...h.calls.history.find(m=>m.id===id),content,revision:1};h.calls.history=h.calls.history.map(m=>m.id===id?replacement:m);const session={...store.view.session,historyRevision:1};h.calls.sessionDocs.improvement=session;h.calls.historyRevision=1;return {session,replacement,historyRevision:1};};
+ store.enqueue('edit',{id:'u',order:1,content:'Uploaded correction',expectedRevision:0});await settle();assert.equal(uploading,true);
+ let saving;if(kind==='scene')saving=(await ctx.edit()).click();else{const api=await h.use('continuity.js');saving=chat.saveDirectorLiveState('improvement',saveSeed,api.requestSource(store.view.session));}
+ await settle();assert.equal(h.calls.sceneSaves ?? h.calls.directorSaves ?? 0,0);assert.throws(()=>store.enqueue('delete',{id:'a',order:2}),/Sync/);
+ wait.resolve();await saving;assert.equal(store.confirmed.messages[0].content,'Uploaded correction');assert.equal(store.requiresReconciliation,false);assert.equal(store.status.paused,false);
+});
+
+for(const kind of ['scene','director'])test(kind+' failed write preserves its draft and releases all save locks',async()=>{
+ const ctx=kind==='scene'?await sceneSaveHarness():await directorSaveHarness(),{h,chat,store}=ctx;let root,save;
+ if(kind==='scene'){save=await ctx.edit();h.calls.onSceneSave=async()=>{throw Error('Offline');};}else{root=await ctx.open();save=namedButton(root,'Save live state');h.calls.onDirectorSave=async()=>{throw Error('Offline');};}
+ await save.click();assert.equal(save.disabled,false);assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);assert.equal(store.requiresReconciliation,false);
+ if(kind==='scene'){assert.equal(h.el('message-list').querySelector('input').value,editedScene);assert.match(chat.memorySnapshot().messages[1].scene,/Inn/);}
+ else {assert.equal(root.querySelectorAll('input')[1].value,'21:15');assert.equal(chat.memorySnapshot().session.directorState.scene.time,'20:00');}
+});
+
+test('Warm Director save waits for Firebase and applies state/checkpoint before dismissed-dialog Send resumes without refreshes',async()=>{
+ const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open(),save=namedButton(root,'Save live state');h.calls.onDirectorSave=()=>wait.promise;
+ const before={history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads,session:h.calls.sessionReads};
+ const saving=save.click();await settle();assert.equal(save.disabled,true);await save.click();assert.equal(h.calls.directorSaves,1);
+ await root.querySelector('.settings-close').click();h.el('chat-input').value='Continue after save';
+ const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();assert.equal(h.calls.requests.length,0);assert.equal(h.state.busy,true);
+ Object.assign(h.state.settings,{narrationMode:'director',directorProfileId:'director-profile',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,profiles:[...h.state.settings.profiles,{id:'director-profile',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
+ h.calls.onRequest=body=>{if(body.model==='director'){assert.ok(body.messages.some(m=>m.content.includes('21:15')));assert.equal(store.view.turns.manual_saved.after.scene.time,'21:15');assert.equal(store.view.session.directorCheckpoint,'manual_saved');h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'unchanged',objective:'Describe the room',stopCondition:'Stop before the next action',memoryIds:[],requiredMemoryIds:[],updates:{}});}else h.calls.response='The room waits.';};
+ wait.resolve();await saving;await send;
+ assert.equal(save.disabled,false);assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');assert.equal(h.calls.requests.length,2,JSON.stringify({toasts:h.document.body.querySelectorAll('.toast').map(t=>t.textContent),ui:h.el('message-list').children.map(t=>t.textContent)}));
+ assert.deepEqual({history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads,session:h.calls.sessionReads},before);assert.equal(h.calls.directorReads ?? 0,0);
+});
+
+for(const outcome of ['failure','reconcile-failure'])test('Dismissed Director '+outcome+' stops waiting Send and distinguishes an unconfirmed draft from a committed write',async()=>{
+ const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open();h.calls.onDirectorSave=()=>wait.promise;
+ if(outcome==='reconcile-failure'){h.calls.beforeDirectorReturn=()=>{h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,loreRevision:4})});};h.calls.onLoreRead=async()=>{throw Error('Refresh offline');};h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);}
+ const saving=namedButton(root,'Save live state').click();await settle();await root.querySelector('.settings-close').click();h.el('chat-input').value='Keep waiting draft';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
+ if(outcome==='failure')wait.reject(Error('Offline'));else wait.resolve();await saving;await send;
+ assert.equal(h.calls.requests.length,0);assert.equal(h.el('chat-input').value,'Keep waiting draft');assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);
+ assert.equal(store.requiresReconciliation,outcome==='reconcile-failure');assert.ok(h.document.body.querySelectorAll('.toast').some(t=>outcome==='failure'?/failed/.test(t.textContent):/was saved/.test(t.textContent)));
+ if(outcome==='failure'){await open();const latest=h.document.body.children.filter(n=>(n.className ?? '').includes('memory-sub-sheet')).at(-1);assert.equal(latest.querySelectorAll('input')[1].value,'21:15');assert.equal(chat.memorySnapshot().session.directorState.scene.time,'20:00');}
+});
+
+test('A newer scene-save snapshot stays authoritative and requires coherent reconciliation before queued mutations',async()=>{
+ const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>{h.calls.historyRevision=4;h.calls.sessionCallbacks.at(-1)({data:()=>({...result.session,historyRevision:4,loreRevision:3,directorRevision:2})});};
+ const before=h.calls.historyReads ?? 0;await (await edit()).click();assert.equal(h.calls.historyReads ?? 0,before);assert.equal(chat.memorySnapshot().session.historyRevision,4);assert.equal(chat.memorySnapshot().session.loreRevision,3);
+ assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(store.requiresReconciliation,true);assert.match(chat.memorySnapshot().messages[1].scene,/Saved Hall/);assert.throws(()=>store.enqueue('delete',{id:'u'}),/Refresh/);
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.serverHistory=h.calls.history.map(m=>m.id==='u'?{...m,content:'Remote current action'}:m);
+ h.el('chat-input').value='Continue after reconciliation';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(store.requiresReconciliation,false);assert.ok(h.calls.historyReads>before);assert.ok(h.calls.requests[0].messages.some(m=>m.content.includes('Remote current action')));
+});
+
+for(const switched of ['story','account','away-back'])test('Director result after '+switched+' change cannot update the active story and always releases its queue',async()=>{
+ const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open();h.calls.onDirectorSave=()=>wait.promise;
+ const saving=namedButton(root,'Save live state').click();await settle();
+ if(switched==='account')h.calls.uid='other';else{chat.setSession(null);if(switched==='away-back')chat.setSession('improvement');}
+ wait.resolve();await saving;assert.equal(store.status.paused,false);assert.equal(store.requiresReconciliation,true);assert.equal(chat.memorySnapshot()?.session.directorState?.scene.time ?? '20:00','20:00');
+});
+
+test('Director local application leaves cache persistence outside the save completion wait and survives reopening',async()=>{
+ const caches=[],{h,chat,store,open}=await directorSaveHarness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},saveStoryData:(_u,_s,value)=>{caches.push(structuredClone(value));return new Promise(()=>{});}}});
+ const root=await open();await namedButton(root,'Save live state').click();assert.equal(store.confirmed.session.directorState.scene.time,'21:15');assert.ok(caches.some(v=>v.confirmed?.turns.manual_saved));
+ chat.setSession(null);chat.setSession('improvement');assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');
+});
+
+test('A same-revision author metadata change during a scene save is retained for coherent reconciliation',async()=>{
+ const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>h.calls.sessionCallbacks.at(-1)({data:()=>({...result.session,longTermPlan:'Newer author plan'})});
+ await (await edit()).click();assert.equal(chat.memorySnapshot().session.longTermPlan,'Newer author plan');assert.equal(store.requiresReconciliation,true);assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(h.state.busy,false);
+});
+
+test('Director save reconciles a remote dependency revision before settling its dismissed dialog and Send',async()=>{
+ const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open();h.calls.onDirectorSave=()=>wait.promise;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ h.calls.beforeDirectorReturn=()=>h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,loreRevision:3})});
+ const saving=namedButton(root,'Save live state').click();await settle();await root.querySelector('.settings-close').click();h.el('chat-input').value='Use reconciled state';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
+ const before=h.calls.historyReads ?? 0;wait.resolve();await saving;await send;
+ assert.equal(store.requiresReconciliation,false);assert.equal(store.status.paused,false);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');assert.equal(chat.memorySnapshot().session.loreRevision,3);assert.ok(h.calls.historyReads>before);assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);
+});
+
+test('Concurrent Director coordinators produce one write and release the queue after the committed result',async()=>{
+ const {h,chat,store}=await directorSaveHarness(),wait=deferred(),api=await h.use('continuity.js'),source=api.requestSource(chat.memorySnapshot().session);h.calls.onDirectorSave=()=>wait.promise;
+ const saving=chat.saveDirectorLiveState('improvement',saveSeed,source);await settle();await assert.rejects(chat.saveDirectorLiveState('improvement',saveSeed,source),/already saving/);assert.equal(h.calls.directorSaves,1);
+ wait.resolve();await saving;assert.equal(store.status.paused,false);assert.equal(store.confirmed.session.directorCheckpoint,'manual_saved');
 });
