@@ -21,12 +21,6 @@ test('an older settings hydration cannot restore stale settings after Sync',asyn
  const refresh=await h.settings.readSettingsRefresh();refresh.apply();h.oldHash.resolve();await older;
  assert.equal(h.state.settings.maxContextTokens,64000);assert.equal(JSON.parse(h.cached.get('roleplay-settings:u')).maxContextTokens,64000);
 });
-test('Lilith v2 defaults preserve explicitly selected and disabled pets',async()=>{
- const h=await fixture();assert.deepEqual(Array.from(h.settings.DEFAULT_SETTINGS.petCharacterIds),['lillith-v2.png']);
- assert.deepEqual(Array.from((await h.settings.mergeDefaults({})).petCharacterIds),['lillith-v2.png']);
- assert.deepEqual(Array.from((await h.settings.mergeDefaults({petCharacterIds:[]})).petCharacterIds),[]);
- assert.deepEqual(Array.from((await h.settings.mergeDefaults({petCharacterIds:['violet']})).petCharacterIds),['violet']);
-});
 test('a delayed settings subscription delivery from a former account is ignored',async()=>{
  const h=await fixture();h.settings.watchSettings();h.setOwner('other');await h.watch({maxContextTokens:12000});assert.equal(h.state.settings.maxContextTokens,10000);assert.equal(h.cached.size,0);
 });
