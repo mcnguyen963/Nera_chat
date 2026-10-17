@@ -21,8 +21,10 @@ export async function readLoreCard(sid,id) {
   return decodeLoreSnapshot(await getDocFromServer(versionRef(sid,id,session.data()?.loreGeneration)));
 }
 export async function readLoreCards(sid) {
-  for(let attempt=0;attempt<3;attempt++) {
+  // Disabled repeated bulk reads: for(let attempt=0;attempt<3;attempt++) {
+  {
     const before=(await getDocFromServer(versionSessionRef(sid))).data(),snap=await getDocsFromServer(versionRoot(sid,before?.loreGeneration)),after=(await getDocFromServer(versionSessionRef(sid))).data();
+    // Keep the generation boundary check, but never repeat the collection download.
     if(before?.loreGeneration===after?.loreGeneration && before?.loreRevision===after?.loreRevision)return snap.docs.map(decodeLoreSnapshot);
   }
   throw Object.assign(new Error('Lorebooks changed while loading. Retry.'),{code:'lore-read-changed'});

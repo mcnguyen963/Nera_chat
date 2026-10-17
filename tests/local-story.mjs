@@ -56,15 +56,16 @@ test('A failed Sync resumes network retry backoff without discarding local messa
  offline=false;timers.at(-1)();assert.equal(await q.checkpoint(),true);assert.equal(q.status.pending,0);
 });
 
-test('An invalidated local store blocks admissions until coherent adoption and persists the requirement across reopening',async()=>{
- const data=new Map(),writes=[],stubs={
-  'auth.js':{currentUid:()=> 'u'},'messages.js':{restoreMessageChunkCache:async()=>{}},
+test('A stale local receipt allows admissions and does not restore a persisted refresh lock',async()=>{
+ const data=new Map([['s',{requiresReconciliation:true}]]),writes=[],stubs={
+  'auth.js':{currentUid:()=> 'u'},'messages.js':{restoreMessageChunkCache:async()=>{},deleteMessage:async()=>({})},
   'chat-cache.js':{loadStoryData:async(_u,sid)=>structuredClone(data.get(sid) ?? null),saveStoryData:async(_u,sid,value)=>{writes.push(value);data.set(sid,{...data.get(sid),...structuredClone(value)});return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true}},
  };
  const api=await appHarness({stubs})('local-story-store.js'),store=await api.openStoryStore('s',base(),()=>{});
- store.invalidate();assert.equal(store.requiresReconciliation,true);assert.throws(()=>store.enqueue('delete',{id:'u'}),/Refresh/);
- store.adopt(base());assert.equal(store.requiresReconciliation,true);await tick();api.forgetStoryStore('s');
- const reopened=await api.openStoryStore('s',base(),()=>{});assert.equal(reopened.requiresReconciliation,true);
- reopened.adopt(base(),{reconciled:true});assert.equal(reopened.requiresReconciliation,false);await tick();assert.equal(data.get('s').requiresReconciliation,false);
- assert.ok(writes.some(value=>value.requiresReconciliation===true));
+ assert.equal(store.requiresReconciliation,false);
+ store.invalidate();assert.equal(store.requiresReconciliation,true);
+ assert.doesNotThrow(()=>store.enqueue('delete',{id:'u'}));await store.flush();
+ store.adopt(base());await tick();api.forgetStoryStore('s');
+ const reopened=await api.openStoryStore('s',base(),()=>{});assert.equal(reopened.requiresReconciliation,false);
+ assert.ok(writes.every(value=>!Object.hasOwn(value,'requiresReconciliation')));
 });
