@@ -5,7 +5,7 @@ import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { computeTurns } from './turns.js';
 import { canonicalScene, validateSceneEdit } from './scene.js';
-import { assertSource, revisionOf, trimInvalidations } from './continuity.js';
+import { assertSource, revisionOf, trimInvalidations, StoryConflict } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
   limitToLast, updateDoc, collection, runTransaction, writeBatch, serverTimestamp,
@@ -21,13 +21,13 @@ import {
 
 export class HistoryConflict extends Error {
   constructor(message = 'Story history changed while the reply was generated. Copy the reply or save it at the end.') {
-    super(message); this.name = 'HistoryConflict';
+    super(message); this.name = 'HistoryConflict'; this.code = 'story-conflict';
   }
 }
 export class MessageEditConflict extends Error {
   constructor(message) {
     super('This message was edited elsewhere. Your draft is kept; review the latest version before saving.');
-    this.name = 'MessageEditConflict';
+    this.name = 'MessageEditConflict'; this.code = 'story-conflict';
     this.currentMessage = message;
   }
 }
@@ -203,7 +203,7 @@ export async function addMessage(sessionId, message, opts = {}) {
     const snap = await tx.get(sessionRef(sessionId, owner));
     assertStory(snap.data());
     const data = assertStory(snap.data());
-    if (message.role === 'user' && data.directorPending)throw new Error('Finish or discard the pending Director narration before sending another turn.');
+    if (message.role === 'user' && data.directorPending)throw new StoryConflict('Finish or discard the pending Director narration before sending another turn.');
     if (message.role === 'assistant') assertReplySource(data,opts.expectedSource);
     else assertSource(data,opts.expectedSource);
     if(opts.signal?.aborted)throw Object.assign(new Error('Summary stopped; checkpoint was not changed.'),{name:'AbortError'});

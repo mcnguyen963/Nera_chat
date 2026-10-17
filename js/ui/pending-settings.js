@@ -5,7 +5,7 @@ export function beginSettingsSave(owner,sid=null) {
   const id=key(owner,sid);let finish;
   const promise=new Promise((resolve,reject)=>finish=ok=>ok?resolve():reject(new Error('Settings were not saved. Review settings before sending.')));
   promise.catch(()=>{});pending.set(id,promise);
-  return ok=>{if(pending.get(id)===promise)pending.delete(id);finish(ok);};
+  return ok=>{if(pending.get(id)===promise)pending.delete(id);finish(ok);if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('settings-save-finished'));};
 }
 export function hasPendingSettings(owner,sid){return pending.has(key(owner,null)) || pending.has(key(owner,sid));}
 export async function waitForPendingSettings(owner,sid) {

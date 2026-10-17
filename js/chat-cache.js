@@ -44,13 +44,17 @@ export async function saveChatCache(uid,sessionId,value) {
     tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;
   });
 }
-export async function replaceStoryCache(uid,sid,snapshot,data) {
-  const db=await database();if(!db)return;
+export async function replaceStoryCache(uid,sid,snapshot,data,{discardPending=false}={}) {
+  const db=await database();if(!db){if(discardPending)throw new Error('Could not replace local story data.');return;}
   await new Promise((resolve,reject)=>{
-    const tx=db.transaction([STORE,'storyData'],'readwrite'),key=`${uid}:${sid}`;
+    const tx=db.transaction(discardPending?[STORE,'storyData','outbox','operations']:[STORE,'storyData'],'readwrite'),key=`${uid}:${sid}`;
     tx.objectStore(STORE).put({key,uid,savedAt:Date.now(),value:snapshot});
     const aux=tx.objectStore('storyData'),request=aux.get(key);
-    request.onsuccess=()=>aux.put({key,value:{...request.result?.value,...data}});
+    request.onsuccess=()=>{const value={...request.result?.value,...data};if(discardPending)delete value.queueBase;aux.put({key,value});};
+    if(discardPending){
+      const outbox=tx.objectStore('outbox'),header=outbox.get(key);
+      header.onsuccess=()=>{for(const id of header.result?.value?.ids ?? [])tx.objectStore('operations').delete(key+':'+id);outbox.delete(key);};
+    }
     tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error ?? new Error('Could not cache refreshed story.'));
   });
 }

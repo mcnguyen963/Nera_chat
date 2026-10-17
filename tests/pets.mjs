@@ -20,11 +20,14 @@ test('pet sheets use their actual action rows and valid occupied frames', () => 
   }
 });
 
-test('Lilith v2 is listed in the catalog and uses Lilith animation rows', async () => {
+test('Lilith v2 and Cinderella are listed in the catalog and use their animation rows', async () => {
   const catalog = JSON.parse(await readFile(new URL('../resources/pets/manifest.json', import.meta.url), 'utf8'));
-  assert.ok(catalog.includes('lillith-v2.png'));
-  await readFile(new URL('../resources/pets/lillith-v2.png', import.meta.url));
-  assert.deepEqual(petAnimations('lillith-v2.png'), petAnimations('lilith.webp'));
+  for(const file of ['lillith-v2.png','Cinderella.png']){
+    assert.ok(catalog.includes(file));
+    const sheet=await readFile(new URL('../resources/pets/'+file, import.meta.url));
+    assert.equal(sheet.readUInt32BE(16),1536);assert.equal(sheet.readUInt32BE(20),2288);
+    assert.deepEqual(petAnimations(file), petAnimations('lilith.webp'));
+  }
 });
 
 test('selection avoids repeats without excluding a single selected pet', () => {

@@ -271,7 +271,7 @@ function tap() {
   if (Date.now() - lastTap < 1000) return;
   lastTap = lastInput = Date.now();
   closeMenu();
-  const choices = /^(?:lilith|lillith-v2)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
+  const choices = /^(?:lilith|lillith-v2|cinderella)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
   react(choices[Math.floor(Math.random() * choices.length)]);
 }
 

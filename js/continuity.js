@@ -60,13 +60,16 @@ export function summarySource(session) {
   // The summarizer receives transcript and prior summary, not lorebook content.
   return { ...source,sourceKind:'summary' };
 }
+export class StoryConflict extends Error {
+  constructor(message){super(message);this.name='StoryConflict';this.code='story-conflict';}
+}
 export function assertSource(session, expected) {
   if (!expected) return;
   const actual=session && (expected.sourceKind==='summary' ? summarySource(session) : requestSource(session));
   const changed=actual ? Object.keys(expected).filter(key => actual[key]!==expected[key]) : ['story'];
   if (changed.length) {
     const labels={historyRevision:'story history',longTermPlan:'fixed plan',memory:'memory settings',loreRevision:'lorebooks',activeSummaryMessageId:'active summary',breakpointOrder:'summary checkpoint',story:'story deleted'};
-    throw new Error('Story history or author inputs changed. The generated result was discarded; try again. Changed: '+changed.map(key => labels[key] ?? key).join(', ')+'.');
+    throw new StoryConflict('Story history or author inputs changed. The generated result was discarded; try again. Changed: '+changed.map(key => labels[key] ?? key).join(', ')+'.');
   }
 }
 
