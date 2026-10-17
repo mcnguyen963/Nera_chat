@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {indexedDBFixture} from './indexeddb-fixture.mjs';
 
 export async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {},firestoreOverrides = {} } = {}) {
   const elements = new Map();
@@ -80,7 +81,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } }, ...globals.navigator },
     requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
     localStorage: { getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
-    window: { addEventListener() {} }, crypto,
+    window: { addEventListener(type,fn) { ((calls.windowListeners ??= {})[type] ??= []).push(fn); } }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     prompt:()=>calls.prompt,
     setTimeout: timers?.setTimeout ?? ((fn,ms)=>{if(ms===500){const id=++stopTimerId;stopTimers.set(id,fn);return id;}if(ms===300 || ms===0)return setTimeout(fn,0);}), clearTimeout: timers?.clearTimeout ?? (id=>{stopTimers.delete(id);clearTimeout(id);}), confirm: message => { (calls.confirmations ??= []).push(message);return calls.confirmResponses?.length ? calls.confirmResponses.shift() : calls.confirm; },
@@ -2437,4 +2438,135 @@ test('repeated remote changes during Sync leave local work visible and release S
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Keep local history'}]);h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
  h.calls.onMessagesRefresh=()=>{h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:(h.calls.sessionDocs.improvement.historyRevision ?? 0)+1};};
  assert.equal(await chat.syncChatData(),false);assert.equal(chat.memorySnapshot().messages[0].content,'Keep local history');assert.equal(h.state.busy,false);
+});
+
+for(const blockedRole of ['user','assistant'])test('turn-end checkpoint keeps generation and composer responsive during a slow '+blockedRole+' upload',async()=>{
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{}}}),chat=await openImprovementChat(h,{},[{id:'opening',role:'assistant',order:1,content:'Opening'}]);await settle();
+ let finish;
+ h.calls.addMessage=async(sid,message,options)=>{
+   const commit=()=>{const session={...options.session,historyRevision:(options.session.historyRevision ?? 0)+1,nextOrder:(options.session.nextOrder ?? 0)+1};
+     if(message.role==='assistant')session.nextNarratorTurn=(session.nextNarratorTurn ?? 1)+1;
+     h.calls.sessionDocs[sid]=session;h.calls.historyRevision=session.historyRevision;
+     return {message:{...message,id:options.id,order:session.nextOrder,historyRevision:session.historyRevision},session,historyRevision:session.historyRevision};};
+   if(message.role===blockedRole)return new Promise(resolve=>finish=()=>resolve(commit()));return commit();
+ };
+ h.calls.response='Completed reply';h.el('chat-input').value='My action';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');
+ assert.equal(h.calls.requests.length,1);assert.ok(chat.memorySnapshot().messages.some(m=>m.content==='Completed reply'));
+ assert.equal(h.state.busy,false);assert.ok(store.status.pending>0);assert.equal(h.el('chat-sync-status').textContent,'Saving…');
+ finish();await store.flush();await settle();
+ assert.equal(store.status.pending,0);assert.equal(h.el('chat-sync-status').textContent,'Synced');assert.equal(h.calls.requests.length,1);
+});
+
+test('Sync resolves a persisted stale-save conflict after reload and removes dependent local messages only for that story',async()=>{
+ const fixture=indexedDBFixture({sessions:[]}),uid='test-user',sid='s';
+ const old={id:sid,storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:2,loreRevision:1};
+ const messages=[{id:'u',role:'user',order:1,revision:0,content:'Old history'}],remote={...old,historyRevision:4,loreRevision:2};
+ const serverMessages=[...messages,{id:'phone',role:'assistant',order:2,content:'Phone reply'}];
+ const unsaved=new Map();
+ async function open(type){
+   const h=await harness({globals:{indexedDB:fixture.indexedDB,performance:{getEntriesByType:()=>[{type}]}},extraStubs:{'unsaved-replies.js':{
+     loadUnsavedReply:async(owner,story)=>unsaved.get(owner+':'+story) ?? null,
+     storeUnsavedReply:async(owner,story,value)=>{if(value)unsaved.set(owner+':'+story,value);else unsaved.delete(owner+':'+story);},
+   }}});
+   const cache=await h.use('chat-cache.js');
+   if(type==='navigate'){
+     await cache.saveChatCache(uid,sid,{session:old,recent:messages,history:messages,hasEarlier:false});
+     await cache.saveStoryData(uid,sid,{confirmed:{session:old,messages,turns:{}}});
+     await cache.storyQueueStorage.put(uid,'other',{id:'other-op',kind:'edit',payload:{id:'u',order:1,content:'Other work'}},{session:{...old,id:'other'},messages,turns:{}});
+   }
+   const guard=await h.use('continuity.js');h.calls.onMessageSave=async(_sid,_message,options)=>guard.assertSource(remote,options.expectedSource);
+   const chat=await h.use('ui/chat-view.js');h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);chat.initChatView();chat.setSession(sid);await new Promise(r=>setTimeout(r,0));
+   const cached=await cache.loadChatCache(uid,sid);
+   h.calls.sessionCallbacks.at(-1)({id:sid,data:()=>cached.session});h.calls.sessionDocs[sid]=remote;h.calls.serverHistory=serverMessages;
+   await h.calls.latestCallbacks.at(-1)({messages:cached.history,hasEarlier:false});await settle();
+   return {h,chat,cache,store:(await h.use('local-story-store.js')).storyStore(sid)};
+ }
+ const first=await open('navigate');
+ first.store.enqueue('add',{id:'local-user',message:{role:'user',content:'Conflicting local action'}});
+ first.store.enqueue('add',{id:'local-reply',message:{role:'assistant',content:'Dependent local reply'}});
+ await assert.rejects(first.store.flush(),error=>error.code==='story-conflict');await first.store.settled();
+ unsaved.set(uid+':'+sid,{owner:uid,sid,id:'unsaved',message:{role:'assistant',content:'Old unsaved reply'},sourceRevision:2});
+ const second=await open('reload');assert.equal(second.store.status.pending,2);assert.equal(second.h.calls.historyReads ?? 0,0);
+ assert.equal(await second.chat.syncChatData(),true);assert.equal(second.store.status.pending,0);
+ assert.deepEqual(second.chat.memorySnapshot().messages.map(m=>m.content),['Old history','Phone reply']);
+ assert.equal(await second.cache.storyQueueStorage.load(uid,sid),null);assert.ok(await second.cache.storyQueueStorage.load(uid,'other'));assert.equal(unsaved.has(uid+':'+sid),false);
+ assert.equal(second.h.calls.requests.length,0);
+ const third=await open('back_forward');assert.equal(third.store.status.pending,0);assert.equal(third.store.view.messages.at(-1).content,'Phone reply');
+});
+
+for(const failure of ['messages','cache','permission','offline'])test('Sync conflict recovery preserves local work when '+failure+' fails',async()=>{
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},replaceStoryCache:async()=>{if(failure==='cache')throw Error('Cache failed');}}}),chat=await openImprovementChat(h);await settle();
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ const code=failure==='permission'?'permission-denied':failure==='offline'?'unavailable':'story-conflict';
+ h.calls.addMessage=async()=>{throw Object.assign(Error('Save failed'),{code});};
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'local',message:{role:'user',content:'Keep my local work'}});
+ if(failure==='offline')await settle();else await assert.rejects(store.flush());
+ if(failure==='messages')h.calls.onMessagesRefresh=()=>{throw Error('Message read failed');};
+ assert.equal(await chat.syncChatData(),false);assert.equal(store.status.pending,1);assert.equal(store.status.paused,false);
+ assert.ok(chat.memorySnapshot().messages.some(m=>m.content==='Keep my local work'));
+ if(failure==='permission' || failure==='offline')assert.equal(h.calls.historyReads ?? 0,0);
+ store.close();
+});
+
+for(const event of ['visibilitychange','online','pageshow','focus'])test('active-story freshness refreshes changed Firebase messages on '+event,async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Old message'}]);await settle();
+ h.document.hidden=false;
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:4};
+ h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'New phone reply'}];
+ if(event==='visibilitychange'){h.document.hidden=false;await h.document.dispatchEvent({type:event});}
+ else for(const callback of h.calls.windowListeners[event])callback();
+ for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='New phone reply';i++)await settle();
+ assert.equal(chat.memorySnapshot().messages.at(-1).content,'New phone reply');assert.equal(h.calls.requests.length,0);
+});
+
+test('automatic freshness keeps conflicting local work and refreshes after a pending settings save ends',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h);await settle();h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ h.document.hidden=false;
+ const pending=await h.use('ui/pending-settings.js'),finish=pending.beginSettingsSave('test-user','improvement');
+ h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:5};h.calls.serverHistory=[{id:'phone',role:'assistant',order:1,content:'Phone'}];
+ const reads=h.calls.sessionReads;await h.document.dispatchEvent({type:'visibilitychange'});assert.equal(h.calls.sessionReads,reads);
+ finish(true);for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='Phone';i++)await settle();
+ assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone');
+ h.calls.addMessage=async()=>{throw Object.assign(Error('Changed'),{code:'story-conflict'});};
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'local',message:{role:'user',content:'Local'}});await assert.rejects(store.flush());
+ const historyReads=h.calls.historyReads;await h.document.dispatchEvent({type:'visibilitychange'});await settle();
+ assert.equal(store.status.pending,1);assert.equal(h.calls.historyReads,historyReads);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Local');
+});
+
+test('opening a visible cached story checks Firebase without waiting for a page reload',async()=>{
+ const h=await harness({chatCache:{loadChatCache:async()=>({session:{id:'s',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:1},recent:[{id:'old',role:'assistant',order:1,content:'Cached'}],history:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false}),saveChatCache:async()=>{},deleteChatCache:async()=>{}}});
+ h.document.hidden=false;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('s');await new Promise(r=>setTimeout(r,0));
+ h.calls.sessionCallbacks.at(-1)({id:'s',data:()=>({historyRevision:1})});
+ h.calls.sessionDocs.s={...h.calls.sessionDocs.s,historyRevision:3};h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'Phone version'}];
+ await h.calls.latestCallbacks.at(-1)({messages:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false});
+ for(let i=0;i<30 && chat.memorySnapshot().messages.at(-1)?.content!=='Phone version';i++)await settle();
+ assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone version');assert.equal(h.calls.requests.length,0);
+ const reads=h.calls.historyReads;await h.document.dispatchEvent({type:'visibilitychange'});await settle();assert.equal(h.calls.historyReads,reads);
+});
+
+for(const switched of ['story','account'])test('a conflict replacement committed during a '+switched+' switch cannot revive the discarded queue',async()=>{
+ const replacement=deferred();let replacing=false;
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},replaceStoryCache:async()=>{replacing=true;await replacement.promise;}}}),chat=await openImprovementChat(h);await settle();
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.addMessage=async()=>{throw Object.assign(Error('Changed'),{code:'story-conflict'});};
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'local',message:{role:'user',content:'Conflicting'}});await assert.rejects(store.flush());
+ h.calls.serverHistory=[{id:'phone',role:'assistant',order:1,content:'Phone'}];const sync=chat.syncChatData();
+ for(let i=0;i<30 && !replacing;i++)await settle();assert.equal(replacing,true);
+ if(switched==='story')h.state.sessionId='other';else h.calls.uid='other';
+ replacement.resolve();assert.equal(await sync,false);assert.equal(store.status.pending,0);assert.equal(store.view.messages.at(-1).content,'Phone');
+ assert.equal(store.status.paused,false);assert.equal(h.state.storySettings.revision,1);
+});
+
+test('Sync waits for discarded unsaved reply cleanup before reporting completion',async()=>{
+ const cleanup=deferred();let clearing=false,finished=false;
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{}},extraStubs:{'unsaved-replies.js':{
+   loadUnsavedReply:async()=>null,storeUnsavedReply:async()=>{clearing=true;await cleanup.promise;},
+ }}}),chat=await openImprovementChat(h);await settle();h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ h.calls.addMessage=async()=>{throw Object.assign(Error('Changed'),{code:'story-conflict'});};
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'local',message:{role:'user',content:'Conflicting'}});await assert.rejects(store.flush());
+ const sync=chat.syncChatData().then(result=>{finished=true;return result;});
+ for(let i=0;i<30 && !clearing;i++)await settle();assert.equal(clearing,true);assert.equal(finished,false);
+ cleanup.resolve();assert.equal(await sync,true);assert.equal(store.status.pending,0);
 });

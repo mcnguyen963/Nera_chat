@@ -4,7 +4,7 @@ const {doc,collection,getDocFromServer,getDocsFromServer,runTransaction,serverTi
 import { db } from './db.js';
 import { currentUid } from './auth.js';
 import { assertStory } from './errors.js';
-import { requestSource, assertSource } from './continuity.js';
+import { requestSource, assertSource, StoryConflict } from './continuity.js';
 import { validateDirectorState, settleDirectorState } from './director-state.js';
 const parent=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid);
 export const directorTurnRef=(sid,id,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'directorTurns',id);
@@ -22,7 +22,7 @@ export async function savePendingDirectorTurn(sid,turn,source,options={}) {
     check(uid);const receipt=await readReceipt(tx,sid,options.operationId,uid);if(receipt)return receipt;const ref=parent(sid,uid),s=assertStory((await tx.get(ref)).data());assertSource(s,source);
     if(s.directorPending && s.directorPending!==turn.id) {
       const previous=(await tx.get(directorTurnRef(sid,s.directorPending,uid))).data();
-      if(turn.replaces!==s.directorPending && previous?.source && JSON.stringify(previous.source)===JSON.stringify(source))throw new Error('Another Director turn is pending. Refresh and retry.');
+      if(turn.replaces!==s.directorPending && previous?.source && JSON.stringify(previous.source)===JSON.stringify(source))throw new StoryConflict('Another Director turn is pending. Refresh and retry.');
     }
     check(uid);const saved={...turn,version:1,status:'pending',source,createdAt:Date.now()};
     tx.set(directorTurnRef(sid,turn.id,uid),saved);tx.update(ref,{directorPending:turn.id,updatedAt:serverTimestamp()});
@@ -33,11 +33,12 @@ export async function savePendingDirectorTurn(sid,turn,source,options={}) {
 export async function directorReplyPatch(tx,sid,session,message,order,uid=currentUid()) {
   if(!message.directorTurnId)return null;
   const ref=directorTurnRef(sid,message.directorTurnId,uid),snap=await tx.get(ref),turn=snap.data();
-  if(!snap.exists() || turn.version!==1)throw new Error('Director contract is missing. Re-plan the reply.');
-  if(turn.status==='discarded')throw new Error('This Director contract was discarded. Re-plan the turn.');
+  if(!snap.exists())throw new StoryConflict('Director contract is missing. Re-plan the reply.');
+  if(turn.version!==1)throw new Error('Unsupported Director turn version.');
+  if(turn.status==='discarded')throw new StoryConflict('This Director contract was discarded. Re-plan the turn.');
   const rewrite=turn.status==='completed' && session.directorCheckpoint===turn.id;
   if(!rewrite){
-    if(session.directorPending!==turn.id)throw new Error('The pending Director contract changed.');
+    if(session.directorPending!==turn.id)throw new StoryConflict('The pending Director contract changed.');
     assertSource(session,turn.source);
   }
   const completed=!message.truncated;

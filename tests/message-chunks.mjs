@@ -1208,7 +1208,8 @@ test('Explicit Re-plan replaces a pending contract while competing replacement a
  const h=await setup(),old=await pendingDirector(h),source=h.source.requestSource(h.documents.get(h.sessionPath));
  const next={...old,id:'director_replan',replaces:old.id,after:{...old.after,scene:{...old.after.scene,hour:22}}};
  await h.director.savePendingDirectorTurn('s',next,source);assert.equal(h.documents.get(h.sessionPath).directorPending,next.id);
- await assert.rejects(h.director.savePendingDirectorTurn('s',{...next,id:'director_competing'},source),/Another Director/);
+ await assert.rejects(h.director.savePendingDirectorTurn('s',{...next,id:'director_competing'},source),error=>error.code==='story-conflict' && /Another Director/.test(error.message));
+ await assert.rejects(h.api.addMessage('s',{role:'user',content:'Action from another device'}),error=>error.code==='story-conflict');
  assert.equal(h.documents.get(h.sessionPath).directorState.scene.hour,20);
 });
 test('Director live-state reset is guarded and completed items leave the live ledger',async()=>{
