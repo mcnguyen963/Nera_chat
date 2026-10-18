@@ -7,11 +7,17 @@ let opening;
 function database() {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
   if (!opening) opening = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 2);
+    const request = indexedDB.open(DATABASE, 3);
+    let blocked=false;
     request.onupgradeneeded = () => {
-      for(const name of [STORE,'outbox','storyData','operations'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
+      for(const name of [STORE,'outbox','storyData','operations','loreCache'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onblocked=()=>{blocked=true;resolve(null);};
+    request.onsuccess = () => {
+      if(blocked){request.result.close?.();return;}
+      request.result.onversionchange=()=>{request.result.close?.();opening=undefined;};
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error);
   }).catch(() => null);
   return opening;
@@ -47,7 +53,8 @@ export async function saveChatCache(uid,sessionId,value) {
 export async function replaceStoryCache(uid,sid,snapshot,data,{discardPending=false}={}) {
   const db=await database();if(!db){if(discardPending)throw new Error('Could not replace local story data.');return;}
   await new Promise((resolve,reject)=>{
-    const tx=db.transaction(discardPending?[STORE,'storyData','outbox','operations']:[STORE,'storyData'],'readwrite'),key=`${uid}:${sid}`;
+    const tx=db.transaction(discardPending?[STORE,'storyData','outbox','operations','loreCache']:[STORE,'storyData','loreCache'],'readwrite'),key=`${uid}:${sid}`;
+    if(data.loreSnapshot)tx.objectStore('loreCache').put({key,value:data.loreSnapshot});
     tx.objectStore(STORE).put({key,uid,savedAt:Date.now(),value:snapshot});
     const aux=tx.objectStore('storyData'),request=aux.get(key);
     request.onsuccess=()=>{const value={...request.result?.value,...data};if(discardPending)delete value.queueBase;aux.put({key,value});};
@@ -67,7 +74,8 @@ export async function deleteChatCache(uid, sessionId) {
   const db = await database();
   if (!db) return;
   await new Promise((resolve) => {
-    const transaction = db.transaction([STORE,'outbox','storyData'], "readwrite");
+    const transaction = db.transaction([STORE,'outbox','storyData','loreCache'], "readwrite");
+    transaction.objectStore('loreCache').delete(`${uid}:${sessionId}`);
     const pin=transaction.objectStore('outbox').get(`${uid}:${sessionId}`);pin.onsuccess=()=>{if(!pin.result)transaction.objectStore('storyData').delete(`${uid}:${sessionId}`);};
     const store=transaction.objectStore(STORE);store.delete(`${uid}:${sessionId}`);const request=store.get('meta:'+uid);request.onsuccess=()=>{if(request.result)store.put({...request.result,order:request.result.order.filter(id=>id!==sessionId)});};
     transaction.oncomplete = resolve;
@@ -85,6 +93,9 @@ export async function loadStoryData(uid,sid) {return readRecord('storyData',`${u
 export async function saveStoryData(uid,sid,value) {return writeRecords(['storyData'],tx=>(()=>{const store=tx.objectStore('storyData'),key=`${uid}:${sid}`,r=store.get(key);r.onsuccess=()=>store.put({key,value:{...r.result?.value,...value}});})());}
 async function readRecord(store,key) {const db=await database();if(!db)return null;return new Promise(resolve=>{const tx=db.transaction(store,'readonly'),r=tx.objectStore(store).get(key);r.onsuccess=()=>resolve(r.result?.value ?? null);r.onerror=()=>resolve(null);});}
 async function writeRecords(stores,action) {const db=await database();if(!db)return false;return new Promise(resolve=>{try{const tx=db.transaction(stores,'readwrite');action(tx);tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>resolve(false);}catch{resolve(false);}});}
+export const loadLoreCache=(uid,sid)=>readRecord('loreCache',`${uid}:${sid}`);
+export const saveLoreCache=(uid,sid,value)=>writeRecords(['loreCache'],tx=>tx.objectStore('loreCache').put({key:`${uid}:${sid}`,value}));
+export const deleteLoreCache=(uid,sid)=>writeRecords(['loreCache'],tx=>tx.objectStore('loreCache').delete(`${uid}:${sid}`));
 export const storyQueueStorage={
   async load(uid,sid){
     const key=`${uid}:${sid}`,header=await readRecord('outbox',key);if(!header)return null;

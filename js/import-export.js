@@ -102,14 +102,15 @@ export async function serializeStory(sessionId) {
   const owner=currentUid();
   await messagesApi.ensureChunked(sessionId);
   const storySettings=await ensureStorySettings(sessionId);
+  const loreSnapshot=await loreStore.getLoreSnapshot(sessionId),lore=loreSnapshot.entries,loreInfo=loreStore.loreSnapshotInfo(loreSnapshot);
   const session = await sessionsApi.getSessionFromServer(sessionId);
   if (!session) throw new Error("No active session to export.");
   assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
   const msgs = await getMessages(sessionId);
   const directorTurns=session.directorState || session.directorPending ? await exportDirectorTurns(sessionId) : [];
-  let lore;
-  try{lore=await getLore(sessionId);}catch(error){if(error.code==='lore-read-changed')assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));throw error;}
-  assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId));
+  // Disabled: exports capture cached lore, rather than rereading the collection.
+  // lore=await getLore(sessionId);
+  assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId),{cachedLore:true});
   if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');
 
   const lines = [
@@ -117,7 +118,7 @@ export async function serializeStory(sessionId) {
       user_name: "You",
       character_name: session.title,
       create_date: new Date().toISOString(),
-      nera:{ version:2,storySettings,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn","directorState","directorRevision","directorCheckpoint","directorPending","directorNeedsReview","directorStateHistoryOrder","directorAbandonedTurnIds"].filter(k => k in session).map(k => [k,session[k]])),lore,...(directorTurns.length ? {directorTurns} : {}) },
+      nera:{ version:2,storySettings,session:Object.fromEntries(["longTermPlan","memory","memoryState","activeSummaryMessageId","breakpointOrder","memoryInvalidations","historyRevision","nextNarratorTurn","directorState","directorRevision","directorCheckpoint","directorPending","directorNeedsReview","directorStateHistoryOrder","directorAbandonedTurnIds"].filter(k => k in session).map(k => [k,session[k]])),lore,loreSnapshot:loreInfo,...(directorTurns.length ? {directorTurns} : {}) },
     }),
   ];
   for (const m of msgs) {
@@ -141,7 +142,7 @@ export async function exportAllStories({signal,onProgress=()=>{},save=download}=
  const sessions=(await listSessions()).filter(s=>!s.deleting && !s.importing),blocks=[JSON.stringify({neraAccount:{version:1,exportedAt:new Date().toISOString(),stories:sessions.length}})];
  const check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');if(signal?.aborted)throw Object.assign(new Error('Export cancelled.'),{name:'AbortError'});};
  for(const [i,s] of sessions.entries()){check();onProgress({done:i,total:sessions.length,title:s.title});const story=await serializeStory(s.id);captured.push({id:s.id,source:story.source});check();blocks.push(JSON.stringify({neraStorySeparator:{index:i+1,id:s.id,title:story.title}}),story.text.trimEnd());}
- for(const capture of captured){check();assertSnapshotRevisions(capture.source,await sessionsApi.getSessionFromServer(capture.id));}
+ for(const capture of captured){check();assertSnapshotRevisions(capture.source,await sessionsApi.getSessionFromServer(capture.id),{cachedLore:true});}
  check();onProgress({done:sessions.length,total:sessions.length});const text=blocks.join('\n')+'\n';save(text,'nera-all-stories-'+new Date().toISOString().slice(0,10)+'.jsonl','application/x-ndjson');return sessions.length;
 }
 
@@ -151,13 +152,17 @@ export async function buildFullBackup(sessionId){
  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
  await messagesApi.ensureChunked(sessionId);check();
  const storySettings=await ensureStorySettings(sessionId);check();
+ const loreSnapshot=await loreStore.getLoreSnapshot(sessionId),lore=loreSnapshot.entries;check();
  const before=await sessionsApi.getSessionFromServer(sessionId);check();
  if(!before || before.deleting || before.importing)throw new Error('This story no longer exists on the server.');
  assertSnapshotRevisions({...before,storySettingsRevision:storySettings.revision},before);
- const messages=await getMessages(sessionId),lore=await getLore(sessionId);check();
+ // Disabled collection reload: const lore=await getLore(sessionId);
+ const messages=await getMessages(sessionId);check();
  const directorTurns=before.directorState || before.directorPending ? await exportDirectorTurns(sessionId) : [];
  const after=await sessionsApi.getSessionFromServer(sessionId);check();
- if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('The story changed while exporting. Try again when both devices are idle.');
- return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,storySettings,messages,lore,...(directorTurns.length ? {directorTurns} : {})};
+ assertSnapshotRevisions(before,after,{cachedLore:true});
+ const stable=s=>Object.fromEntries(Object.entries(s).filter(([key])=>!['loreRevision','loreGeneration','loreSchemaVersion','loreMigration','updatedAt'].includes(key)));
+ if(JSON.stringify(stable(before))!==JSON.stringify(stable(after)))throw new Error('The story changed while exporting. Try again when both devices are idle.');
+ return {format:'nera-chat-backup',version:1,exportedAt:new Date().toISOString(),session:after,storySettings,messages,lore,loreSnapshot:loreStore.loreSnapshotInfo(loreSnapshot),...(directorTurns.length ? {directorTurns} : {})};
 }
 export async function exportFullBackup(sessionId){const backup=await buildFullBackup(sessionId);download(JSON.stringify(backup,null,2)+'\n',(backup.session.title || 'session').replace(/[^\w\- ]+/g,'').trim()+'-backup.json','application/json');}

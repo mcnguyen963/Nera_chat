@@ -2,6 +2,7 @@ import { doc, collection, getDocFromServer, getDocsFromServer, onSnapshot } from
 import { db } from './db.js';
 import { currentUid } from './auth.js';
 import { fromRecordDocument, toRecordDocument } from './lore-records.js';
+import {assertStory} from './errors.js';
 const parts=sid=>['users',sid?.uid ?? currentUid(),'sessions',sid?.id ?? sid];
 export const versionSessionRef=sid=>doc(db,...parts(sid));
 export const versionRoot=(sid,generation)=>collection(db,...parts(sid),...(generation ? ['loreV3',generation,'entries'] : ['lore']));
@@ -23,9 +24,9 @@ export async function readLoreCard(sid,id) {
 export async function readLoreCards(sid) {
   // Disabled repeated bulk reads: for(let attempt=0;attempt<3;attempt++) {
   {
-    const before=(await getDocFromServer(versionSessionRef(sid))).data(),snap=await getDocsFromServer(versionRoot(sid,before?.loreGeneration)),after=(await getDocFromServer(versionSessionRef(sid))).data();
+    const before=assertStory((await getDocFromServer(versionSessionRef(sid))).data()),snap=await getDocsFromServer(versionRoot(sid,before?.loreGeneration)),after=assertStory((await getDocFromServer(versionSessionRef(sid))).data());
     // Keep the generation boundary check, but never repeat the collection download.
-    if(before?.loreGeneration===after?.loreGeneration && before?.loreRevision===after?.loreRevision)return snap.docs.map(decodeLoreSnapshot);
+    if(before?.loreGeneration===after?.loreGeneration && before?.loreRevision===after?.loreRevision){const docs=snap.docs.map(decodeLoreSnapshot);Object.defineProperty(docs,'loreState',{value:after});return docs;}
   }
   throw Object.assign(new Error('Lorebooks changed while loading. Retry.'),{code:'lore-read-changed'});
 }
@@ -62,18 +63,28 @@ export function wrapLoreTransaction(tx,sid,session) {
   wrapped.flush=async()=>{
     if(session.loreMigration?.active && session.loreMigration.expiresAt>Date.now() && queue.some(w=>logical(w.target)))throw new Error('Lorebook migration is in progress. Try again after it finishes.');
     for(const w of queue)if(generation&&logical(w.target)&&w.method==='update')await get(w.target);
-    const state=new Map();
+    const state=new Map(),changes=new Map();
     for(const w of queue) {
-      if(!generation||!logical(w.target)){if(w.method==='delete')tx.delete(w.target);else if(w.options)tx[w.method](w.target,w.data,w.options);else tx[w.method](w.target,w.data);continue;}
+      if(!generation||!logical(w.target)){
+        if(logical(w.target)){
+          const id=w.target.id ?? w.target.path.split('/').at(-1),prior=changes.get(id),previous=prior?.type==='set'?prior.data:cache.get(w.target.path)?.data();
+          if(w.method==='delete')changes.set(id,{id,type:'delete'});
+          else if(w.method==='set' && !w.options?.merge)changes.set(id,{id,type:'set',data:w.data});
+          else if(previous)changes.set(id,{id,type:'set',data:applyFields(previous,w.data)});
+          else changes.set(id,{id,type:'patch',data:{...(prior?.data ?? {}),...w.data}});
+        }
+        if(w.method==='delete')tx.delete(w.target);else if(w.options)tx[w.method](w.target,w.data,w.options);else tx[w.method](w.target,w.data);continue;
+      }
       const key=w.target.path,id=w.target.id ?? key.split('/').at(-1),target=actual(w.target);
-      if(w.method==='delete'){tx.delete(target);state.set(key,null);continue;}
+      if(w.method==='delete'){tx.delete(target);state.set(key,null);changes.set(id,{id,type:'delete'});continue;}
       const previous=state.has(key) ? state.get(key) : cache.get(key)?.data();
       if(w.method==='update'&&!previous)throw new Error('This lorebook subject was deleted');
       const data=w.method==='update' ? applyFields(previous,w.data) : w.options?.merge ? {...previous,...w.data} : w.data;
       const canonical=toRecordDocument({...data,id},previous?{...previous,id}:null);
       if(new TextEncoder().encode(JSON.stringify(canonical)).length>900000)throw new Error('card storage full');
-      state.set(key,fromRecordDocument(canonical));tx.set(target,canonical);
+      state.set(key,fromRecordDocument(canonical));changes.set(id,{id,type:'set',data:state.get(key)});tx.set(target,canonical);
     }
+    return [...changes.values()];
   };
   return wrapped;
 }

@@ -23,7 +23,7 @@ async function setup(changed = false) {
       },
     } : specifier.includes('messages') ? { getMessages: async () => messages, addMessagesBulk() {}, ensureChunked: async () => {} }
       : specifier.includes('lore-format') ? {normalizeLoreEntry:x=>x}
-      : specifier.includes('lore-store') ? {getLore:async()=>[],importLore(){}}
+      : specifier.includes('lore-store') ? {getLore:async()=>[],getLoreSnapshot:async()=>({entries:[],loadedRevision:0,schemaVersion:2,generation:null}),loreSnapshotInfo:s=>({source:'device-cache',loadedRevision:s.loadedRevision}),importLore(){}}
       : specifier.includes('memory-settings') ? {normalizeMemory:()=>({})}
       : specifier.includes('memory-ui') ? {download(){}}
       : { currentUid: () => 'owner' };

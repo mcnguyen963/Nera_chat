@@ -17,6 +17,11 @@ export function appHarness({ stubs = {}, sources = {}, globals = {} } = {}) {
     if(path==='sessions.js' && stub && !stub.getSessionFromServer)stub.getSessionFromServer=stub.getSession;
     if(path==='messages.js' && stub && !stub.ensureChunked)stub.ensureChunked=async()=>{};
     if(path==='chat-cache.js' && stub){stub.loadStoryData ??= async()=>null;stub.saveStoryData ??= async()=>true;}
+    if(path==='lore-store.js' && stub){
+      stub.getLoreSnapshot ??= async(sid,options)=>({entries:structuredClone(await stub.getLore(sid,options)),initialized:true,loadedRevision:0,lastCommittedRevision:0,schemaVersion:2,generation:null});
+      stub.loreSnapshotInfo ??= snapshot=>({source:'device-cache',loadedRevision:snapshot.loadedRevision,lastCommittedRevision:snapshot.lastCommittedRevision,schemaVersion:snapshot.schemaVersion,generation:snapshot.generation});
+      stub.initializeLoreCache ??= async()=>{};stub.forgetLoreCache ??= async()=>{};
+    }
     const module = stub
       ? new vm.SyntheticModule(Object.keys(stub), function () {
         for (const [key, value] of Object.entries(stub)) this.setExport(key, value);
