@@ -200,6 +200,16 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   };
   stubs['messages.js'].readMessageSnapshot=async sid=>{await calls.onMessagesRefresh?.();return {messages:await stubs['messages.js'].getMessages(sid),chunkRanges:[],records:[]};};
   stubs['messages.js'].applyMessageSnapshot=()=>{};
+  const loreSnapshots=new Map();
+  stubs['lore-store.js'].getLoreSnapshot=async(sid,{source='cache'}={})=>{
+    const id=sid?.id ?? sid,key=(calls.uid ?? 'test-user')+':'+id;
+    if(source==='cache' && loreSnapshots.has(key))return structuredClone(loreSnapshots.get(key));
+    const snapshot={version:1,initialized:true,entryRevisions:{},entries:structuredClone(await stubs['lore-store.js'].getLore(id)),loadedRevision:calls.sessionDocs?.[id]?.loreRevision ?? 0,lastCommittedRevision:calls.sessionDocs?.[id]?.loreRevision ?? 0,schemaVersion:2,generation:null};
+    if(source==='cache')loreSnapshots.set(key,snapshot);return snapshot;
+  };
+  stubs['lore-store.js'].publishLoreSnapshot=async(sid,snapshot,{commit}={})=>{await commit?.();loreSnapshots.set((sid.uid ?? calls.uid ?? 'test-user')+':'+(sid.id ?? sid),structuredClone(snapshot));return snapshot;};
+  stubs['lore-store.js'].readLoreEntry=async(_sid,id)=>structuredClone(calls.loreEntries?.find(e=>e.id===id) ?? null);
+  stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{loreSnapshots.delete(uid+':'+sid);};
   Object.assign(stubs,extraStubs);
   if(chatCache)stubs['chat-cache.js']={replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
   const cache = new Map();
@@ -1280,6 +1290,25 @@ test('Q3 P0.13 folded deletion asks twice and a recent deletion asks once',async
   }
 });
 
+test('summary checkpoints start collapsed, preserve expansion on rerender, and open for editing',async()=>{
+ const h=await harness(),history=[{id:'a',order:1,role:'assistant',content:'Latest narration'},{id:'sum',order:2,role:'summary',content:'A long summary\n'.repeat(200)}];
+ await openImprovementChat(h,{activeSummaryMessageId:'sum',breakpointOrder:1},history);
+ const row=()=>h.el('message-list').querySelector('[data-message-id="sum"]');
+ let details=row().querySelector('.summary-details');assert.equal(details.open,false);assert.equal(details.querySelector('summary').textContent,'Show summary');assert.equal(details.querySelector('.msg-content').textContent,history[1].content);
+ details.open=true;await details.dispatchEvent({type:'toggle'});await h.document.dispatchEvent({type:'scene-preference'});
+ details=row().querySelector('.summary-details');assert.equal(details.open,true);assert.equal(details.querySelector('summary').textContent,'Hide summary');
+ details.open=false;await details.dispatchEvent({type:'toggle'});await row().querySelectorAll('button').find(b=>b.textContent==='Edit').click();
+ assert.equal(row().querySelector('.summary-details').open,true);assert.equal(row().querySelector('.msg-editor').value,history[1].content);
+ await row().querySelectorAll('button').find(b=>b.textContent==='Cancel').click();assert.equal(row().querySelector('.summary-details').open,true);
+});
+test('the current checkpoint divider marks the covered-history boundary and disappears after reset',async()=>{
+ const h=await harness(),history=[{id:'u1',role:'user',order:1,content:'Old action'},{id:'a1',role:'assistant',order:2,content:'Summarized reply',narratorTurn:7},{id:'u2',role:'user',order:3,content:'Retained action'},{id:'a2',role:'assistant',order:4,content:'Retained reply',narratorTurn:8},{id:'sum',role:'summary',order:5,content:'Summary'}];
+ await openImprovementChat(h,{activeSummaryMessageId:'sum',breakpointOrder:2},history);
+ const list=h.el('message-list'),divider=list.querySelector('.checkpoint-divider');assert.ok(divider);assert.equal(divider.nextSibling.dataset.messageId,'u2');assert.match(divider.textContent,/Current checkpoint.*T7/);
+ await h.document.dispatchEvent({type:'scene-preference'});assert.equal(list.querySelectorAll('.checkpoint-divider').length,1);
+ await h.document.dispatchEvent({type:'reset-summary'});assert.equal(list.querySelector('.checkpoint-divider'),null);assert.equal(list.querySelector('[data-message-id="sum"]').querySelector('.msg-meta').querySelector('span').textContent,'Summary checkpoint');
+});
+
 test('Q3 P0.14 omitted history indicator shows turns not sent with actionable tooltip',async()=>{
   const h=await harness(),history=Array.from({length:40},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'story '+i+' '+ 'x'.repeat(300)}));
   const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:3000,maxResponseTokens:100,autoSummarizationEnabled:false});await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,10));
@@ -1658,7 +1687,7 @@ for(const change of ['story','account','destination','cancel'])test('single-card
  finish(f.serializeCard(card,{storyId:'improvement'}));await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
 });
 test('book list import requires an explicit choice for ambiguous name matches',async()=>{
- const {h,f,lore,card,other,root}=await cardUI();other.aliases=[card.name];lore.openLorebooks({screen:'list',book:'characters'});await namedButton(root,'Import card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'different'});await namedButton(dialog,'Read pasted text').click();assert.equal(dialog.querySelector('select').value,'');assert.equal(namedButton(dialog,'Import card').disabled,true);assert.ok(dialog.querySelectorAll('p').some(e=>/Several cards match/.test(e.textContent)));
+ const {h,f,lore,card,other,root}=await cardUI();other.aliases=[card.name];await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'test-user',sessionId:'improvement',revision:1,snapshot:{entries:[card,other],loadedRevision:0}}});lore.openLorebooks({screen:'list',book:'characters'});await namedButton(root,'Import card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'different'});await namedButton(dialog,'Read pasted text').click();assert.equal(dialog.querySelector('select').value,'');assert.equal(namedButton(dialog,'Import card').disabled,true);assert.ok(dialog.querySelectorAll('p').some(e=>/Several cards match/.test(e.textContent)));
  const select=dialog.querySelector('select');select.value='__new';await select.dispatchEvent({type:'change'});await namedButton(dialog,'Import card').click();assert.equal(h.calls.cardImports.length,1);assert.notEqual(h.calls.cardImports[0][1].id,card.id);
 });
 
@@ -2102,6 +2131,23 @@ test('Ordinary local turns reuse loaded history and lore without collection relo
  for(let i=0;i<3;i++){h.el('chat-input').value='Action '+i;h.calls.response='Reply '+i;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await (await h.use('local-story-store.js')).storyStore('improvement').flush();}
  assert.equal(h.calls.historyReads,history);assert.equal(h.calls.loreReads,lore);assert.equal(h.calls.sessionReads,sessionReads);assert.deepEqual(h.calls.subscriptions,[]);
 });
+
+test('committed cached lore reaches the UI and next request without a header or collection reload',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{memory:{lorebooks:true}},[{id:'a',role:'assistant',order:1,content:'Opening'}]);await settle();
+ const reads={lore:h.calls.loreReads,session:h.calls.sessionReads},entries=[{id:'fact',book:'facts',kind:'card',name:'Inn',alwaysLoad:true,aliases:[],sections:{text:{text:'The inn has a purple door.',origin:'user',kind:'canon',lines:[]}}}];
+ await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'another',sessionId:'improvement',revision:99,snapshot:{entries:[{id:'wrong-account'}]}}});assert.equal(chat.memorySnapshot().entries.length,0);
+ await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'test-user',sessionId:'improvement',revision:2,snapshot:{entries,loadedRevision:0,lastCommittedRevision:2},sessionPatch:{'memoryState.needsRebuild':true}}});
+ assert.equal(chat.memorySnapshot().entries[0].id,'fact');assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,true);assert.deepEqual({lore:h.calls.loreReads,session:h.calls.sessionReads},reads);
+ h.el('chat-input').value='Look at the inn';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.calls.requests.length,1);assert.match(JSON.stringify(h.calls.requests[0]),/purple door/);assert.equal(h.calls.loreReads,reads.lore);
+});
+test('a failed initial lore load keeps the composer draft and offers manual Sync',async()=>{
+ const h=await harness();h.calls.onLoreRead=()=>{throw Error('Limit reached');};const chat=await openImprovementChat(h,{memory:{lorebooks:true}});await settle();
+ await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'test-user',sessionId:'improvement',revision:1,snapshot:{initialized:false,entries:[],loadedRevision:null}}});
+ h.el('chat-input').value='Keep my unsent action';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.el('chat-input').value,'Keep my unsent action');assert.equal(h.calls.requests.length,0);assert.equal(chat.memorySnapshot().messages.length,0);assert.equal(h.state.busy,false);
+ assert.match(h.el('btn-memory').title,/Sync data/);
+});
 for(const mode of ['retry','regenerate','continue'])test('Cancel '+mode+' discards partial output, unlocks immediately and ignores a late stream',async()=>{
  const h=await harness(),messages=[{id:'u',order:1,role:'user',content:'Opening'},...(mode==='retry'?[]:[{id:'a',order:2,role:'assistant',content:'Original reply'}])];
  const chat=await openImprovementChat(h,{},messages);h.state.settings.streaming=true;
@@ -2428,13 +2474,13 @@ for(const switched of ['account','story'])test('late Sync result cannot replace 
  assert.equal(await sync,false);assert.equal(h.state.sessionId,switched==='story'?'other':'improvement');assert.equal(h.state.busy,false);assert.equal(h.state.storySettings.revision,1);
 });
 
-test('a delayed older lore load cannot overwrite the Sync replacement',async()=>{
- const h=await harness(),chat=await openImprovementChat(h,{memory:{lorebooks:true}}),old=deferred();let count=0;
- h.calls.onLoreRead=()=>++count===1?old.promise:undefined;
- const previous=h.calls.loreEntries;h.calls.loreEntries=[{id:'old'}];
+test('an unscoped lore notification performs no reload; explicit Sync replaces cached lore',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{memory:{lorebooks:true}});await settle();
+ const reads=h.calls.loreReads ?? 0;h.calls.loreEntries=[{id:'remote'}];
  await h.document.dispatchEvent({type:'local-lore-saved',detail:{sessionId:'improvement'}});await settle();
- h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.loreEntries=[{id:'fresh'}];assert.equal(await chat.syncChatData(),true);
- h.calls.loreEntries=previous;old.resolve();await settle();assert.equal(chat.memorySnapshot().entries[0].id,'fresh');
+ assert.equal(h.calls.loreReads ?? 0,reads);
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);assert.equal(await chat.syncChatData(),true);
+ assert.equal(h.calls.loreReads,reads+1);assert.equal(chat.memorySnapshot().entries[0].id,'remote');
 });
 
 test('Manual Sync reads a changing remote snapshot once and preserves local data until the next explicit Sync',async()=>{

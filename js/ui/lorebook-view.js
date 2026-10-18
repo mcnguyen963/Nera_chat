@@ -505,7 +505,12 @@ function cardTransfer(explicitId=null) {
         const reviewed=plan,backup=await store.importCard(ctx.source,reviewed,{isCurrent:()=>ctx.isCurrent() && !cancelled && !dirty() && plan===reviewed});
         const showResult=ctx.isCurrent() && !cancelled && plan===reviewed;close();if(showResult){staged=base=null;openCard(reviewed.data);}
         toast('Imported '+reviewed.data.name+'.','Undo',async()=>{if(currentUid()!==ctx.source.uid)throw new Error('Account changed; Undo cancelled.');await store.restoreBackup(ctx.source,backup,[]);if(opened && sid===ctx.source.id){staged=base=null;selected=null;screen='list';renderShell();}toast('Restored');});
-      } catch(e) {toast(e.message);body.append(button('Refresh preview',async()=>{check();const fresh=await store.getLore(ctx.source);check();refresh(fresh);}));}
+      } catch(e) {toast(e.message);body.append(button('Refresh preview',async()=>{
+        check();
+        // Disabled full-collection preview reload: const fresh=await store.getLore(ctx.source);
+        const id=destination.value,card=id && id!=='__new'?await store.readLoreEntry(ctx.source,id):null;
+        check();const fresh=entries().filter(e=>e.id!==id);if(card)fresh.push(card);refresh(fresh);
+      }));}
       finally {b.disabled=false;}
     },'btn primary');
     function refresh(fresh=null) {

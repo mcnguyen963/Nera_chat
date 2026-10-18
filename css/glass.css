@@ -60,6 +60,12 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .msg.assistant, .msg.system { padding: 0; }
 .msg.user { max-width: 92%; padding: 12px 16px 6px; background: var(--user-bubble); }
 .msg.summary { border: 1px dashed var(--glass-line); }
+.summary-details { white-space: normal; }
+.summary-details > summary { min-height: 44px; display: list-item; align-content: center; cursor: pointer; color: var(--text); }
+.summary-details > summary:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 4px; }
+.summary-details[open] > .msg-content { padding-top: 8px; }
+.checkpoint-divider { display: flex; align-items: center; gap: 12px; flex-shrink: 0; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; white-space: normal; }
+.checkpoint-divider::before, .checkpoint-divider::after { content: ""; flex: 1; min-width: 16px; height: 1px; background: var(--glass-line); }
 .msg-meta { color: var(--muted); font-size: 11px; }
 .msg-meta > span:first-child { min-width: 0; }
 .msg-content { white-space: pre-wrap; overflow-wrap: anywhere; }

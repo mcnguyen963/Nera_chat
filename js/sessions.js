@@ -48,7 +48,7 @@ export async function getSessionFromServer(sessionId) {
 }
 
 export async function createSession(title, { importing = false } = {}) {
-  const id = newId("sess");
+  const id = newId("sess"),owner=currentUid();
   const data = {
     title: title || "New Session",
     ...(importing ? {importing:true} : {}),
@@ -64,7 +64,9 @@ export async function createSession(title, { importing = false } = {}) {
     activeChunkBytes: 0,
     activeChunkCount: 0,
   };
-  await setDoc(sessionDoc(id), {...data,importing:true});
+  await setDoc(sessionDoc(id,owner), {...data,importing:true});
+  await loreStore.initializeLoreCache(owner,id);
+  if(owner!==currentUid())throw new Error('Account changed; story creation cancelled.');
   try {await writeInitialStorySettings(id);if(!importing)await updateSession(id,{importing:false});}catch(error){await deleteSession(id);throw error;}
   return id;
 }
@@ -96,9 +98,12 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     if(snap.exists() && !snap.data().deleting)throw new Error('This story is not marked for deletion.');
     // Drop local persisted state before any server subtree disappears.
     await deleteChatCache(owner,sessionId);
+    await loreStore.forgetLoreCache(owner,sessionId);
     await storeUnsavedReply(owner,sessionId,null);
     deletionNotice(sessionId);
     await waitForStoryWrites(sessionId);
+    // An already-committed write may have acknowledged while deletion drained.
+    await loreStore.forgetLoreCache(owner,sessionId);
     for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns','operationReceipts']) {
       const snap=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,name));
       for(let i=0;i<snap.docs.length;i+=450) {
@@ -176,6 +181,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
   const sourceSnap = await getDocFromServer(sessionDoc(sourceId,owner));
   const source = sourceSnap.exists() ? { id: sourceSnap.id, ...sourceSnap.data() } : null;
   assertStory(source);
+  const capturedLore=await loreStore.getLoreSnapshot({id:sourceId,uid:owner});
   const msgsSnap = messageCount === 0 ? { docs: [] } : await getDocsFromServer(
     collection(db,"users",owner,"sessions",sourceId,"messageChunks")
   );
@@ -213,7 +219,8 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     breakpointOrder: hasSummary ? source.breakpointOrder ?? 0 : 0,
   };
 
-  if(source.loreSchemaVersion===3){data.loreGeneration=newId('generation');data.loreMigration={active:false};}
+  data.loreSchemaVersion=capturedLore.schemaVersion===3 || capturedLore.entries.some(e=>e.schemaVersion===3)?3:2;data.loreRevision=0;
+  data.loreMigration={active:false};data.loreGeneration=data.loreSchemaVersion===3?newId('generation'):null;
   if (source.memoryState) {
     const lastAssistant = selected.filter(m => m.role === 'assistant').at(-1)?.order ?? 0;
     data.memoryState = { ...source.memoryState, extractedThroughOrder: source.memoryState.extractedThroughOrder == null ? null : Math.min(source.memoryState.extractedThroughOrder, lastAssistant), failureStreak: 0, paused: false, lastError: null };
@@ -239,6 +246,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
   // selects an incomplete copy. Remove partial chunks if a write fails.
   try {
     await setDoc(sessionDoc(id,owner),{...data,importing:true});
+    await loreStore.initializeLoreCache(owner,id,{schemaVersion:data.loreSchemaVersion,generation:data.loreGeneration ?? null});
     for (let i = 0; i < groups.length; i += 6) {
       await runTransaction(db,async tx=>{
         assertStory((await tx.get(sessionDoc(sourceId,owner))).data());
@@ -248,13 +256,14 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     }
     if (owner !== currentUid()) throw new Error('Account changed; session copy cancelled.');
     await writeInitialStorySettings(id,sourceSettings.values,owner);
-    await copyLore(sourceId,id,selected.at(-1)?.order ?? 0);
+    await copyLore(sourceId,id,selected.at(-1)?.order ?? 0,capturedLore);
     if(directorTurns.length)await importDirectorTurns(id,directorTurns,owner);
     await runTransaction(db,async tx=>{
       const fresh=assertStory((await tx.get(sessionDoc(sourceId,owner))).data());
-      assertSnapshotRevisions(capturedSource,fresh);
-      assertStory((await tx.get(sessionDoc(id,owner))).data());
-      tx.set(sessionDoc(id,owner),{...data,storySettingsRevision:1});
+      assertSnapshotRevisions(capturedSource,fresh,{cachedLore:true});
+      const copied=await tx.get(sessionDoc(id,owner));
+      assertStory(copied.data());
+      tx.set(sessionDoc(id,owner),{...data,loreRevision:copied.data()?.loreRevision ?? 0,storySettingsRevision:1});
     });
   } catch (error) {
     try { if (owner === currentUid()) await deleteSession(id); } catch (cleanupError) {

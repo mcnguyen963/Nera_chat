@@ -34,6 +34,7 @@ import { lintPlayerAgency, lintDirectorGestures, lintDirectorHistory, lintDirect
 import { recoverScene } from '../scene-recovery.js';
 import { computeTurns, dueRangeStatus } from '../turns.js';
 import { getLore, configureLoreWrites, holdLoreWrites } from '../lore-store.js';
+import * as loreStore from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 import { state } from "../state.js";
@@ -295,6 +296,7 @@ let cacheWritesPaused = false;
 let refreshingStory=null;
 const pendingCacheWrites = new Set();
 const renderedMessages = new Map();
+const expandedSummaries = new Set();
 
 const el = {};
 let refreshFloatingCopy = () => {};
@@ -326,14 +328,15 @@ function syncLore(force=false) {
   if(loreSessionId===session.id && !force)return;
   const sid=session.id,owner=currentUid(),epoch=dataEpoch,run=++loreLoadVersion,revision=session.loreRevision ?? 0;loreSessionId=sid;
   loreReady=(async()=>{
-    const cached=await loadStoryData(owner,sid);
-    const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
+    // const cached=await loadStoryData(owner,sid);
+    // Disabled: a different server revision must not invalidate initialized cached lore.
+    // const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
+    const snapshot=await loreStore.getLoreSnapshot(sid),entries=snapshot.entries;
     if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch || run!==loreLoadVersion)return;
-    loreEntries=entries;verifiedLoreRevision=revision;loreStatus='ok';
-    void saveStoryData(owner,sid,{lore:{revision,entries}});
+    loreEntries=entries;verifiedLoreRevision=snapshot.loadedRevision;loreStatus='ok';
     rememberMemoryStory();updateMemoryChip();document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));void updateIndicator();
   })();
-  loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid && epoch===dataEpoch && run===loreLoadVersion){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks: '+error.message);}});
+  loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid && epoch===dataEpoch && run===loreLoadVersion){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks. Your draft is kept. Use Sync data to retry.');}});
 }
 // Fields that can change the context or the caches needed to build it.
 function preparationKey(story) {
@@ -372,10 +375,12 @@ async function prepareStoryDocument(fresh,token = null) {
   syncLore();
   if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate || state.storySettings?.values?.narrationMode==='director') {
     try {await loreReady;check();} catch {check();syncLore();await loreReady;check();}
+    /* Disabled automatic collection reload on revision mismatch.
     if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) {
       const entries = await getLore(sid);check();
       loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0;
     }
+    */
   }
   check();
   await ensureHistory();check();
@@ -409,7 +414,7 @@ function updateMemoryChip() {
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
   chip.classList.toggle('running', running); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
   const status=dueRangeStatus(historyMessages ?? lastMessages,session?.memoryState,mem);
-  chip.title=session?.memoryState?.needsRebuild ? 'History edited. Re-extract from the Memory settings.' : loreStatus==='error' ? 'Lorebooks offline — retrying…' : status.reason==='pointer-unset' ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : 'Memory ready to update.';
+  chip.title=session?.memoryState?.needsRebuild ? 'History edited. Re-extract from the Memory settings.' : loreStatus==='error' ? 'Lorebooks unavailable. Use Sync data to retry.' : status.reason==='pointer-unset' ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : 'Memory ready to update.';
   chip.textContent = running ? 'Updating memory…' : effectivelyPaused(session?.memoryState) ? 'Memory paused' : loreStatus==='error' ? 'Lorebooks offline' : mem.autoUpdate && pointer==null ? 'Choose start' : mem.autoUpdate && turn ? 'Memory · T'+turn : 'Memory';
 }
 
@@ -429,11 +434,11 @@ export function initChatView() {
     prepare: async sid => { if (sid !== state.sessionId) throw new Error("Open the story before maintenance."); return reconcileStory(); },
     patch(sid, patch, entries,loreRevision) {
       const live = memorySnapshot(sid); if (!live) return;
-      if(loreRevision!=null && sid===state.sessionId)verifiedLoreRevision=loreRevision;
-      live.session = { ...live.session,...(loreRevision!=null ? {loreRevision} : {}), memoryState: { ...live.session.memoryState, ...patch } };
+      // The committed delta already updated lore. A write is not a full download.
+      live.session = { ...live.session,...(loreRevision!=null ? {loreRevision:Math.max(live.session.loreRevision ?? 0,loreRevision)} : {}), memoryState: { ...live.session.memoryState, ...patch } };
       if (entries) live.entries = entries;
       memoryStories.set(sid,{ ...live,owner:currentUid() });
-      if (sid === state.sessionId) { session = live.session; if (entries) {loreEntries = entries;void saveStoryData(currentUid(),sid,{lore:{revision:session.loreRevision ?? 0,entries}});}const local=storyStore(sid);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});updateMemoryChip();void updateIndicator(); }
+      if (sid === state.sessionId) { session = live.session; if (entries)loreEntries=entries;const local=storyStore(sid);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});updateMemoryChip();void updateIndicator(); }
     },
     waitIdle(signal) {
       if (!busy || signal?.aborted) return Promise.resolve();
@@ -455,6 +460,7 @@ export function initChatView() {
     syncLore(); rememberMemoryStory(); invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator();
   });
   document.addEventListener('local-lore-saved',e=>{
+    /* Disabled: successful writes must not reread the header and all lore cards.
     const sid=e.detail.sessionId,owner=currentUid(),epoch=dataEpoch;
     if(sid!==state.sessionId)return;
     const run=++loreReloadVersion;
@@ -467,6 +473,24 @@ export function initChatView() {
       queueCacheSave();
     })();
     void loreReloading.catch(error=>{if(active())showTransientError(error);});
+    */
+    const d=e.detail;
+    if(d.uid!==currentUid() || !d.snapshot)return;
+    const active=d.sessionId===state.sessionId && session,remembered=memoryStories.get(d.sessionId);
+    if(!active && remembered?.owner!==d.uid)return;
+    const patched={...(active?session:remembered.session),loreRevision:Math.max((active?session:remembered.session).loreRevision ?? 0,d.revision ?? 0)};
+    for(const [key,value]of Object.entries(d.sessionPatch ?? {})){
+      const parts=key.split('.');let target=patched;
+      for(const part of parts.slice(0,-1))target=target[part]={...target[part]};
+      target[parts.at(-1)]=value;
+    }
+    if(!active){memoryStories.set(d.sessionId,{...remembered,session:patched,entries:d.snapshot.entries});return;}
+    session=patched;loreEntries=d.snapshot.entries;verifiedLoreRevision=d.snapshot.loadedRevision;
+    if(d.snapshot.initialized!==false)loreStatus='ok';
+    const store=storyStore(d.sessionId);
+    if(store && !store.status.pending && !store.status.paused)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
+    rememberMemoryStory();updateMemoryChip();void updateIndicator();queueCacheSave();
+    document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:d.sessionId,entries:loreEntries}}));
   });
   document.addEventListener('scene-preference', () => { invalidateRenderedMessages(); renderMessages(lastMessages); });
   const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
@@ -743,6 +767,7 @@ export function setSession(sessionId) {
   historyLoading = null;
   historyEpoch++;
   renderedMessages.clear();
+  expandedSummaries.clear();
   indicatorRefresh.invalidate();
   el.list.innerHTML = "";
   const emptyRing = contextRingPresentation({used:0, max:0});
@@ -859,6 +884,7 @@ export function forgetChatSession(sessionId) {
   memoryUpdater.stop(sessionId); memoryStories.delete(sessionId);clearUnsaved(currentUid(),sessionId);
   historyCache.delete(currentUid()+':'+sessionId);
   void deleteChatCache(currentUid(), sessionId);
+  void loreStore.forgetLoreCache(currentUid(),sessionId);
 }
 
 // ---------- rendering ----------
@@ -965,6 +991,7 @@ function renderMessages(msgs) {
     editingState = null; // the edited message was deleted remotely
   }
   const sticky = isNearBottom();
+  el.list.querySelectorAll('.checkpoint-divider').forEach(node=>node.remove());
   const visible = msgs.slice(-visibleCount);
   const visibleIds = new Set(visible.map((m) => m.id));
   for (const [id, entry] of renderedMessages) {
@@ -985,11 +1012,12 @@ function renderMessages(msgs) {
     const sceneState=timeline.get(m.id),renderedScene=sceneState?.effective;
     const pending=m.id===latestAssistant && !isAcceptedTurn(m,{lastUserOrder,sceneOn:session?.memory?.scene === true});
     const retry = m.role === 'user' && m.id === latestStory?.id;
-    if (!entry || !entry.message || entry.retry !== retry || entry.turnLabel!==turnLabel || entry.renderedScene!==renderedScene || entry.pending!==pending || !sameRenderedMessage(entry.message, m)) {
+    const activeSummary=isActiveSummary(m);
+    if (!entry || !entry.message || entry.activeSummary!==activeSummary || entry.retry !== retry || entry.turnLabel!==turnLabel || entry.renderedScene!==renderedScene || entry.pending!==pending || !sameRenderedMessage(entry.message, m)) {
       const node = renderMessage(m, retry, sceneState, pending);
       node.dataset.messageId = m.id;
       entry?.node.remove();
-      entry = { node, message: m, retry, turnLabel, renderedScene, pending };
+      entry = { node, message: m, retry, turnLabel, renderedScene, pending, activeSummary };
       renderedMessages.set(m.id, entry);
     }
     if (entry.node.parentNode !== el.list || entry.node.nextSibling !== anchor) {
@@ -1005,6 +1033,7 @@ function renderMessages(msgs) {
   } else {
     el.earlierBtn.remove();
   }
+  renderCheckpointDivider(renderHistory,visible);
   renderUnsavedReply();
   updateWelcome();
   if (savedStream && renderedMessages.has(savedStream.savedId)) {
@@ -1017,6 +1046,23 @@ function renderMessages(msgs) {
   } else if (sticky) scrollToEnd();
   queueCacheSave();
   updateRewriteControls();
+}
+
+function renderCheckpointDivider(history,visible) {
+  const breakpoint=session?.breakpointOrder ?? 0,summaryId=session?.activeSummaryMessageId;
+  if(!summaryId || breakpoint<=0 || history.find(m=>m.id===summaryId)?.retired)return;
+  const firstRetained=history.find(m=>m.role!=='summary' && m.order>breakpoint);
+  // Do not place a misleading breakpoint in the middle of a paginated window.
+  const target=firstRetained ? visible.find(m=>m.id===firstRetained.id) : visible.find(m=>m.order>breakpoint);
+  if(!target)return;
+  const row=renderedMessages.get(target.id)?.node;if(!row)return;
+  const covered=history.filter(m=>m.role==='assistant' && m.order<=breakpoint).at(-1);
+  const turn=covered && turnsFor(history).turnById.get(covered.id);
+  const divider=document.createElement('div');divider.className='checkpoint-divider';
+  divider.setAttribute('role','separator');
+  const label='Current checkpoint · summarized through '+(turn?'T'+turn:'message #'+breakpoint);
+  divider.setAttribute('aria-label',label);divider.textContent=label;
+  el.list.insertBefore(divider,row);
 }
 
 export function sameRenderedMessage(a,b) {
@@ -1056,7 +1102,7 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   meta.className = "msg-meta";
   const label = document.createElement("span");
   label.textContent =
-    m.role === "user" ? "You" : m.role === "summary" ? (m.retired ? "Retired summary" : "Summary checkpoint") : "Assistant";
+    m.role === "user" ? "You" : m.role === "summary" ? (m.retired ? "Retired summary" : isActiveSummary(m) ? "Current summary checkpoint" : "Summary checkpoint") : "Assistant";
   if (m.role !== 'summary' && anyMemory(normalizeMemory(session?.memory))) label.textContent += ' · T'+(turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) ?? '?');
   if (m.editedAt) label.textContent += " (edited)";
   if (m.truncated) label.textContent += " · cut off";
@@ -1116,7 +1162,16 @@ function renderMessage(m, retry = false, sceneState = null, pending = false) {
   const content = document.createElement("div");
   content.className = "msg-content";
   content.textContent = m.content;
-  wrap.appendChild(content);
+  if(m.role==='summary'){
+    const details=document.createElement('details');details.className='summary-details';details.open=expandedSummaries.has(m.id);
+    const toggle=document.createElement('summary');toggle.textContent=details.open?'Hide summary':'Show summary';
+    details.addEventListener('toggle',()=>{
+      if(wrap.parentNode!==el.list)return;
+      if(details.open)expandedSummaries.add(m.id);else expandedSummaries.delete(m.id);
+      toggle.textContent=details.open?'Hide summary':'Show summary';
+    });
+    details.append(toggle,content);wrap.appendChild(details);
+  }else wrap.appendChild(content);
   if(m.role==='user' && m.planJump){const note=document.createElement('p');note.className='muted';note.textContent='Confirmed time skip: '+m.planJump.from+' → '+m.planJump.to;wrap.append(note);}
   if (pending) {
     const review = document.createElement('div');review.className = 'muted';
@@ -1196,6 +1251,8 @@ const isActiveSummary = m => m.role === 'summary' && m.id === session?.activeSum
 
 async function startEdit(m, wrap) {
   if (busy) return;
+  const details=wrap.querySelector('.summary-details');
+  if(details){details.open=true;expandedSummaries.add(m.id);details.querySelector('summary').textContent='Hide summary';}
   const contentEl = wrap.querySelector(".msg-content");
   if (!contentEl || editingState) return;
   const source = {sid:state.sessionId, owner:currentUid(), epoch:historyEpoch};
@@ -1562,8 +1619,8 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
     {
       const fresh=await getSessionFromServer(sid);check();
       if(!fresh || fresh.deleting)throw new Error('Story no longer exists.');
-      const [account,prompts,messageData,entries,turns]=await Promise.all([
-        readSettingsRefresh(),readStorySettingsRefresh(sid),messagesApi.readMessageSnapshot(sid),getLore(sid),
+      const [account,prompts,messageData,loreSnapshot,turns]=await Promise.all([
+        readSettingsRefresh(),readStorySettingsRefresh(sid),messagesApi.readMessageSnapshot(sid),loreStore.getLoreSnapshot(sid,{source:'server',publish:false}),
         Promise.all([...new Set([fresh.directorPending,fresh.directorCheckpoint].filter(Boolean))].map(async id=>[id,await directorStore.getDirectorTurn(sid,id)])),
       ]);check();
       const latest=await getSessionFromServer(sid);check();
@@ -1571,9 +1628,10 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       // A manual Sync keeps the previous local snapshot if this one is inconsistent.
       if(preparationKey(latest)!==preparationKey(fresh) || latest?.directorCheckpoint!==fresh.directorCheckpoint || prompts.revision!==(latest.storySettingsRevision ?? 0))throw new Error('Story changed during Sync. Local data was kept.');
       account.check();
+      const entries=loreSnapshot.entries;
       const messages=messageData.messages,view={session:latest,messages,turns:Object.fromEntries(turns.filter(([,turn])=>turn))};
       const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false};
-      await replaceStoryCache(owner,sid,snapshot,{confirmed:view,requiresReconciliation:false,turns:view.turns,storySettings:prompts,lore:{revision:latest.loreRevision ?? 0,entries},chunkRanges:messageData.chunkRanges},{discardPending});
+      await loreStore.publishLoreSnapshot({uid:owner,id:sid},loreSnapshot,{persist:false,commit:()=>replaceStoryCache(owner,sid,snapshot,{confirmed:view,requiresReconciliation:false,turns:view.turns,storySettings:prompts,loreSnapshot,chunkRanges:messageData.chunkRanges},{discardPending})});
       // Keep the queue aligned with the committed cache even if navigation
       // changes while IndexedDB finishes. Its scoped observer publishes later.
       store?.adopt(view,{persist:false,reconciled:true,discardPending,serverConfirmed:true,notify:false});
@@ -1630,6 +1688,8 @@ async function handleSend(e) {
     const planJump=planJumpControl?.get();
     if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
     await chatLoading;assertActive(token);const store=await ensureLocalStory();assertActive(token);
+    // Missing lore must leave the composer draft intact until Sync can retry.
+    await loreReady;assertActive(token);validateSavedStorySettings();
     if(session.directorPending)store.enqueue('discardDirector',{});
     const id=messagesApi.newMessageId();
     const mem=normalizeMemory(session.memory);const initializeMemory=mem.autoUpdate && session.memoryState?.extractedThroughOrder==null && computeTurns(store.view.messages).lastTurn<=mem.lagTurns;
@@ -1637,7 +1697,6 @@ async function handleSend(e) {
     saved=true;planJumpControl?.reset();
     if(el.input.value===draft)setComposerText('');
     const userMsg=store.view.messages.find(m=>m.id===id);
-    await loreReady;assertActive(token);validateSavedStorySettings();
     await runAssistantTurn({messages:historyMessages,reconciled:true,savedUserId:userMsg.id},token);
   } catch (err) {
     if (!saved && requestedOwner===currentUid() && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
@@ -2010,6 +2069,7 @@ async function handleResetSummary() {
   try {
     await updateSession(session.id, { activeSummaryMessageId: null, breakpointOrder: 0 });
     assertActive(token);session = { ...session, activeSummaryMessageId: null, breakpointOrder: 0 };
+    renderMessages(lastMessages);
     updateIndicator();
     queueCacheSave();
     setStatus("Summary checkpoint reset.", true);

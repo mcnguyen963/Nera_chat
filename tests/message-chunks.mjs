@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 async function setup(legacyCount = 0) {
   const documents = new Map();
-  const reads = { documents: 0, legacy: 0 };
+  const reads = { documents: 0, legacy: 0, collections:[] };
   const transactions = [], fault = { failAt:null, failBatchAt:null, batchCount:0, beforeCommit:null };
   const sessionPath = 'users/u/sessions/s';
   documents.set('users/u/settings/storyMigration',{version:1,values:{narratorSystemPrompt:'Legacy narrator',summarizerSystemPrompt:'Legacy summary'}});
@@ -46,7 +46,7 @@ async function setup(legacyCount = 0) {
     startAfter: (value) => ({ kind: 'startAfter', value }),
     limit: (value) => ({ kind: 'limit', value }),
     limitToLast: (value) => ({ kind: 'limitToLast', value }),
-    Timestamp: { now: () => new Date() },
+    Timestamp: class {constructor(seconds,nanoseconds=0){Object.assign(this,{seconds,nanoseconds});}toDate(){return new Date(this.seconds*1000+this.nanoseconds/1e6);}static now(){return new Date();}},
     arrayUnion: (...values) => ({ kind: 'arrayUnion', values }),
     serverTimestamp: () => ({ kind: 'serverTimestamp' }),
     increment: amount => ({kind:'increment',amount}),
@@ -58,6 +58,7 @@ async function setup(legacyCount = 0) {
     getDoc: async (target) => firestore.getDocFromServer(target),
     getDocsFromServer: async (source) => {
       const target = source.target ?? source;
+      reads.collections.push(target.path);
       await fault.onServerRead?.(target.path);
       const constraints = source.constraints ?? [];
       const prefix = target.path + '/';
@@ -66,7 +67,7 @@ async function setup(legacyCount = 0) {
       );
       for (const c of constraints.filter((item) => item.kind === 'where')) {
         paths = paths.filter((path) => {
-          const value = documents.get(path)[c.field];
+          const value = c.field.split('.').reduce((o,k)=>o?.[k],documents.get(path));
           return c.op === '==' ? value === c.value : c.op === '<' ? value < c.value : c.op === '<=' ? value <= c.value : c.op === '>=' ? value >= c.value : value > c.value;
         });
       }
@@ -160,7 +161,7 @@ async function setup(legacyCount = 0) {
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
   const storySettings=await load('story-settings-store.js');await link(storySettings);await storySettings.evaluate();
   const transfer=await load('import-export.js');await link(transfer);await transfer.evaluate();
-  return {director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
+  return {format:modules.get('lore-format.js').namespace,records:modules.get('lore-records.js').namespace,lines:modules.get('lore-lines.js').namespace,director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
 
 test('migration packs existing messages once and checkpoint reads use chunks', async () => {
@@ -906,8 +907,8 @@ test('New and zero-message copied stories receive independent explicit settings 
  const fresh=await h.sessions.createSession('New');assert.notEqual((await api.ensureStorySettings(fresh)).values.narratorSystemPrompt,'Custom source');assert.ok((await api.ensureStorySettings(fresh)).values.rewriteSystemPrompt);
  await h.sessions.deleteSession(copied);assert.equal(h.documents.has(path+'/storySettings/current'),false);
 });
-test('Concurrent source settings and lore changes abort unpublished copies',async()=>{
- for(const field of ['historyRevision','loreRevision','storySettingsRevision']){
+test('Concurrent source history and settings changes abort unpublished copies',async()=>{
+ for(const field of ['historyRevision','storySettingsRevision']){
   const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');
   let changed=false;h.fault.beforeCommit=changes=>{if(!changed && changes.some(c=>c[1].path.includes('/storySettings/current') && !c[1].path.startsWith(h.sessionPath+'/'))){changed=true;h.documents.get(h.sessionPath)[field]=(h.documents.get(h.sessionPath)[field] ?? 0)+1;}};
   await assert.rejects(h.sessions.duplicateSession('s'),/story changed while copying/);assert.equal([...h.documents].filter(([p,d])=>p.startsWith('users/u/sessions/') && p.split('/').length===4 && !d.importing).length,1);
@@ -927,6 +928,86 @@ test('Failed lore writes leave their revision and content unchanged',async()=>{
  assert.equal(h.documents.get(h.sessionPath).loreRevision,revision);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').name,entry.name);
 });
 
+test('200 cached lore entries remain unchanged across remote revisions, exports and copies until explicit Sync',async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');
+ for(let i=0;i<200;i++)h.documents.set(h.sessionPath+'/lore/e'+i,{...loreEntry('e'+i),name:'Cached '+i});
+ const [first,also]=await Promise.all([h.lore.getLoreSnapshot('s'),h.lore.getLore('s')]);assert.equal(first.entries.length,200);assert.equal(also.length,200);
+ assert.equal(h.reads.collections.filter(p=>p===h.sessionPath+'/lore').length,1);
+ h.documents.get(h.sessionPath).loreRevision=20;h.documents.get(h.sessionPath+'/lore/e0').name='Remote edit';h.documents.set(h.sessionPath+'/lore/new-remote',loreEntry('new-remote'));
+ const jsonl=await h.transfer.serializeStory('s'),header=JSON.parse(jsonl.text.split('\n')[0]).nera;
+ assert.equal(header.lore.length,200);assert.equal(header.lore.find(e=>e.id==='e0').name,'Cached 0');assert.equal(header.loreSnapshot.source,'device-cache');assert.equal(header.loreSnapshot.loadedRevision,0);
+ const backup=await h.transfer.buildFullBackup('s');assert.equal(backup.lore.length,200);assert.equal(backup.loreSnapshot.loadedRevision,0);
+ let changed=false;h.fault.beforeCommit=changes=>{if(!changed && changes.some(c=>c[1].path.includes('/storySettings/current') && !c[1].path.startsWith(h.sessionPath+'/'))){changed=true;h.documents.get(h.sessionPath).loreRevision++;}};
+ const copied=await h.sessions.duplicateSession('s'),copyLore=await h.lore.getLore(copied);
+ assert.equal(copyLore.length,200);assert.equal(copyLore.find(e=>e.id==='e0').name,'Cached 0');
+ assert.equal(h.reads.collections.filter(p=>p===h.sessionPath+'/lore').length,1);assert.equal(h.reads.collections.filter(p=>p==='users/u/sessions/'+copied+'/lore').length,0);
+ const synced=await h.lore.getLoreSnapshot('s',{source:'server'});assert.equal(synced.entries.length,201);assert.equal(synced.entries.find(e=>e.id==='e0').name,'Remote edit');assert.equal(synced.loadedRevision,21);
+ assert.equal((await h.lore.getLore('s')).length,201);assert.equal(h.reads.collections.filter(p=>p===h.sessionPath+'/lore').length,2);
+});
+test('partial imports publish only their committed batches to the cache and do not reread lore',async()=>{
+ const h=await setup();await h.lore.initializeLoreCache('u','s');await h.lore.listBackups('s');
+ const writes=Array.from({length:7},(_,i)=>({id:'new'+i,data:{...loreEntry('new'+i),name:'Imported '+i}}));
+ h.fault.failAt=h.transactions.length+2;
+ await assert.rejects(h.lore.importLore('s',{writes},[]),e=>e.completed===3);
+ let cached=await h.lore.getLoreSnapshot('s');assert.equal(cached.entries.length,3);assert.equal(cached.lastCommittedRevision,1);assert.equal(cached.loadedRevision,0);
+ await h.lore.importLore('s',{writes:writes.slice(3)},[]);cached=await h.lore.getLoreSnapshot('s');assert.equal(cached.entries.length,7);
+ assert.equal(h.reads.collections.filter(p=>p===h.sessionPath+'/lore').length,0);
+});
+test('transaction retries and failed attempts never leak speculative lore into the cache',async()=>{
+ const h=await setup();await h.lore.initializeLoreCache('u','s');let attempts=0;
+ h.fault.beforeCommit=changes=>{if(changes.some(c=>c[1].path.endsWith('/lore/mira')) && attempts++===0)h.documents.get(h.sessionPath).loreRevision=5;};
+ await h.lore.createEntry('s',loreEntry());let value=await h.lore.getLoreSnapshot('s');assert.equal(attempts,2);assert.equal(value.entries.length,1);assert.equal(value.lastCommittedRevision,6);assert.equal(value.loadedRevision,0);
+ const before=JSON.stringify(value);h.fault.failAt=h.transactions.length+1;
+ await assert.rejects(h.lore.saveEntry('s',{...value.entries[0],name:'Failed speculative name'},value.entries[0]),/Injected/);
+ value=await h.lore.getLoreSnapshot('s');assert.equal(JSON.stringify(value),before);assert.equal(h.reads.collections.filter(p=>p===h.sessionPath+'/lore').length,0);
+});
+for(const migrated of [false,true])test(`every lore mutation updates the ${migrated?'selective':'legacy'} cache without a collection reload`,async()=>{
+ const h=await setup();await h.lore.initializeLoreCache('u','s');await h.lore.createEntry('s',loreEntry());
+ if(migrated)await h.lore.migrateRecords('s',await h.lore.getLore('s'),{expectedRevision:1});
+ const reads=()=>h.reads.collections.filter(p=>p===h.sessionPath+'/lore' || p.startsWith(h.sessionPath+'/loreV3/') && p.endsWith('/entries')).length,baseline=reads();
+ const find=async id=>(await h.lore.getLore('s')).find(e=>e.id===id);
+ let base=await find('mira');await h.lore.saveEntry('s',{...base,name:'Saved Mira'},base);assert.equal((await find('mira')).name,'Saved Mira');
+ const other={...loreEntry('other'),name:'Other'};await h.lore.createEntry('s',other);assert.ok(await find('other'));
+ const merged=await h.lore.mergeEntries('s',other,await find('mira'));assert.equal(await find('other'),undefined);assert.ok((await find('mira')).aliases.includes('Other'));
+ await h.lore.restoreBackup('s',merged);assert.ok(await find('other'));
+ const deleted=await h.lore.deleteEntry('s',await find('other'));assert.equal(await find('other'),undefined);await h.lore.restoreBackup('s',deleted);assert.ok(await find('other'));
+ const beforeBackup=JSON.stringify(await h.lore.getLoreSnapshot('s'));await h.lore.writeBackup('s','test','Backup only',await h.lore.getLore('s'));assert.equal(JSON.stringify(await h.lore.getLoreSnapshot('s')),beforeBackup);
+ await h.lore.reconcileBackground('s',await find('mira'),'appearance','Saved background','canon');assert.equal((await find('mira')).sections.appearance.text,'Saved background');
+ base=await find('mira');await h.lore.replaceLines('s',[{entry:base,snapshot:{appearance:base.sections.appearance.lines.map(l=>l.id)},sent:{appearance:base.sections.appearance.lines},sections:{appearance:[{id:'tidied',text:'Tidied',by:'reorganize',src:2,at:2}]}}],2);
+ assert.ok((await find('mira')).sections.appearance.lines.some(l=>l.id==='tidied'));
+ const committed=await h.lore.commitExtraction('s',{creates:[],appends:[{entryId:'mira',section:'notes',line:{id:'extracted',text:'A fresh note',by:'auto',src:2,at:3}}],aliases:[],statusChanges:[]},{endOrder:2,fromTurn:1,toTurn:1});
+ assert.equal(committed.cacheApplied,true);assert.ok((await find('mira')).sections.notes.lines.some(l=>l.id==='extracted'));
+ // Rebuild operates only on the captured cached IDs even if the server has another card.
+ h.documents.set(h.sessionPath+'/lore/unseen',loreEntry('unseen'));
+ await h.lore.markGeneratedForReview('s');assert.equal(await find('unseen'),undefined);assert.equal((await find('mira')).sections.notes.lines[0].needsReview,true);
+ await h.lore.removeReviewedLines('s',await h.lore.getLore('s'),0,2);assert.equal((await find('mira')).sections.notes.lines.length,0);assert.equal(reads(),baseline);
+});
+for(const migrated of [false,true])test(`Timeline uniqueness uses a query limited to one ${migrated?'selective':'legacy'} card`,async()=>{
+ const h=await setup(),timeline=h.lines.makeEntry('events','Timeline',{kind:'timeline'});await h.lore.createEntry('s',timeline);
+ if(migrated)await h.lore.migrateRecords('s',await h.lore.getLore('s'),{expectedRevision:1});
+ const collection=h.sessionPath+(migrated?'/loreV3/'+h.documents.get(h.sessionPath).loreGeneration+'/entries':'/lore'),baseline=h.reads.collections.filter(p=>p===collection).length;
+ // Native query mocks record the matching result; this must be bounded regardless of cached lore.
+ const next={...timeline,id:'another-timeline'};
+ await assert.rejects(h.lore.importCard('s',{id:next.id,data:next,expected:null,loreRevision:h.documents.get(h.sessionPath).loreRevision}),/Timeline already exists/);
+ assert.equal(h.reads.collections.filter(p=>p===collection).length,baseline+1);assert.equal(h.documents.has(collection+'/'+next.id),false);
+});
+for(const migrated of [false,true])test(`cached ${migrated?'selective':'legacy'} lore round trips IDs, sources, approvals and schedules through JSON and JSONL`,async()=>{
+ const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});
+ const character=loreEntry();character.sections.appearance.lines[0].sourceRevision=0;
+ const plan=h.lines.makeEntry('plan','Festival',{schedule:{start:'1/10/738',end:'20/10/738',status:'pending',phases:[{id:'intro',title:'Introduction',start:'1/10/738',end:'5/10/738',text:'Welcome',status:'completed'}]}});plan.id='festival';
+ await h.lore.createEntry('s',character);await h.lore.createEntry('s',plan);
+ if(migrated){const entries=await h.lore.getLore('s');entries[0]=h.records.reconcileRecords(entries[0]);h.records.approveRecord(entries[0],entries[0].recordLayout.records[0]);await h.lore.migrateRecords('s',entries,{expectedRevision:2});}
+ const captured=await h.lore.getLoreSnapshot('s');h.documents.get(h.sessionPath).loreRevision++;
+ for(const format of ['json','jsonl']){
+  const text=format==='json'?JSON.stringify(await h.transfer.buildFullBackup('s')):(await h.transfer.serializeStory('s')).text;
+  const imported=await h.transfer.importSillyTavern({name:'cached.'+format,size:new TextEncoder().encode(text).length,text:async()=>text}),entries=await h.lore.getLore(imported);
+  for(const expected of captured.entries){const actual=entries.find(e=>e.id===expected.id);assert.ok(actual);for(const field of ['sections','schedule','recordLayout','coreReferences','createdFrom'])assert.deepEqual(JSON.parse(JSON.stringify(h.format.normalizeLoreEntry(actual)[field] ?? null)),JSON.parse(JSON.stringify(h.format.normalizeLoreEntry(expected)[field] ?? null)),field);}
+  const reads=h.reads.collections.filter(p=>p==='users/u/sessions/'+imported+'/lore' || p.startsWith('users/u/sessions/'+imported+'/loreV3/') && p.endsWith('/entries')).length;
+  assert.equal(reads,migrated?2:0,'only explicit schema conversion reads the empty destination; import writes populate its cache');
+  await h.lore.getLore(imported);assert.equal(h.reads.collections.filter(p=>p==='users/u/sessions/'+imported+'/lore').length,migrated?2:0);
+ }
+});
+
 test('Story JSONL and full backups round trip only allowed settings and old files use the preserved seed',async()=>{
  const h=await setup(),api=h.storySettings;
  await h.api.addMessage('s',{role:'assistant',content:'Preserved story',scene:'Inn'});const base=(await api.ensureStorySettings('s')).values;
@@ -939,10 +1020,10 @@ test('Story JSONL and full backups round trip only allowed settings and old file
  delete records[0].nera.storySettings;const old=await h.transfer.importSillyTavern({...file,text:async()=>records.map(JSON.stringify).join('\n')});assert.equal((await api.ensureStorySettings(old)).values.narratorSystemPrompt,'Legacy narrator');
  assert.equal(h.documents.get('users/u/sessions/'+id).memory.autoUpdate,false);assert.equal(h.documents.get('users/u/sessions/'+id).memory.sceneFallback,false);
 });
-test('Export rejects history, lore, or settings changes during snapshot reads',async()=>{
- for(const field of ['historyRevision','loreRevision','storySettingsRevision']){
+test('Export rejects history or settings changes during snapshot reads',async()=>{
+ for(const field of ['historyRevision','storySettingsRevision']){
   const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});await h.storySettings.ensureStorySettings('s');
-  h.fault.onServerRead=path=>{if(path===h.sessionPath+'/lore'){h.documents.get(h.sessionPath)[field]=(h.documents.get(h.sessionPath)[field] ?? 0)+1;}};
+  h.fault.onServerRead=path=>{if(path===h.sessionPath+'/messageChunks'){h.documents.get(h.sessionPath)[field]=(h.documents.get(h.sessionPath)[field] ?? 0)+1;}};
   await assert.rejects(h.transfer.serializeStory('s'),/story changed while copying or exporting/);
  }
 });

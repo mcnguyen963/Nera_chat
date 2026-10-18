@@ -31,8 +31,8 @@ export function initSidebar() {
 
   logoutBtn.addEventListener("click",async()=>{if(logoutBtn.disabled || state.busy)return;logoutBtn.disabled=true;try{await prepareChatLogout();await logout();}catch(error){toast('Sign out failed: '+friendlyError(error)+' Reload to continue.','Reload',()=>window.location.reload());}finally{logoutBtn.disabled=false;}});
   document.getElementById('btn-export-all')?.addEventListener('click',()=>{
-    const controller=new AbortController(),sheet=subSheet('Download all my stories',{compact:true,close:()=>{controller.abort();return true;}}),body=node('div',null,'memory-content'),progress=node('p','This reads one document per message chunk and lore card, plus each story document. Large accounts use more database reads.');
-    body.append(progress,button('Download',async()=>{try{await exportAllStories({signal:controller.signal,onProgress:p=>{progress.textContent=`Exporting ${p.done} of ${p.total} stories…`;}});progress.textContent='Downloaded all stories.';}catch(error){progress.textContent=error.name==='AbortError'?'Export cancelled.':friendlyError(error);}}),button('Cancel',sheet.hide));sheet.dialog.append(body);
+    const controller=new AbortController(),sheet=subSheet('Download all my stories',{compact:true,close:()=>{controller.abort();return true;}}),body=node('div',null,'memory-content'),progress=node('p','Exports cached lore. Use Sync data first to include changes from another device.');
+    body.append(progress,button('Download',async()=>{try{await exportAllStories({signal:controller.signal,onProgress:p=>{progress.textContent=`Exporting ${p.done} of ${p.total} stories…`;}});progress.textContent='Exported cached lore.';}catch(error){progress.textContent=error.name==='AbortError'?'Export cancelled.':friendlyError(error);}}),button('Cancel',sheet.hide));sheet.dialog.append(body);
   });
 
   // Select a freshly imported session.
