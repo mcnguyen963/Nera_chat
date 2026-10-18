@@ -193,7 +193,16 @@ function closeSettingsPopup() {
   return true;
 }
 
-function globalDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
+const numericDraftFields=new Set([...Object.keys(contextFields),'rewriteRecentMessages','modelContextTokens','maxResponseTokens','maxOutputPrice',...Object.keys(samplingRanges),'maxTokens','directorMaxInputTokens','directorMaxOutputTokens','directorRecentTurns','directorFocusLimit']);
+function settingsSignature(value,key='') {
+  // Inputs hold text; saved settings hold numbers. Compare their values rather
+  // than reporting a successful save as another unsaved edit.
+  if(numericDraftFields.has(key))return value==null?'':String(value);
+  if(Array.isArray(value))return value.map(item=>settingsSignature(item));
+  if(value && typeof value==='object')return Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,settingsSignature(value[k],k)]));
+  return value;
+}
+function globalDirty() { return JSON.stringify(settingsSignature(draft)) !== JSON.stringify(settingsSignature(original)); }
 function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
   return raw("set-session-title") !== sessionOriginal.title ||

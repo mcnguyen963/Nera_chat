@@ -1517,6 +1517,27 @@ test('Story rewrite settings are editable and resettable with an explicit Markdo
  assert.equal(h.state.storySettings.values.rewriteRecentMessages,0);assert.equal(h.state.storySettings.values.rewriteSystemPrompt,'My custom prompt');assert.equal(h.state.settings.rewriteRecentMessages,10);assert.equal(h.state.settings.streamVibrationMode,'spaces');
  await h.fire('btn-reset-rewrite-prompt');await rewrite.loadRewriteDefaultPrompt();assert.equal(h.el('set-rewrite-prompt').value,def);await h.fire('btn-save-settings');assert.equal(h.state.storySettings.values.rewriteSystemPrompt,def);
 });
+test('a saved prompt closes Settings without falsely reporting unsaved numeric fields',async()=>{
+ const h=await harness();h.state.sessionId='story';h.state.storySettingsId='story';h.state.storySettings={values:(await h.use('story-settings.js')).defaultStorySettings()};
+ const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();await h.fire('nav-prompts');
+ h.el('set-narrator-prompt').value='My saved story prompt';await h.fire('btn-save-settings');assert.match(h.el('settings-saved-msg').textContent,/Story prompts saved/);
+ h.calls.confirm=false;const before=h.calls.confirmations?.length ?? 0;await h.fire('btn-close-settings');
+ assert.equal(h.el('settings-tab').classList.contains('hidden'),true);assert.equal(h.calls.confirmations?.length ?? 0,before);
+});
+test('a saved shared setting closes Settings without phantom newer edits',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();h.el('set-model').value='saved-model';
+ await h.fire('btn-save-settings');assert.equal(h.el('settings-saved-msg').textContent,'Saved ✓');
+ h.calls.confirm=false;const before=h.calls.confirmations?.length ?? 0;await h.fire('btn-close-settings');
+ assert.equal(h.el('settings-tab').classList.contains('hidden'),true);assert.equal(h.calls.confirmations?.length ?? 0,before);
+});
+test('saving shared settings preserves a genuinely unsaved story prompt and its close warning',async()=>{
+ const h=await harness();h.state.sessionId='story';h.state.storySettingsId='story';h.state.storySettings={values:(await h.use('story-settings.js')).defaultStorySettings()};
+ const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();await h.fire('nav-prompts');h.el('set-narrator-prompt').value='Still an unsaved prompt';
+ await h.fire('nav-model');h.el('set-model').value='saved-model';await h.fire('btn-save-settings');assert.equal(h.el('settings-saved-msg').textContent,'Saved. New edits are unsaved.');
+ h.calls.confirm=false;await h.fire('btn-close-settings');assert.equal(h.el('settings-tab').classList.contains('hidden'),false);assert.equal(h.el('set-narrator-prompt').value,'Still an unsaved prompt');
+ await h.fire('nav-prompts');await h.fire('btn-save-settings');assert.equal(h.state.storySettings.values.narratorSystemPrompt,'Still an unsaved prompt');
+ await h.fire('btn-close-settings');assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
+});
 test('MAIN merge stops a rewrite during history loading without a model call',async()=>{
  const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
  h.calls.onHistoryRead=()=>{started();return new Promise(resolve=>release=resolve);};
@@ -2214,6 +2235,7 @@ test('Settings stays dismissible during a delayed save and keeps edits typed aft
  view.openSettingsPopup();assert.equal(h.el('set-model').value,'next-draft');
  finish();await save;
  assert.equal(h.state.settings.modelId,'submitted-model');assert.equal(h.el('set-model').value,'next-draft');
+ assert.equal(h.el('settings-saved-msg').textContent,'Saved. New edits are unsaved.');
  h.calls.onSettingsSave=null;await h.fire('btn-save-settings');assert.equal(h.state.settings.modelId,'next-draft');
 });
 
