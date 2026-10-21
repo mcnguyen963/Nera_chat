@@ -32,6 +32,7 @@ const contextFields = {
   maxContextTokens: "set-max-context", autoSummaryThresholdPercent: "set-auto-threshold",
   keepRecentMessagesAfterSummary: "set-keep-n", summarizerMaxTokens: "set-summarizer-maxtokens",
   summarizerChunkTokens: "set-summarizer-chunk",
+  summarizerThinkingTokens: "set-summarizer-thinking",
 };
 const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
 let draft;
@@ -476,6 +477,7 @@ function validatedDraft(storyValues=null) {
     if (profile.endpoint && !/^https?:\/\//i.test(profile.endpoint)) throw new Error("Endpoint URL must start with http:// or https://.");
   }
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
+  if (result.summarizerThinkingTokens >= result.summarizerMaxTokens) throw new Error('Summary thinking tokens must be lower than the summary total output tokens.');
   result.rewriteRecentMessages=integerField(result.rewriteRecentMessages,'set-rewrite-n');
   if(!['off','speed','spaces'].includes(result.streamVibrationMode))throw new Error('Choose a valid vibration mode.');
   if(result.rewriteSystemPrompt!=null && !result.rewriteSystemPrompt.trim())throw new Error('Rewrite system prompt cannot be empty. Use the default or enter a prompt.');

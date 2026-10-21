@@ -55,7 +55,8 @@ export const DEFAULT_SETTINGS = {
   autoSummarizationEnabled: false,
   autoSummaryThresholdPercent: 70,
   keepRecentMessagesAfterSummary: 10,
-  summarizerMaxTokens: 20000,
+  summarizerMaxTokens: 50000,
+  summarizerThinkingTokens: 20000,
   summarizerChunkTokens: 250000,
   narratorSystemPrompt: prompts.narrator,
   summarizerSystemPrompt: prompts.summarizer,
@@ -70,6 +71,9 @@ export async function mergeDefaults(data) {
       ...(data?.reasoning ?? {}),
     },
   };
+  // Older saved total limits stay intact; leave room for visible text when
+  // introducing the separate thinking budget to those settings.
+  if (data?.summarizerThinkingTokens == null) merged.summarizerThinkingTokens = Math.min(20000, Math.floor(merged.summarizerMaxTokens * 0.4));
   for (const key of PROMPT_KEYS) {
     const saved=data?.[key];
     if (typeof saved!=='string' || saved===DEFAULT_SETTINGS[key]) {merged[key]=DEFAULT_SETTINGS[key];continue;}

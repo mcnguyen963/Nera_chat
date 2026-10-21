@@ -26,11 +26,18 @@ function summarizerSettings(settings, outputCapacity) {
   if (!Number.isFinite(contextLimit) || contextLimit < 1024) {
     throw new Error("Summarization needs a context limit of at least 1024 tokens.");
   }
-  const maxResponseTokens = Math.min(
-    settings.summarizerMaxTokens ?? 20000, outputCapacity
-  );
-  // Use the selected connection's reasoning settings for summaries as well.
-  return { ...settings, maxResponseTokens };
+  const total = settings.summarizerMaxTokens ?? 50000;
+  const thinking = settings.summarizerThinkingTokens ?? Math.min(20000, Math.floor(total * 0.4));
+  if (!Number.isSafeInteger(total) || total < 256 || !Number.isSafeInteger(thinking) || thinking < 0 || thinking >= total) {
+    throw new Error('Summary thinking tokens must be non-negative and lower than the summary total output tokens.');
+  }
+  // Only the written summary occupies future chat context. Thinking is an
+  // additional part of this request's total output allowance.
+  const maxResponseTokens = Math.min(total - thinking, outputCapacity) + thinking;
+  const reasoning = thinking > 0
+    ? { enabled:true,mode:'max_tokens',maxTokens:thinking }
+    : { enabled:false,explicitDisable:true };
+  return { ...settings, maxResponseTokens, reasoning };
 }
 
 export function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
@@ -99,7 +106,7 @@ async function runSummary(session,settings,opts) {
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
   const summaryPrompt = (settings.summarizerSystemPrompt || '')+(memoryActive(normalizeMemory(session.memory)) ? '\n\n'+prompts.summaryContinuity : '');
-  const detailDirective = '\n\n'+renderPrompt(prompts.summaryOutput, { MAX_OUTPUT_TOKENS: requestSettings.maxResponseTokens });
+  const detailDirective = '\n\n'+renderPrompt(prompts.summaryOutput, { MAX_OUTPUT_TOKENS: requestSettings.maxResponseTokens - (requestSettings.reasoning.maxTokens ?? 0) });
 
   let content = null;
   let offset = 0;
