@@ -51,7 +51,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-chunk': 2000, 'mem-loreLookbackMessages': 0, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
+      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-thinking': 0, 'set-summarizer-chunk': 2000, 'mem-loreLookbackMessages': 0, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
@@ -274,6 +274,8 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   h.el('set-frequency-penalty').value = '-2';
   h.el('set-presence-penalty').value = '2';
   h.el('set-keep-n').value = '0';
+  h.el('set-summarizer-maxtokens').value = '60000';
+  h.el('set-summarizer-thinking').value = '12000';
   h.el('set-auto-summary-enabled').checked = true;
   await h.fire('btn-profile-copy');
   const copyId = h.el('set-profiles').value;
@@ -282,8 +284,16 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   await h.fire('set-profiles', 'change');
   assert.equal(h.el('set-model').value, 'model-a');
   assert.equal(h.calls.writes.length, 0);
+  h.el('set-summarizer-thinking').value='60000';
+  await h.fire('btn-save-settings');
+  assert.equal(h.calls.writes.length,0);
+  assert.match(h.el('settings-saved-msg').textContent,/thinking tokens must be lower/);
+  h.el('set-summarizer-thinking').value='12000';
   await h.fire('btn-save-settings');
   assert.equal(h.state.settings.keepRecentMessagesAfterSummary, 0);
+  assert.equal(h.state.settings.summarizerMaxTokens,60000);
+  assert.equal(h.state.settings.summarizerThinkingTokens,12000);
+  assert.equal(h.calls.writes.at(-1).summarizerThinkingTokens,12000);
   assert.equal(h.state.settings.autoSummarizationEnabled, true);
   assert.equal(h.state.settings.profiles.length, 2);
   assert.equal(h.state.settings.profiles.find(p => p.id === copyId).modelId, 'model-b');
@@ -660,7 +670,7 @@ test('Summarizer respects input and output budgets without a one-third context c
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
   const settings = { ...h.state.settings, narratorSystemPrompt:'Narrate.', summarizerSystemPrompt:'Summarize the established events.', modelId: 'test', streaming: false,
-    maxContextTokens: 14000,maxResponseTokens:100,summarizerMaxTokens:7000,summarizerChunkTokens:900,
+    maxContextTokens: 14000,maxResponseTokens:100,summarizerMaxTokens:7000,summarizerThinkingTokens:2000,summarizerChunkTokens:900,
     keepRecentMessagesAfterSummary: 0 };
   const messages = Array.from({ length: 8 }, (_, i) => ({ id: String(i), order: i + 1,
     role: i%2 ? 'assistant' : 'user', content: 'event '.repeat(65) }));
@@ -676,7 +686,10 @@ test('Summarizer respects input and output budgets without a one-third context c
 test('Summarizer preserves configured output limits above the default', async () => {
   const h = await harness();
   const settingsApi = await h.use('settings.js');
-  assert.equal(settingsApi.DEFAULT_SETTINGS.summarizerMaxTokens, 20000);
+  assert.equal(settingsApi.DEFAULT_SETTINGS.summarizerMaxTokens, 50000);
+  assert.equal(settingsApi.DEFAULT_SETTINGS.summarizerThinkingTokens,20000);
+  assert.equal((await settingsApi.mergeDefaults({summarizerMaxTokens:5000})).summarizerThinkingTokens,2000);
+  assert.equal((await settingsApi.mergeDefaults({summarizerMaxTokens:50000,summarizerThinkingTokens:0})).summarizerThinkingTokens,0);
   assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 100000 })).summarizerMaxTokens, 100000);
   assert.equal((await settingsApi.mergeDefaults({ summarizerMaxTokens: 5000 })).summarizerMaxTokens, 5000);
   const { runSummarization } = await h.use('summarizer.js');
@@ -689,7 +702,7 @@ test('Summarizer preserves configured output limits above the default', async ()
   assert.ok(h.calls.requests.every(request => request.max_tokens === 100000));
 });
 
-test('Summarizer preserves chat reasoning within its effective output budget', async () => {
+test('Summarizer uses its own default thinking budget instead of chat reasoning', async () => {
   const h = await harness();
   const { runSummarization } = await h.use('summarizer.js');
   await runSummarization({ id: 's' }, {
@@ -698,7 +711,9 @@ test('Summarizer preserves chat reasoning within its effective output budget', a
     keepRecentMessagesAfterSummary: 0,
   }, { messages: Array.from({length:4},(_,i)=>({id:String(i),order:i+1,role:i%2?'assistant':'user',content:'A new event'})) });
   assert.equal(h.calls.requests.length, 1);
-  assert.deepEqual(h.calls.requests[0].reasoning, {max_tokens:Math.min(20000,h.calls.requests[0].max_tokens-1)});
+  assert.deepEqual(h.calls.requests[0].reasoning, {max_tokens:20000});
+  assert.equal(h.calls.requests[0].max_tokens,50000);
+  assert.match(h.calls.requests[0].messages[1].content,/within 30000 output tokens/);
 });
 
 test('Incomplete streamed replies are rejected', async () => {

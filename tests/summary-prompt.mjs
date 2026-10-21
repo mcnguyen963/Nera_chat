@@ -33,7 +33,7 @@ test('Summary requests carry the active summary and then each complete chunk rep
   const {prompts}=await use('system-prompts.js');
   const {runSummarization}=await use('summarizer.js');
   await runSummarization({id:'story',activeSummaryMessageId:active.id,breakpointOrder:4,longTermPlan:'Private future outline'},
-    {summarizerSystemPrompt:prompts.summarizer,maxContextTokens:50000,summarizerMaxTokens:4000,summarizerChunkTokens:1,keepRecentMessagesAfterSummary:2});
+    {summarizerSystemPrompt:prompts.summarizer,maxContextTokens:50000,summarizerMaxTokens:4000,summarizerThinkingTokens:0,summarizerChunkTokens:1,keepRecentMessagesAfterSummary:2});
   assert.equal(requests.length,3);
   for(const [i,request]of requests.entries()){
     assert.equal(request.messages.length,2);
@@ -49,12 +49,12 @@ test('Summary requests carry the active summary and then each complete chunk rep
   assert.equal(saved.content,replacements.at(-1));
   assert.equal(saved.coveredRange.toOrder,10);
 });
-test('Serialized summaries use task-specific continuity and preserve configured reasoning',async()=>{
+test('Serialized summaries use task-specific continuity and use independent summary thinking budgets',async()=>{
   for(const endpoint of ['https://openrouter.ai/api/v1/chat/completions','https://mock.local/chat'])for(const memory of [{},{lorebooks:true}])for(const reasoning of [
     {enabled:true,mode:'effort',effort:'high'},
     {enabled:true,mode:'max_tokens',maxTokens:4096},
     {enabled:false,explicitDisable:true},
-  ]){
+  ])for(const thinking of [0,20000]){
     const requests=[];
     const previous='Only Sol knew Mira owed him a map after the thaw.';
     const history=Array.from({length:8},(_,i)=>({id:'m'+i,order:i+1,narratorTurn:Math.floor(i/2)+1,role:i%2?'assistant':'user',content:'Event '+i}));
@@ -69,7 +69,7 @@ test('Serialized summaries use task-specific continuity and preserve configured 
       'context-builder.js':{buildContextForRequest:async()=>({usedTokens:100,report:{warnings:[]}}),computeContextUsage:async()=>({}),MESSAGE_FRAME_TOKENS:8,REQUEST_FRAME_TOKENS:8},
     }});
     const {prompts}=await use('system-prompts.js');
-    const settings={endpoint,modelId:'test',streaming:false,maxContextTokens:120000,maxResponseTokens:1000,summarizerMaxTokens:89000,keepRecentMessagesAfterSummary:2,summarizerSystemPrompt:'Summarize only.',reasoning};
+    const settings={endpoint,modelId:'test',streaming:false,maxContextTokens:120000,maxResponseTokens:1000,summarizerMaxTokens:89000,summarizerThinkingTokens:thinking,keepRecentMessagesAfterSummary:2,summarizerSystemPrompt:'Summarize only.',reasoning};
     await (await use('summarizer.js')).runSummarization({id:'story',memory,activeSummaryMessageId:'old-summary',breakpointOrder:2},settings);
     assert.equal(requests.length,1);
     const body=requests[0],system=body.messages[0].content;
@@ -80,8 +80,8 @@ test('Serialized summaries use task-specific continuity and preserve configured 
     assert.match(prompts.continuity,/Continue from the newest narrative and the current user message/);
     assert.ok(body.messages[1].content.startsWith('Previous summary:\n'+previous+'\n\nNew events to fold in:\n'));
     assert.equal(body.max_tokens,89000);
-    assert.match(body.messages[1].content,/within 89000 output tokens\. This is a ceiling, not a target/);
-    if(reasoning.enabled)assert.deepEqual(body.reasoning,reasoning.mode==='effort' ? {effort:'high'} : {max_tokens:4096});
+    assert.ok(body.messages[1].content.includes(`within ${89000-thinking} output tokens. This is a ceiling, not a target`));
+    if(thinking)assert.deepEqual(body.reasoning,{max_tokens:thinking});
     else if(endpoint.includes('openrouter.ai'))assert.deepEqual(body.reasoning,{enabled:false});
     else assert.equal(body.reasoning,undefined);
     assert.equal(settings.reasoning,reasoning);
@@ -100,4 +100,24 @@ test('F20 immediately preceding summary default migrates, while customized summa
   assert.equal((await settings.mergeDefaults({summarizerSystemPrompt:old.trim()})).summarizerSystemPrompt,settings.DEFAULT_SETTINGS.summarizerSystemPrompt);
   const custom=old.trim()+'\nMy custom story requirements.';
   assert.equal((await settings.mergeDefaults({summarizerSystemPrompt:custom})).summarizerSystemPrompt,custom);
+});
+
+test('Summary context capacity limits written text while retaining a separate thinking allowance',async()=>{
+  for(const full of [false,true])for(const modelContextTokens of [null,160000]){
+    const requests=[];
+    const history=Array.from({length:6},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'Established event.'}));
+    const use=appHarness({stubs:{
+      'messages.js':{getMessages:async()=>history,getCheckpointMessages:async()=>history,newMessageId:()=> 'summary',addMessage:async(_sid,message)=>({id:message.id,message})},
+      'tokenizer.js':{countTokens:async()=>100},
+      'context-builder.js':{buildContextForRequest:async()=>({usedTokens:80000,report:{warnings:[]}}),computeContextUsage:async()=>({}),MESSAGE_FRAME_TOKENS:8,REQUEST_FRAME_TOKENS:8},
+      'llm-client.js':{chatCompletion:async request=>{requests.push(request);return {content:'Complete summary.',finishReason:'stop'};}},
+    }});
+    const settings={maxContextTokens:100000,modelContextTokens,maxResponseTokens:1000,summarizerMaxTokens:50000,summarizerThinkingTokens:20000,keepRecentMessagesAfterSummary:0};
+    await(await use('summarizer.js')).runSummarization({id:'story'},settings,{full});
+    assert.equal(requests.length,1);
+    assert.equal(requests[0].settings.maxResponseTokens,39860);
+    assert.equal(requests[0].settings.reasoning.maxTokens,20000);
+    assert.match(requests[0].messages[1].content,/within 19860 output tokens/);
+    await assert.rejects((await use('summarizer.js')).runSummarization({id:'story'},{...settings,summarizerThinkingTokens:50000},{full}),/thinking tokens/);
+  }
 });
