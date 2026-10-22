@@ -31,11 +31,11 @@ Only one JSON object, no code fence, no comments, exactly this shape:
     { "name": "<Name>", "aliases": [], "sections": { "description": { "text": "" }, "state": { "text": "", "lines": [] } } }
   ],
   "facts": [
-    { "name": "<Topic>", "text": "<one rule per line>", "lines": [] }
+    { "name": "<Topic>", "aliases": [], "text": "<one rule per line>", "lines": [] }
   ],
   "events": {
     "timeline": { "lines": [ { "text": "<important event>", "turn": 12, "when": "<date>" } ] },
-    "threads": [ { "title": "<unresolved goal, promise, mystery or threat>", "status": "open", "text": "<what it is about>", "lines": [] } ]
+    "threads": [ { "title": "<unresolved goal, promise, mystery or threat>", "status": "open", "aliases": [], "text": "<what it is about>", "lines": [] } ]
   }
 }
 

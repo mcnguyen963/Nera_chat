@@ -8,6 +8,10 @@ import { latestScene } from './scene.js';
 export const STOPLIST = new Set('he she they him her them i you me we it someone somebody man woman boy girl guard the a narrator user unknown'.split(' '));
 export const COMMON_ALIAS_WORDS = new Set('captain guard old lady lord man woman girl boy'.split(' '));
 export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’]/g,"'").replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
+export function validRecallAlias(value) {
+  const name=normalizeName(value), words=name.replace(/^the /,'').split(' ');
+  return name.length>=2 && name.length<=60 && !words.every(w=>STOPLIST.has(w)||COMMON_ALIAS_WORDS.has(w));
+}
 export function duplicateCards(entries) {
   const names=new Map(),ids=new Set();
   for(const e of entries)for(const n of new Set([e.name,...(e.aliases ?? [])].map(normalizeName).filter(Boolean))){const key=e.book+':'+n;const previous=names.get(key);if(previous && previous!==e.id){ids.add(e.id);ids.add(previous);}else names.set(key,e.id);}
@@ -30,7 +34,7 @@ export function makeEntry(book, name, extra = {}) {
 }
 export function parseMemoryLines(text,ctx={}) {
   const ops=[],skipped=[],adjusted=[],info=[];let sawNone=false;
-  const tags={char:'char',character:'char',characters:'char',chars:'char',chr:'char',loc:'loc',location:'loc',locations:'loc',place:'loc',places:'loc',fact:'fact',facts:'fact',world:'fact',event:'event',events:'event',open:'open',thread:'open',threads:'open',opened:'open',closed:'closed',close:'closed',resolved:'closed',expired:'expired',background:'background'};
+  const tags={alias:'alias',char:'char',character:'char',characters:'char',chars:'char',chr:'char',loc:'loc',location:'loc',locations:'loc',place:'loc',places:'loc',fact:'fact',facts:'fact',world:'fact',event:'event',events:'event',open:'open',thread:'open',threads:'open',opened:'open',closed:'closed',close:'closed',resolved:'closed',expired:'expired',background:'background'};
   const assistants=ctx.range?.assistants ?? [],turns=computeTurns(ctx.messages ?? []);
   for(const [i,source] of stripThinking(text).split(/\r?\n/).entries()) {
     const line=source.trim().replace(/^(?:[-*+•]|\d+[.)])\s+/,'').replace(/`|\*\*|__/g,'').replace(/[｜│∣]/g,'|').trim();
@@ -41,17 +45,24 @@ export function parseMemoryLines(text,ctx={}) {
     const m=line.match(/^(?:\[?\s*(?:T|Turn\s*)(\d+)(?:\s*[-–]\s*(?:T|Turn\s*)?(\d+))?\s*\]?\s*:?\s*)?\[\s*([A-Za-z ]+?)\s*\]\s*(.*)$/i);
     if(!m){skip('not a note');continue;}
     let tag=tags[m[3].toLowerCase()];if(!tag){skip('unknown tag');continue;}
-    const book=tag==='char'?'characters':tag==='loc'?'locations':tag==='fact'?'facts':'events';
-    if(ctx.mem?.books?.[book]?.on===false){skip('book off');continue;}
+    let book=tag==='char'?'characters':tag==='loc'?'locations':tag==='fact'?'facts':'events';
     let body=m[4],name,value,section='text',threadMeta;
-    if(tag==='event' || (tag==='open' && /^Timeline\s*[|:]/i.test(body))){tag='event';name='Timeline';value=body.replace(/^(?:Timeline\s*)?[|:]\s*/i,'');}
-    else if(tag==='fact' && !body.includes('|')){name='General';value=body;}
-    else if(body.includes('|')){const at=body.indexOf('|');name=body.slice(0,at);value=body.slice(at+1);}
-    else if(['open','closed','expired','background'].includes(tag)) {const at=body.search(/:| [—-] /);name=at<0?body:body.slice(0,at);value=at<0?'':body.slice(at).replace(/^(?::| [—-] )\s*/,'');}
-    else {const match=body.match(/^([^:]+):\s*([^:]+):\s*(.*)$/);if(!match || !SECTION_MAP[book]?.[normalizeName(match[2])]){skip('missing separator');continue;}name=match[1];value=match[2]+': '+match[3];}
+    if(tag==='alias') {
+      const parts=body.split('|').map(s=>s.trim());
+      if(parts.length!==3 || !['characters','locations','facts','events'].includes(parts[0])){skip('invalid alias format or book');continue;}
+      [book,name,value]=parts;section='alias';
+    }
+    if(ctx.mem?.books?.[book]?.on===false){skip('book off');continue;}
+    if(tag!=='alias') {
+      if(tag==='event' || (tag==='open' && /^Timeline\s*[|:]/i.test(body))){tag='event';name='Timeline';value=body.replace(/^(?:Timeline\s*)?[|:]\s*/i,'');}
+      else if(tag==='fact' && !body.includes('|')){name='General';value=body;}
+      else if(body.includes('|')){const at=body.indexOf('|');name=body.slice(0,at);value=body.slice(at+1);}
+      else if(['open','closed','expired','background'].includes(tag)) {const at=body.search(/:| [—-] /);name=at<0?body:body.slice(0,at);value=at<0?'':body.slice(at).replace(/^(?::| [—-] )\s*/,'');}
+      else {const match=body.match(/^([^:]+):\s*([^:]+):\s*(.*)$/);if(!match || !SECTION_MAP[book]?.[normalizeName(match[2])]){skip('missing separator');continue;}name=match[1];value=match[2]+': '+match[3];}
+    }
     name=name.trim().replace(/^["'“”[\]]+|["'“”[\]]+$/g,'');
-    if(!name || name.length>60 || STOPLIST.has(normalizeName(name)) || normalizeName(name).length<2){skip('not a valid name');continue;}
-    if(book==='characters' || book==='locations') {
+    if(!name || name.length>60 && !ctx.entries?.some(e=>e.book===book && [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(name))) || STOPLIST.has(normalizeName(name)) || normalizeName(name).length<2){skip('not a valid name');continue;}
+    if(tag!=='alias' && (book==='characters' || book==='locations')) {
       value=value.trim();
       const label=value.match(/^(.+?)(?::| [—-] )\s*(.*)$/);
       if(label) {
@@ -64,7 +75,7 @@ export function parseMemoryLines(text,ctx={}) {
     }
     value=value.trim();
     if(['open','closed','expired','background'].includes(tag) && value.startsWith('{')){try{const data=JSON.parse(value);if(typeof data.text!=='string')throw new Error();value=data.text;threadMeta=normalizeThreadMeta(data.threadMeta);}catch{skip('invalid structured thread note');continue;}}
-    if(section==='alias' && (normalizeName(value).length<2 || normalizeName(value).split(' ').every(w=>STOPLIST.has(w)))){skip('not a valid alias');continue;}
+    if(section==='alias' && !validRecallAlias(value)){skip('not a valid alias');continue;}
     if((!value && !['open','closed','expired','background'].includes(tag)) || value.length>400){skip('empty or oversized note');continue;}
     if(ops.length>=80){info.push('too many notes; first 80 kept');continue;}
     let turn=Math.max(Number(m[1]),Number(m[2] ?? m[1])),startTurn=Math.min(Number(m[1]),Number(m[2] ?? m[1])),assistant,evidence=[],original=null;
@@ -95,9 +106,21 @@ export function applyOps(entries, ops, stampCtx = {}) {
   const match = (book,name) => {const matches=working.filter(e => e.book === book && [e.name,...(e.aliases ?? [])].some(n => normalizeName(n) === normalizeName(name)));if(matches.length>1)throw Object.assign(new Error('Duplicate cards match '+name+'. Open Lorebooks → Duplicate review and choose the surviving card before retrying memory extraction.'),{code:'duplicate-lore'});return matches[0];};
   const timeline=()=>{const cards=working.filter(e=>e.kind==='timeline');if(cards.length>1)throw Object.assign(new Error('Duplicate timeline cards. Open Lorebooks → Duplicate review and choose the surviving card before retrying memory extraction.'),{code:'duplicate-lore'});return cards[0];};
   const now = stampCtx.now ?? Date.now();
-  for (const op of ops) {
+  // Seed aliases after creating cards, without changing already saved identities.
+  const ordered=[...ops.filter(op=>op.section!=='alias'),...ops.filter(op=>op.section==='alias')];
+  for (const op of ordered) {
     if (stampCtx.mem?.books?.[op.book]?.on === false) { skipped.push({ ...op, reason:'book off' }); continue; }
     let e = op.tag === 'event' ? timeline() : match(op.book,op.name);
+    if(op.section==='alias') {
+      if(!validRecallAlias(op.text)){skipped.push({...op,reason:'not a valid alias'});continue;}
+      const clash=match(op.book,op.text);
+      if(clash && clash.id!==e?.id){skipped.push({...op,reason:'name already used by '+clash.name});continue;}
+      if(!e){skipped.push({...op,reason:'alias target was not created in this update'});continue;}
+      if(!creates.includes(e)){skipped.push({...op,reason:'saved card names and aliases are preserved; edit aliases manually'});continue;}
+      if(e.kind==='timeline' || !['characters','locations','facts','events'].includes(e.book)){skipped.push({...op,reason:'aliases are not supported for this card kind'});continue;}
+      if(![e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(op.text))){(e.aliases ??= []).push(op.text);aliases.push({entryId:e.id,alias:op.text});}
+      continue;
+    }
     if(!e && op.tag==='open' && op.threadMeta){const key=threadIdentity(op.threadMeta);const matches=key?working.filter(e=>e.kind==='thread' && threadIdentity(e.threadMeta)===key):[];if(matches.length===1)e=matches[0];}
     if(['expired','background'].includes(op.tag) && (!e || e.kind!=='thread')){skipped.push({...op,reason:'cannot archive an unknown thread'});continue;}
     if(op.tag==='background' && (e.createdFrom!=='auto' || !e.threadHistory || e.sections.text?.text?.trim() || e.sections.text?.lines?.some(l=>l.by==='user'))){skipped.push({...op,reason:'authored thread requires manual review'});continue;}
@@ -106,7 +129,6 @@ export function applyOps(entries, ops, stampCtx = {}) {
     if(e && archivedThread(e) && op.tag==='open' && (!(op.evidence?.length && op.src>e.threadHistory.archive.source.src) || !op.threadMeta && e.sections.text.lines.some(l=>normalizeName(l.text)===normalizeName(op.text)))){skipped.push({...op,reason:'archived thread needs new evidence'});continue;}
     let text = op.text;
     if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed' && !e.threadMeta)) { e = timeline(); text = `Resolved: ${op.name} — ${text}`; }
-    if (!e && op.section === 'alias') { const clash = match(op.book,text); if (clash) { skipped.push({ ...op,reason:'name already used by '+clash.name }); continue; } }
     if (!e) {
       const timeline = op.tag === 'event' || op.tag === 'closed';
       e = makeEntry(op.book, timeline ? 'Timeline' : op.name, { kind:timeline ? 'timeline' : ['open','closed'].includes(op.tag) ? 'thread' : 'card', draft:!['event','open','closed'].includes(op.tag), createdFrom:'auto', status:op.tag === 'open' ? 'open' : null });
@@ -115,12 +137,6 @@ export function applyOps(entries, ops, stampCtx = {}) {
     let section = e.kind === 'timeline' ? 'text' : op.section;
     if (section === 'bond' && [e.name,...e.aliases].some(n => normalizeName(n) === normalizeName(stampCtx.protagonist ?? stampCtx.mem?.protagonist))) section = 'notes';
     if (section === 'personality' && !stampCtx.allowPersonality) { skipped.push({ ...op, reason:'personality is written by you' }); continue; }
-    if (section === 'alias') {
-      const clash = match(op.book,text);
-      if (clash && clash.id !== e.id) { skipped.push({ ...op,reason:'name already used by '+clash.name }); continue; }
-      if(!(e.aliases ?? []).some(n=>normalizeName(n)===normalizeName(text))){(e.aliases ??= []).push(text);aliases.push({entryId:e.id,alias:text});}
-      continue;
-    }
     if(e.kind==='thread' && op.tag==='open' && !op.threadMeta && ['expired-unresolved','background-unresolved'].includes(e.threadMeta?.outcome))Object.assign(e,reopenThread(e));
     if(op.tag==='expired'){const projected=threadLifecycle({...e,status:'open',threadMeta:(op.threadMeta ?? e.threadMeta)?{...(op.threadMeta ?? e.threadMeta),outcome:null}:null},latestScene(stampCtx.messages ?? [],Infinity,stampCtx.session?.memory?.startingScene).scene);if(!projected.threadExpired){skipped.push({...op,reason:'expiry is not supported by canonical story time'});continue;}e.threadMeta=projected.threadMeta;}
     if(e.kind==='thread' && op.threadMeta && op.tag!=='expired')e.threadMeta=op.threadMeta;

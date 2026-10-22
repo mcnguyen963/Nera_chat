@@ -12,7 +12,7 @@ export function fillProtagonist(text, protagonist) { return String(text).replace
 export const LOREBOOK_TEMPLATE_MD = prompts.lorebookMarkdown;
 export const LOREBOOK_TEMPLATE_JSON = prompts.lorebookJson;
 export async function buildExtractionMessages({ settings, mem, entries, messages, range, count }) {
-  const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+prompts.threadPolicy+"\n\n"+prompts.threadExtraction+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
+  const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+prompts.memoryNaming+"\n\n"+prompts.threadPolicy+"\n\n"+prompts.threadExtraction+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens}) - await count(prompt) - 500;
   const turns = computeTurns(messages);
   let fitted = null;
@@ -49,8 +49,8 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   }
   if(governed)known.push('THREADS GOVERNED BY CURRENT POLICY (eligible for incidental background archival):\n'+governed);
   for (const [book,label] of [['characters',renderLoreLabel('knownCharacters')],['locations',renderLoreLabel('knownLocations')],['facts',renderLoreLabel('knownFacts')],['events',renderLoreLabel('knownThreads')]]) {
-    const candidates=entries.filter(e=>e.book===book && (book!=='events' || e.kind==='thread' && e.status!=='closed')).sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))));
-    const names=candidates.map(e=>e.name+(e.aliases?.length?' ('+e.aliases.join(', ')+')':''));
+    const candidates=entries.filter(e=>e.book===book && (book!=='events' || e.kind==='thread' && (e.status!=='closed' || ids.has(e.id)))).sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))));
+    const names=candidates.map(e=>e.kind==='thread' ? JSON.stringify({name:e.name,aliases:e.aliases ?? [],status:e.status ?? 'open'}) : e.name+(e.aliases?.length?' ('+e.aliases.join(', ')+')':''));
     let n=names.length;
     while(n>0 && !ids.has(candidates[n-1].id) && await count(renderLoreLabel('knownList',{LABEL:label,NAMES:names.slice(0,n).join('; '),MORE:''}))>inputBudget*.15/4)n--;
     known.push(renderLoreLabel('knownList',{LABEL:label,NAMES:names.slice(0,n).join('; '),MORE:n<names.length ? renderLoreLabel('moreNames',{COUNT:names.length-n}) : ''}));

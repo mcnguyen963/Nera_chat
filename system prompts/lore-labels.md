@@ -4,7 +4,7 @@ protagonistLine: PROTAGONIST: {{PROTAGONIST}}
 knownCharacters: Characters
 knownLocations: Locations
 knownFacts: Fact topics
-knownThreads: Open threads
+knownThreads: Threads
 knownList: {{LABEL}}: {{NAMES}}{{MORE}}
 moreNames: ; … and {{COUNT}} more
 extraInstruction: EXTRA INSTRUCTION: {{TEXT}}

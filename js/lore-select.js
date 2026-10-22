@@ -28,10 +28,10 @@ export function buildLoreIndex(entries) {
   return index;
 }
 export function findMentionOccurrences(text, index, book) {
-  const matches = [], nfc = String(text).normalize('NFC');
+  const matches = [], nfc = String(text).normalize('NFC').replace(/[‘’]/g,"'");
   for (const term of index[book] ?? []) {
     // All matches share offsets in the same string; allow names across whitespace.
-    const phrase = escapeRegex(term.firstName ? term.term : term.normTerm).replace(/\s+/g, '\\s+');
+    const phrase = escapeRegex(term.firstName ? term.term.replace(/[‘’]/g,"'") : term.normTerm).replace(/\s+/g, '\\s+');
     const re = new RegExp('(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',term.firstName ? 'gu' : 'giu');
     for (const m of nfc.matchAll(re)) matches.push({ id:term.entryId, start:m.index, end:m.index+m[0].length });
   }
@@ -121,6 +121,9 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
         if (book === 'facts') add(e,4,'recent');
       }
     }
+    const alreadySkipped=new Set(skipped.map(s=>s.entryId));
+    for(const entry of list) if(!candidates.has(entry.id) && !alreadySkipped.has(entry.id))
+      skipped.push({entryId:entry.id,book,name:entry.name,reason:'no name or alias match'});
     const ranked = [...candidates.values()].sort((a,b) => a.priority-b.priority ||
       ((!transition && (book==='facts' && a.priority===4 || book==='events' && a.priority===2))
         ? newestNote(b.entry)-newestNote(a.entry) : compareMention(a.mention,b.mention)) || (book==='characters' ? characterImportance(a.entry)-characterImportance(b.entry) : 0) || stableId(a.entry.id,b.entry.id));
