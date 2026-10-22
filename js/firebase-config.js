@@ -1,10 +1,10 @@
 // Local Firebase web config for the aichat-95df4 project.
 export const firebaseConfig = {
-  apiKey: "AIzaSyC7Hmyg0aFU0RSzxfnrgjrZlX1nukSV71I",
-  authDomain: "aichat-6c3cd.firebaseapp.com",
-  projectId: "aichat-6c3cd",
-  storageBucket: "aichat-6c3cd.firebasestorage.app",
-  messagingSenderId: "170301269428",
-  appId: "1:170301269428:web:f636213c036c2e2e94bee1",
-  measurementId: "G-0GZVKWQRH2",
+  apiKey: "AIzaSyBIdIDMi24w5kYo-i5fHlRIh-EjGmbXa54",
+  authDomain: "aichat-95df4.firebaseapp.com",
+  projectId: "aichat-95df4",
+  storageBucket: "aichat-95df4.firebasestorage.app",
+  messagingSenderId: "225600392302",
+  appId: "1:225600392302:web:1b2577ba2e0147e778aa7f",
+  measurementId: "G-440MGBS4HF",
 };
