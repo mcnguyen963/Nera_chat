@@ -1,3 +1,5 @@
+import {supportsProviders, providerOrder, providerRetryAt, coolDownProvider, availabilityFailure, unavailableProviders} from './provider-routing.js';
+
 // OpenAI-compatible chat client with SSE streaming + reasoning/thinking handling (spec §7).
 // - delta.content  -> visible response, becomes message.content
 // - delta.reasoning -> collapsible "thinking" pane, becomes message.thinking.
@@ -99,6 +101,12 @@ function responseError(data) {
   return classified("API error: " + (typeof detail === "string" ? detail : JSON.stringify(detail ?? data)),data?.error ? "api_rejection" : "malformed_response",{providerError:data?.error ?? null});
 }
 
+async function httpResponseError(response) {
+  const text=await response.text();
+  let data;try { data=JSON.parse(text); } catch {}
+  return classified(`API error ${response.status}: ${data?.error?.message ?? text}`,"api_rejection",{status:response.status,providerError:data?.error ?? null});
+}
+
 const BAD_FINISH = new Set(['content_filter', 'error', 'tool_calls', 'function_call', 'safety', 'recitation', 'blocklist', 'prohibited_content']);
 
 function finishKind(reason) {
@@ -139,8 +147,36 @@ function serializedRequestBody(settings, messages, stream = false, format = {}) 
 }
 
 export async function chatCompletion(options) {
+  const order = supportsProviders(options.settings.endpoint) ? providerOrder(options.settings.providerOrder) : [];
+  if (!order.length) return completionAttempt(options);
+  for (const tag of order) {
+    if (options.signal?.aborted) throw classified('Stopped.','cancelled');
+    if (providerRetryAt(options.settings,tag)) continue;
+    let started = false;
+    try {
+      const result = await completionAttempt({...options,
+        provider:{...options.provider,only:[tag],order:[tag],allow_fallbacks:false},
+        onDelta:text => { if(text) started=true; options.onDelta?.(text); },
+        onReasoning:text => { if(text) started=true; options.onReasoning?.(text); },
+      });
+      return {...result,provider:tag};
+    } catch(error) {
+      if (options.signal?.aborted || !availabilityFailure(error)) throw error;
+      coolDownProvider(options.settings,tag);
+      if (started || error.partial?.content || error.partial?.thinking) throw error;
+      const next=order.slice(order.indexOf(tag)+1).find(candidate=>!providerRetryAt(options.settings,candidate));
+      if(next) {
+        options.onProviderFallback?.({from:tag,to:next});
+        globalThis.document?.dispatchEvent(new CustomEvent('provider-fallback',{detail:{from:tag,to:next}}));
+      }
+    }
+  }
+  throw unavailableProviders(options.settings,order);
+}
+
+async function completionAttempt(options) {
   const controller=new AbortController();let timer,content='',thinking='';
-  const kick=()=>{globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort('timeout'),120000);timer?.unref?.();};
+  const kick=()=>{if(controller.signal.aborted)return;globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort('timeout'),120000);timer?.unref?.();};
   const cancel=()=>controller.abort(options.signal?.reason ?? 'user');
   if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
   let rejectAbort;
@@ -148,7 +184,7 @@ export async function chatCompletion(options) {
   kick();
   try {
     if(controller.signal.aborted)rejectAbort();
-    return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{content+=t;options.onDelta?.(t);},onReasoning:t=>{thinking+=t;options.onReasoning?.(t);}}),aborted]);
+    return await Promise.race([unboundedCompletion({...options,signal:controller.signal,kick,onDelta:t=>{if(controller.signal.aborted)return;content+=t;options.onDelta?.(t);},onReasoning:t=>{if(controller.signal.aborted)return;thinking+=t;options.onReasoning?.(t);}}),aborted]);
   } catch(error) {
     if(!controller.signal.aborted && error.classification==='transport_loss' && !error.partial) {
       error.classification="transport_loss";
@@ -177,7 +213,7 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
     body: serializedRequestBody(settings, messages, false, { responseFormat,provider,onRequest }),
     signal,
   });
-  if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});
+  if (!res.ok) throw await httpResponseError(res);
   let data;try {data=await res.json();}catch(error){if(error.name!=='SyntaxError'){error.classification='transport_loss';throw error;}throw classified("The model returned malformed JSON.","malformed_response",{cause:error});}
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
   const msg = data.choices[0].message;
@@ -201,7 +237,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     body: serializedRequestBody(settings, messages, true, { responseFormat,provider,onRequest }),
     signal,
   });
-  if (!res.ok) throw classified(`API error ${res.status}: ${await res.text()}`,"api_rejection",{status:res.status});
+  if (!res.ok) throw await httpResponseError(res);
 
   let content = "";
   let thinking = "";

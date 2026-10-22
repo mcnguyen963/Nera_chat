@@ -1,6 +1,11 @@
+import {archivedThread,restoreThreadArchive} from '../thread-archive.js';
 import {node,field} from './memory-ui.js';
 import {normalizeThreadMeta,threadSummary} from '../thread-lifecycle.js';
 export function renderThreadEditor(parent,item,{onChange=()=>{}}={}) {
+  if(archivedThread(item)){
+    const archive=node('div');archive.append(node('p',item.threadHistory.archive.reason==='short-lived'?'Archived: resolved within three story days.':'Archived: incidental unresolved matter.','muted'));
+    const restore=node('button','Restore thread');restore.type='button';restore.addEventListener('click',()=>{Object.assign(item,restoreThreadArchive(item));archive.replaceChildren(node('p','Restored. Save to apply.','muted'));onChange();});archive.append(restore);parent.append(archive);
+  }
   const details=node('details');details.append(node('summary','Thread timing and outcome'));
   const meta=normalizeThreadMeta(item.threadMeta) ?? normalizeThreadMeta({});
   const kind=node('select');for(const k of ['ongoing','appointment','commitment']){const option=node('option',k);option.value=k;kind.append(option);}kind.value=meta.kind;

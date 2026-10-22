@@ -113,3 +113,20 @@ test('ordinary card edits preserve concurrent importance changes and conflicting
  assert.equal(h.store.mergeEntryEdits(current,staged,base).importance,1);
  staged.importance=2;assert.throws(()=>h.store.mergeEntryEdits(current,staged,base),/importance changed/);
 });
+
+for(const migrated of [false,true])test(`thread archive commits and restores with conflict protection in ${migrated?'record':'legacy'} storage`,async()=>{
+ const h=await setup();if(migrated)await h.store.migrateRecords('s',[h.entry],{expectedRevision:0});
+ const messages=[{id:'u1',role:'user',order:1,revision:0,content:'Nera accepts the search.'},{id:'a1',role:'assistant',order:2,revision:0,content:'The search starts.',scene:'date: 24/10/738 · time: 08:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}},{id:'u2',role:'user',order:3,revision:0,content:'Nera returns the heirloom.'},{id:'a2',role:'assistant',order:4,revision:0,content:'The owner confirms the return.',scene:'date: 25/10/738 · time: 10:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}];
+ const range=(turn)=>({fromTurn:turn,toTurn:turn,endOrder:turn*2,assistants:[{...messages[turn*2-1],turn}],messages});
+ const ctx={messages,session:{memory:{}}};
+ const opened=h.l.parseMemoryLines('T1 [open] Recover heirloom | Nera accepts the search.',{range:range(1),messages});
+ await h.store.commitExtraction('s',h.l.applyOps(await h.store.getLore('s'),opened.ops,ctx),range(1));
+ const before=(await h.store.getLore('s')).find(e=>e.kind==='thread');assert.equal(before.threadHistory.opened.turn,1);
+ const closed=h.l.parseMemoryLines('T2 [closed] Recover heirloom | The heirloom was returned.',{range:range(2),messages});
+ await h.store.commitExtraction('s',h.l.applyOps(await h.store.getLore('s'),closed.ops,ctx),range(2));
+ const saved=(await h.store.getLore('s')).find(e=>e.kind==='thread'),archive=await h.use('thread-archive.js');
+ assert.equal(saved.threadHistory.archive.reason,'short-lived');assert.equal(saved.threadHistory.resolved.turn,2);
+ const restored=archive.restoreThreadArchive(saved);await h.store.saveEntry('s',restored,saved);
+ const fresh=(await h.store.getLore('s')).find(e=>e.kind==='thread');assert.equal(fresh.threadHistory.archive,null);assert.equal(fresh.threadHistory.restored,true);assert.equal(fresh.threadMeta.outcome,'resolved');
+ const stale=structuredClone(saved);stale.threadHistory.archive.reason='incidental';await assert.rejects(()=>h.store.saveEntry('s',stale,saved),/archive changed/);
+});

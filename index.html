@@ -201,6 +201,14 @@
                     </div>
                     <p id="model-status" class="muted" role="status" aria-live="polite" aria-atomic="true"></p>
                   </div>
+                  <div class="provider-control">
+                    <div class="model-input-row"><strong>Provider priority</strong><button type="button" id="btn-fetch-providers" class="btn small">Fetch providers</button></div>
+                    <p class="muted">OpenRouter: choose up to 10 providers for this model. Failed providers rest for 30 minutes. Remove and reselect a provider, then save, to reset its cooldown. No selections uses automatic routing.</p>
+                    <ol id="provider-selected" aria-label="Providers in priority order"></ol>
+                    <label for="provider-search">Search providers</label><input id="provider-search" type="search" autocomplete="off" />
+                    <div id="provider-list" aria-label="Available providers"></div>
+                    <p id="provider-status" class="muted" role="status" aria-live="polite"></p>
+                  </div>
                   <label class="checkbox-label disclosure-toggle"><input type="checkbox" id="set-reasoning-enabled" aria-controls="thinking-options" /> Thinking enabled</label>
                 </div>
                 <div id="thinking-options" class="settings-grid hidden">

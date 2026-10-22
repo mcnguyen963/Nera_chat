@@ -420,6 +420,7 @@ function updateMemoryChip() {
 
 
 export function initChatView() {
+  document.addEventListener('provider-fallback',event=>showTransientInfo('Provider unavailable. Trying '+event.detail.to+'…'));
   // Disabled automatic full Sync; reconnecting still retries pending saves.
   // document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestStoryFreshness();});
   // window.addEventListener('pageshow',requestStoryFreshness);

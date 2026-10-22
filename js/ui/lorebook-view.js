@@ -1,3 +1,4 @@
+import {threadMatchesFilter} from '../thread-archive.js';
 import { CHARACTER_IMPORTANCE, characterImportance } from '../character-importance.js';
 import {renderThreadEditor} from './thread-editor.js';
 import {usableLore} from '../continuity.js';
@@ -162,7 +163,7 @@ function renderList() {
   if (book === 'events') {
     const tabs = node('div',null,'segmented');
     tabs.append(button('Timeline',() => { const timeline = entries().find(e => e.kind === 'timeline'); if (timeline) openCard(timeline); else void newCard('Timeline','timeline'); }),button('Threads',() => { selected = null; staged = base = null; renderList(); })); list.append(tabs);
-    const status = node('select'); for (const value of ['open','closed','all']) { const o = node('option',value==='closed'?'Archived':value[0].toUpperCase()+value.slice(1)); o.value = value; status.append(o); } status.value = threadFilter; status.addEventListener('change',() => { threadFilter = status.value; renderList(); }); list.append(status);
+    const status = node('select'); for (const value of ['open','closed','all','archived']) { const o = node('option',value==='archived'?'Archived threads':value[0].toUpperCase()+value.slice(1)); o.value = value; status.append(o); } status.value = threadFilter; status.addEventListener('change',() => { threadFilter = status.value; renderList(); }); list.append(status);
   }
   const searchField = field('Search names…',search); searchField.input.addEventListener('input',() => { search = searchField.input.value; renderRows(rows); }); list.append(searchField.wrap);
   const books = entries().filter(e => e.book === book);
@@ -182,10 +183,10 @@ function renderList() {
   if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
 }
 function renderRows(rows) {
-  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || e.kind === 'thread' && (threadFilter === 'all' || threadView(e).status === threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
+  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || threadMatchesFilter(threadView(e),threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
   if (!cards.length) {
     const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.',plan:'No scheduled plans yet. Add an event with dates and optional phases.' };
-    rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : messages[book],'muted')); return;
+    rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : book==='events' && threadFilter!=='open' ? 'No '+(threadFilter==='all'?'active':threadFilter)+' threads.' : messages[book],'muted')); return;
   }
   for (const e of cards) {
     const row = button('',() => openCard(e),'lore-list-item'); row.setAttribute('role','option'); row.setAttribute('aria-selected',String(selected === e.id)); row.append(node('strong',e.name),node('small',e.aliases.join(', '),'muted'),node('span',sizes.has(e.id) ? (sizes.get(e.id)/1000).toFixed(1)+'k' : '…','muted'));

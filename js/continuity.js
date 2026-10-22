@@ -1,3 +1,4 @@
+import {archivedThread} from './thread-archive.js';
 import { prompts } from './system-prompts.js';
 import {latestScene} from './scene.js';
 import {projectThreads} from './thread-lifecycle.js';
@@ -26,7 +27,7 @@ export function snapshotNeedsReview(section, entry, session = {}, upToOrder = In
   const meta = sectionMeta(section,entry);
   return !!(section.unavailable || meta.kind === 'snapshot' && (meta.cutoff?.order >= upToOrder));
 }
-export function usableLore(entries, messages, session, upToOrder = Infinity, sceneOverride = null) {
+export function usableLore(entries, messages, session, upToOrder = Infinity, sceneOverride = null, {includeArchived=false} = {}) {
   const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && noteNeedsReview(entry.statusSource,messages,session,upToOrder) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
     const meta = sectionMeta(s,entry);
     const unavailable = snapshotNeedsReview(s,entry,session,upToOrder);
@@ -40,11 +41,16 @@ export function usableLore(entries, messages, session, upToOrder = Infinity, sce
   })) }));
   const safe=available.map(e=>{
     if(e.kind!=='thread')return e;
+    const history=e.threadHistory;
+    const archiveStale=history?.archive && [history.opened,history.resolved,history.archive.source].filter(Boolean).some(s=>noteNeedsReview(s,messages,session,upToOrder));
+    if(archiveStale)e={...e,threadHistory:{...history,archive:null}};
     const timingStale=e.threadMetaSource && noteNeedsReview(e.threadMetaSource,messages,session,upToOrder);
     const closureStale=e.statusSource && noteNeedsReview(e.statusSource,messages,session,upToOrder);
     return {...e,...(timingStale?{threadMeta:null,threadTimingNeedsReview:true}:closureStale && e.threadMeta?{threadMeta:{...e.threadMeta,outcome:null}}:{})};
   });
-  return { entries:projectThreads(safe,sceneOverride ?? latestScene(messages,upToOrder,session?.memory?.startingScene).scene), skipped };
+  const projected=projectThreads(safe,sceneOverride ?? latestScene(messages,upToOrder,session?.memory?.startingScene).scene);
+  if(!includeArchived)for(const e of projected.filter(archivedThread))skipped.push({entryId:e.id,book:e.book,name:e.name,reason:'Archived thread: '+e.threadHistory.archive.reason});
+  return {entries:includeArchived ? projected : projected.filter(e=>!archivedThread(e)),skipped};
 }
 // Firestore map order is not story state. Compare nested maps by their contents.
 function orderedValue(value) {

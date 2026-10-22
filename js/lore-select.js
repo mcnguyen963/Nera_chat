@@ -1,3 +1,4 @@
+import {archivedThread} from './thread-archive.js';
 import { characterCardSlots, allocateCharacterPools } from './character-budget.js';
 import { characterImportance } from './character-importance.js';
 import { renderPlanUnit } from './scheduled-plan.js';
@@ -64,6 +65,7 @@ const newestNote = entry => Math.max(0,maxOf(Object.values(entry.sections).flatM
 const compareMention = (a,b) => !a ? (b ? 1 : 0) : !b ? -1 : b.order-a.order || b.offset-a.offset;
 // Structured sources preserve message boundaries. Legacy text is one synthetic message.
 export function selectEntries(entries, mem, text, scene, recentText = '', sources = {}) {
+  entries=entries.filter(e=>!archivedThread(e));
   const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
   const start=sources.startingScene ? resolveScene(sources.startingScene,index) : null, transition=!!start;
   const required=new Set(sources.directorRequiredIds ?? []),directorIds=new Set(sources.directorMemoryIds ?? []);
