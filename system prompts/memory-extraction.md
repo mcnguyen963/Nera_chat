@@ -53,7 +53,7 @@ Do not merge people based only on similar names. If a short name is ambiguous an
 
 Create a new card only for a clearly distinct subject with information worth retaining. Use its established name, not an invented name or generic description.
 
-Add an alias only when it is clearly established, useful for identifying the subject, and not already listed. Put it on the existing card using the alias section.
+For new cards, follow the supplied CARD NAMING AND RECALL CONTRACT: use a short, stable name and seed only distinctive, evidenced aliases. Preserve saved card names and aliases; do not repair existing identities during extraction.
 
 CHANGES AND CHRONOLOGY
 
@@ -90,7 +90,7 @@ Character sections:
 - bond: relationship with {{PROTAGONIST}}.
 - relations: relationship with another character; explicitly name that character.
 - notes: other durable personal information, secrets, capabilities, or limitations.
-- alias: an established alternative name for the existing character.
+- alias: an established alternative name for a character created in this response; follow the supplied alias format.
 
 Never write personality, temperament, mood, or speech-habit notes.
 
@@ -98,7 +98,7 @@ Location sections:
 - description: durable physical features or layout.
 - state: consequential ownership, damage, access, danger, or condition.
 - notes: other lasting information about the place.
-- alias: an established alternative name for the existing place.
+- alias: an established alternative name for a place created in this response; follow the supplied alias format.
 
 [fact] is for setting-level knowledge such as magic, institutions, laws, and history. Information about one character or location belongs on that subject’s card.
 
@@ -114,7 +114,7 @@ T<number> [event] note
 T<number> [open] THREAD TITLE | note
 T<number> [closed] THREAD TITLE | confirmed outcome
 
-Additional thread forms explicitly supplied by the app are also allowed.
+Additional thread and new-card alias forms explicitly supplied by the app are also allowed.
 
 Use the actual turn in NEW TURNS that establishes the note. When consolidating a changing state, use the turn confirming the final state.
 

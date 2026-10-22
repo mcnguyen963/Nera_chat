@@ -234,6 +234,7 @@ function renderEditor() {
     const banner = node('div',null,'lore-banner'); banner.append(node('p',`This card was created by a memory update (turn ${linesOf(staged)[0]?.turn ?? '?'}). Check it's a new character, not someone you already have.`),button('Keep',async () => { if (state.busy) throw new Error('Wait for the current reply or summary.'); const ctx=cardFlowContext(),original = entries().find(e => e.id === staged.id) ?? base;await store.saveEntry(ctx.source,{ ...original,draft:false },original);if(ctx.isCurrent()){base.draft=false;staged.draft=false;banner.remove();}if(currentUid()===ctx.source.uid)toast('Saved'); }),button('Merge into…',mergeCard),button('Delete',deleteCard)); editor.append(banner);
   }
   if (staged.kind !== 'timeline' && !['characters', 'locations'].includes(book)) { const name = field(staged.kind === 'thread' ? 'Title' : 'Main name',staged.name); name.input.maxLength = 60; name.input.addEventListener('input',() => staged.name = name.input.value); editor.append(name.wrap); }
+  if (book==='facts' || staged.kind==='thread') renderNameChips(editor,{aliasesOnly:true});
   if (book === 'characters' || book === 'locations') {
     renderNameChips(editor);
     const always = field('Always load','',{ type:'checkbox' }); always.input.checked = staged.alwaysLoad; always.input.addEventListener('change',() => staged.alwaysLoad = always.input.checked); editor.append(always.wrap,node('p',"Load this card every turn, even when it isn't mentioned.",'muted'));
@@ -628,12 +629,13 @@ async function reorganize(cards) {
   }
 }
 
-function renderNameChips(parent) {
-  const host = node('div',null,'lore-names'), label = node('p','Names','eyebrow'); parent.append(label,host);
-  function move(from,to) { const names = [staged.name,...staged.aliases]; if (to<0 || to>=names.length) return; const [item] = names.splice(from,1); names.splice(to,0,item); [staged.name,...staged.aliases] = names; render(); }
+function renderNameChips(parent,{aliasesOnly=false}={}) {
+  const host = node('div',null,'lore-names'), label = node('p',aliasesOnly ? 'Aliases' : 'Names','eyebrow'); parent.append(label,host);
+  function move(from,to) { const names = [staged.name,...staged.aliases]; if (to<0 || to>=names.length || aliasesOnly && (from===0 || to===0)) return; const [item] = names.splice(from,1); names.splice(to,0,item); [staged.name,...staged.aliases] = names; render(); }
   function render() {
     host.replaceChildren();
     for (const [index,name] of [staged.name,...staged.aliases].entries()) {
+      if(aliasesOnly && index===0)continue;
       const chip = node('span',null,'lore-name-chip'); chip.draggable = true;
       const edit = button(name,() => {
         const dialog = subSheet('Edit name',{compact:true}), body = node('div',null,'memory-content'), f = field(index ? 'Other name' : 'Main name',name); f.input.maxLength=60;
@@ -646,9 +648,9 @@ function renderNameChips(parent) {
       if (name.length<3 || STOPLIST.has(normalizeName(name))) chip.append(badge('Very short names can match by accident','warn'));
       host.append(chip);
     }
-    const add = field('+ add name',''); add.input.maxLength=60; const append = () => { const name=add.input.value.trim(); if (!name) return; if (![staged.name,...staged.aliases].some(n => normalizeName(n) === normalizeName(name))) staged.aliases.push(name); render(); };
-    add.input.addEventListener('keydown',e => { if (e.key === 'Enter') { e.preventDefault(); append(); } }); host.append(add.wrap,button('+ add name',append,'btn small'));
-    host.append(node('small','Drag to reorder, or use Alt + Left/Right on a name. The first name is the main name.','muted'));
+    const addLabel=aliasesOnly ? '+ add alias' : '+ add name',add = field(addLabel,''); add.input.maxLength=60; const append = () => { const name=add.input.value.trim(); if (!name) return; if (![staged.name,...staged.aliases].some(n => normalizeName(n) === normalizeName(name))) staged.aliases.push(name); render(); };
+    add.input.addEventListener('keydown',e => { if (e.key === 'Enter') { e.preventDefault(); append(); } }); host.append(add.wrap,button(addLabel,append,'btn small'));
+    host.append(node('small',aliasesOnly ? 'Use specific alternative names or phrases that should recall this card.' : 'Drag to reorder, or use Alt + Left/Right on a name. The first name is the main name.','muted'));
   } render();
 }
 

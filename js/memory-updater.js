@@ -89,7 +89,7 @@ async function start(sid,range,manual) {
     const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     if(controller.signal.aborted || currentUid()!==owner)return false;
     rawAnswers.set(sid,result.content);
-    const parsed = parseMemoryLines(result.content,{ range,mem,messages:source,protagonist:mem.protagonist });
+    const parsed = parseMemoryLines(result.content,{ range,mem,entries,messages:source,protagonist:mem.protagonist });
     if (!parsed.valid) throw new Error("The model's answer wasn't in the note format."+(parsed.skipped[0] ? ' Line '+parsed.skipped[0].line+': '+parsed.skipped[0].reason+'.' : ''));
     await runtime.waitIdle(controller.signal);
     if (controller.signal.aborted || currentUid() !== owner) return false;

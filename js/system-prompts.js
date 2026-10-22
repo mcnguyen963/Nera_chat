@@ -38,6 +38,7 @@ const files = {
   "replyContract": "reply-contract.md",
   "sceneRecovery": "scene-recovery.md",
   "memoryExtraction": "memory-extraction.md",
+  "memoryNaming": "memory-naming.md",
   "threadPolicy": "thread-policy.md",
   "threadExtraction": "thread-extraction.md",
   "threadDefaultHashes": "thread-default-hashes.md",

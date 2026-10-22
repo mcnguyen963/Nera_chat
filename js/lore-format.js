@@ -21,9 +21,9 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
   for (const book of books) {
     const list = entries.filter(e => e.book === book);
     if (book === 'characters' || book === 'locations') out[book] = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],...(e.book==='characters' ? {importance:characterImportance(e)} : {}),alwaysLoad:!!e.alwaysLoad,sections:Object.fromEntries(Object.entries(e.sections).filter(([,s]) => s.text || s.lines.length).map(([k,s]) => [k,{ text:s.text,lines:sortLines(s.lines).map(exportLine) }])) }));
-    if (book === 'facts') out.facts = list.map(e => ({ name:e.name,text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) }));
+    if (book === 'facts') out.facts = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) }));
     if (book === 'plan') out.plan = list.map(e=>({name:e.name,schedule:e.schedule,text:e.sections.text.text}));
-    if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,status:e.status,...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadHistory?{threadHistory:e.threadHistory}:{}),text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
+    if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,aliases:e.aliases ?? [],status:e.status,...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadHistory?{threadHistory:e.threadHistory}:{}),text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
   }
   return JSON.stringify(out,null,2);
 }
@@ -58,7 +58,7 @@ export function fromJson(text) {
   const section = value => typeof value === 'string' ? { text:value,lines:[],origin:'import',kind:'background',cutoff:null } : { text:String(value?.text ?? ''),origin:value?.origin ?? 'import',kind:value?.kind ?? 'background',cutoff:value?.cutoff ?? null,lines:(Array.isArray(value?.lines) ? value.lines : []).map(importedLine).filter(l => l.text) };
   for (const book of ['characters','locations','facts']) for (const [i,item] of (Array.isArray(data[book]) ? data[book] : []).entries()) {
     if (!item?.name?.trim()) { warnings.push({ line:1,reason:`missing name in ${book} card ${i+1}` }); continue; }
-    const e = makeEntry(book,item.name.trim(),{ aliases:book === 'facts' ? [] : (item.aliases ?? []).map(String),alwaysLoad:book !== 'facts' && item.alwaysLoad === true,createdFrom:'import' });
+    const e = makeEntry(book,item.name.trim(),{ aliases:(item.aliases ?? []).map(String),alwaysLoad:book !== 'facts' && item.alwaysLoad === true,createdFrom:'import' });
     if(book==='characters'){validateImportance({...item,book});e.importance=characterImportance(item);}
     warnUnknown(item,['name','aliases','alwaysLoad','sections','text','lines',...(book==='characters'?['importance']:[])],e.name);
     if (book === 'facts') e.sections.text = section(item);
@@ -75,7 +75,7 @@ export function fromJson(text) {
     const timeline = makeEntry('events','Timeline',{ kind:'timeline',createdFrom:'import' }); timeline.sections.text = section(Array.isArray(events) ? { lines:events } : events?.timeline); entries.push(timeline);
     for (const item of events?.threads ?? []) {
       if (!item.title?.trim()) { warnings.push({ line:1,reason:'missing thread title' }); continue; }
-      const e = makeEntry('events',item.title.trim(),{ kind:'thread',status:item.status === 'closed' ? 'closed' : 'open',createdFrom:'import' }); e.sections.text = section(item);if(item.threadMeta)e.threadMeta=normalizeThreadMeta(item.threadMeta);if(item.threadHistory){validateThreadHistory(item.threadHistory);e.threadHistory=structuredClone(item.threadHistory);}entries.push(e);
+      const e = makeEntry('events',item.title.trim(),{ kind:'thread',aliases:(item.aliases ?? []).map(String),status:item.status === 'closed' ? 'closed' : 'open',createdFrom:'import' }); e.sections.text = section(item);if(item.threadMeta)e.threadMeta=normalizeThreadMeta(item.threadMeta);if(item.threadHistory){validateThreadHistory(item.threadHistory);e.threadHistory=structuredClone(item.threadHistory);}entries.push(e);
     }
   }
   return { entries,warnings,books,story:data.story ?? '',format:'json' };

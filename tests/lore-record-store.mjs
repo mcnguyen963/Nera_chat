@@ -35,6 +35,24 @@ test('migration stages canonical sources and records before atomically activatin
  const {store,docs,path,entry}=await setup();const result=await store.migrateRecords('s',[entry],{expectedRevision:0});const session=docs.get(path);assert.equal(session.loreGeneration,result.generation);assert.equal(session.loreSchemaVersion,3);assert.equal(session.loreRevision,1);assert.equal(docs.get(path+'/lore/mira').sections.notes.text,entry.sections.notes.text);
  const active=docs.get(path+'/loreV3/'+result.generation+'/entries/mira');assert.equal(active.schemaVersion,3);assert.equal(active.sections,undefined);assert.ok(active.sources.length);assert.ok(active.records.length);assert.equal((await store.getLore('s'))[0].sections.notes.text,entry.sections.notes.text);
 });
+for(const migrated of [false,true])test(`extracted aliases persist and manual alias edits survive copies in ${migrated?'record':'legacy'} storage`,async()=>{
+ const h=await setup();
+ if(migrated)await h.store.migrateRecords('s',[h.entry],{expectedRevision:0});
+ const history=[{id:'u',role:'user',order:1,content:'Remember the charter and banquet.'},{id:'a',role:'assistant',order:2,content:'Arvayne succession law is called the succession charter. The Founders Reception is called the Founding Banquet.'}];
+ const range={assistants:[{id:'a',role:'assistant',order:2,turn:1}],messages:history,fromTurn:1,toTurn:1,endOrder:2};
+ const parsed=h.l.parseMemoryLines('T1 [alias] facts | Arvayne succession law | succession charter\nT1 [alias] events | Founders Reception | Founding Banquet\nT1 [fact] Arvayne succession law | Inheritance follows the charter.\nT1 [open] Founders Reception | Recover the invitation.',{messages:history,range});
+ const changes=h.l.applyOps(await h.store.getLore('s'),parsed.ops);
+ await h.store.commitExtraction('s',changes,{...range,messages:history});
+ for(const created of changes.creates){
+   const saved=(await h.store.getLore('s')).find(e=>e.id===created.id);
+   assert.deepEqual(JSON.parse(JSON.stringify(saved.aliases)),JSON.parse(JSON.stringify(created.aliases)));
+   const edited=structuredClone(saved);edited.aliases.push('Manually chosen '+created.book+' phrase');
+   await h.store.saveEntry('s',edited,saved);
+ }
+ h.docs.set('users/u/sessions/copy',migrated?{loreRevision:0,loreSchemaVersion:3,loreGeneration:'copy-generation'}:{loreRevision:0});await h.store.copyLore('s','copy');
+ const source=await h.store.getLore('s'),copied=await h.store.getLore('copy');
+ for(const created of changes.creates){const original=source.find(e=>e.id===created.id),copy=copied.find(e=>e.name===original.name);assert.deepEqual(JSON.parse(JSON.stringify(copy.aliases)),JSON.parse(JSON.stringify(original.aliases)));}
+});
 for(const migrated of [false,true])test(`scheduled plans persist completion and copy independently in ${migrated?'record':'legacy'} storage`,async()=>{
  const h=await setup(),e=planFixture(h.l);await h.store.createEntry('s',e);
  if(migrated)await h.store.migrateRecords('s',await h.store.getLore('s'),{expectedRevision:1});

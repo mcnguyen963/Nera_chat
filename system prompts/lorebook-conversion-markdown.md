@@ -54,6 +54,7 @@ aliases: <optional>
 ## World facts
 
 ### <Topic, e.g. Magic, Calendar, Politics>
+aliases: <optional distinctive alternative name>
 <one rule of the world per line>
 
 ## Events
@@ -64,6 +65,7 @@ Updates:
 
 ### Thread: <short title of an unresolved goal, promise, mystery or threat>
 status: open
+aliases: <optional distinctive alternative name>
 <what it is about>
 Updates:
 - [T<turn> · <date>] <progress>

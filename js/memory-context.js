@@ -190,6 +190,8 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
     if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
   }
+  // Related records can admit a closed thread after direct name matching.
+  for(let i=skipped.length-1;i>=0;i--)if(skipped[i].reason==='no name or alias match' && selection.selected[skipped[i].book]?.some(item=>item.entry.id===skipped[i].entryId))skipped.splice(i,1);
   const recordReports={},fits={};
   let characterSelectionReport = null, characterBudgetReport = null;
   const empty = { text:'',included:[],skipped:[],tokens:0,cut:0 }; let chars = empty, places = empty;

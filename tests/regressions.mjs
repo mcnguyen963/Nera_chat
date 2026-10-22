@@ -1367,6 +1367,15 @@ test('R2 Ctrl+S validation errors stay in the lorebook UI instead of rejecting u
  const name=h.el('lorebook-overlay').querySelectorAll('label').find(label=>label.textContent==='Main name').querySelector('input');name.value='';await name.dispatchEvent({type:'input'});await h.document.dispatchEvent({type:'keydown',key:'s',ctrlKey:true,preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));assert.match(h.document.body.querySelector('.toast').textContent,/Enter a name/);assert.equal(h.calls.cardWrites?.length ?? 0,0);
 });
 
+for(const book of ['facts','events'])test(`${book} editor saves recall aliases without changing the main name or thread status`,async()=>{
+ const h=await harness();await openImprovementChat(h);const l=await h.use('lore-lines.js');
+ const card=l.makeEntry(book,book==='facts'?'Arvayne succession law':'Founders Reception',book==='events'?{kind:'thread',status:'closed'}:{});
+ h.calls.loreEntries=[card];const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({entryId:card.id});await new Promise(resolve=>setImmediate(resolve));
+ const root=h.el('lorebook-overlay'),alias=root.querySelectorAll('label').find(label=>label.textContent==='+ add alias').querySelector('input');
+ alias.value=book==='facts'?'succession charter':'Founding Banquet';await namedButton(root,'+ add alias').click();await namedButton(root,'Save').click();
+ const [,saved]=h.calls.cardWrites.at(-1);assert.equal(saved.name,card.name);assert.equal(saved.status,card.status);assert.deepEqual(Array.from(saved.aliases),[alias.value]);
+});
+
 test('R4 successful story import visibly explains that paid background memory is off',async()=>{
  const h=await harness(),v=await h.use('ui/settings-view.js');v.initSettingsView();v.openSettingsPopup();h.el('file-import-st').files=[{name:'story.jsonl'}];await h.fire('file-import-st','change');assert.match(h.el('settings-saved-msg').textContent,/Imported\. Background memory is off.*Memory settings/);
 });
