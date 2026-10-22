@@ -1,3 +1,4 @@
+import {validateThreadHistory,importedThreadHistory} from './thread-archive.js';
 import { characterImportance, validateImportance } from './character-importance.js';
 import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule, mergePlanSchedule } from './scheduled-plan.js';
@@ -22,7 +23,7 @@ export function toJson(entries, { title = '', books = Object.keys(BOOK_LABELS), 
     if (book === 'characters' || book === 'locations') out[book] = list.map(e => ({ name:e.name,aliases:e.aliases ?? [],...(e.book==='characters' ? {importance:characterImportance(e)} : {}),alwaysLoad:!!e.alwaysLoad,sections:Object.fromEntries(Object.entries(e.sections).filter(([,s]) => s.text || s.lines.length).map(([k,s]) => [k,{ text:s.text,lines:sortLines(s.lines).map(exportLine) }])) }));
     if (book === 'facts') out.facts = list.map(e => ({ name:e.name,text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) }));
     if (book === 'plan') out.plan = list.map(e=>({name:e.name,schedule:e.schedule,text:e.sections.text.text}));
-    if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,status:e.status,...(e.threadMeta?{threadMeta:e.threadMeta}:{}),text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
+    if (book === 'events') { const timeline = list.find(e => e.kind === 'timeline'); out.events = { timeline:{ text:timeline?.sections.text.text ?? '',lines:sortLines(timeline?.sections.text.lines ?? []).map(exportLine) },threads:list.filter(e => e.kind === 'thread').map(e => ({ title:e.name,status:e.status,...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadHistory?{threadHistory:e.threadHistory}:{}),text:e.sections.text.text,lines:sortLines(e.sections.text.lines).map(exportLine) })) }; }
   }
   return JSON.stringify(out,null,2);
 }
@@ -33,6 +34,7 @@ export function normalizeLoreEntry(e){
       const normalized={...makeEntry(e.book,e.name),...e,id:typeof e.id==='string' && e.id && !e.id.includes('/') && !/^__.*__$|^\.{1,2}$/.test(e.id) ? e.id : newLoreId(),aliases:Array.isArray(e.aliases)?e.aliases:[],kind:e.kind ?? (e.book==='events' ? e.name==='Timeline' ? 'timeline' : 'thread' : 'card')};
       if(e.book==='characters')normalized.importance=characterImportance(e);
       if(e.book==='plan')validateSchedule(e.schedule);
+      validateThreadHistory(e.threadHistory);
       if(e.threadMeta!=null)normalized.threadMeta=normalizeThreadMeta(e.threadMeta);
       normalized.sections=Object.fromEntries(SECTION_KEYS[e.book].map(key=>{
         const raw=e.sections?.[key],section=typeof raw==='string' ? {text:raw} : raw ?? {};
@@ -73,7 +75,7 @@ export function fromJson(text) {
     const timeline = makeEntry('events','Timeline',{ kind:'timeline',createdFrom:'import' }); timeline.sections.text = section(Array.isArray(events) ? { lines:events } : events?.timeline); entries.push(timeline);
     for (const item of events?.threads ?? []) {
       if (!item.title?.trim()) { warnings.push({ line:1,reason:'missing thread title' }); continue; }
-      const e = makeEntry('events',item.title.trim(),{ kind:'thread',status:item.status === 'closed' ? 'closed' : 'open',createdFrom:'import' }); e.sections.text = section(item);if(item.threadMeta)e.threadMeta=normalizeThreadMeta(item.threadMeta);entries.push(e);
+      const e = makeEntry('events',item.title.trim(),{ kind:'thread',status:item.status === 'closed' ? 'closed' : 'open',createdFrom:'import' }); e.sections.text = section(item);if(item.threadMeta)e.threadMeta=normalizeThreadMeta(item.threadMeta);if(item.threadHistory){validateThreadHistory(item.threadHistory);e.threadHistory=structuredClone(item.threadHistory);}entries.push(e);
     }
   }
   return { entries,warnings,books,story:data.story ?? '',format:'json' };
@@ -84,7 +86,7 @@ export function toMarkdown(entries, { title = '', books = Object.keys(BOOK_LABEL
     out.push('## '+(book === 'events' ? 'Events' : BOOK_LABELS[book]),'');
     for (const e of entries.filter(e => e.book === book)) {
       out.push('### '+(e.kind === 'thread' ? 'Thread: ' : '')+e.name);
-      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.schedule ? {schedule:{...e.schedule,phases:[]}} : {}),...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadMetaSource?{threadMetaSource:e.threadMetaSource}:{}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
+      out.push('<!-- nera-entry: '+JSON.stringify({ id:e.id,draft:e.draft,createdFrom:e.createdFrom,...(e.schedule ? {schedule:{...e.schedule,phases:[]}} : {}),...(e.statusSource ? {statusSource:e.statusSource} : {}),...(e.threadMeta?{threadMeta:e.threadMeta}:{}),...(e.threadHistory?{threadHistory:e.threadHistory}:{}),...(e.threadMetaSource?{threadMetaSource:e.threadMetaSource}:{}),...(e.coreReferences ? {coreReferences:e.coreReferences} : {}),...(e.createdAt ? {createdAt:e.createdAt} : {}),...(e.updatedAt ? {updatedAt:e.updatedAt} : {}) })+' -->');
       if (e.aliases?.length) out.push('aliases: '+JSON.stringify(e.aliases));
       if(e.book==='characters')out.push('importance: '+characterImportance(e));
       if (e.alwaysLoad) out.push('always load: yes');
@@ -143,7 +145,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
         const value = JSON.parse(provenance[2]);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
         if (provenance[1] === 'entry') {
-          for (const prop of ['id','draft','createdFrom','statusSource','threadMeta','threadMetaSource','coreReferences','schedule','createdAt','updatedAt','importance']) if (prop in value) entry[prop] = prop==='threadMeta'?normalizeThreadMeta(value[prop]):value[prop];
+          for (const prop of ['id','draft','createdFrom','statusSource','threadMeta','threadMetaSource','threadHistory','coreReferences','schedule','createdAt','updatedAt','importance']) if (prop in value) entry[prop] = prop==='threadMeta'?normalizeThreadMeta(value[prop]):value[prop];
         } else if (provenance[1] === 'section') {
           for (const prop of ['origin','kind','cutoff','unavailable','sourceRevision']) if (prop in value) entry.sections[key][prop] = value[prop];
         } else if (entry.sections[key].lines.length && !noteMetadata.has(entry.sections[key].lines.at(-1))) noteMetadata.set(entry.sections[key].lines.at(-1),value);
@@ -227,6 +229,7 @@ export function planImport(existingEntries,parsed,{ mode = 'merge',conflict = 'm
       }
       result.alwaysLoad ||= source.alwaysLoad;
       if (source.status === 'closed') result.status = 'closed';
+      if(source.threadHistory && (!result.threadHistory || conflict==='file'))result.threadHistory=structuredClone(source.threadHistory);
       if(source.threadMeta){if(result.threadMeta && cardFingerprint(result.threadMeta)!==cardFingerprint(source.threadMeta))preview.conflicts++;if(!result.threadMeta || conflict==='file'){result.threadMeta=normalizeThreadMeta(source.threadMeta);result.threadMetaSource=source.threadMetaSource?structuredClone(source.threadMetaSource):null;}}
       for (const [key,s] of Object.entries(source.sections)) {
         const dest = result.sections[key];
@@ -261,6 +264,7 @@ export function validateCard(entry) {
   if (entry.book === 'events' ? !['timeline','thread'].includes(entry.kind) : entry.kind !== 'card') throw new Error('Unsupported card kind.');
   if (!Array.isArray(entry.aliases) || entry.aliases.some(a=>typeof a!=='string')) throw new Error('Aliases must be a list of names.');
   for (const key of ['alwaysLoad','draft']) if (entry[key]!=null && typeof entry[key]!=='boolean') throw new Error(key+' must be true or false.');
+  validateThreadHistory(entry.threadHistory);
   if(entry.kind==='thread' && entry.threadMeta!=null)normalizeThreadMeta(entry.threadMeta);
   if (entry.kind==='thread' && !['open','closed'].includes(entry.status)) throw new Error('Thread status must be open or closed.');
   if(entry.book==='plan')validateSchedule(entry.schedule);
@@ -286,7 +290,7 @@ function supportedCardFields(entry,warnings) {
     if(allowed.includes(key))return true;
     warnings.push({line:1,reason:`ignored unsupported field '${key}' in ${label}`});return false;
   }));
-  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','threadMeta','threadMetaSource','coreReferences','schemaVersion','recordLayout','schedule','importance'],'card');
+  const out=pick(entry,['id','book','kind','name','aliases','alwaysLoad','draft','status','sections','createdFrom','createdAt','updatedAt','statusSource','threadMeta','threadMetaSource','threadHistory','coreReferences','schemaVersion','recordLayout','schedule','importance'],'card');
   const note=l=>pick(l,['id','text','turn','when','src','by','at','evidence','sourceRevision','needsReview','origin','kind','cutoff'],'note');
   out.sections=Object.fromEntries(Object.entries(out.sections).map(([key,s])=>[key,{...pick(s,['text','lines','origin','kind','cutoff','unavailable','sourceRevision'],key),lines:s.lines.map(note)}]));
   if(out.statusSource)out.statusSource=note(out.statusSource);if(out.threadMetaSource)out.threadMetaSource=note(out.threadMetaSource);
@@ -335,6 +339,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   const sameStory=!!parsed.sourceStoryId && parsed.sourceStoryId===storyId;
   if(!sameStory) {
     source.statusSource=null;source.threadMetaSource=null;
+    if(source.threadHistory)source.threadHistory=importedThreadHistory(source.threadHistory);
     for(const s of Object.values(source.sections)) {
       s.cutoff=null;s.sourceRevision=0;s.unavailable=false;
       if(s.kind==='snapshot')s.kind='background';
@@ -346,6 +351,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   if(source.book==='characters')result.importance=characterImportance(mode==='merge' && target ? target : source);
   const keepThreadMeta=source.kind==='thread' && mode==='merge' && target?.threadMeta && (!source.threadMeta || conflict!=='file');
   if(source.kind==='thread')result.threadMeta=normalizeThreadMeta(keepThreadMeta?target.threadMeta:source.threadMeta);
+  if(source.kind==='thread')result.threadHistory=structuredClone(mode==='merge' && conflict!=='file' ? target?.threadHistory ?? source.threadHistory ?? null : source.threadHistory ?? null);
   result.threadMetaSource=keepThreadMeta?structuredClone(target.threadMetaSource ?? null):null;
   if(source.book==='plan')result.schedule=mode==='merge' ? mergePlanSchedule(target?.schedule,source.schedule,conflict) : structuredClone(source.schedule);
   result.statusSource=null;
@@ -356,7 +362,7 @@ export function planCardImport(entries,parsed,{targetId=null,storyId=null,mode='
   const changes=[],notes={added:[],edited:[],removed:[]};
   const targetNotes=new Map(Object.values(target?.sections ?? {}).flatMap(s=>s.lines).map(l=>[l.id,l]));
   const incomingSections=new Map(Object.entries(source.sections).flatMap(([key,s])=>s.lines.map(l=>[l.id,key])));
-  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences','schedule','threadMeta',...(source.book==='characters'?['importance']:[])])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
+  for(const prop of ['name','aliases','alwaysLoad','draft','status','coreReferences','schedule','threadMeta','threadHistory',...(source.book==='characters'?['importance']:[])])if(cardFingerprint(target?.[prop] ?? null)!==cardFingerprint(result[prop]))changes.push({field:prop,before:target?.[prop] ?? null,after:result[prop]});
   for(const key of SECTION_KEYS[source.book]) {
     const incoming=source.sections[key],before=target?.sections[key] ?? makeEntry(source.book,'empty').sections[key];
     const next=incoming ? structuredClone(incoming) : {...before,text:'',lines:[],origin:'import',kind:'background',cutoff:null};

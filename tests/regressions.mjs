@@ -2800,3 +2800,30 @@ test('Concurrent Director coordinators produce one write and release the queue a
  const saving=chat.saveDirectorLiveState('improvement',saveSeed,source);await settle();await assert.rejects(chat.saveDirectorLiveState('improvement',saveSeed,source),/already saving/);assert.equal(h.calls.directorSaves,1);
  wait.resolve();await saving;assert.equal(store.status.paused,false);assert.equal(store.confirmed.session.directorCheckpoint,'manual_saved');
 });
+
+test('Provider cooldown resets only after saved manual reselection, survives a failed save, and never resets other providers',async()=>{
+  const h=await harness(),routing=await h.use('provider-routing.js');
+  const profile=h.state.settings.profiles.find(p=>p.id===h.state.settings.activeProfileId);
+  profile.endpoint='https://openrouter.ai/api/v1/chat/completions';profile.modelId='author/model';profile.providerOrder=['first','second'];
+  h.settings.mirrorFromActiveProfile(h.state.settings);h.state.settings.providerCooldownAccount='test-user';
+  routing.coolDownProvider(h.state.settings,'first');routing.coolDownProvider(h.state.settings,'second');
+  h.calls.modelFetch=async()=>({ok:true,json:async()=>({data:{endpoints:[{tag:'first',provider_name:'First'},{tag:'second',provider_name:'Second'}]}})});
+  const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();await h.fire('btn-fetch-providers');
+  await h.el('provider-selected').children[0].children[3].click();
+  assert.ok(routing.providerRetryAt(h.state.settings,'first'));
+  await h.el('provider-list').children[0].children[1].click();
+  assert.ok(routing.providerRetryAt(h.state.settings,'first'));
+  h.calls.fail=true;await h.fire('btn-save-settings');assert.ok(routing.providerRetryAt(h.state.settings,'first'));assert.match(h.el('settings-saved-msg').textContent,/Save failed/);
+  h.calls.fail=false;await h.fire('btn-save-settings');assert.equal(routing.providerRetryAt(h.state.settings,'first'),0);assert.ok(routing.providerRetryAt(h.state.settings,'second'));
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.writes.at(-1).profiles[0].providerOrder)),['second','first']);assert.equal(h.calls.writes.at(-1).providerCooldownAccount,undefined);
+});
+
+test('Changing model discards draft provider selection and resolving another profile never inherits its provider order',async()=>{
+  const h=await harness(),profile=h.state.settings.profiles.find(p=>p.id===h.state.settings.activeProfileId);
+  profile.providerOrder=['first'];h.settings.mirrorFromActiveProfile(h.state.settings);
+  const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+  h.el('set-model').value='other/model';await h.fire('set-model','input');await h.fire('btn-save-settings');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.state.settings.providerOrder)),[]);
+  const models=await h.use('model-profiles.js');h.state.settings.providerOrder=['first'];h.state.settings.profiles.push({id:'other',endpoint:profile.endpoint,modelId:'other/model',providerOrder:['third']});
+  const resolved=models.resolveModelProfile(h.state.settings,'other');assert.deepEqual(JSON.parse(JSON.stringify(resolved.providerOrder)),['third']);resolved.providerOrder.push('fourth');assert.equal(h.state.settings.profiles.at(-1).providerOrder.length,1);
+});

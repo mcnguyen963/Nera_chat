@@ -2,6 +2,8 @@ import { openDirectorState } from './director-view.js';
 import { currentUid } from '../auth.js';
 import { beginSettingsSave } from './pending-settings.js';
 import {setIcon} from './icons.js';
+import {initProviderPicker} from './provider-picker.js';
+import {providerOrder,resetProviderCooldown} from '../provider-routing.js';
 import {initModelPicker} from './model-picker.js';
 import {effectiveActiveSettings,saveStorySettings} from '../story-settings-store.js';
 import {STORY_SETTING_KEYS,defaultStorySettings,changedStoryFields,explicitStorySettings,resolveStorySettings} from '../story-settings.js';
@@ -36,7 +38,8 @@ const contextFields = {
 };
 const samplingRanges = { temperature: [0, 2], topP: [0, 1], frequencyPenalty: [-2, 2], presencePenalty: [-2, 2] };
 let draft;
-let modelPicker;
+let modelPicker,providerPicker;
+const providerResets=new Map();
 let original;
 let promptStoryId=null,promptBase=null;
 let panel = "model";
@@ -58,7 +61,14 @@ export function initSettingsView() {
   modelPicker = initModelPicker({
     button: input('btn-fetch-models'), picker: input('model-picker'), search: input('model-search'),
     list: input('model-list'), status: input('model-status'), model: input('set-model'),
-    endpoint: input('set-endpoint'), apiKey: input('set-apikey'), onSelect: capture,
+    endpoint: input('set-endpoint'), apiKey: input('set-apikey'), onSelect: () => {providerPicker?.connectionChanged();capture();},
+  });
+  if(input('btn-fetch-providers'))providerPicker=initProviderPicker({
+    button:input('btn-fetch-providers'),search:input('provider-search'),list:input('provider-list'),selected:input('provider-selected'),status:input('provider-status'),
+    endpoint:input('set-endpoint'),apiKey:input('set-apikey'),model:input('set-model'),
+    connection:()=>{const settings=draft ?? state.settings ?? {};return {...settings,providerOrder:activeProfile(settings)?.providerOrder ?? settings.providerOrder ?? []};},
+    onChange:order=>{if(!draft)return;capture();const profile=activeProfile(draft);if(profile){profile.providerOrder=order;draft.providerOrder=[...order];}},
+    onReselect:(settings,tag)=>{providerResets.set(JSON.stringify([settings.activeProfileId,settings.endpoint,settings.modelId,tag]),{settings:structuredClone(settings),tag});},
   });
   input('stream-vibration-help').hidden=vibrationSupport()==='unsupported' ? false : true;
   input('btn-reset-rewrite-prompt').addEventListener('click',()=>{draft.rewriteSystemPrompt=defaultStorySettings().rewriteSystemPrompt;renderRewritePrompt();clearMessage();});
@@ -159,11 +169,12 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
 }
 
 function reloadGlobalSettings() {
+  providerResets.clear();
   viewVersion++;draftOwner=currentUid();
   draft = structuredClone(state.settings);
   promptStoryId=state.sessionId;promptBase=null;
   try {const effective=resolveStorySettings(state.settings,state.storySettings);for(const key of STORY_SETTING_KEYS)draft[key]=effective[key];promptBase=structuredClone(state.storySettings.values);}catch{}
-  renderAll(); capture();
+  renderAll(); providerPicker?.clear(); capture();
   original = structuredClone(draft);
   clearMessage();
 }
@@ -182,6 +193,7 @@ function closeSettingsPopup() {
   capture();
   if (!saving && (globalDirty() || sessionDirty() || accountDirty()) && !confirm("Discard unsaved settings changes?")) return false;
   modelPicker?.reset();
+  providerPicker?.reset();
   el.overlay.classList.add("hidden");
   el.overlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
@@ -203,7 +215,7 @@ function settingsSignature(value,key='') {
   if(value && typeof value==='object')return Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,settingsSignature(value[k],k)]));
   return value;
 }
-function globalDirty() { return JSON.stringify(settingsSignature(draft)) !== JSON.stringify(settingsSignature(original)); }
+function globalDirty() { return providerResets.size>0 || JSON.stringify(settingsSignature(draft)) !== JSON.stringify(settingsSignature(original)); }
 function sessionDirty() {
   if (sessionId !== state.sessionId) return false;
   return raw("set-session-title") !== sessionOriginal.title ||
@@ -319,6 +331,7 @@ function renderProfile() {
   set("set-reasoning-maxtokens", reasoning.maxTokens);
   input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
   syncOptionalControls();
+  providerPicker?.reset();
 }
 function renderPetChoices(selectedIds = []) {
   petChoicesReady = true;
@@ -369,8 +382,10 @@ function capture() {
   if (!draft) return;
   const profile = activeProfile(draft);
   if (profile) {
+    if(profile.endpoint!==raw('set-endpoint').trim() || profile.modelId!==raw('set-model').trim())profile.providerOrder=[];
     profile.name = raw("set-profile-name").trim() || profile.name || "Default";
     for (const [key, id] of Object.entries(connectionFields)) profile[key] = raw(id).trim();
+    profile.providerOrder=providerOrder(profile.providerOrder);
     profile.streaming = input("set-streaming").checked;
     profile.advancedParametersEnabled = input("set-advanced-enabled").checked;
     profile.reasoning = {
@@ -465,6 +480,7 @@ function validatedDraft(storyValues=null) {
         profile[key] = null;
       }
     }
+    profile.providerOrder=providerOrder(profile.providerOrder);
     profile.maxResponseTokens = integerField(profile.maxResponseTokens, "set-max-resp");
     profile.maxOutputPrice = numberField(profile.maxOutputPrice, "set-max-output-price", 0, Number.MAX_SAFE_INTEGER, true);
     profile.reasoning={...DEFAULT_SETTINGS.reasoning,...profile.reasoning};
@@ -497,6 +513,7 @@ async function handleSaveSettings() {
   try { validated = panel==='prompts' ? explicitStorySettings({...draft,rewriteRecentMessages:integerField(draft.rewriteRecentMessages,'set-rewrite-n')}) : validatedDraft(Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,state.settings[k]]))); }
   catch (error) { feedback(error.message, true); return; }
   const version=viewVersion,owner=currentUid(),submitted=structuredClone(draft),savedPanel=panel;
+  const resetSnapshot=[...providerResets.entries()];
   const finishSave=beginSettingsSave(owner,savedPanel==='prompts'?promptStoryId:null);let committed=false;
   saving = true; el.save.disabled = el.saveSession.disabled = true;feedback('Saving…');el.save.setAttribute('aria-busy','true');
   try {
@@ -514,6 +531,11 @@ async function handleSaveSettings() {
     for(const key of STORY_SETTING_KEYS){if(state.settings[key]===undefined)delete validated[key];else validated[key]=state.settings[key];}
     const promptDraft=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,draft[k]])),promptOriginal=Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,original[k]]));
     await saveSettings(validated);
+    for(const [key,reset] of resetSnapshot) {
+      const profile=validated.profiles.find(p=>p.id===reset.settings.activeProfileId);
+      if(profile?.endpoint===reset.settings.endpoint && profile?.modelId===reset.settings.modelId && profile.providerOrder?.includes(reset.tag))resetProviderCooldown({...reset.settings,providerCooldownAccount:owner},reset.tag);
+      if(providerResets.get(key)===reset)providerResets.delete(key);
+    }
     committed=true;
     if(version!==viewVersion || owner!==currentUid())return;
     capture();const newer=Object.fromEntries(Object.entries(draft).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(submitted[key])));

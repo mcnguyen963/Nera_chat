@@ -19,11 +19,12 @@ export function storedSettings(settings) {
   const out=structuredClone(settings);
   for (const key of PROMPT_KEYS) if (out[key]===DEFAULT_SETTINGS[key]) delete out[key];
   delete out.streamVibrationMode;
+  delete out.providerCooldownAccount;
   return out;
 }
 const localKey=() => 'nera.settings.local.'+currentUid();
 export function withLocal(settings) {
-  const out=structuredClone(settings);out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
+  const out=structuredClone(settings);out.providerCooldownAccount=currentUid();out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
   return out;
 }
 
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS = {
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
   modelId: "",
+  providerOrder: [],
   streaming: true,
   rewriteRecentMessages: 10, rewriteSystemPrompt: null, streamVibrationMode: "spaces",
   maxResponseTokens: 8192,
@@ -99,6 +101,7 @@ const PROFILE_CONNECTION_KEYS = [
   "endpoint",
   "apiKey",
   "modelId",
+  "providerOrder",
   "streaming",
   "maxResponseTokens",
   "maxOutputPrice",
@@ -117,7 +120,7 @@ export function activeProfile(settings) {
 export function mirrorToActiveProfile(settings) {
   const p = activeProfile(settings);
   if (!p) return;
-  for (const k of PROFILE_CONNECTION_KEYS) p[k] = settings[k];
+  for (const k of PROFILE_CONNECTION_KEYS) p[k] = k === "providerOrder" ? structuredClone(settings.providerOrder ?? []) : settings[k];
   p.reasoning = structuredClone(settings.reasoning ?? DEFAULT_SETTINGS.reasoning);
 }
 
@@ -130,6 +133,7 @@ export function mirrorFromActiveProfile(settings) {
       ? ["temperature", "topP", "frequencyPenalty", "presencePenalty"].some((name) => p[name] !== null && p[name] !== undefined && p[name] !== "")
       : p[k] ?? DEFAULT_SETTINGS[k];
   }
+  settings.providerOrder = structuredClone(p.providerOrder ?? []);
   settings.reasoning = {
     ...structuredClone(DEFAULT_SETTINGS.reasoning),
     ...(p.reasoning ?? {}),
@@ -265,6 +269,7 @@ export async function saveSettings(settings) {
       throw Object.assign(new Error('Your saved settings were loaded from the server. Review them and save again.'),{code:'settings-reloaded'});
     }
     const snapshot = structuredClone(settings);
+    snapshot.providerCooldownAccount=currentUid();
     normalizeProfiles(snapshot);
     mirrorToActiveProfile(snapshot);
     await setDoc(userSettingsRef(), storedSettings(snapshot));

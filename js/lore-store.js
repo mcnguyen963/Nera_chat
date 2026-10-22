@@ -110,6 +110,7 @@ async function createEntryImpl(sid,entry) { validateImportance(entry); if(entry.
 export function mergeEntryEdits(current, staged, base) {
   validateImportance(staged);
   const out = { ...current };
+  if(staged.kind==='thread' && cardFingerprint(staged.threadHistory ?? null)!==cardFingerprint(base.threadHistory ?? null)){if(cardFingerprint(current.threadHistory ?? null)!==cardFingerprint(base.threadHistory ?? null))throw new Error('Thread archive changed while editing. Reopen the thread.');out.threadHistory=structuredClone(staged.threadHistory ?? null);}
   if(staged.kind==='thread' && cardFingerprint(staged.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null)){if(cardFingerprint(current.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null))throw new Error('Thread timing changed while editing. Reopen the thread.');out.threadMeta=normalizeThreadMeta(staged.threadMeta);out.threadMetaSource=null;}
   for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
   if(staged.book==='characters' && characterImportance(staged)!==characterImportance(base)){
@@ -351,13 +352,13 @@ async function commitExtractionImpl(sid,changes,range) {
         else{lines.push(a.line);cardNotes++;}
       }
       for(const al of changes.aliases.filter(a=>a.entryId===id))if(!(data.aliases ?? []).some(x=>normalizeName(x)===normalizeName(al.alias)))(data.aliases ??= []).push(al.alias);
-      for(const st of changes.statusChanges.filter(a=>a.entryId===id)){data.status=st.status;if(st.source)data.statusSource=st.source;if(st.threadMeta)data.threadMeta=st.threadMeta;if(st.threadMetaSource)data.threadMetaSource=st.threadMetaSource;}
+      for(const st of changes.statusChanges.filter(a=>a.entryId===id)){data.status=st.status;if(st.source)data.statusSource=st.source;if(st.threadMeta)data.threadMeta=st.threadMeta;if(st.threadMetaSource)data.threadMetaSource=st.threadMetaSource;if(st.threadHistory)data.threadHistory=st.threadHistory;}
       // A full card drops its proposed edits; other cards and the checkpoint still commit.
       try { guardSize(data,true); } catch (error) {
         if(error.message!=='card storage full')throw error;
         skipped.push({entryId:id,card:data.name,reason:'card full'});continue;
       }
-      tx.update(ref(sid,id),{sections:data.sections,aliases:data.aliases ?? [],status:data.status ?? null,...(data.statusSource ? {statusSource:data.statusSource} : {}),...(data.threadMeta?{threadMeta:data.threadMeta}:{}),...(data.threadMetaSource?{threadMetaSource:data.threadMetaSource}:{}),updatedAt:serverTimestamp()});written.push(data);notes+=cardNotes;
+      tx.update(ref(sid,id),{sections:data.sections,aliases:data.aliases ?? [],status:data.status ?? null,...(data.statusSource ? {statusSource:data.statusSource} : {}),...(data.threadMeta?{threadMeta:data.threadMeta}:{}),...(data.threadMetaSource?{threadMetaSource:data.threadMetaSource}:{}),...(data.threadHistory?{threadHistory:data.threadHistory}:{}),updatedAt:serverTimestamp()});written.push(data);notes+=cardNotes;
     }
     for(const e of changes.creates){
       try {guardSize(e,true);}catch(error){if(error.message!=='card storage full')throw error;skipped.push({entryId:e.id,card:e.name,reason:'card full'});continue;}

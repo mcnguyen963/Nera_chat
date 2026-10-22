@@ -82,7 +82,7 @@ async function start(sid,range,manual) {
     live = runtime.get(sid); if (!live) return false;
     mem = normalizeMemory(live.session.memory); settings = structuredClone(memoryTaskSettings(live.settings,mem)); source = structuredClone(live.messages); entries = structuredClone(live.entries);
     range = dueRange(source,live.session.memoryState,mem,{ manual }); if (!range) return false;
-    const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session).entries,messages:source,range,count:countTokens }); range = built.range;
+    const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session,Infinity,null,{includeArchived:true}).entries,messages:source,range,count:countTokens }); range = built.range;
     if(controller.signal.aborted || currentUid()!==owner)return false;
     const snapshot = stamp(range.messages);
     const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};

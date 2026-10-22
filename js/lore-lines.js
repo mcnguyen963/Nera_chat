@@ -1,3 +1,5 @@
+import {parseStoryDate,parseClock} from './story-calendar.js';
+import {archivedThread,updateThreadHistory} from './thread-archive.js';
 import {normalizeThreadMeta,threadLifecycle,threadIdentity,reopenThread} from './thread-lifecycle.js';
 import {stripThinking} from './thinking-text.js';
 import { evidenceFor, revisionOf, noteNeedsReview } from './continuity.js';
@@ -98,9 +100,10 @@ export function applyOps(entries, ops, stampCtx = {}) {
     let e = op.tag === 'event' ? timeline() : match(op.book,op.name);
     if(!e && op.tag==='open' && op.threadMeta){const key=threadIdentity(op.threadMeta);const matches=key?working.filter(e=>e.kind==='thread' && threadIdentity(e.threadMeta)===key):[];if(matches.length===1)e=matches[0];}
     if(['expired','background'].includes(op.tag) && (!e || e.kind!=='thread')){skipped.push({...op,reason:'cannot archive an unknown thread'});continue;}
-    if(op.tag==='background' && e.createdFrom!=='auto' && !(e.sections.text?.lines?.some(l=>l.by==='auto') && !e.sections.text?.text?.trim())){skipped.push({...op,reason:'authored thread requires manual review'});continue;}
-    if(op.threadMeta && e?.kind==='thread' && ['closed','cancelled'].includes(e.status) && op.tag==='open' && op.threadMeta.dueDate===e.threadMeta?.dueDate && op.threadMeta.dueTime===e.threadMeta?.dueTime){skipped.push({...op,reason:'closed commitment needs new evidence or a rescheduled date'});continue;}
+    if(op.tag==='background' && (e.createdFrom!=='auto' || !e.threadHistory || e.sections.text?.text?.trim() || e.sections.text?.lines?.some(l=>l.by==='user'))){skipped.push({...op,reason:'authored thread requires manual review'});continue;}
+    if(op.threadMeta && e?.kind==='thread' && !archivedThread(e) && ['closed','cancelled'].includes(e.status) && op.tag==='open' && op.threadMeta.dueDate===e.threadMeta?.dueDate && op.threadMeta.dueTime===e.threadMeta?.dueTime){skipped.push({...op,reason:'closed commitment needs new evidence or a rescheduled date'});continue;}
     if (stampCtx.reorganize && (!e || stampCtx.allowedIds && !stampCtx.allowedIds.includes(e.id))) { skipped.push({ ...op, reason:'name outside the notes' }); continue; }
+    if(e && archivedThread(e) && op.tag==='open' && (!(op.evidence?.length && op.src>e.threadHistory.archive.source.src) || !op.threadMeta && e.sections.text.lines.some(l=>normalizeName(l.text)===normalizeName(op.text)))){skipped.push({...op,reason:'archived thread needs new evidence'});continue;}
     let text = op.text;
     if (op.tag === 'closed' && (!e || e.kind !== 'thread' || e.status === 'closed' && !e.threadMeta)) { e = timeline(); text = `Resolved: ${op.name} — ${text}`; }
     if (!e && op.section === 'alias') { const clash = match(op.book,text); if (clash) { skipped.push({ ...op,reason:'name already used by '+clash.name }); continue; } }
@@ -129,6 +132,14 @@ export function applyOps(entries, ops, stampCtx = {}) {
     const original = stampCtx.reorganize ? [...(entries.find(x => x.id === e.id)?.sections[section]?.lines ?? [])].filter(l => l.turn === op.turn).sort((a,b) => a.at-b.at).at(-1) : null;
     const ln = { id:newLoreId('ln'), text, turn:op.turn, when:original?.when ?? op.when, src:original?.src ?? op.src, by:stampCtx.reorganize ? 'reorganize' : 'auto',at:now,evidence:op.evidence ?? [],sourceRevision:op.sourceRevision ?? stampCtx.sourceRevision ?? 0 };
     if (new TextEncoder().encode(JSON.stringify(e)).length + new TextEncoder().encode(JSON.stringify(ln)).length > 900000) { skipped.push({ ...op, reason:'card storage full' }); continue; }
+    if(e.kind==='thread' && !stampCtx.reorganize && ['open','closed','background'].includes(op.tag)) {
+      const scene=latestScene(stampCtx.messages ?? [],op.src+1,stampCtx.session?.memory?.startingScene);
+      const sceneMessages=(stampCtx.messages ?? []).filter(m=>m.id===scene.fromId);
+      const evidence=[...new Map([...(ln.evidence ?? []),...evidenceFor(sceneMessages)].map(x=>[x.id,x])).values()];
+      const source={...ln,evidence,date:parseStoryDate(scene.scene?.when)?.valid ? scene.scene.when : null,time:parseClock(scene.scene?.time)!==null ? scene.scene.time : null};
+      const history=updateThreadHistory(e,op.tag,source,{fresh:creates.includes(e),valid:s=>!noteNeedsReview(s,stampCtx.messages ?? [],stampCtx.session ?? {})});
+      if(history){e.threadHistory=history;const change=statusChanges.findLast(c=>c.entryId===e.id);if(change)change.threadHistory=history;}
+    }
     s.lines.push(ln);
     if (['open','closed','expired','background'].includes(op.tag) && e.kind === 'thread') {e.statusSource=ln;if(op.threadMeta)e.threadMetaSource=ln;const status=statusChanges.findLast(c=>c.entryId===e.id);if(status){status.source=ln;if(op.threadMeta)status.threadMetaSource=ln;}}
     if (!creates.includes(e)) appends.push({ entryId:e.id, section, line:ln });

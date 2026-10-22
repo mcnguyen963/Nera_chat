@@ -498,3 +498,10 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 @media (max-width:720px) {input:not([type]),input[type="search"],input[type="tel"],.msg-editor,.settings-prompts textarea,.full-label textarea,.msg input {font-size:16px;}}
 
 .chat-sync-status { border: 0; background: transparent; color: var(--muted); font-size: 10px; padding: 4px; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.provider-control { grid-column: 1 / -1; min-width: 0; }
+.provider-control ol { padding: 0; list-style: none; }
+.provider-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.provider-row span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.provider-row .btn { min-height: 44px; }
+#provider-list { max-height: 260px; overflow-y: auto; }

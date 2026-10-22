@@ -1,3 +1,4 @@
+import {archivedThread} from './thread-archive.js';
 import { maxOf } from './math-utils.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
@@ -22,6 +23,8 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   }
   if (!fitted) throw new Error('One turn is too long for a memory update. Raise Max context tokens.');
   const transcript = formatTurnsTranscript(messages, turns, { range: fitted });
+  const archived=entries.filter(archivedThread);
+  entries=entries.filter(e=>!archivedThread(e));
   const index = buildLoreIndex(entries), ids = new Set();
   for (const book of ['characters', 'locations','facts','events']) for (const id of findMentions(transcript, index, book)) ids.add(id);
   const timeline=sceneTimeline(messages);
@@ -31,6 +34,20 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
     if (resolved.place) ids.add(resolved.place);
   }
   const known = [prompts.knownNamesHeader];
+  let archiveText='';
+  for(const e of archived.slice().reverse()) {
+    const line=JSON.stringify({title:e.name,outcome:e.threadMeta?.outcome ?? null,reason:e.threadHistory.archive.reason})+'\n';
+    if(await count(archiveText+line)>inputBudget*.05)continue;
+    archiveText+=line;
+  }
+  if(archiveText)known.push('ARCHIVED THREAD IDENTITIES (deduplication only; repeated mentions do not reopen):\n'+archiveText);
+  let governed='';
+  for(const e of entries.filter(e=>e.kind==='thread' && e.threadHistory && e.createdFrom==='auto')) {
+    const line=JSON.stringify(e.name)+'\n';
+    if(await count(governed+line)>inputBudget*.03)continue;
+    governed+=line;
+  }
+  if(governed)known.push('THREADS GOVERNED BY CURRENT POLICY (eligible for incidental background archival):\n'+governed);
   for (const [book,label] of [['characters',renderLoreLabel('knownCharacters')],['locations',renderLoreLabel('knownLocations')],['facts',renderLoreLabel('knownFacts')],['events',renderLoreLabel('knownThreads')]]) {
     const candidates=entries.filter(e=>e.book===book && (book!=='events' || e.kind==='thread' && e.status!=='closed')).sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)) || Math.max(0,maxOf(Object.values(b.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0))))-Math.max(0,maxOf(Object.values(a.sections).flatMap(s=>(s.lines ?? []).map(l=>l.at ?? 0)))));
     const names=candidates.map(e=>e.name+(e.aliases?.length?' ('+e.aliases.join(', ')+')':''));

@@ -4,7 +4,7 @@ export function resolveModelProfile(settings,profileId,{role='Selected'}={}) {
   const profile=settings.profiles?.find(p=>p.id===profileId);
   if(!profile)throw new Error('The '+role+' model profile no longer exists. Choose another saved profile.');
   const advanced=profile.advancedParametersEnabled ?? ['temperature','topP','frequencyPenalty','presencePenalty'].some(k=>profile[k]!=null&&profile[k]!=='');
-  return {...structuredClone(settings),activeProfileId:profile.id,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',streaming:profile.streaming ?? true,
+  return {...structuredClone(settings),activeProfileId:profile.id,endpoint:profile.endpoint ?? '',apiKey:profile.apiKey ?? '',modelId:profile.modelId ?? '',providerOrder:structuredClone(profile.providerOrder ?? []),streaming:profile.streaming ?? true,
     maxResponseTokens:profile.maxResponseTokens ?? settings.maxResponseTokens,maxOutputPrice:profile.maxOutputPrice ?? null,modelContextTokens:profile.modelContextTokens ?? null,
     reasoning:structuredClone(profile.reasoning ?? {}),advancedParametersEnabled:advanced,
     ...Object.fromEntries(['temperature','topP','frequencyPenalty','presencePenalty'].map(k=>[k,profile[k] ?? null]))};
