@@ -58,3 +58,8 @@ test('CI tests each branch and deploys only main after the test gate', async () 
   assert.match(workflow,/node scripts\/stamp-version.mjs _site "\$GITHUB_SHA"/);
   assert.doesNotMatch(workflow,/branches: \[feature\/story-memory\]/);
 });
+
+test('release stamping versions worker URLs without changing unrelated URLs',()=>{
+ const source="new Worker(new URL('./tokenizer-worker.js', import.meta.url), {type:'module'}); new URL('./image.png', import.meta.url);";
+ assert.equal(stampJavaScript(source,version),source.replace('./tokenizer-worker.js','./tokenizer-worker.js?v='+version));
+});

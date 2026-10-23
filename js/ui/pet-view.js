@@ -11,6 +11,8 @@ const IOS = /iP(?:hone|ad|od)/.test(globalThis.navigator?.userAgent ?? '') ||
 let paintedPosition=null,homeDirty=true,layoutFrame=0;
 function setPetStyle(key,value){if(root.style.getPropertyValue(key)!==value)root.style.setProperty(key,value);}
 let root, sprite, layer, menu, slot, idleLabel;
+let layerOrigin={x:0,y:0};
+function measureLayerOrigin(){const rect=layer.getBoundingClientRect();layerOrigin={x:rect.left,y:rect.top};}
 let character = null, loaded = false, hiddenForVisit = false, pinned = false;
 let activity = "idle", phase = "idle", frame = 0, frameAt = 0, raf = 0;
 let reactionUntil = 0, nextTrip = 0, lastInput = Date.now(), lastTyping = 0, lastTap = 0;
@@ -20,6 +22,15 @@ let suspended = true, welcomeSession;
 let layoutDirty = true, geometry = null, geometryAt = -Infinity;
 const TEXT_OBSTACLES = ".msg-content, .msg-meta, .thinking, .msg-editor, .welcome h1, .welcome p, .msg.summary, .msg.error";
 const visibleText = new Set(), observedText = new Set();
+const CONTROL_OBSTACLES='.main button, .main input, .main select, .main textarea, .main a, .main summary, #top-menu:not([hidden]), .top-bar-title, .context-indicator';
+const visibleControls=new Set(), observedControls=new Set();
+let controlObserver=null;
+function syncControlObstacles(){
+  if(!controlObserver)return;
+  const nodes=new Set(document.querySelectorAll(CONTROL_OBSTACLES));
+  for(const node of observedControls)if(!nodes.has(node)){controlObserver.unobserve(node);observedControls.delete(node);visibleControls.delete(node);}
+  for(const node of nodes)if(!observedControls.has(node) && !layer.contains(node)){observedControls.add(node);controlObserver.observe(node);}
+}
 let textObserver = null;
 function syncTextObstacles() {
   if (!textObserver) return;
@@ -116,7 +127,7 @@ export function initPetView() {
   slot.className = "pet-home-slot";
   slot.setAttribute("aria-hidden", "true");
   layer.append(root, menu);
-  document.body.append(layer);
+  (document.getElementById('app') ?? document.body).append(layer);
   root.addEventListener("pointerdown", beginPointer);
   root.addEventListener("touchmove", (event) => {
     if (pointer?.held || pointer?.dragging) event.preventDefault();
@@ -195,14 +206,21 @@ export function initPetView() {
       }
       layoutDirty = true;
     });
-    syncTextObstacles();
+    controlObserver=new IntersectionObserver(entries=>{
+      for(const entry of entries){
+        if(!observedControls.has(entry.target))continue;
+        if(entry.isIntersecting)visibleControls.add(entry.target);else visibleControls.delete(entry.target);
+      }
+      layoutDirty=true;
+    });
+    syncTextObstacles();syncControlObstacles();
     const textChanges = typeof MutationObserver === "undefined" ? null : new MutationObserver((records) => {
       // Streaming text-node updates do not change the obstacle elements.
-      if (!records || records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1))) syncTextObstacles();
+      if (!records || records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1))) {syncTextObstacles();syncControlObstacles();}
       layoutDirty = homeDirty = true;
     });
     const list = document.getElementById("message-list");
-    if (list) textChanges?.observe(list, { childList: true, subtree: true });
+    if (list) textChanges?.observe(list, { childList: true, subtree: true, characterData: true });
   }
   observedSession = state.sessionId;
   const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
@@ -324,6 +342,7 @@ export function refreshPetPlacement() {
   updateVisibility();
 }
 function homePoint() {
+  measureLayerOrigin();
   const rect = slot?.getBoundingClientRect();
   if (!rect || !rect.width) return null;
   return { x: rect.left, y: rect.top };
@@ -341,6 +360,7 @@ function floatingSize() {
   setPetStyle("--pet-size", `${MOBILE.matches ? 64 : 80}px`);
 }
 function paintPosition(position) {
+  position={x:position.x-layerOrigin.x,y:position.y-layerOrigin.y};
   if(paintedPosition?.x===position.x && paintedPosition?.y===position.y)return;
   paintedPosition={x:position.x,y:position.y};
   root.style.transform = IOS ? `translate(${position.x}px, ${position.y}px)` : `translate3d(${position.x}px, ${position.y}px, 0)`;
@@ -352,6 +372,7 @@ function isSuspended() {
     document.getElementById("top-menu")?.hidden === false;
 }
 function measureVisibility(){
+  measureLayerOrigin();
   const rect=slot.getBoundingClientRect(),list=document.getElementById('message-list')?.getBoundingClientRect();
   return {home:rect.width ? {x:rect.left,y:rect.top} : null,homeVisible:rect.width && rect.top>=(list?.top ?? 0) && rect.bottom<=(list?.bottom ?? window.innerHeight)};
 }
@@ -393,23 +414,26 @@ function syncPetSettings() {
 function rectBox(rect) { return { x: rect.left, y: rect.top, width: rect.width, height: rect.height }; }
 function measureGeometry() {
   const now = performance.now();
-  if (geometry && (state.busy || phase !== "idle") && now - geometryAt < 150) return false;
+  if (geometry && now - geometryAt < 150) return false;
+  measureLayerOrigin();
   const viewport = window.visualViewport;
   const inset = window.getComputedStyle?.(layer);
   const safeTop = Number.parseFloat(inset?.paddingTop) || 0;
   const safeLeft = Number.parseFloat(inset?.paddingLeft) || 0;
   const safeRight = Number.parseFloat(inset?.paddingRight) || 0;
   const main = document.querySelector(".main")?.getBoundingClientRect() ?? { left: 0, right: window.innerWidth, top: 0 };
-  const composer = document.getElementById("composer")?.getBoundingClientRect();
+  const composer = (document.getElementById("composer-shell") ?? document.getElementById("composer"))?.getBoundingClientRect();
   const left = Math.max(main.left + 8, (viewport?.offsetLeft ?? 0) + safeLeft + 8);
   const top = Math.max(main.top + 8, (viewport?.offsetTop ?? 0) + safeTop + 8);
   const right = Math.min(main.right - 8, (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth) - safeRight - 8);
   const bottom = Math.min(composer?.top ?? window.innerHeight, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight)) - 8;
   const bounds = { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
-  const collect = (selector) => [...document.querySelectorAll(selector)]
-    .filter((node) => !layer.contains(node) && !node.closest("[hidden], .hidden") && node.getClientRects().length)
-    .map((node) => rectBox(node.getBoundingClientRect()));
-  const controls = collect(".main button, .main input, .main select, .main textarea, .main a, .main summary, #top-menu:not([hidden]), .top-bar-title, .context-indicator");
+  const controls=[];
+  for(const node of controlObserver ? visibleControls : document.querySelectorAll(CONTROL_OBSTACLES)){
+    if(layer.contains(node) || node.closest('[hidden], .hidden'))continue;
+    const rect=node.getBoundingClientRect();
+    if(rect.width && rect.height && rect.bottom>top && rect.top<bottom && rect.right>left && rect.left<right)controls.push(rectBox(rect));
+  }
   const text = [];
   const candidatesText = textObserver ? visibleText : document.querySelectorAll(TEXT_OBSTACLES);
   for (const node of candidatesText) {
@@ -598,12 +622,17 @@ function openMenu() {
     button("Hide for this visit", () => { hiddenForVisit = true; updateVisibility(); })
   );
   menu.hidden = false; root.setAttribute("aria-expanded", "true");
+  measureLayerOrigin();
   const rect = root.getBoundingClientRect();
-  const width = menu.offsetWidth, height = menu.offsetHeight;
   const vv = window.visualViewport;
-  const left = vv?.offsetLeft ?? 0, top = vv?.offsetTop ?? 0;
-  const right = left + (vv?.width ?? window.innerWidth), bottom = top + (vv?.height ?? window.innerHeight);
-  menu.style.left = `${Math.max(left + 8, Math.min(rect.left, right - width - 8))}px`;
-  menu.style.top = `${Math.max(top + 8, Math.min(rect.bottom + 6, bottom - height - 8))}px`;
+  const left = vv?.offsetLeft ?? 0;
+  const top=Math.max(vv?.offsetTop ?? 0,document.querySelector('.top-bar')?.getBoundingClientRect()?.bottom ?? 0);
+  const right = left + (vv?.width ?? window.innerWidth);
+  const bottom=Math.min((vv?.offsetTop ?? 0)+(vv?.height ?? window.innerHeight),document.getElementById('composer-shell')?.getBoundingClientRect()?.top ?? window.innerHeight);
+  menu.style.maxHeight=`${Math.max(0,bottom-top-16)}px`;
+  menu.style.overflowY='auto';
+  const width=menu.offsetWidth,height=menu.offsetHeight;
+  menu.style.left = `${Math.max(left + 8, Math.min(rect.left, right - width - 8))-layerOrigin.x}px`;
+  menu.style.top = `${Math.max(top + 8, Math.min(rect.bottom + 6, bottom - height - 8))-layerOrigin.y}px`;
   menu.querySelector("button")?.focus({ preventScroll: true });
 }

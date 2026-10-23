@@ -1,3 +1,4 @@
+import {createWorkBudget} from './ui-work.js';
 import { directorCast } from './director-cast.js';
 import { directorScene } from './director-state.js';
 import { buildReplyBrief, replySubjects } from './narrator-brief.js';
@@ -24,13 +25,20 @@ function stripOcc(content) {
 }
 // Memory mode uses additive message costs and renders the final wire request once.
 export async function buildMemoryContext(session, settings, opts, { count, adRule, normalizeAd, accountingRetry = false }) {
+  const yieldWork=createWorkBudget({signal:opts.signal,check:opts.check});
+  const rawCount=count; count=async text=>{await yieldWork();return rawCount(text);};
   const director=settings.narrationMode==='director', turn=opts.directorTurn ? {...opts.directorTurn} : null;
   const mem = normalizeMemory(session.memory);
   if(director){mem.scene=true;mem.calendar={mode:'legacy',anchor:null};mem.lorebooks=true;}
   const limit = requestInputLimit(settings);
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('Context limit must leave space for the request after reserving the reply.');
   const all = opts.messages, upTo = opts.upToOrder ?? Infinity;
-  const raw = [...new Map(all.filter(m => !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId) && ['user','assistant'].includes(m.role) && m.order < upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim()).map(m => [m.id,m])).values()].sort((a,b) => a.order-b.order);
+  const rawById=new Map();
+  for(const m of all){
+    await yieldWork();
+    if(!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId) && ['user','assistant'].includes(m.role) && m.order<upTo && (m.role==='user' ? normalizeAd(m.content) : readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean).trim())rawById.set(m.id,m);
+  }
+  const raw=[...rawById.values()].sort((a,b)=>a.order-b.order);
   if (opts.draftText?.trim() || opts.placeholderLatest || opts.draftPlanJump) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '',...(opts.draftPlanJump ? {planJump:opts.draftPlanJump} : {}) });
   const byId=new Map(raw.map(m=>[m.id,m]));
   const turns = computeTurns(raw), current = director && (turn?.after || session.directorState) ? {scene:parseScene(directorScene(turn?.after ?? session.directorState)),missingStreak:0} : mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};

@@ -1,10 +1,10 @@
+import {afterUiPaint} from '../ui-work.js';
 import {openStoryStore,storyStore,flushStory,closeStoryStores,forgetStoryStore} from '../local-story-store.js';
 import {loadStoryData,saveStoryData,storyQueueStorage,replaceStoryCache} from '../chat-cache.js';
 import * as directorStore from '../director-store.js';
 import { prepareDirectorTurn } from '../director-turn.js';
 import { directorScene, directorSceneWarnings } from '../director-state.js';
 import { requestSource } from '../continuity.js';
-import { createPlanJumpControl } from './plan-jump.js';
 import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
@@ -65,7 +65,6 @@ let session = null;      // latest snapshot of the active session doc
 let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
-let planJumpControl=null;
 let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
 const releaseBusy=token=>{
@@ -146,7 +145,7 @@ function applyWorkingStory(view,status) {
   if(storyStore(state.sessionId)?.requiresReconciliation || status.paused && directStorySaves.has(currentUid()+':'+state.sessionId))return;
   if(!status.pending && session && revisionFields.some(key=>(view.session[key] ?? 0)<(session[key] ?? 0)))return;
   if(!session || view.session.id!==state.sessionId)return;
-  const changed=historyMessages!==view.messages || preparationKey(session)!==preparationKey(view.session);
+  const changed=!sameHistoryRendering(historyMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
   syncStatus=status;latestReady=true;hasEarlier=false;
   if(changed)renderMessages(historyMessages.slice(-Math.max(visibleCount,PAGE_SIZE)));
@@ -577,8 +576,6 @@ export function initChatView() {
     }
   });
 
-  const jumpButton=document.getElementById('btn-plan-jump');
-  if(jumpButton)planJumpControl=createPlanJumpControl(jumpButton,{story:()=>session,messages:()=>historyMessages ?? lastMessages,owner:currentUid,busy:()=>busy || !!editingState,changed:()=>{indicatorRefresh.invalidate();void updateIndicator();}});
   el.composer.addEventListener("submit", handleSend);
   el.summarizeBtn.addEventListener("click", handleSummarize);
   document.addEventListener("summarize-full", handleFullSummarize);
@@ -748,7 +745,6 @@ export function setSession(sessionId) {
   storySettingsReady=selectStorySettings(sessionId);void storySettingsReady.catch(error=>showTransientError(error.message));
   session = null;
   streamState = null;
-  planJumpControl?.reset();
   editingState = null;clearOriginalDraft();
   lastMessages = [];
   visibleCount = PAGE_SIZE;
@@ -972,6 +968,10 @@ function invalidateRenderedMessages() {
   for (const entry of renderedMessages.values()) entry.message = null;
 }
 
+function sameHistoryRendering(a,b) {
+  return a===b || !!a && a.length===b.length && a.every((m,i)=>m===b[i] ||
+    m.id===b[i].id && m.order===b[i].order && m.narratorTurn===b[i].narratorTurn && m.planThread===b[i].planThread && sameRenderedMessage(m,b[i]));
+}
 function renderMessages(msgs) {
   const savedStream = streamState?.savedId && msgs.some(m => m.id === streamState.savedId) ? streamState : null;
   const position = savedStream ? captureListPosition() : null;
@@ -980,6 +980,7 @@ function renderMessages(msgs) {
   const lastUserOrder=lastUserOrderOf(renderHistory);
   const latestAssistant=renderHistory.filter(m => m.role==='assistant').at(-1)?.id;
   const latestStory = msgs.filter(m => m.role !== 'summary').at(-1);
+  const turnLabels=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(renderHistory).turnById : null;
   if (!isNearBottom() && msgs.length > lastMessages.length) {
     visibleCount += msgs.length - lastMessages.length;
   }
@@ -1009,7 +1010,7 @@ function renderMessages(msgs) {
     const m = visible[i];
     if(streamState?.continuationId===m.id && !streamState.saveCompleted){anchor=streamState.wrap;continue;}
     let entry = renderedMessages.get(m.id);
-    const turnLabel=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(historyMessages ?? lastMessages).turnById.get(m.id) : null;
+    const turnLabel=turnLabels?.get(m.id) ?? null;
     const sceneState=timeline.get(m.id),renderedScene=sceneState?.effective;
     const pending=m.id===latestAssistant && !isAcceptedTurn(m,{lastUserOrder,sceneOn:session?.memory?.scene === true});
     const retry = m.role === 'user' && m.id === latestStory?.id;
@@ -1075,9 +1076,9 @@ export function sameRenderedMessage(a,b) {
     (a.reviewWarnings ?? []).join('\n')===(b.reviewWarnings ?? []).join('\n');
 }
 let timelineMemo={src:null,start:null,value:null};
-function timelineFor(messages,start){if(timelineMemo.src!==messages || timelineMemo.start!==start)timelineMemo={src:messages,start,value:sceneTimeline(messages,{startingScene:start})};return timelineMemo.value;}
+function timelineFor(messages,start){if(!sameHistoryRendering(timelineMemo.src,messages) || timelineMemo.start!==start)timelineMemo={src:messages,start,value:sceneTimeline(messages,{startingScene:start})};timelineMemo.src=messages;return timelineMemo.value;}
 let turnsMemo={src:null,value:null};
-export function turnsFor(list) { if (turnsMemo.src!==list) turnsMemo={src:list,value:computeTurns(list)}; return turnsMemo.value; }
+export function turnsFor(list) { if (!sameHistoryRendering(turnsMemo.src,list)) turnsMemo={src:list,value:computeTurns(list)}; turnsMemo.src=list;return turnsMemo.value; }
 
 function updateWelcome() {
   const welcome = document.getElementById("welcome");
@@ -1087,7 +1088,7 @@ function updateWelcome() {
   if (newStory) newStory.hidden = Boolean(state.sessionId);
   document.getElementById("chat-tab")?.classList.toggle("is-empty", empty);
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
-  planJumpControl?.refresh();
+
   el.input.disabled = !state.sessionId;
   el.sendBtn.disabled = busy || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
@@ -1415,20 +1416,20 @@ const indicatorHint = 'Token count refreshes after you leave the message box.';
 let indicatorUsageCache=null;
 const indicatorRefresh = createIndicatorRefresh({
   focused: () => busy || !!editingState || !!el.input && document.activeElement === el.input,
-  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value,planJumpControl?.preview()]),
-  compute: async () => {
+  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value]),
+  compute: async ({isCurrent}) => {
     if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
     const source = session, settings = effectiveActiveSettings(), draftText = el.input.value;
     const messages = historyMessages ?? lastMessages;
-    const jump=planJumpControl?.preview(),key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText,jump]);
+    const key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText]);
     if(indicatorUsageCache?.key===key)return indicatorUsageCache.usage;
-    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText,draftPlanJump:jump });
+    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText, check:()=>{if(!isCurrent())throw new StaleTurn();} });
     indicatorUsageCache={key,usage};return usage;
   },
   apply: usage => { if (usage) applyIndicator(usage); },
   onError: error => { if (el.contextLabel) el.contextLabel.textContent = error.message; },
 });
-export function scheduledPlanDraftJump() {return planJumpControl?.preview() ?? null;}
+export function scheduledPlanDraftJump() {return null;}
 export async function updateIndicator() {
   if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
   clearTimeout(indicatorTimer);
@@ -1683,21 +1684,26 @@ async function handleSend(e) {
   if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
   pendingMaintenance=null;const token=acquireBusy('send');if(!token)return;
   try {
-    await waitForPendingChanges(token);assertActive(token);
+    indicatorRefresh.invalidate();
+    setPreparing(true);
+    // Capture pending settings now: a dismissed save may settle during the paint.
+    const pendingChanges=waitForPendingChanges(token);
+    void pendingChanges.catch(()=>{});
+    await afterUiPaint();assertActive(token);
+    await pendingChanges;assertActive(token);
     const settings=effectiveActiveSettings();
     if(!settings?.modelId || !settings?.apiKey)throw new Error('Set your API key and Model ID in the Settings tab first.');
-    const planJump=planJumpControl?.get();
-    if(planJump && classifyUserInput(text)!=='narrative')throw new Error('Clear the time skip before sending an OOC question.');
     await chatLoading;assertActive(token);const store=await ensureLocalStory();assertActive(token);
     // Missing lore must leave the composer draft intact until Sync can retry.
     await loreReady;assertActive(token);validateSavedStorySettings();
     if(session.directorPending)store.enqueue('discardDirector',{});
     const id=messagesApi.newMessageId();
     const mem=normalizeMemory(session.memory);const initializeMemory=mem.autoUpdate && session.memoryState?.extractedThroughOrder==null && computeTurns(store.view.messages).lastTurn<=mem.lagTurns;
-    store.enqueue('add',{id,message:{role:'user',content:text,...(planJump?{planJump}:{})},...(initializeMemory?{sessionUpdate:{memoryState:{...session.memoryState,extractedThroughOrder:0}}}:{})});
-    saved=true;planJumpControl?.reset();
+    store.enqueue('add',{id,message:{role:'user',content:text},...(initializeMemory?{sessionUpdate:{memoryState:{...session.memoryState,extractedThroughOrder:0}}}:{})});
+    saved=true;
     if(el.input.value===draft)setComposerText('');
     const userMsg=store.view.messages.find(m=>m.id===id);
+    await afterUiPaint();assertActive(token);
     await runAssistantTurn({messages:historyMessages,reconciled:true,savedUserId:userMsg.id},token);
   } catch (err) {
     if (!saved && requestedOwner===currentUid() && requestedSessionId === state.sessionId && !el.input.value) setComposerText(draft);
@@ -1750,7 +1756,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
       opts={...opts,directorTurn};
       showTransientInfo('Narrating…');
     }
-    let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries) }),controller);
+    let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries),signal:controller.signal,check:()=>assertActive(token) }),controller);
     assertActive(token);
     if(opts.savedUserId){
       validateSavedStorySettings();
@@ -2090,6 +2096,8 @@ function restoreStreamUI() {
 }
 
 function startStreamUI(prefix=null) {
+  const sticky=wasNearBottom && isNearBottom();
+  setPreparing(false);
   const wrap = document.createElement("div");
   wrap.className = "msg assistant";
 
@@ -2112,7 +2120,7 @@ function startStreamUI(prefix=null) {
     renderedMessages.get(prefix.id).node=wrap;
     content.textContent=prefix.content;
   }else el.list.appendChild(wrap);
-  scrollToEnd();
+  if(sticky) scrollToEnd();
 
   streamState = {
     wrap, thinking, thinkingBody: thinking.querySelector(".thinking-body"), content,
@@ -2121,6 +2129,17 @@ function startStreamUI(prefix=null) {
   updateWelcome();
 }
 
+function updateStreamText(node,text) {
+  const previous=node.textContent;
+  if(previous===text)return;
+  const child=node.firstChild;
+  if(child?.nodeType===3 && child===node.lastChild && text.startsWith(previous))child.appendData(text.slice(previous.length));
+  else node.textContent=text;
+}
+function setPreparing(active) {
+  const node=document.getElementById('composer-preparing');
+  if(node)node.hidden=!active;
+}
 function appendStream(kind, text) {
   if (!streamState) return;
   if (kind === "content") {
@@ -2133,9 +2152,10 @@ function appendStream(kind, text) {
     current.frame = requestAnimationFrame(() => {
       current.frame = 0;
       if (streamState !== current) return;
-      const sticky = isNearBottom();
-      current.content.textContent = current.prefix ? current.prefix+'\n\n'+stripPlan(current.contentText) : stripPlan(current.contentText);
-      current.thinkingBody.textContent = current.thinkingText.slice(-4000);
+      const sticky = wasNearBottom && isNearBottom();
+      const visible = current.prefix ? current.prefix+'\n\n'+stripPlan(current.contentText) : stripPlan(current.contentText);
+      updateStreamText(current.content,visible);
+      updateStreamText(current.thinkingBody,current.thinkingText.slice(-4000));
       if (sticky) scrollToEnd();
     });
   }
@@ -2156,6 +2176,7 @@ function updateMessageControls() {
 let busyUiQueued=false;
 function applyBusyUi(b) {
   busy = state.busy = b;
+  if(!b)setPreparing(false);
   if(el.sendBtn)el.sendBtn.disabled=b;
   if(!b){if(el.sendBtn)el.sendBtn.hidden=false;el.stopBtn?.classList.add('hidden');if(el.stopBtn)el.stopBtn.disabled=false;}
   if(el.quickProfile)el.quickProfile.disabled=b;
@@ -2165,7 +2186,7 @@ function applyBusyUi(b) {
   if(busyUiQueued)return;
   busyUiQueued=true;
   requestAnimationFrame(()=>{
-    busyUiQueued=false;planJumpControl?.refresh();updateRewriteControls();updateMemoryChip();updateMessageControls();
+    busyUiQueued=false;updateRewriteControls();updateMemoryChip();updateMessageControls();
   });
 }
 

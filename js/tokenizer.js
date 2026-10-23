@@ -47,7 +47,56 @@ export function createTokenizer({ importer = importVendor, now = () => Date.now(
   };
 }
 
-const tokenizer = createTokenizer();
+// One worker serves all callers. A failed/stalled worker settles every request;
+// estimates remain uncached and a later request retries after the cooldown.
+export function createWorkerTokenizer({
+  spawn = () => new Worker(new URL('./tokenizer-worker.js', import.meta.url), {type:'module'}),
+  now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
+} = {}) {
+  let worker=null, serial=0, ready=false, retryAfter=0;
+  const pending=new Map();
+  const estimate=text=>new TextEncoder().encode(text).length;
+  function fail(source) {
+    if (source!==worker) return;
+    worker?.terminate(); worker=null; ready=false; retryAfter=now()+30000;
+    for (const job of pending.values()) { cancel(job.timer); job.resolve(estimate(job.text)); }
+    pending.clear();
+  }
+  function connect() {
+    if (worker) return worker;
+    const source=spawn(); worker=source;
+    source.onmessage=({data})=>{
+      if (source!==worker) return;
+      const job=pending.get(data?.id);
+      if (!job) return;
+      if (!Number.isFinite(data.count) || data.count<0) { fail(source); return; }
+      pending.delete(data.id); cancel(job.timer); ready=data.ready===true;
+      retryAfter=ready ? 0 : now()+30000;
+      job.resolve(data.count);
+    };
+    source.onerror=()=>fail(source);
+    source.onmessageerror=()=>fail(source);
+    return source;
+  }
+  return {
+    tokenizerReady:()=>ready,
+    tokenizerStatus:()=>ready?'ok':retryAfter?'fallback':'loading',
+    async countTokens(text) {
+      if (!text) return 0;
+      if (now()<retryAfter) return estimate(text);
+      try {
+        const source=connect(), id=++serial;
+        return await new Promise(resolve=>{
+          pending.set(id,{text,resolve,timer:schedule(()=>fail(source),30000)});
+          try { source.postMessage({id,text}); } catch { fail(source); }
+        });
+      } catch { fail(worker); return estimate(text); }
+    },
+  };
+}
+// Node and worker contexts retain the injectable encoder used by offline tools.
+// Browser failures never run the encoder synchronously on the UI thread.
+const tokenizer = typeof document === 'undefined' ? createTokenizer() : createWorkerTokenizer();
 export const countTokens = tokenizer.countTokens;
 export const tokenizerReady = tokenizer.tokenizerReady;
 

@@ -199,3 +199,8 @@ body > .settings-overlay { transform: var(--app-viewport-transform, none); }
     -webkit-backdrop-filter: none;
   }
 }
+
+/* Pet and chrome share the app stacking context, including the welcome screen. */
+.composer { z-index: 30; }
+.composer-preparing { max-width: var(--reading-width); margin: 0 auto 4px; padding-inline: 8px; color: var(--muted); font-size: 11px; }
+.composer-preparing[hidden] { display: none; }

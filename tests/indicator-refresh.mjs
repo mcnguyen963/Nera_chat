@@ -30,3 +30,12 @@ test('Focus during computation rejects result and defers replacement until blur'
   assert.equal(h.calls,1);assert.deepEqual(h.applied,[]);
   h.setSource('latest typed draft');h.setFocus(false);h.refresh.blur();h.flush();h.jobs.shift().resolve('fresh');await tick();assert.deepEqual(h.applied,['fresh']);
 });
+
+test('invalidating an active indicator exposes cancellation to its expensive computation',async()=>{
+ const {createIndicatorRefresh}=await appHarness()('ui/indicator-refresh.js');
+ let current,finish,applied=false,focused=false;
+ const refresh=createIndicatorRefresh({focused:()=>focused,key:()=>1,compute:({isCurrent})=>{current=isCurrent;return new Promise(resolve=>finish=resolve);},apply:()=>applied=true,onError:error=>{throw error;}});
+ const running=refresh.request();assert.equal(current(),true);
+ focused=true;refresh.invalidate();assert.equal(current(),false);
+ finish(1);await running;assert.equal(applied,false);
+});

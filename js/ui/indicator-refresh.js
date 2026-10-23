@@ -12,7 +12,7 @@ export function createIndicatorRefresh({ focused, key, compute, apply, onError, 
     const version = revision, source = key();
     const valid = () => version === revision && source === key() && !focused();
     running = (async () => {
-      try { const result = await compute(); if (valid()) apply(result); }
+      try { const result = await compute({isCurrent:valid}); if (valid()) apply(result); }
       catch (error) { if (valid()) onError(error); }
     })();
     await running;

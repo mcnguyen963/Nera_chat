@@ -18,6 +18,8 @@ export function initViewport() {
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const style = document.documentElement.style;
   let baseline = vv.height, width = window.innerWidth, keyboard = false, queued = false;
+  const applied=new Map();
+  const write=(key,value)=>{if(applied.get(key)!==value){style.setProperty(key,value);applied.set(key,value);}};
   const sync = () => {
     queued = false;
     const vars = viewportVars(vv);
@@ -29,11 +31,12 @@ export function initViewport() {
     const focused = !!document.activeElement?.matches?.('textarea, input:not([type=checkbox]):not([type=radio]), [contenteditable=true]');
     keyboard = keyboardVisible({height:vv.height, layoutHeight:window.innerHeight, baselineHeight:baseline, focused, wasOpen:keyboard});
     if (!keyboard) baseline = vv.height;
-    style.setProperty("--app-offset-top", ios ? vars.offsetTop : "0px");
-    style.setProperty("--app-viewport-transform", ios ? `translateY(${vars.offsetTop})` : "none");
-    style.setProperty("--app-height", vars.height);
-    style.setProperty("--composer-safe-bottom", keyboard ? "0px" : "var(--safe-bottom)");
-    document.documentElement.dataset.keyboard = keyboard ? 'open' : 'closed';
+    write("--app-offset-top", ios ? vars.offsetTop : "0px");
+    write("--app-viewport-transform", ios ? `translateY(${vars.offsetTop})` : "none");
+    write("--app-height", vars.height);
+    write("--composer-safe-bottom", keyboard ? "0px" : "var(--safe-bottom)");
+    const keyboardState=keyboard ? 'open' : 'closed';
+    if(document.documentElement.dataset.keyboard!==keyboardState)document.documentElement.dataset.keyboard=keyboardState;
     // Only undo keyboard focus panning, never normal browser toolbar scrolling.
     if (keyboard && ios && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0);
   };
