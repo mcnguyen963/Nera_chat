@@ -53,13 +53,21 @@ export function createWorkerTokenizer({
   spawn = () => new Worker(new URL('./tokenizer-worker.js', import.meta.url), {type:'module'}),
   now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
 } = {}) {
-  let worker=null, serial=0, ready=false, retryAfter=0;
+  let worker=null, serial=0, ready=false, retryAfter=0, watchdog=null;
   const pending=new Map();
   const estimate=estimateTokens;
+  // Measure inactivity, not total time in a busy queue. Only a reply resets
+  // this deadline; submitting more work must not conceal a stalled worker.
+  function arm(source) {
+    if(watchdog!==null)cancel(watchdog);
+    watchdog=null;
+    if(source===worker && pending.size)watchdog=schedule(()=>fail(source),30000);
+  }
   function fail(source) {
     if (source!==worker) return;
+    if(watchdog!==null)cancel(watchdog);watchdog=null;
     worker?.terminate(); worker=null; ready=false; retryAfter=now()+30000;
-    for (const job of pending.values()) { cancel(job.timer); job.resolve(estimate(job.text)); }
+    for (const job of pending.values()) job.resolve(estimate(job.text));
     pending.clear();
   }
   function connect() {
@@ -70,9 +78,10 @@ export function createWorkerTokenizer({
       const job=pending.get(data?.id);
       if (!job) return;
       if (!Number.isFinite(data.count) || data.count<0) { fail(source); return; }
-      pending.delete(data.id); cancel(job.timer); ready=data.ready===true;
+      pending.delete(data.id); ready=data.ready===true;
       retryAfter=ready ? 0 : now()+30000;
       job.resolve(data.count);
+      arm(source);
     };
     source.onerror=()=>fail(source);
     source.onmessageerror=()=>fail(source);
@@ -87,8 +96,8 @@ export function createWorkerTokenizer({
       try {
         const source=connect(), id=++serial;
         return await new Promise(resolve=>{
-          pending.set(id,{text,resolve,timer:schedule(()=>fail(source),30000)});
-          try { source.postMessage({id,text}); } catch { fail(source); }
+          pending.set(id,{text,resolve});
+          try { source.postMessage({id,text}); if(watchdog===null)arm(source); } catch { fail(source); }
         });
       } catch { fail(worker); return estimate(text); }
     },

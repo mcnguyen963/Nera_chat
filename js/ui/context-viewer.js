@@ -1,3 +1,4 @@
+import * as tokenizer from '../tokenizer.js';
 import { buildDirectorContext } from '../director-context.js';
 import { seedDirectorState } from '../director-state.js';
 import { renderCoreEditor } from './character-core-editor.js';
@@ -17,10 +18,7 @@ const expanded = new Map(), scrollPositions = new Map();
 
 export function initContextViewer() {
   document.addEventListener('context-details', openContextViewer);
-  document.getElementById('chat-input').addEventListener('input', () => {
-    if (open) { clearTimeout(timer); timer = setTimeout(render, 400); }
-  });
-  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed','story-settings-changed']) {
+  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed','story-settings-changed','turn-finished']) {
     document.addEventListener(event, () => { if (open) void render(); });
   }
 }
@@ -30,7 +28,9 @@ export function openContextViewer() {
   sheet(document.getElementById('context-viewer'), 'NEXT REQUEST', {className:'context-sheet', close:() => {
     rememberView(); open = false; ++version; clearTimeout(timer); return true;
   }});
-  void prepareMemorySnapshot().then(() => render()).catch(e => toast(e.message));
+  // Opening a read-only preview uses the local story immediately. Explicit
+  // Refresh can still reconcile saves without blocking first display.
+  void render();
 }
 function rememberView() {
   const body = document.querySelector('#context-viewer .memory-content');
@@ -83,7 +83,7 @@ function textSection(body, key, title, text, empty) {
   section.append(text ? preview(key+'-text', 'Read included text', text) : node('p', empty, 'muted'));
   body.append(section);
 }
-async function render() {
+async function render({accurate=false}={}) {
   const dialog = document.querySelector('#context-viewer .sheet');
   if (!dialog || !open) return;
   const run = ++version, live = memorySnapshot();
@@ -98,9 +98,10 @@ async function render() {
     return;
   }
   try {
-    const draftText = document.getElementById('chat-input').value;
+    const draftText = '';
+    const check=()=>{if(run!==version || !open || state.sessionId!==live.session.id)throw new Error('Context preview changed.');};
     const built = await buildContextForRequest(live.session, effectiveActiveSettings(), {
-      messages:live.messages, loreEntries:live.entries, draftText, draftPlanJump:scheduledPlanDraftJump(), includeInspection:true,
+      messages:live.messages, loreEntries:live.entries, draftText, draftPlanJump:scheduledPlanDraftJump(), includeInspection:true, tokenCountMode:accurate ? undefined : 'estimate', check,
     });
     if (run !== version || !open || state.sessionId !== live.session.id) return;
     rememberView();
@@ -123,7 +124,8 @@ async function render() {
       seg.title = b.label+': '+b.tokens; bar.append(seg);
     }
     overview.append(bar, node('p', 'Separate max reply: '+r.totals.reserved.toLocaleString(), 'muted'));
-    if (draftText.trim()) overview.append(node('p', 'including your draft', 'muted'));
+    const counted=accurate && tokenizer.tokenizerStatus?.()==='ok';
+    overview.append(node('p', (counted ? 'Tokenizer count' : 'Fast estimate')+' · excludes unsent input'+(!accurate && live.settings.tokenCountingMode==='accurate' ? ' · refining count…' : ''), 'muted context-count-status'));
     if (live.providerUsage) overview.append(node('p', `Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`, 'muted'));
     for (const warning of r.warnings) overview.append(node('p', warning, 'memory-warning'));
     const breakdown = group('tokens', 'Token breakdown');
@@ -192,7 +194,7 @@ async function render() {
       section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
       body.append(section);
     }
-    if(live.settings.narrationMode==='director'){const dg=group('director-preview','Director · next request preview');try{const d=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`, 'muted'),preview('director-next-json','Read Director input',JSON.stringify({messages:d.apiMessages,response_format:d.responseFormat},null,2)));}catch(error){dg.append(node('p',error.message,'muted'));}if(run!==version || !open || state.sessionId!==live.session.id)return;body.append(dg);}
+    if(live.settings.narrationMode==='director'){const dg=group('director-preview','Director · next request preview');try{const d=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries),accurate ? {} : {count:tokenizer.estimateTokens});dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`, 'muted'),preview('director-next-json','Read Director input',JSON.stringify({messages:d.apiMessages,response_format:d.responseFormat},null,2)));}catch(error){dg.append(node('p',error.message,'muted'));}if(run!==version || !open || state.sessionId!==live.session.id)return;body.append(dg);}
     const scene = group('scene', 'Current scene & memory');
     scene.append(node('p', r.scene ? r.scene.raw+' (from turn '+r.scene.fromTurn+')' : 'No current scene included.', 'muted'));
     for (const [key,label] of [['memory','Read assembled memory block'],['replyContract','Read reply contract'],['reminder','Read scene reminder']]) {
@@ -249,8 +251,16 @@ async function render() {
     body.scrollTop = scrollPositions.get('body') ?? 0;
     for (const e of body.querySelectorAll('.context-scroll')) e.scrollTop = scrollPositions.get(e.dataset.scrollKey) ?? 0;
     if (focusKey) [...body.querySelectorAll('summary,pre,button')].find(e => e.dataset.focusKey===focusKey)?.focus({preventScroll:true});
+    if(!accurate && live.settings.tokenCountingMode==='accurate' && !live.busy){
+      clearTimeout(timer);timer=setTimeout(()=>{if(run===version && open)void render({accurate:true});},0);
+    }
   } catch (e) {
     if (run !== version || !open || state.sessionId!==live.session.id) return;
+    if(accurate && dialog.querySelector('.context-overview')){
+      const status=dialog.querySelector('.context-count-status');
+      if(status)status.textContent='Fast estimate · could not refine count · excludes unsent input';
+      return;
+    }
     const body = node('div', null, 'memory-content');
     body.append(node('p', e.message, 'memory-warning'), button('Refresh', () => render()));
     dialog.querySelector('.memory-content')?.remove(); dialog.append(body);

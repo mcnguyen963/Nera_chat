@@ -146,7 +146,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     'db.js': { db: {} },
     'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
-    'tokenizer.js': { countTokens: async (text) => text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
+    'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>Math.ceil(text.length*0.306), countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
       subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
@@ -957,10 +957,10 @@ test('lorebook editor stages canon text and saves only on Save; closing dirty ed
   h.calls.confirm=false; await root.querySelector('.settings-close').click(); assert.equal(root.classList.contains('hidden'),false);
   const save=root.querySelectorAll('button').find(b => b.textContent === 'Save'); await save.click(); assert.equal(h.calls.cardWrites[0][1].sections.appearance.text,'Silver hair'); assert.equal(h.calls.cardWrites[0][2].sections.appearance.text,'Red hair');
 });
-test('context viewer includes composer draft and Copy request is the exact computed API text',async () => {
+test('context viewer excludes unsent input and Copy request matches the saved-context preview',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Opening' }],hasEarlier:false });
-  h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer'); assert.ok(root.querySelectorAll('p').some(p => p.textContent === 'including your draft'));
-  await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.match(h.calls.clipboard,/=== USER ===\nAsk Mira$/); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
+  h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer'); assert.ok(root.querySelectorAll('p').some(p => p.textContent.includes('excludes unsent input')));
+  await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.ok(!h.calls.clipboard.includes('Ask Mira'));assert.ok(h.calls.clipboard.includes('Opening')); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
 
 test('grouped context viewer lazily reveals exact request text and preserves navigation across refresh',async () => {
@@ -975,23 +975,23 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   for(const key of ['instructions','summary','book-characters','book-locations','book-facts','book-events','scene','conversation','updates','full-request']) assert.equal(get(key).open,false,key);
   assert.equal(root.querySelectorAll('pre').length,0,'Long text is lazy');
   const conversation=get('conversation');conversation.open=true;await conversation.dispatchEvent({type:'toggle'});
-  assert.equal(root.querySelectorAll('.context-turn-list').length,2);
-  const draft=root.querySelectorAll('details').find(d=>d.children[0]?.textContent?.includes('Composer draft'));
+  assert.equal(root.querySelectorAll('.context-turn-list').length,1);
+  const draft=root.querySelectorAll('details').find(d=>d.children[0]?.textContent?.includes('Opening exchange'));
   draft.open=true;await draft.dispatchEvent({type:'toggle'});
-  assert.equal(draft.querySelector('pre').textContent,'<script>Draft as literal text</script>');
+  assert.ok(['Start','Opening'].includes(draft.querySelector('pre').textContent));assert.ok(!root.querySelectorAll('pre').some(p=>p.textContent==='<script>Draft as literal text</script>'));
   root.querySelector('.memory-content').scrollTop=120;
-  root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='recent').scrollTop=35;
+  root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='opening').scrollTop=35;
   draft.querySelector('summary').focus();
   await root.querySelectorAll('button').find(b=>b.textContent==='Refresh').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(get('conversation').open,true);
   assert.equal(get(draft.dataset.contextKey).open,true);
   assert.equal(h.document.activeElement.dataset.focusKey,draft.dataset.contextKey);
   assert.equal(root.querySelector('.memory-content').scrollTop,120);
-  assert.equal(root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='recent').scrollTop,35);
+  assert.equal(root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='opening').scrollTop,35);
   const full=get('full-request');full.open=true;await full.dispatchEvent({type:'toggle'});
   const request=root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='request');
   for(const d of request.querySelectorAll('details')) {d.open=true;await d.dispatchEvent({type:'toggle'});}
-  const built=await (await h.use('context-builder.js')).buildContextForRequest(chat.memorySnapshot().session,chat.memorySnapshot().settings,{messages:chat.memorySnapshot().messages,draftText:h.el('chat-input').value});
+  const built=await (await h.use('context-builder.js')).buildContextForRequest(chat.memorySnapshot().session,chat.memorySnapshot().settings,{messages:chat.memorySnapshot().messages,draftText:'',tokenCountMode:'estimate'});
   assert.deepEqual(request.querySelectorAll('pre').map(p=>p.textContent),Array.from(built.apiMessages,m=>m.content));
   await root.querySelectorAll('button').find(b=>b.textContent==='Copy request as text').click();
   assert.equal(h.calls.clipboard,built.apiMessages.map(m=>'=== '+m.role.toUpperCase()+' ===\n'+m.content).join('\n\n'));
@@ -2882,4 +2882,90 @@ test('stream text appends preserve the text node and unchanged frames do no writ
  chat.updateStreamText(node,'Hello there');assert.equal(appends,1);assert.equal(replacements,0);
  chat.updateStreamText(node,'Hello there');assert.equal(appends,1);assert.equal(replacements,0);
  chat.updateStreamText(node,'Hello');assert.equal(replacements,1);assert.equal(value,'Hello');
+});
+
+
+test('context preview and indicator show a fast saved-context estimate while accurate counting never responds',async()=>{
+ const h=await harness();const chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Opening.'}]);
+ h.state.settings.tokenCountingMode='accurate';
+ let exactCalls=0;h.calls.onTokenCount=()=>{exactCalls++;return new Promise(()=>{});};
+ h.el('chat-input').value='Unsent action never counted';
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();
+ await new Promise(resolve=>setTimeout(resolve,25));
+ const root=h.el('context-viewer');assert.ok(root.querySelector('.context-total'));
+ assert.ok(root.querySelectorAll('p').some(p=>p.textContent.includes('Fast estimate')));
+ assert.ok(!root.querySelectorAll('p,pre').some(p=>p.textContent?.includes('Unsent action never counted')));assert.ok(exactCalls>0);
+ await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,320));
+ assert.match(h.el('context-label').textContent,/input.*tokens.*estimate/);
+ assert.ok(root.querySelector('.context-total'),'Worker still pending, preview remains visible');
+ assert.equal(h.calls.requests.length,0);
+ await root.querySelector('.settings-close').click();
+});
+
+
+test('accurate preview refines a visible fast estimate when the tokenizer becomes ready',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start refining.'},{id:'a',order:2,role:'assistant',content:'Opening refining.'}]);
+ h.state.settings.tokenCountingMode='accurate';let release;const ready=new Promise(resolve=>release=resolve);
+ h.calls.onTokenCount=async text=>{await ready;return text.length;};
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();
+ await new Promise(resolve=>setTimeout(resolve,25));const root=h.el('context-viewer');
+ assert.match(root.querySelector('.context-count-status').textContent,/Fast estimate/);
+ release();await new Promise(resolve=>setTimeout(resolve,25));
+ assert.match(root.querySelector('.context-count-status').textContent,/Tokenizer count/);
+ assert.equal(h.calls.requests.length,0);await root.querySelector('.settings-close').click();
+});
+
+test('saving an edit replaces the row without first removing it from the scrolling list',async()=>{
+ const {h,bubble,pending}=await oldMessageEditor();await pending;
+ let removed=false;const remove=bubble.remove.bind(bubble);bubble.remove=()=>{removed=true;remove();};
+ bubble.querySelector('.msg-editor').value='Corrected text';
+ await bubble.querySelector('.msg-actions').children.find(b=>b.textContent==='Save').click();
+ assert.equal(removed,false,'Keep the row in layout until its replacement is ready');
+ assert.equal(h.el('message-list').querySelector('.msg-editor'),null);
+});
+
+test('finishing a stream atomically replaces its row instead of temporarily duplicating the reply',async()=>{
+ const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+`\nexport {startStreamUI};\nexport function completeStreamFixture(message){streamState.savedId=message.id;streamState.saveCompleted=true;renderMessages([...lastMessages,message]);}\n`;
+ const h=await harness({sources:{'ui/chat-view.js':source}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
+ chat.startStreamUI();const list=h.el('message-list'),stream=list.children.at(-1);let duplicated=false;
+ const insert=list.insertBefore.bind(list);list.insertBefore=(node,anchor)=>{if(node.dataset.messageId==='a' && stream.parentNode===list)duplicated=true;return insert(node,anchor);};
+ chat.completeStreamFixture({id:'a',order:2,role:'assistant',content:'Completed narration.'});
+ assert.equal(duplicated,false,'Do not insert the completed reply beside the full streaming reply');
+ assert.equal(stream.parentNode,null);assert.equal(list.children.filter(n=>n.dataset.messageId==='a').length,1);
+});
+
+test('scroll gestures do not highlight or copy a long message, while a stationary hold still copies',async()=>{
+ const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+'\nexport {attachHoldToCopy};';
+ const jobs=new Map();let serial=0;
+ const h=await harness({sources:{'ui/chat-view.js':source},timers:{setTimeout:(fn,ms)=>{jobs.set(++serial,{fn,ms});return serial;},clearTimeout:id=>jobs.delete(id)}}),chat=await h.use('ui/chat-view.js');
+ const target=h.document.createElement('div');chat.attachHoldToCopy(target,()=> 'Narration to copy');
+ const pointer={pointerType:'touch',clientX:50,clientY:100,target:{closest:()=>null}};
+ await target.dispatchEvent({type:'pointerdown',...pointer});
+ assert.equal(target.classList.contains('holding'),false,'A scroll starts with pointerdown, so delay visual hold feedback');
+ await target.dispatchEvent({type:'pointermove',...pointer,clientY:125});
+ for(const [id,job]of [...jobs])if(job.ms===500){jobs.delete(id);job.fn();}
+ await target.dispatchEvent({type:'pointerup',...pointer});assert.equal(h.calls.clipboard,undefined);
+ await target.dispatchEvent({type:'pointerdown',...pointer});
+ for(const [id,job]of [...jobs])if(job.ms===500){jobs.delete(id);job.fn();}
+ assert.equal(target.classList.contains('holding'),true);
+ await target.dispatchEvent({type:'pointerup',...pointer});assert.equal(h.calls.clipboard,'Narration to copy');assert.equal(target.classList.contains('holding'),false);
+});
+
+test('replacing content above the viewport preserves the visible message anchor',async()=>{
+ const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+'\nexport {renderMessages};';
+ const h=await harness({sources:{'ui/chat-view.js':source}}),chat=await openImprovementChat(h,{},[
+  {id:'u',order:1,role:'user',content:'x'.repeat(300)},
+  {id:'a',order:2,role:'assistant',content:'y'.repeat(600)},
+  {id:'u2',order:3,role:'user',content:'z'.repeat(300)},
+ ]);
+ const list=h.el('message-list');list.clientHeight=500;list.scrollTop=800;
+ const height=node=>40+(node.querySelector?.('.msg-content')?.textContent?.length ?? 0)*2;
+ const rect=node=>{let top=-list.scrollTop;for(const sibling of list.children){if(sibling===node)break;top+=height(sibling);}return {top,bottom:top+height(node),height:height(node),width:320};};
+ list.getBoundingClientRect=()=>({top:0,bottom:500,height:500,width:320});
+ Object.defineProperty(list,'scrollHeight',{get:()=>list.children.reduce((n,node)=>n+height(node),0)});
+ for(const node of list.children)node.getBoundingClientRect=()=>rect(node);
+ const create=h.document.createElement;h.document.createElement=tag=>{const node=create(tag);node.getBoundingClientRect=()=>rect(node);return node;};
+ const visible=()=>list.children.find(node=>node.dataset.messageId==='a');const before=visible().getBoundingClientRect().top;
+ chat.renderMessages(chat.memorySnapshot().messages.map(m=>m.id==='u'?{...m,content:'Shortened above viewport'}:m));
+ assert.equal(visible().getBoundingClientRect().top,before);assert.ok(list.scrollTop>=0);assert.ok(list.scrollTop<=list.scrollHeight-list.clientHeight);
 });

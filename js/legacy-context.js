@@ -25,6 +25,7 @@ export const REQUEST_FRAME_TOKENS = 8;
 
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
+const previewTokenCounter=createTokenCounter({count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
 const sharedTokenCounter=createTokenCounter({count:countTokens,ready:tokenizerReady,version:()=>tokenizer.tokenizerMode?.()});
 
 const AD_DIRECTIVE_RULE = prompts.legacyAuthorDirection;
@@ -50,7 +51,7 @@ export function openingExchange(messages) {
 
 export async function buildLegacyContext(session, settings, opts = {}) {
   const yieldWork=createWorkBudget({signal:opts.signal,check:opts.check});
-  const countSystemTokensCached=async text=>{await yieldWork();return sharedTokenCounter(text);};
+  const countSystemTokensCached=async text=>{await yieldWork();return (opts.tokenCountMode==='estimate' ? previewTokenCounter : sharedTokenCounter)(text);};
   const upToOrder = opts.upToOrder ?? Infinity; // regenerate: only messages before this order
   // The opening exchange is a permanent story anchor, including after a
   // summary checkpoint. Callers normally provide their full cached history.
