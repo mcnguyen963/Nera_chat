@@ -6,7 +6,7 @@ const VENDOR = './vendor/gpt-tokenizer-2.9.0.js';
 const importVendor = (_url, attempt) => attempt
   ? import(`./vendor/gpt-tokenizer-2.9.0.js?nera_retry=${attempt}`)
   : import('./vendor/gpt-tokenizer-2.9.0.js');
-
+export const estimateTokens=text=>{let n=0;for(const ch of text)n+=ch.codePointAt(0)<128?0.3:1;return Math.ceil(n*1.02);};
 export function createTokenizer({ importer = importVendor, now = () => Date.now() } = {}) {
   let modPromise = null, retryAfter = 0, attempts = 0, ready = false;
   function loadTokenizer() {
@@ -41,7 +41,7 @@ export function createTokenizer({ importer = importVendor, now = () => Date.now(
       } catch {
         if (ready) { ready=false; modPromise=null; retryAfter=now()+30000; }
         // Conservative across languages; never cache this as a tokenizer result.
-        return new TextEncoder().encode(text).length;
+        return estimateTokens(text);
       }
     },
   };
@@ -55,7 +55,7 @@ export function createWorkerTokenizer({
 } = {}) {
   let worker=null, serial=0, ready=false, retryAfter=0;
   const pending=new Map();
-  const estimate=text=>{let n=0;for(const ch of text)n+=ch.codePointAt(0)<128?0.3:1;return Math.ceil(n*1.02);};
+  const estimate=estimateTokens;
   function fail(source) {
     if (source!==worker) return;
     worker?.terminate(); worker=null; ready=false; retryAfter=now()+30000;
