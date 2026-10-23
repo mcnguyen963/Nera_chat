@@ -106,7 +106,9 @@ async function runSummary(session,settings,opts) {
   let running = priorSummary ? "Previous summary:\n" + priorSummary + "\n\n" : "";
 
   const summaryPrompt = (settings.summarizerSystemPrompt || '')+(memoryActive(normalizeMemory(session.memory)) ? '\n\n'+prompts.summaryContinuity : '');
-  const detailDirective = '\n\n'+renderPrompt(prompts.summaryOutput, { MAX_OUTPUT_TOKENS: requestSettings.maxResponseTokens - (requestSettings.reasoning.maxTokens ?? 0) });
+  // The API enforces output capacity. Do not turn that large allowance into
+  // a prose instruction that can anchor the model's summary length.
+  const detailDirective = '\n\n'+prompts.summaryOutput;
 
   let content = null;
   let offset = 0;

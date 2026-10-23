@@ -9,13 +9,14 @@ const root=process.env.F20_PROMPT_ROOT;
 const readPrompt=file=>readFile(root ? `${root}/${file}` : new URL('../system prompts/'+file,import.meta.url),'utf8');
 test('Default summary prompt matches the revised continuity text within its word budget',async()=>{
   // Keep approved text in a versioned fixture, independent of local release notes.
-  const approved=(await readFile(new URL('./fixtures/summary-approved-f20.md',import.meta.url),'utf8')).trim();
+  const approved=(await readFile(new URL('./fixtures/summary-approved-no-ceiling.md',import.meta.url),'utf8')).trim();
   const actual=(await readPrompt('summarizer.md')).trim();
   assert.equal(actual,approved);
   assert.ok(actual.split(/\s+/).length<=1470);
   const directive=await readPrompt('summary-output.md');
   assert.match(directive,/carry forward the previous summary's still-relevant story, voice, relationship, knowledge, and promise information/);
-  assert.match(directive,/\{\{MAX_OUTPUT_TOKENS\}\}/);
+  assert.doesNotMatch(directive,/MAX_OUTPUT_TOKENS|ceiling|\d[\d,]* output tokens/);
+  assert.doesNotMatch(actual,/output-token limit|supplied limit|ceiling/);
 });
 test('Summary requests carry the active summary and then each complete chunk replacement',async()=>{
   const requests=[];
@@ -43,7 +44,8 @@ test('Summary requests carry the active summary and then each complete chunk rep
     assert.ok(input.includes('=== Turn '+(i+3)+' ==='));
     assert.ok(input.includes('USER: Event '+(4+i*2)));
     assert.ok(input.includes('STORY: Event '+(5+i*2)));
-    assert.ok(input.includes('within 4000 output tokens'));
+    assert.match(input,/Write a compact, complete replacement summary/);
+    assert.doesNotMatch(input,/within \d+ output tokens|MAX_OUTPUT_TOKENS/);
     assert.doesNotMatch(input,/Private future outline|Event 0\b|Event 1\b|Event 10\b|Event 11\b|\{\{MAX_OUTPUT_TOKENS\}\}/);
   }
   assert.equal(saved.content,replacements.at(-1));
@@ -80,7 +82,8 @@ test('Serialized summaries use task-specific continuity and use independent summ
     assert.match(prompts.continuity,/Continue from the newest narrative and the current user message/);
     assert.ok(body.messages[1].content.startsWith('Previous summary:\n'+previous+'\n\nNew events to fold in:\n'));
     assert.equal(body.max_tokens,89000);
-    assert.ok(body.messages[1].content.includes(`within ${89000-thinking} output tokens. This is a ceiling, not a target`));
+    assert.match(body.messages[1].content,/Write a compact, complete replacement summary/);
+    assert.doesNotMatch(body.messages[1].content,/89000|69000|output-token limit|ceiling|MAX_OUTPUT_TOKENS/);
     if(thinking)assert.deepEqual(body.reasoning,{max_tokens:thinking});
     else if(endpoint.includes('openrouter.ai'))assert.deepEqual(body.reasoning,{enabled:false});
     else assert.equal(body.reasoning,undefined);
@@ -117,7 +120,17 @@ test('Summary context capacity limits written text while retaining a separate th
     assert.equal(requests.length,1);
     assert.equal(requests[0].settings.maxResponseTokens,39860);
     assert.equal(requests[0].settings.reasoning.maxTokens,20000);
-    assert.match(requests[0].messages[1].content,/within 19860 output tokens/);
+    assert.doesNotMatch(requests[0].messages[1].content,/19860|39860|ceiling|MAX_OUTPUT_TOKENS/);
     await assert.rejects((await use('summarizer.js')).runSummarization({id:'story'},{...settings,summarizerThinkingTokens:50000},{full}),/thinking tokens/);
   }
+});
+
+
+test('the previous ceiling-aware summary default upgrades by exact hash; custom text remains intact',async()=>{
+ const use=appHarness({stubs:{'db.js':{db:{}},'auth.js':{currentUid:()=> 'owner'},
+ 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc(){},getDocFromServer(){},setDoc(){},onSnapshot(){},runTransaction(){},serverTimestamp(){}}}});
+ const settings=await use('settings.js');
+ const old=(await readFile(new URL('./fixtures/summary-approved-f20.md',import.meta.url),'utf8')).trim();
+ assert.equal((await settings.mergeDefaults({summarizerSystemPrompt:old})).summarizerSystemPrompt,settings.DEFAULT_SETTINGS.summarizerSystemPrompt);
+ assert.equal((await settings.mergeDefaults({summarizerSystemPrompt:old+'\nCustom continuity rule.'})).summarizerSystemPrompt,old+'\nCustom continuity rule.');
 });
