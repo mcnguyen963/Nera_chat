@@ -20,7 +20,7 @@ The app sends:
 
 1. Optional **Previous summary:** the active summary from the last checkpoint, or the replacement produced for an earlier chunk of this same summarization run.
 2. **New events to fold in:** a chronological transcript of the next portion of history eligible for summarization.
-3. A final instruction giving the effective output-token limit for this request.
+3. A final instruction reinforcing concise replacement-summary and continuity requirements.
 
 Transcript markers mean:
 
@@ -90,8 +90,8 @@ Use concise entries for **Knowledge**, **Promises & obligations**, and **Author 
 
 Briefly identify unresolved choices, conflicts, and risks as of the last supplied event. Refer to obligations already recorded without copying their full terms. Do not predict outcomes or end on physical staging, a mood, or an instruction to resume the cutoff scene.
 
-# BUDGET AND FINAL CHECK
+# COMPRESSION AND FINAL CHECK
 
-The app-supplied output-token limit is the ceiling, not a target. Use only the space needed for durable continuity. Reserve room for every relevant section before writing. Under pressure, remove duplication, scene choreography, redundant quotations, and resolved minutiae before compressing unique promises, secrets, relationship changes, or author rulings.
+Use only the space needed for durable continuity. The replacement must condense the supplied material rather than reproduce its length or expand older summaries. Complete every relevant section concisely. Remove duplication, scene choreography, redundant quotations, and resolved minutiae before compressing unique promises, secrets, relationship changes, or author rulings.
 
-Before output, silently compare against the previous summary: did every still-relevant long-term fact survive or receive an evidence-backed update? Check names, participants, quotation accuracy, knowledge holders, anchored deadlines, and consistency across sections. Finish the entire summary within the supplied limit. Output no checklist, self-corrections, scene tags, plan tags, or extraction records.
+Before output, silently compare against the previous summary: did every still-relevant long-term fact survive or receive an evidence-backed update? Check names, participants, quotation accuracy, knowledge holders, anchored deadlines, and consistency across sections. Finish every relevant section without padding or repeating facts. Output no checklist, self-corrections, scene tags, plan tags, or extraction records.

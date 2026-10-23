@@ -717,7 +717,8 @@ test('Summarizer uses its own default thinking budget instead of chat reasoning'
   assert.equal(h.calls.requests.length, 1);
   assert.deepEqual(h.calls.requests[0].reasoning, {max_tokens:20000});
   assert.equal(h.calls.requests[0].max_tokens,50000);
-  assert.match(h.calls.requests[0].messages[1].content,/within 30000 output tokens/);
+  assert.doesNotMatch(h.calls.requests[0].messages[1].content,/within 30000 output tokens|MAX_OUTPUT_TOKENS|ceiling/);
+  assert.match(h.calls.requests[0].messages[1].content,/compact, complete replacement summary/);
 });
 
 test('Incomplete streamed replies are rejected', async () => {
