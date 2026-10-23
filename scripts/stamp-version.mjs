@@ -67,6 +67,7 @@ export function stampJavaScript(source, version) {
   }
   for (let i = 0; i < parts.length; i++) {
     const token = parts[i];
+    if (token.value === 'new' && parts[i+1]?.value === 'URL' && parts[i+2]?.value === '(' && parts[i+4]?.value === ',' && parts.slice(i+5,i+10).map(p=>p.value).join('') === 'import.meta.url') stamp(parts[i+3]);
     if (token.type !== 'word' || !['import','export'].includes(token.value)) continue;
     if (parts[i - 1]?.value === '.') continue;
     const next = parts[i + 1];

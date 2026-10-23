@@ -72,7 +72,7 @@ test('request callbacks require both the current turn and current session', () =
 // Firebase, or browser credentials. Geometry helpers above cover route correctness.
 async function harness({ mobile = false, reduced = false, intersection = true, ios = false } = {}) {
   let now = 100000, nextId = 0;
-  const frames = new Map(), timers = new Map(), ids = new Map(), assets = [], observers = [], textNodes = [], intersections = [];
+  const frames = new Map(), timers = new Map(), ids = new Map(), assets = [], observers = [], observerOptions = [], textNodes = [], intersections = [];
   const state = { settings: { petCharacterIds: [], petMovement: 'roam' }, sessionId: 'story', busy: false };
   class Element {
     constructor() {
@@ -110,7 +110,8 @@ async function harness({ mobile = false, reduced = false, intersection = true, i
         width = height = Number.parseFloat(this.style.getPropertyValue('--pet-box')) || 64;
         const match = this.style.transform?.match(/translate(?:3d)?\(([-\d.]+)px, ([-\d.]+)px/);
         if (match) { x = Number(match[1]); y = Number(match[2]); }
-      } else if (this.rect) ({ x, y, width, height } = this.rect);
+      } else if (this.classList.contains('pet-layer') && !this.rect) { x=0;y=0;width=mobile?390:1000;height=750; }
+      else if (this.rect) ({ x, y, width, height } = this.rect);
       return { x, y, left: x, top: y, width, height, right: x + width, bottom: y + height };
     }
     querySelectorAll() { return this.children; }
@@ -147,7 +148,7 @@ async function harness({ mobile = false, reduced = false, intersection = true, i
       observe(node) { this.targets.add(node); this.callback([{target:node,isIntersecting:node.rect.y>=0 && node.rect.y<600}]); }
       unobserve(node) { this.targets.delete(node); }
     }} : {}),
-    MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} },
+    MutationObserver: class { constructor(callback) { observers.push(callback); } observe(node,options) { observerOptions.push({node,options}); } },
     requestAnimationFrame(cb) { const id = ++nextId; frames.set(id, cb); return id; },
     cancelAnimationFrame(id) { frames.delete(id); },
     fetch: async () => { throw new Error('Catalog fetched outside Settings'); },
@@ -164,7 +165,7 @@ async function harness({ mobile = false, reduced = false, intersection = true, i
     for (const [id, timer] of [...timers]) if (timer.due <= now) { timers.delete(id); timer.cb(); }
     const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((cb) => cb(now));
   }
-  return { pet, state, assets, ids, frames, timers, document, window, welcome, observers, intersections, advance, settle,
+  return { pet, state, assets, ids, frames, timers, document, window, welcome, observers, observerOptions, intersections, advance, settle,
     addText(y) { const el=new Element();el.className='msg-content';el.rect={x:100,y,width:300,height:40};textNodes.push(el);list.append(el);observers.forEach(cb=>cb());return el; },
     removeText(el) { textNodes.splice(textNodes.indexOf(el),1);el.remove();observers.forEach(cb=>cb()); },
     async select(ids) { state.settings.petCharacterIds = ids; document.dispatchEvent({ type: 'settings-changed' }); await settle(); },
@@ -321,4 +322,33 @@ test('scroll and keyboard resize bursts coalesce layout work while reduced motio
  assert.equal(h.frames.size,0);const reads=root.rectReads ?? 0;
  for(let i=0;i<20;i++){h.document.dispatchEvent({type:'scroll'});h.window.dispatchEvent({type:'resize'});}
  assert.equal(h.frames.size,1);assert.equal(root.rectReads ?? 0,reads);h.advance(16);assert.equal(h.frames.size,0);assert.equal(root.hidden,false);
+});
+
+test('pet shares the app layer and converts viewport positions when the keyboard offsets it',async()=>{
+ const h=await harness({mobile:true,ios:true});await h.select(['lillith-v2.png']);
+ const root=h.ids.get('chat-pet'),layer=root.parentNode;
+ assert.equal(layer.parentNode,h.ids.get('app'));
+ layer.rect={x:0,y:45,width:390,height:705};
+ h.pet.refreshPetPlacement();
+ assert.equal(root.style.transform,'translate(40px, 55px)');
+ layer.rect.y=0;h.pet.refreshPetPlacement();
+ assert.equal(root.style.transform,'translate(40px, 100px)');
+});
+
+test('idle scrolling also throttles expensive pet obstacle measurements',async()=>{
+ const h=await harness({mobile:true,ios:true});await h.select(['lillith-v2.png']);
+ const visible=h.addText(180);h.advance(200);visible.rectReads=0;
+ for(let i=0;i<5;i++){h.document.dispatchEvent({type:'scroll'});h.advance(16);}
+ assert.equal(visible.rectReads,0);
+ h.advance(80);assert.equal(visible.rectReads,1);
+});
+
+test('incremental stream text still invalidates pet geometry without rescanning obstacle elements',async()=>{
+ const h=await harness({mobile:true,ios:true});await h.select(['lillith-v2.png']);
+ const observation=h.observerOptions.find(({node,options})=>node.id==='message-list' && options.characterData);
+ assert.ok(observation);
+ const visible=h.addText(180);h.advance(200);visible.rectReads=0;
+ const targets=h.intersections[0].targets.size;
+ h.observers[0]([{type:'characterData',addedNodes:[],removedNodes:[]}]);h.advance(160);
+ assert.equal(visible.rectReads,1);assert.equal(h.intersections[0].targets.size,targets);
 });

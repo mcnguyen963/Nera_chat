@@ -1,3 +1,4 @@
+import {createWorkBudget} from './ui-work.js';
 import {createTokenCounter} from './token-cache.js';
 // MAIN context builder frozen at fbcc95ad2498e24670d8daaf66f712e76f34dccf8787c5c3d00976ff13e03c64; golden fixtures verify wire parity. Prompt strings live in Markdown.
 import {prompts,renderPrompt} from "./system-prompts.js";
@@ -24,7 +25,7 @@ export const REQUEST_FRAME_TOKENS = 8;
 
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
-const countSystemTokensCached=createTokenCounter({count:countTokens,ready:tokenizerReady});
+const sharedTokenCounter=createTokenCounter({count:countTokens,ready:tokenizerReady});
 
 const AD_DIRECTIVE_RULE = prompts.legacyAuthorDirection;
 
@@ -48,6 +49,8 @@ export function openingExchange(messages) {
 }
 
 export async function buildLegacyContext(session, settings, opts = {}) {
+  const yieldWork=createWorkBudget({signal:opts.signal,check:opts.check});
+  const countSystemTokensCached=async text=>{await yieldWork();return sharedTokenCounter(text);};
   const upToOrder = opts.upToOrder ?? Infinity; // regenerate: only messages before this order
   // The opening exchange is a permanent story anchor, including after a
   // summary checkpoint. Callers normally provide their full cached history.
@@ -77,8 +80,12 @@ export async function buildLegacyContext(session, settings, opts = {}) {
   if(temporary) used+=temporaryTokens+MESSAGE_FRAME_TOKENS;
   const available = requestInputLimit(settings) - used;
   const contentFor = (m) => m.role === "user" ? normalizeAdDirective(m.content) : storyText(m.content);
-  const raw = all.filter((m) => ["user", "assistant"].includes(m.role) && m.order < upToOrder && contentFor(m).trim())
-    .sort((a, b) => a.order - b.order);
+  const raw=[];
+  for(const m of all){
+    await yieldWork();
+    if(['user','assistant'].includes(m.role) && m.order<upToOrder && contentFor(m).trim())raw.push(m);
+  }
+  raw.sort((a,b)=>a.order-b.order);
   const latestUser = [...raw].reverse().find((m) => m.role === "user");
   const anchors = openingExchange(raw);
   const recent = raw.filter((m) => m.order > (summaryText ? (session.breakpointOrder ?? 0) : 0));

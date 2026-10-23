@@ -1192,7 +1192,7 @@ test('memory failure details appear on the first failure in the toast and settin
 test('U4 rendered message comparison tracks scene/review fields and memoizes turn computation',async () => {
  const h=await harness(),chat=await h.use('ui/chat-view.js'),base={role:'assistant',content:'Story'};
  for(const patch of [{revision:1},{acceptance:'pending'},{reviewWarnings:['warning']},{sceneMeta:{kind:'manual'}},{sceneCandidate:{scene:'new'}},{ooc:true},{truncated:true},{editedAt:true}]) assert.equal(chat.sameRenderedMessage(base,{...base,...patch}),false);
- const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.notEqual(chat.turnsFor(list),chat.turnsFor([...list]));
+ const list=[{id:'a',role:'assistant',order:1}];assert.equal(chat.turnsFor(list),chat.turnsFor(list));assert.equal(chat.turnsFor(list),chat.turnsFor([...list]));assert.notEqual(chat.turnsFor(list),chat.turnsFor([{...list[0],narratorTurn:2}]));
 });
 
 test('Final twenty-turn replay keeps narration plus maintenance at two calls and uses no separate reconciliation read on ordinary sends',async()=>{
@@ -1789,7 +1789,9 @@ test('Mobile composer defers remote refreshes while typing, cancels blur/refocus
   h.document.activeElement=null;await h.fire('chat-input','blur');for(const [id,j]of jobs){if(j.ms===0){jobs.delete(id);j.fn();}}
   await new Promise(r=>setImmediate(r));assert.deepEqual(tracker.drafts,['Latest draft\nwith more text']);
   h.document.activeElement=h.el('chat-input');h.el('chat-input').value='Exact latest action';await h.fire('chat-input','input');
-  h.calls.response='New reply.';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  h.calls.response='New reply.';let sent=false;const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}}).finally(()=>sent=true);
+  for(let i=0;i<100 && !sent;i++){for(const [id,j]of [...jobs])if(j.ms===0){jobs.delete(id);j.fn();}await new Promise(r=>setImmediate(r));}
+  assert.equal(sent,true);await sending;
   assert.equal(h.calls.messages[0][1].content,'Exact latest action');assert.ok(h.calls.requests[0].messages.some(m=>m.role==='user'&&m.content==='Exact latest action'));
   assert.match(h.el('context-label').title,/leave the message box/);
 });
@@ -2447,7 +2449,7 @@ test('Stop after enqueue keeps the saved user turn and stops generation after th
  const timers=controlledTimers(),h=await harness({timers}),chat=await openImprovementChat(h);
  const provider=deferred();h.calls.onRequest=()=>provider.promise;
  h.el('chat-input').value='Queued action';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
- for(let i=0;i<30 && !h.calls.requests.length;i++)await settle();
+ for(let i=0;i<30 && !h.calls.requests.length;i++){timers.advance(0);await settle();}
  assert.equal(h.calls.requests.length,1,'the request starts before advancing the guard timer');
  assert.equal(h.el('btn-stop').disabled,true);timers.advance(500);await h.fire('btn-stop');
  assert.ok(chat.memorySnapshot().messages.some(m=>m.role==='user' && m.content==='Queued action'));assert.equal(h.el('chat-input').value,'');
@@ -2475,7 +2477,7 @@ test('real lore gate drains an earlier extraction commit before Send and defers 
  const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});let laterDone=false;const later=x.extract().then(()=>laterDone=true,()=>laterDone=true);
  await settle();assert.equal(h.calls.requests.length,0);assert.equal(laterDone,false);
  x.commit.resolve();await earlier;
- for(let i=0;i<30 && !h.calls.requests.length;i++)await settle();
+ for(let i=0;i<30 && !h.calls.requests.length;i++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal(h.calls.requests.length,1);assert.equal(laterDone,false);
  provider.resolve();await send;
  // This extraction was queued against an older source and may safely reject.
@@ -2835,4 +2837,40 @@ test('Changing model discards draft provider selection and resolving another pro
   assert.deepEqual(JSON.parse(JSON.stringify(h.state.settings.providerOrder)),[]);
   const models=await h.use('model-profiles.js');h.state.settings.providerOrder=['first'];h.state.settings.profiles.push({id:'other',endpoint:profile.endpoint,modelId:'other/model',providerOrder:['third']});
   const resolved=models.resolveModelProfile(h.state.settings,'other');assert.deepEqual(JSON.parse(JSON.stringify(resolved.providerOrder)),['third']);resolved.providerOrder.push('fourth');assert.equal(h.state.settings.profiles.at(-1).providerOrder.length,1);
+});
+
+test('Send paints feedback and the queued message before request preparation, without stealing scroll position',async()=>{
+ const {createWorkBudget}=await import('../js/ui-work.js');const paints=[];
+ const h=await harness({extraStubs:{'ui-work.js':{createWorkBudget,afterUiPaint:()=>new Promise(resolve=>paints.push(resolve))}}});
+ await openImprovementChat(h);h.state.settings.streaming=true;h.calls.streamLines=['data: {"choices":[{"delta":{"content":"The traveler waits."},"finish_reason":"stop"}]}\n','data: [DONE]\n'];const list=h.el('message-list');list.scrollHeight=3000;list.scrollTop=2500;
+ await list.dispatchEvent({type:'scroll'});
+ h.el('chat-input').value='A new action';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.el('composer-preparing').hidden,false);assert.equal(h.el('btn-send').hidden,true);
+ assert.equal(h.calls.messages.length,0);assert.equal(h.calls.requests.length,0);
+ paints.shift()();for(let i=0;i<30&&!paints.length;i++)await settle();
+ assert.equal(h.el('chat-input').value,'');assert.ok(list.children.some(n=>n.dataset.messageId));assert.equal(h.calls.requests.length,0);
+ list.scrollTop=800;await list.dispatchEvent({type:'scroll'});
+ paints.shift()();await send;
+ assert.equal(list.scrollTop,800);assert.equal(h.el('composer-preparing').hidden,true);assert.equal(h.calls.requests.length,1);
+});
+
+test('Stop before the first paint retains the draft and prevents a late request',async()=>{
+ const {createWorkBudget}=await import('../js/ui-work.js');const paints=[];
+ const h=await harness({extraStubs:{'ui-work.js':{createWorkBudget,afterUiPaint:()=>new Promise(resolve=>paints.push(resolve))}}});
+ await openImprovementChat(h);h.el('chat-input').value='Do not submit';
+ const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ await h.stopAfterGuard();assert.equal(h.state.busy,false);assert.equal(h.el('composer-preparing').hidden,true);
+ paints.shift()();await send;
+ assert.equal(h.el('chat-input').value,'Do not submit');assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
+});
+
+test('stream text appends preserve the text node and unchanged frames do no writes',async()=>{
+ const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+'\nexport {updateStreamText};';
+ const h=await harness({sources:{'ui/chat-view.js':source}}),chat=await h.use('ui/chat-view.js');
+ let value='Hello',replacements=0,appends=0;
+ const text={nodeType:3,appendData:s=>{value+=s;appends++;}};
+ const node={firstChild:text,lastChild:text,get textContent(){return value;},set textContent(v){value=v;replacements++;}};
+ chat.updateStreamText(node,'Hello there');assert.equal(appends,1);assert.equal(replacements,0);
+ chat.updateStreamText(node,'Hello there');assert.equal(appends,1);assert.equal(replacements,0);
+ chat.updateStreamText(node,'Hello');assert.equal(replacements,1);assert.equal(value,'Hello');
 });
