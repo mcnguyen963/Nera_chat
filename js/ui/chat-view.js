@@ -66,7 +66,7 @@ let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
 let tokenizerWarned=false;
-const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
+const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
 const releaseBusy=token=>{
   if(busyGate.active!==token)return false;
   token.stopTimer?.();const released=busyGate.release(token);token.loreHold?.release();return released;
@@ -588,8 +588,7 @@ export function initChatView() {
     onResize:() => { if (wasNearBottom) scrollToEnd(); else clampListScroll(); },
   });
   const autoGrow = () => { sizeComposer(); measureComposer(); };
-  el.input.addEventListener("input", () => { indicatorRefresh.invalidate(); autoGrow(); });
-  el.input.addEventListener("blur", () => indicatorRefresh.blur());
+  el.input.addEventListener("input", () => { autoGrow(); });
   window.addEventListener("resize", autoGrow);
   autoGrow();
 
@@ -597,7 +596,6 @@ export function initChatView() {
   // above it (iOS auto-scrolls the window on focus; app.js cancels that, and
   // this compensates inside the list if the user was scrolled deep).
   el.input.addEventListener("focus", () => {
-    indicatorRefresh.invalidate();
     requestAnimationFrame(() => alignFieldToKeyboard(document.getElementById("composer-box")));
   });
 
@@ -1412,14 +1410,14 @@ function showToast(text, ok) {
 
 // ---------- context indicator ----------
 
-const indicatorHint = 'Token count refreshes after you leave the message box.';
+const indicatorHint = 'Saved context estimate, excluding unsent input. Refreshes after replies.';
 let indicatorUsageCache=null;
 const indicatorRefresh = createIndicatorRefresh({
-  focused: () => busy || !!editingState || !!el.input && document.activeElement === el.input,
-  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, el.input?.value]),
+  focused: () => busy || !!editingState,
+  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, state.settings?.tokenCountingMode]),
   compute: async ({isCurrent}) => {
     if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
-    const source = session, settings = effectiveActiveSettings(), draftText = el.input.value;
+    const source = session, settings = effectiveActiveSettings(), draftText = '';
     const messages = historyMessages ?? lastMessages;
     const key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText]);
     if(indicatorUsageCache?.key===key)return indicatorUsageCache.usage;
@@ -1437,7 +1435,7 @@ export async function updateIndicator() {
 }
 function applyIndicator(usage) {
   lastMemoryReport = usage.report;
-  const estimated=tokenizer.tokenizerStatus?.()==='fallback';if(estimated && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
+  const fallback=tokenizer.tokenizerStatus?.()==='fallback',estimated=fallback || tokenizer.tokenizerStatus?.()==='estimate';if(fallback && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
   el.contextLabel.title = indicatorHint + ' ' + (usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
   const ring = contextRingPresentation({used:usage.usedTokens, max:usage.max});
   el.contextFill.style.strokeDasharray = ring.dash;
@@ -1449,7 +1447,7 @@ function applyIndicator(usage) {
     `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens` +
     (usage.droppedCount > 0 ? ` · ${usage.droppedCount} ${state.settings.autoSummarizationEnabled === true ? "out of window" : "turns not sent"}` : "") +
     (chatStatus==='reconnecting' ? ' · reconnecting' : '') +
-    (estimated ? ' · estimate (tokenizer unavailable)' : '') +
+    (estimated ? (fallback ? ' · estimate (tokenizer unavailable)' : ' · estimate') : '') +
     (!historyMessages && hasEarlier ? " · recent history estimate" : "") +
     (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
   const indicator = document.getElementById('context-indicator');

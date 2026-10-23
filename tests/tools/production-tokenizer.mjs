@@ -10,5 +10,7 @@ const mod=new vm.SourceTextModule(await readFile(new URL('../../js/tokenizer.js'
   if(vendor.status!=='evaluated')await vendor.evaluate();return vendor;
 }});
 await mod.link(()=>{throw new Error('Unexpected static tokenizer import.');});await mod.evaluate();
-export const countTokens=mod.namespace.countTokens;
-export const tokenizerStatus=mod.namespace.tokenizerStatus;
+// Evaluation explicitly uses the encoder, regardless of the interactive UI mode.
+const tokenizer=mod.namespace.createTokenizer();
+export const countTokens=tokenizer.countTokens;
+export const tokenizerStatus=tokenizer.tokenizerStatus;

@@ -15,7 +15,8 @@ import { requestInputLimit, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from '.
 const tokenCaches=new WeakMap();
 function cachedCount(counter) {
   let cache=tokenCaches.get(counter);if(!cache){cache={values:new Map(),size:0};tokenCaches.set(counter,cache);}
-  const ready=()=>counter!==countTokens || !tokenizer.tokenizerStatus || tokenizer.tokenizerStatus()==='ok';
+  const epoch=tokenizer.tokenizerMode?.();if(cache.epoch!==epoch){cache.values.clear();cache.size=0;cache.epoch=epoch;}
+  const ready=()=>counter!==countTokens || !tokenizer.tokenizerStatus || ['ok','estimate'].includes(tokenizer.tokenizerStatus());
   return async text=>{
     if(!ready()){cache.values.clear();cache.size=0;}
     if(cache.values.has(text))return cache.values.get(text);

@@ -146,7 +146,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     'db.js': { db: {} },
     'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
-    'tokenizer.js': { countTokens: async (text) => text.length },
+    'tokenizer.js': { countTokens: async (text) => text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
       subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
@@ -276,6 +276,7 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   h.el('set-keep-n').value = '0';
   h.el('set-summarizer-maxtokens').value = '60000';
   h.el('set-summarizer-thinking').value = '12000';
+  h.el('set-token-counting').value='accurate';
   h.el('set-auto-summary-enabled').checked = true;
   await h.fire('btn-profile-copy');
   const copyId = h.el('set-profiles').value;
@@ -294,6 +295,9 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   assert.equal(h.state.settings.summarizerMaxTokens,60000);
   assert.equal(h.state.settings.summarizerThinkingTokens,12000);
   assert.equal(h.calls.writes.at(-1).summarizerThinkingTokens,12000);
+  assert.equal(h.state.settings.tokenCountingMode,'accurate');
+  assert.equal(h.calls.tokenCountingMode,'accurate');
+  assert.equal(h.calls.writes.at(-1).tokenCountingMode,'accurate');
   assert.equal(h.state.settings.autoSummarizationEnabled, true);
   assert.equal(h.state.settings.profiles.length, 2);
   assert.equal(h.state.settings.profiles.find(p => p.id === copyId).modelId, 'model-b');
@@ -1771,7 +1775,7 @@ test('core review requires explicit user review and coverage before persisting s
   e.sections.personality.text+=' Changed.';ui.renderCoreEditor(h.el('core-other'),e);assert.ok(h.el('core-other').querySelectorAll('p').some(p=>p.textContent.startsWith('Needs review')));
 });
 
-test('Mobile composer defers remote refreshes while typing, cancels blur/refocus, and sends latest draft',async()=>{
+test('Context indicator excludes unsent input, skips typing recounts, and refreshes after replies',async()=>{
   const jobs=new Map();let next=0;const tracker={drafts:[],continuations:0};
   const original=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
   const source=original.replace('computeContextUsage, normalizeAdDirective','computeContextUsage as actualUsage, normalizeAdDirective').replace('import {continuationTarget,','import {continuationTarget as actualTarget,')+`\nfunction computeContextUsage(...args){tracker.drafts.push(args[3].draftText);return actualUsage(...args);}\nfunction continuationTarget(...args){tracker.continuations++;return actualTarget(...args);}\n`;
@@ -1784,16 +1788,21 @@ test('Mobile composer defers remote refreshes while typing, cancels blur/refocus
   await chat.updateIndicator();await h.document.dispatchEvent({type:'settings-changed'});
   h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Remote opening update.'}],hasEarlier:false});
   await new Promise(r=>setImmediate(r));assert.equal(tracker.drafts.length,0);assert.equal(h.el('context-label').textContent,previous);
-  h.document.activeElement=null;await h.fire('chat-input','blur');assert.ok([...jobs.values()].some(j=>j.ms===0));
-  h.document.activeElement=h.el('chat-input');await h.fire('chat-input','focus');assert.ok(![...jobs.values()].some(j=>j.ms===0));
-  h.document.activeElement=null;await h.fire('chat-input','blur');for(const [id,j]of jobs){if(j.ms===0){jobs.delete(id);j.fn();}}
-  await new Promise(r=>setImmediate(r));assert.deepEqual(tracker.drafts,['Latest draft\nwith more text']);
+  // Explicit refresh may run while focused, but never includes the draft.
+  for(const [id,j]of [...jobs])if(j.ms===300){jobs.delete(id);j.fn();}
+  await new Promise(r=>setImmediate(r));assert.deepEqual(tracker.drafts,['']);
+  tracker.drafts.length=0;
+  h.el('chat-input').value='Unsent typing';await h.fire('chat-input','input');
+  await h.fire('chat-input','blur');await new Promise(r=>setImmediate(r));assert.equal(tracker.drafts.length,0);
   h.document.activeElement=h.el('chat-input');h.el('chat-input').value='Exact latest action';await h.fire('chat-input','input');
   h.calls.response='New reply.';let sent=false;const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}}).finally(()=>sent=true);
   for(let i=0;i<100 && !sent;i++){for(const [id,j]of [...jobs])if(j.ms===0){jobs.delete(id);j.fn();}await new Promise(r=>setImmediate(r));}
   assert.equal(sent,true);await sending;
   assert.equal(h.calls.messages[0][1].content,'Exact latest action');assert.ok(h.calls.requests[0].messages.some(m=>m.role==='user'&&m.content==='Exact latest action'));
-  assert.match(h.el('context-label').title,/leave the message box/);
+  for(const [id,j]of [...jobs])if(j.ms===300){jobs.delete(id);j.fn();}
+  await new Promise(r=>setImmediate(r));
+  assert.ok(tracker.drafts.length>0);assert.ok(tracker.drafts.every(text=>!text));
+  assert.match(h.el('context-label').title,/excluding unsent input/);
 });
 
 async function oldMessageEditor({read, save}={}) {

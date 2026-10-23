@@ -1,3 +1,4 @@
+import {setTokenCountingMode} from './tokenizer.js';
 import {getPref,setPref} from './local-pref.js';
 import { preserveLegacyStorySeed } from './story-settings-store.js';
 import { prompts } from './system-prompts.js';
@@ -52,6 +53,7 @@ export const DEFAULT_SETTINGS = {
     effort: "medium", // "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
     maxTokens: 4096,
   },
+  tokenCountingMode: "estimate",
   maxContextTokens: 120000,
   modelContextTokens: null,
   autoSummarizationEnabled: false,
@@ -88,6 +90,7 @@ export async function mergeDefaults(data) {
       if(legacyHashes.get(key)?.has(hash)){merged[key]=DEFAULT_SETTINGS[key];break;}
     }
   }
+  merged.tokenCountingMode=merged.tokenCountingMode==='accurate' ? 'accurate' : 'estimate';
   return merged;
 }
 
@@ -204,8 +207,9 @@ export async function readSettingsRefresh() {
   if(!snap.exists())throw new Error('Settings did not load from the server.');
   const settings=withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
   if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');
-  return {settings,check(){if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');},apply(){this.check();++settingsEpoch;state.settings=settings;state.settingsSource='server';cacheSettings(settings);}};
+  return {settings,check(){if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');},apply(){this.check();++settingsEpoch;state.settings=settings;setTokenCountingMode(settings.tokenCountingMode);state.settingsSource='server';cacheSettings(settings);}};
 }
+function activateTokenCounting(settings) {setTokenCountingMode(settings.tokenCountingMode);return settings;}
 export async function loadSettings({ requireServer = false } = {}) {
   const cached = readCachedSettings();
   const ref = userSettingsRef();
@@ -214,7 +218,7 @@ export async function loadSettings({ requireServer = false } = {}) {
     snap = await getDocFromServer(ref);
   } catch (error) {
     state.settingsSource=cached ? 'cache' : 'defaults';
-    if (cached && !requireServer) return withLocal(hydrateProfiles(await mergeDefaults(cached)));
+    if (cached && !requireServer) return activateTokenCounting(withLocal(hydrateProfiles(await mergeDefaults(cached))));
     throw error;
   }
   if (requireServer && !snap.exists()) throw new Error('Settings did not load from the server; reload before saving.');
@@ -223,7 +227,7 @@ export async function loadSettings({ requireServer = false } = {}) {
     const settings = hydrateProfiles(await mergeDefaults(snap.data()));
     await preserveLegacyStorySeed(settings);
     cacheSettings(settings);
-    return withLocal(settings);
+    return activateTokenCounting(withLocal(settings));
   }
 
   // New accounts start with their own clean settings. Shared legacy settings
@@ -233,7 +237,7 @@ export async function loadSettings({ requireServer = false } = {}) {
   await setDoc(ref, storedSettings(seed));
   await preserveLegacyStorySeed(seed);
   cacheSettings(seed);
-  return withLocal(seed);
+  return activateTokenCounting(withLocal(seed));
 }
 
 // Keep an open device current when settings are saved on another device.
@@ -247,7 +251,7 @@ export function watchSettings() {
     try {
       const settings = withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
       if (owner!==currentUid() || run!==settingsEpoch || sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
-      state.settingsSource='server';state.settings = settings;
+      state.settingsSource='server';state.settings = settings;setTokenCountingMode(settings.tokenCountingMode);
       cacheSettings(settings);
       document.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (error) {
@@ -275,6 +279,7 @@ export async function saveSettings(settings) {
     await setDoc(userSettingsRef(), storedSettings(snapshot));
     setPref('nera.streamVibrationMode',snapshot.streamVibrationMode);
     try {localStorage.removeItem(localKey());} catch {}
+    setTokenCountingMode(snapshot.tokenCountingMode);
     ++settingsEpoch;state.settings = snapshot;
     cacheSettings(snapshot);
     document.dispatchEvent(new CustomEvent("settings-changed"));

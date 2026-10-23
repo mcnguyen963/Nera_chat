@@ -267,6 +267,7 @@ function renderAll() {
   if (petChoicesReady && panel === "pets") renderPetChoices(draft.petCharacterIds);
   renderProfile();
   for (const [key, id] of Object.entries(contextFields)) set(id, draft[key]);
+  set("set-token-counting",draft.tokenCountingMode ?? "estimate");
   input("set-auto-summary-enabled").checked = draft.autoSummarizationEnabled === true;
   set('set-model-context',draft.modelContextTokens ?? '');
   const directorDefaults=defaultStorySettings();
@@ -396,6 +397,7 @@ function capture() {
     mirrorFromActiveProfile(draft);
   }
   for (const [key, id] of Object.entries(contextFields)) draft[key] = raw(id).trim();
+  draft.tokenCountingMode=raw("set-token-counting");
   draft.autoSummarizationEnabled = input("set-auto-summary-enabled").checked;
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
@@ -423,6 +425,7 @@ function resetPanel() {
     mirrorFromActiveProfile(draft);
     renderProfile();
   } else if (panel === "context") {
+    draft.tokenCountingMode=DEFAULT_SETTINGS.tokenCountingMode;set("set-token-counting",draft.tokenCountingMode);
     draft.modelContextTokens=null;set('set-model-context','');
     for (const [key, id] of Object.entries(contextFields)) { draft[key] = DEFAULT_SETTINGS[key]; set(id, draft[key]); }
     draft.autoSummarizationEnabled = DEFAULT_SETTINGS.autoSummarizationEnabled;
@@ -495,6 +498,7 @@ function validatedDraft(storyValues=null) {
   for (const [key, id] of Object.entries(contextFields)) result[key] = integerField(result[key], id);
   if (result.summarizerThinkingTokens >= result.summarizerMaxTokens) throw new Error('Summary thinking tokens must be lower than the summary total output tokens.');
   result.rewriteRecentMessages=integerField(result.rewriteRecentMessages,'set-rewrite-n');
+  if(!['estimate','accurate'].includes(result.tokenCountingMode))throw new Error('Choose a valid token counting mode.');
   if(!['off','speed','spaces'].includes(result.streamVibrationMode))throw new Error('Choose a valid vibration mode.');
   if(result.rewriteSystemPrompt!=null && !result.rewriteSystemPrompt.trim())throw new Error('Rewrite system prompt cannot be empty. Use the default or enter a prompt.');
   result.modelContextTokens=String(result.modelContextTokens ?? '').trim() ? integerField(result.modelContextTokens,'set-model-context') : null;
