@@ -30,6 +30,27 @@ test('a stalled or unavailable worker returns estimates and can recover without 
  const unavailable=createWorkerTokenizer({spawn:()=>{throw new Error('blocked');}});
   assert.equal(await unavailable.countTokens('é'),estimateTokens('é'));assert.equal(unavailable.tokenizerStatus(),'fallback');
 });
+test('slow progressing queues retain exact counts past 30 seconds, while new work cannot hide a stall',async()=>{
+ let time=0,serial=0;const timers=new Map();let worker;
+ const tokenizer=createWorkerTokenizer({now:()=>time,
+  schedule:(fn,ms)=>{const id=++serial;timers.set(id,{fn,due:time+ms});return id;},cancel:id=>timers.delete(id),
+  spawn:()=>worker={sent:[],postMessage(data){this.sent.push(data);},terminate(){this.terminated=true;}}});
+ const jobs=Array.from({length:120},(_,i)=>tokenizer.countTokens('message '+i));
+ assert.equal(timers.size,1);
+ for(let i=0;i<120;i++){
+  time+=1000;
+  assert.ok([...timers.values()].every(timer=>timer.due>time));
+  worker.onmessage({data:{id:worker.sent[i].id,count:17,ready:true}});
+ }
+ assert.deepEqual(await Promise.all(jobs),Array(120).fill(17));
+ assert.equal(time,120000);assert.equal(timers.size,0);assert.equal(worker.terminated,undefined);assert.equal(tokenizer.tokenizerStatus(),'ok');
+ const stalled=tokenizer.countTokens('stalled');const deadline=[...timers.values()][0].due;
+ time+=29000;const later=tokenizer.countTokens('later');
+ assert.equal(timers.size,1);assert.equal([...timers.values()][0].due,deadline);
+ time=deadline;[...timers.values()][0].fn();
+ assert.deepEqual(await Promise.all([stalled,later]),[estimateTokens('stalled'),estimateTokens('later')]);
+ assert.equal(worker.terminated,true);assert.equal(timers.size,0);assert.equal(tokenizer.tokenizerStatus(),'fallback');
+});
 test('real worker preserves the pinned encoder counts for Unicode and long text',async()=>{
  const url=new URL('../js/tokenizer-worker.js',import.meta.url).href;
  let thread;

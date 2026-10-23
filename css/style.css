@@ -159,7 +159,7 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .status-line { align-self: center; color: #aaa; font-size: 12px; white-space: pre-wrap; }
 .streaming-summary { align-self: stretch; }
 .summary-stream-body { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow-y: auto; font-size: 13px; line-height: 1.6; }
-.msg.holding { filter: brightness(1.4); }
+.msg.holding { background-color: #ffffff08; }
 .toast { position: fixed; z-index: 100; bottom: calc(100px + var(--safe-bottom)); left: 50%; transform: translateX(-50%); max-width: 90vw; background: #252525; color: #eee; border: 1px solid #484848; border-radius: 10px; padding: 12px 20px; font-size: 12px; box-shadow: 0 8px 30px #0008; pointer-events: none; }
 .toast.error { border-color: var(--danger); }
 .composer { padding: 12px 28px calc(12px + var(--safe-bottom)); position: relative; flex-shrink: 0; }
@@ -227,7 +227,6 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 @media (max-width: 720px) {
   input[type="text"], input[type="email"], input[type="url"], input[type="password"], input[type="number"], select, textarea { font-size: 16px; }
   .msg-editor { font-size: 16px; }
-  .app { transform: var(--app-viewport-transform, none); }
   .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(84vw, 300px); min-width: 0; transform: translateX(-105%); transition: transform .2s; box-shadow: 15px 0 50px #0008; }
   .app.sidebar-open .sidebar { transform: translateX(0); }
   .icon-btn { display: block; width: 32px; min-height: 32px; padding: 6px; }
@@ -492,7 +491,6 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .boot-error { position: fixed; inset: 0; z-index: 1000; display: grid; place-content: center; gap: 12px; padding: 24px; background: #111; color: #eee; text-align: center; }
 @media (max-width: 720px) {
   .msg-editor { font-size: 16px; }
-  .app { transform: var(--app-viewport-transform, none); }
 }
 
 @media (max-width:720px) {input:not([type]),input[type="search"],input[type="tel"],.msg-editor,.settings-prompts textarea,.full-label textarea,.msg input {font-size:16px;}}

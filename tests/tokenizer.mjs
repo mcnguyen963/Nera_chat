@@ -227,6 +227,7 @@ test('CSP restricts executable sources while allowing custom LLM connections and
 
   assert.ok(policy);
   assert.match(policy, /script-src 'self' https:\/\/www\.gstatic\.com;/);
+  assert.match(policy, /worker-src 'self';/);
   assert.match(policy, /connect-src \*;/);
   assert.match(policy, /frame-src 'self' https:\/\/\*\.firebaseapp\.com;/);
   assert.match(policy, /object-src 'none';/);

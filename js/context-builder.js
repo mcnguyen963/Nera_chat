@@ -36,6 +36,7 @@ export function normalizeAdDirective(content) {
   return content;
 }
 
+const countPreviewTokens=createTokenCounter({count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
 const countSystemTokensCached=createTokenCounter({count:text=>tokenizer.countTokens(text),ready:tokenizerIsReady,version:()=>tokenizer.tokenizerMode?.()});
 
 export async function buildContextForRequest(session, settings, opts = {}) {
@@ -65,7 +66,7 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     return {...result,report:{mode:'legacy',totals:{input:result.usedTokens,reserved:settings.maxResponseTokens,max:requestInputLimit(settings)},blocks:result.contributions.map(c=>({key:c.source.toLowerCase().replace(/[^a-z]+/g,'-'),label:c.source,tokens:c.tokens})),loaded:[],skipped:[],scene:null,gap:null,gaps:[],warnings}};
   }
   return buildMemoryContext(session, settings, { ...opts, messages }, {
-    count: countSystemTokensCached, adRule: AD_DIRECTIVE_RULE, normalizeAd: normalizeAdDirective,
+    count: opts.tokenCountMode==='estimate' ? countPreviewTokens : countSystemTokensCached, adRule: AD_DIRECTIVE_RULE, normalizeAd: normalizeAdDirective,
   });
 }
 

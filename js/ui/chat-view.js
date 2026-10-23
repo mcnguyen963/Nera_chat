@@ -972,7 +972,10 @@ function sameHistoryRendering(a,b) {
 }
 function renderMessages(msgs) {
   const savedStream = streamState?.savedId && msgs.some(m => m.id === streamState.savedId) ? streamState : null;
-  const position = savedStream ? captureListPosition() : null;
+  // Optimistic store snapshots may arrive before saveNarration returns. Keep
+  // the stream until finalization instead of laying out two full-size replies.
+  if(savedStream && !savedStream.saveCompleted){lastMessages=msgs;return;}
+  const position = captureListPosition();
   const renderHistory=historyMessages ?? msgs;
   const timeline=timelineFor(renderHistory,session?.memory?.startingScene);
   const lastUserOrder=lastUserOrderOf(renderHistory);
@@ -990,7 +993,6 @@ function renderMessages(msgs) {
     if (msgs.some((m) => m.id === editingState.id)) return;
     editingState = null; // the edited message was deleted remotely
   }
-  const sticky = isNearBottom();
   el.list.querySelectorAll('.checkpoint-divider').forEach(node=>node.remove());
   const visible = msgs.slice(-visibleCount);
   const visibleIds = new Set(visible.map((m) => m.id));
@@ -1016,7 +1018,12 @@ function renderMessages(msgs) {
     if (!entry || !entry.message || entry.activeSummary!==activeSummary || entry.retry !== retry || entry.turnLabel!==turnLabel || entry.renderedScene!==renderedScene || entry.pending!==pending || !sameRenderedMessage(entry.message, m)) {
       const node = renderMessage(m, retry, sceneState, pending);
       node.dataset.messageId = m.id;
-      entry?.node.remove();
+      const replaced=entry?.node?.parentNode===el.list ? entry.node
+        : savedStream?.saveCompleted && savedStream.savedId===m.id && savedStream.wrap.parentNode===el.list ? savedStream.wrap : null;
+      if(replaced){
+        replaced.replaceWith(node);
+        if(anchor===replaced)anchor=node.nextSibling;
+      }
       entry = { node, message: m, retry, turnLabel, renderedScene, pending, activeSummary };
       renderedMessages.set(m.id, entry);
     }
@@ -1043,7 +1050,7 @@ function renderMessages(msgs) {
     }
     restoreListPosition(position, savedStream.saveCompleted ? savedStream.savedId : undefined);
     refreshPetPlacement();
-  } else if (sticky) scrollToEnd();
+  } else restoreListPosition(position);
   queueCacheSave();
   updateRewriteControls();
 }
@@ -1284,11 +1291,8 @@ async function startEdit(m, wrap) {
   const finish = () => {
     if (!active()) return;
     editingState = null; clearOriginalDraft();
-    const top = wrap.getBoundingClientRect().top;
     const entry = renderedMessages.get(m.id); if (entry) entry.message = null;
     renderMessages(lastMessages);
-    const next = renderedMessages.get(m.id)?.node;
-    if (next) el.list.scrollTop += next.getBoundingClientRect().top - top;
     refreshFloatingCopy(); void updateIndicator();void checkActiveStoryFreshness();
   };
   const loadLatest = async () => {
@@ -1359,9 +1363,10 @@ function attachHoldToCopy(target, getText) {
   const HOLD_MS = 500;
   let holding = false;   // press in progress
   let eligible = false;  // held ≥ HOLD_MS without scrolling
-  let startX = 0, startY = 0, startT = 0;
+  let startX = 0, startY = 0, holdTimer = null;
 
   const cancel = () => {
+    if(holdTimer!==null)clearTimeout(holdTimer);holdTimer=null;
     holding = false;
     eligible = false;
     target.classList.remove("holding");
@@ -1372,14 +1377,15 @@ function attachHoldToCopy(target, getText) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     // Don't hijack presses on the inline controls (Edit/Delete/Regenerate).
     if (e.target.closest("button, textarea, input, select, a, details")) return;
-    startX = e.clientX; startY = e.clientY; startT = performance.now();
+    cancel();
+    startX = e.clientX; startY = e.clientY;
     holding = true;
-    target.classList.add("holding");
     // iOS WebKit (Safari AND Chrome-on-iOS) drops the user gesture inside
     // setTimeout, so the clipboard write must NOT happen here — the timer
     // only marks the hold as long enough. The copy runs in pointerup.
-    setTimeout(() => {
-      if (holding) eligible = true;
+    holdTimer=setTimeout(() => {
+      holdTimer=null;
+      if(holding){eligible=true;target.classList.add("holding");}
     }, HOLD_MS);
   });
   target.addEventListener("pointermove", (e) => {
@@ -1421,7 +1427,19 @@ const indicatorRefresh = createIndicatorRefresh({
     const messages = historyMessages ?? lastMessages;
     const key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText]);
     if(indicatorUsageCache?.key===key)return indicatorUsageCache.usage;
-    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText, check:()=>{if(!isCurrent())throw new StaleTurn();} });
+    const check=()=>{if(!isCurrent())throw new StaleTurn();};
+    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText, tokenCountMode:'estimate', check });
+    usage.countingMethod='estimate';
+    // Publish a useful count first. A slow worker can refine it without hiding it.
+    if(settings.tokenCountingMode==='accurate')setTimeout(async()=>{
+      if(!isCurrent())return;
+      try {
+        const refined=await computeContextUsage(source,settings,messages,{loreEntries,draftText,check});
+        if(!isCurrent())return;
+        refined.countingMethod=tokenizer.tokenizerStatus?.()==='ok' ? 'tokenizer' : 'fallback';
+        indicatorUsageCache={key,usage:refined};applyIndicator(refined);
+      }catch{/* Keep the fast estimate if refinement fails or becomes stale. */}
+    },0);
     indicatorUsageCache={key,usage};return usage;
   },
   apply: usage => { if (usage) applyIndicator(usage); },
@@ -1435,7 +1453,7 @@ export async function updateIndicator() {
 }
 function applyIndicator(usage) {
   lastMemoryReport = usage.report;
-  const fallback=tokenizer.tokenizerStatus?.()==='fallback',estimated=fallback || tokenizer.tokenizerStatus?.()==='estimate';if(fallback && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
+  const fallback=usage.countingMethod==='fallback',estimated=usage.countingMethod!=='tokenizer';if(fallback && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
   el.contextLabel.title = indicatorHint + ' ' + (usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
   const ring = contextRingPresentation({used:usage.usedTokens, max:usage.max});
   el.contextFill.style.strokeDasharray = ring.dash;
@@ -2199,8 +2217,8 @@ function scrollToEnd() {
 }
 
 function clampListScroll() {
-  el.list.scrollTop = Math.max(0, Math.min(el.list.scrollTop,
-    Math.max(0, el.list.scrollHeight - el.list.clientHeight)));
+  const next=Math.max(0,Math.min(el.list.scrollTop,Math.max(0,el.list.scrollHeight-el.list.clientHeight)));
+  if(el.list.scrollTop!==next)el.list.scrollTop=next;
 }
 
 function captureListPosition() {
@@ -2219,7 +2237,8 @@ function restoreListPosition(position, replacementId) {
     : position.node?.parentNode === el.list ? position.node
       : renderedMessages.get(replacementId)?.node;
   if (node && Number.isFinite(position.top)) {
-    el.list.scrollTop += node.getBoundingClientRect().top - position.top;
+    const delta=node.getBoundingClientRect().top-position.top;
+    if(delta)el.list.scrollTop+=delta;
   }
   clampListScroll();
 }

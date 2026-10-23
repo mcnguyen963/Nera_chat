@@ -32,7 +32,6 @@ export function initViewport() {
     keyboard = keyboardVisible({height:vv.height, layoutHeight:window.innerHeight, baselineHeight:baseline, focused, wasOpen:keyboard});
     if (!keyboard) baseline = vv.height;
     write("--app-offset-top", ios ? vars.offsetTop : "0px");
-    write("--app-viewport-transform", ios ? `translateY(${vars.offsetTop})` : "none");
     write("--app-height", vars.height);
     write("--composer-safe-bottom", keyboard ? "0px" : "var(--safe-bottom)");
     const keyboardState=keyboard ? 'open' : 'closed';
