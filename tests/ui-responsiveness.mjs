@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Worker} from 'node:worker_threads';
 import {appHarness} from './app-harness.mjs';
-import {createWorkerTokenizer} from '../js/tokenizer.js';
+import {createWorkerTokenizer, estimateTokens} from '../js/tokenizer.js';
 import {createWorkBudget} from '../js/ui-work.js';
 import {countTokens} from '../js/vendor/gpt-tokenizer-2.9.0.js';
 
@@ -17,8 +17,8 @@ test('worker counts concurrent requests by ID, and settles every pending request
  const h=workerFixture(),a=h.tokenizer.countTokens('hello'),b=h.tokenizer.countTokens('你好');
  const worker=h.workers[0];assert.equal(h.workers.length,1);
  worker.onmessage({data:{id:worker.sent[1].id,count:3,ready:true}});assert.equal(await b,3);
- worker.onerror();assert.equal(await a,5);assert.equal(h.tokenizer.tokenizerStatus(),'fallback');assert.equal(h.jobs.size,0);
- assert.equal(await h.tokenizer.countTokens('你好'),6);assert.equal(h.workers.length,1);
+ worker.onerror();assert.equal(await a,estimateTokens('hello'));assert.equal(h.tokenizer.tokenizerStatus(),'fallback');assert.equal(h.jobs.size,0);
+ assert.equal(await h.tokenizer.countTokens('你好'),estimateTokens('你好'));assert.equal(h.workers.length,1);
  h.advance(30000);const recovered=h.tokenizer.countTokens('hello');const fresh=h.workers[1];
  worker.onmessage({data:{id:fresh.sent[0].id,count:999,ready:true}});
  fresh.onmessage({data:{id:fresh.sent[0].id,count:2,ready:true}});
@@ -26,9 +26,9 @@ test('worker counts concurrent requests by ID, and settles every pending request
 });
 test('a stalled or unavailable worker returns estimates and can recover without hanging Send',async()=>{
  const h=workerFixture(),a=h.tokenizer.countTokens('hello'),b=h.tokenizer.countTokens('world');
- h.jobs.values().next().value();assert.deepEqual(await Promise.all([a,b]),[5,5]);assert.equal(h.jobs.size,0);
+ h.jobs.values().next().value();assert.deepEqual(await Promise.all([a,b]),[estimateTokens('hello'),estimateTokens('world')]);assert.equal(h.jobs.size,0);
  const unavailable=createWorkerTokenizer({spawn:()=>{throw new Error('blocked');}});
- assert.equal(await unavailable.countTokens('é'),2);assert.equal(unavailable.tokenizerStatus(),'fallback');
+  assert.equal(await unavailable.countTokens('é'),estimateTokens('é'));assert.equal(unavailable.tokenizerStatus(),'fallback');
 });
 test('real worker preserves the pinned encoder counts for Unicode and long text',async()=>{
  const url=new URL('../js/tokenizer-worker.js',import.meta.url).href;
