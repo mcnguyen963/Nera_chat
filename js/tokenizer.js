@@ -94,10 +94,12 @@ export function createWorkerTokenizer({
     },
   };
 }
-// Node and worker contexts retain the injectable encoder used by offline tools.
-// Browser failures never run the encoder synchronously on the UI thread.
-const tokenizer = typeof document === 'undefined' ? createTokenizer() : createWorkerTokenizer();
-export const countTokens = tokenizer.countTokens;
-export const tokenizerReady = tokenizer.tokenizerReady;
-
-export const tokenizerStatus=tokenizer.tokenizerStatus;
+// Lightweight estimates are immediately usable and cacheable. Exact counting is
+// opt-in; constructing this service does not start a worker or load its encoder.
+let mode='estimate';
+const exactTokenizer=typeof document === 'undefined' ? createTokenizer() : createWorkerTokenizer();
+export function setTokenCountingMode(value) { mode=value==='accurate' ? 'accurate' : 'estimate'; }
+export const tokenizerMode=()=>mode;
+export const countTokens=async text=>mode==='estimate' ? estimateTokens(text) : exactTokenizer.countTokens(text);
+export const tokenizerReady=()=>mode==='estimate' || exactTokenizer.tokenizerReady();
+export const tokenizerStatus=()=>mode==='estimate' ? 'estimate' : exactTokenizer.tokenizerStatus();

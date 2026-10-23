@@ -232,3 +232,34 @@ test('CSP restricts executable sources while allowing custom LLM connections and
   assert.match(policy, /object-src 'none';/);
   assert.match(policy, /base-uri 'self'/);
 });
+
+
+test('lightweight default counts immediately without worker startup or module loading; exact mode is opt-in', async()=>{
+ let spawns=0,imports=0,worker;
+ const context=vm.createContext({document:{},setTimeout,clearTimeout,Worker:class{
+   constructor(){spawns++;worker=this;}
+   postMessage({id}){queueMicrotask(()=>this.onmessage({data:{id,count:123,ready:true}}));}
+ }});
+ const mod=new vm.SourceTextModule(await readFile(new URL('../js/tokenizer.js',import.meta.url),'utf8'),{context,
+   initializeImportMeta:meta=>{meta.url=new URL('../js/tokenizer.js',import.meta.url).href;},
+   importModuleDynamically:()=>{imports++;throw Error('No encoder in lightweight mode');}});
+ // URL is only needed when the user explicitly opts into the worker.
+ context.URL=URL;
+ await mod.link(()=>{throw Error('Unexpected dependency');});await mod.evaluate();
+ const t=mod.namespace;
+ for(const text of ['', 'hello world','Xin chào 世界 👋','Long story. '.repeat(10000)]){
+   assert.equal(await t.countTokens(text),t.estimateTokens(text));
+ }
+ assert.equal(spawns,0);assert.equal(imports,0);assert.equal(t.tokenizerReady(),true);assert.equal(t.tokenizerStatus(),'estimate');
+ t.setTokenCountingMode('accurate');assert.equal(await t.countTokens('hello'),123);assert.equal(spawns,1);assert.equal(t.tokenizerStatus(),'ok');
+ t.setTokenCountingMode('estimate');assert.equal(await t.countTokens('hello'),t.estimateTokens('hello'));assert.equal(spawns,1);
+});
+
+test('cached token counts are replaced when the counting mode changes',async()=>{
+ const {createTokenCounter}=await appHarness()('token-cache.js');
+ let mode='estimate',calls=0;
+ const count=createTokenCounter({count:async()=>{calls++;return mode==='estimate'?10:20;},ready:()=>true,version:()=>mode});
+ assert.equal(await count('same text'),10);assert.equal(await count('same text'),10);assert.equal(calls,1);
+ mode='accurate';assert.equal(await count('same text'),20);assert.equal(calls,2);
+ mode='estimate';assert.equal(await count('same text'),10);assert.equal(calls,3);
+});

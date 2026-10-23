@@ -36,7 +36,7 @@ export function normalizeAdDirective(content) {
   return content;
 }
 
-const countSystemTokensCached=createTokenCounter({count:text=>tokenizer.countTokens(text),ready:tokenizerIsReady});
+const countSystemTokensCached=createTokenCounter({count:text=>tokenizer.countTokens(text),ready:tokenizerIsReady,version:()=>tokenizer.tokenizerMode?.()});
 
 export async function buildContextForRequest(session, settings, opts = {}) {
   const messages = opts.messages ?? await getMessages(session.id);

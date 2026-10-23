@@ -10,7 +10,7 @@ async function fixture(){
   'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc:(_db,...parts)=>parts.join('/'),getDocFromServer:async()=>({exists:()=>true,data:()=>server}),onSnapshot:(_ref,fn)=>{callback=fn;return ()=>{};},setDoc:async()=>{}},
  }});
  const settings=await use('settings.js'),{state}=await use('state.js');state.settings={maxContextTokens:10000};
- return {settings,state,cached,oldHash,setOwner:value=>owner=value,setServer:value=>server=value,watch:value=>callback({exists:()=>true,data:()=>value,metadata:{}})};
+ return {settings,state,cached,oldHash,tokenizer:await use('tokenizer.js'),setOwner:value=>owner=value,setServer:value=>server=value,watch:value=>callback({exists:()=>true,data:()=>value,metadata:{}})};
 }
 test('account Sync stages settings before applying cache and rejects account switches',async()=>{
  const h=await fixture(),refresh=await h.settings.readSettingsRefresh();assert.equal(h.state.settings.maxContextTokens,10000);assert.equal(h.cached.size,0);
@@ -23,4 +23,12 @@ test('an older settings hydration cannot restore stale settings after Sync',asyn
 });
 test('a delayed settings subscription delivery from a former account is ignored',async()=>{
  const h=await fixture();h.settings.watchSettings();h.setOwner('other');await h.watch({maxContextTokens:12000});assert.equal(h.state.settings.maxContextTokens,10000);assert.equal(h.cached.size,0);
+});
+
+test('token counting mode activates only when refreshed settings are accepted',async()=>{
+ const h=await fixture();
+ h.setServer({tokenCountingMode:'accurate',maxContextTokens:64000});
+ const refresh=await h.settings.readSettingsRefresh();
+ assert.equal(h.state.settings.tokenCountingMode,undefined);assert.equal(h.tokenizer.tokenizerMode(),'estimate');
+ refresh.apply();assert.equal(h.state.settings.tokenCountingMode,'accurate');assert.equal(h.tokenizer.tokenizerMode(),'accurate');
 });
