@@ -55,7 +55,7 @@ export function createWorkerTokenizer({
 } = {}) {
   let worker=null, serial=0, ready=false, retryAfter=0;
   const pending=new Map();
-  const estimate=text=>new TextEncoder().encode(text).length;
+  const estimate=text=>{let n=0;for(const ch of text)n+=ch.codePointAt(0)<128?0.3:1;return Math.ceil(n*1.02);};
   function fail(source) {
     if (source!==worker) return;
     worker?.terminate(); worker=null; ready=false; retryAfter=now()+30000;
