@@ -207,3 +207,18 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .composer { z-index: 30; }
 .composer-preparing { max-width: var(--reading-width); margin: 0 auto 4px; padding-inline: 8px; color: var(--muted); font-size: 11px; }
 .composer-preparing[hidden] { display: none; }
+
+/* Compact composer: native thinking picker over a visible mode icon. */
+.composer-row .composer-model { display: none; }
+.composer-row .composer-thinking { flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; padding: 0; margin-right: auto; border-radius: 50%; }
+.composer-thinking .thinking-mode-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; pointer-events: none; }
+.composer-thinking select { position: absolute; inset: 0; width: 44px; height: 44px; opacity: 0; cursor: pointer; }
+.composer-thinking .composer-select-arrow { display: none; }
+.composer-thinking:hover { background: #ffffff0d; }
+.composer-thinking:focus-within { outline: 2px solid var(--muted); outline-offset: 2px; }
+#jump-to-latest { display: none; }
+@media (max-width: 720px) {
+  #floating-copy { bottom: calc(100% + 62px); }
+  .chat-tab:not(.is-empty) #jump-to-latest { display: inline-flex; }
+  .jump-to-latest { width: 44px; height: 44px; border-radius: 50%; align-items: center; justify-content: center; }
+}

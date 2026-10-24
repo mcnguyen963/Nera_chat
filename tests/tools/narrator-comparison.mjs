@@ -38,7 +38,8 @@ export async function comparisonFixture(use){
 }
 export async function buildComparisonRequests(baselineUse,candidateUse){
  const {prompts}=await candidateUse('system-prompts.js'),settingsApi=await candidateUse('story-settings.js');
- const settings={...settingsApi.defaultStorySettings(),endpoint:API,modelId:MODEL,apiKey:'offline-preview-key',streaming:true,narrationMode:'director',maxContextTokens:80000,maxResponseTokens:8192,keepRecentMessagesAfterSummary:120,maxOutputPrice:.4,reasoning:{enabled:true,mode:'effort',effort:'high'}};
+ // The frozen builder reads narratorSystemPrompt; both variants must use Director's prompt.
+ const settings={...settingsApi.defaultStorySettings(),narratorSystemPrompt:prompts.directorNarratorDefault,endpoint:API,modelId:MODEL,apiKey:'offline-preview-key',streaming:true,narrationMode:'director',maxContextTokens:80000,maxResponseTokens:8192,keepRecentMessagesAfterSummary:120,maxOutputPrice:.4,reasoning:{enabled:true,mode:'effort',effort:'high'}};
  const fixture=await comparisonFixture(candidateUse),requests=[];
  for(const [index,row] of fixture.entries())for(const variant of index%2?['candidate','baseline']:['baseline','candidate']){
   const builder=await (variant==='baseline'?baselineUse:candidateUse)('context-builder.js');

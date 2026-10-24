@@ -4,7 +4,7 @@ Built-in LLM instructions and labels live in this folder. `js/system-prompts.js`
 
 ## Narrative instructions
 
-- `narrator.md`: dark fantasy narration, player agency for the configured protagonist, NPC knowledge and behavior, continuity, and the owner's 600-word visible reply cap.
+- `narrator-classic-default.md`: the complete built-in Classic Narrator prompt. `narrator.md` remains the shared foundation used to compose Director Narrator instructions.
 - `author-direction.md`, `continuity.md`: author directives and source priority. Later chat establishes the current moment.
 - `fixed-author-plan.md`, `plan-thread.md`, `plan-status-active.md`, `plan-status-inactive.md`, `no-plan.md`: the author's fixed plan and optional hidden pending-plan notes.
 - `scene.md`, `reply-contract.md`, `scene-reminder.md`, `scene-reminder-plan.md`, `scene-recovery.md`: optional scene output and recovery contracts.

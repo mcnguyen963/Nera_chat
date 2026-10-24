@@ -118,6 +118,7 @@
         <form id="composer" autocomplete="off"></form>
         <div id="composer-shell" class="composer">
           <button id="floating-copy" type="button" class="btn floating-copy" data-icon="copy" aria-label="Copy message being read" hidden>Copy</button>
+          <button id="jump-to-latest" type="button" class="btn floating-copy jump-to-latest" data-icon="down" aria-label="Scroll to latest message">Scroll to latest message</button>
           <div id="composer-preparing" class="composer-preparing" role="status" hidden>Preparing…</div>
           <div id="composer-memory-status" class="composer-memory-status" role="status" hidden>Updating memory · Keep open</div>
           <div id="composer-box" class="composer-box">
@@ -131,7 +132,8 @@
                 <select id="quick-director-profile" aria-label="Director profile"></select>
                 <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
-              <label class="composer-select composer-thinking">
+              <label class="composer-select composer-thinking" title="Thinking: Off">
+                <span id="quick-thinking-icon" class="thinking-mode-icon" aria-hidden="true"></span>
                 <select id="quick-thinking" aria-label="Thinking">
                   <option value="off">Off</option>
                   <option value="none">None</option>

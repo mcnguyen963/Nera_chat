@@ -379,8 +379,8 @@ test('Thinking and sampling controls use only enabled request parameters', async
   const h = await harness();
   const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
   assert.equal(h.settings.DEFAULT_SETTINGS.maxResponseTokens, 8192);
-  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive roleplay/);
-  assert.doesNotMatch(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /plan/i);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive (?:dark fantasy )?roleplay/);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /RESOLVE IN THE SCENE: NO DEFERRAL/);
   assert.equal(h.el('thinking-options').classList.contains('hidden'), true);
   assert.equal(h.el('advanced-options').classList.contains('hidden'), true);
   h.el('set-reasoning-enabled').checked = true;
@@ -2349,7 +2349,7 @@ test('Finishing story creation does not interrupt navigation made while it was p
 });
 
 for(const type of ['director','catch-up'])test(type+' preparation opens a dismissible dialog before a delayed snapshot',async()=>{
- let finish;const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:()=>new Promise(resolve=>finish=resolve),memorySnapshot:()=>null,syncChatData:async()=>{}}}});
+ let finish;const h=await harness({extraStubs:{'ui/chat-view.js':{prepareMemorySnapshot:()=>new Promise(resolve=>finish=resolve),memorySnapshot:()=>null,syncChatData:async()=>{},dismissMemoryRebuild:async()=>{}}}});
  h.state.sessionId='story';let pending;
  if(type==='director')pending=(await h.use('ui/director-view.js')).openDirectorState();
  else {const memory=await h.use('ui/memory-settings-view.js');memory.initMemorySettings(()=>{});pending=h.fire('mem-catch-up');}
@@ -3039,4 +3039,107 @@ test('provider input_tokens usage is accepted without adding output or reasoning
  h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'Reply.'}}],usage:{input_tokens:75000,output_tokens:21000}};
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
  assert.equal(chat.tokenUsageSnapshot().record.tokens,75000);assert.equal(chat.tokenUsageSnapshot().record.kind,'provider');
+});
+
+async function rebuildDismissHarness() {
+ const cachedChats=new Map(),cachedStories=new Map(),cacheKey=(uid,sid)=>uid+':'+sid;
+ const chatCache={
+  loadChatCache:async(uid,sid)=>structuredClone(cachedChats.get(cacheKey(uid,sid)) ?? null),
+  saveChatCache:async(uid,sid,value)=>{cachedChats.set(cacheKey(uid,sid),structuredClone(value));},deleteChatCache:async()=>{},
+  loadStoryData:async(uid,sid)=>structuredClone(cachedStories.get(cacheKey(uid,sid)) ?? null),
+  saveStoryData:async(uid,sid,value)=>{const key=cacheKey(uid,sid);cachedStories.set(key,{...cachedStories.get(key),...structuredClone(value)});return true;},
+ };
+ const server={id:'improvement',title:'Story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:5,
+  memory:{lorebooks:true,autoUpdate:true,batchTurns:10,lagTurns:0},memoryInvalidations:[{revision:4,fromOrder:1,toOrder:122}],
+  memoryState:{extractedThroughOrder:122,paused:true,failureStreak:2,needsRebuild:true,rebuildFromOrder:1}};
+ let h;
+ h=await harness({chatCache,firestoreOverrides:{runTransaction:async(_db,work)=>{
+  h.calls.dismissAttempts=(h.calls.dismissAttempts ?? 0)+1;await h.calls.onDismissSave?.();
+  const writes=[],result=await work({get:async()=>({exists:()=>true,data:()=>structuredClone(server)}),update:(_ref,patch)=>writes.push(patch)});
+  if(h.calls.failDismiss)throw Error('Offline');
+  for(const patch of writes){h.calls.dismissWrites=(h.calls.dismissWrites ?? 0)+1;for(const [key,value]of Object.entries(patch)){const path=key.split('.');let target=server;for(const part of path.slice(0,-1))target=target[part]??={};target[path.at(-1)]=value;}}
+  h.calls.sessionDocs.improvement=structuredClone(server);await h.calls.beforeDismissReturn?.();return result;
+ }}});
+ const {makeEntry}=await h.use('lore-lines.js'),card=makeEntry('characters','Mira');card.sections.appearance.text='Author-maintained appearance.';h.calls.loreEntries=[card];
+ const messages=Array.from({length:22},(_,i)=>({id:'m'+i,order:101+i,role:i%2?'assistant':'user',narratorTurn:Math.floor(i/2)+20,content:'Story '+i,revision:0}));
+ const chat=await openImprovementChat(h,structuredClone(server),messages);await chat.prepareMemorySnapshot();await settle();
+ const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({screen:'list',book:'characters'});await settle();
+ const settings=await h.use('ui/memory-settings-view.js');settings.initMemorySettings(()=>{});settings.fillMemory(server.memory);
+ const store=(await h.use('local-story-store.js')).storyStore('improvement'),root=h.el('lorebook-overlay');
+ const banner=()=>root.querySelectorAll('button').find(b=>b.textContent.startsWith('History edited'));
+ return {h,chat,lore,settings,store,server,root,banner,card,chatCache};
+}
+
+for(const surface of ['lorebooks','settings'])test('Dismiss rebuild from '+surface+' immediately clears the screenshot notice and persists without AI calls',async()=>{
+ const {h,chat,store,server,root,banner,chatCache}=await rebuildDismissHarness();
+ assert.equal(banner().textContent,'History edited at T? — re-extract 11 turns (~2 extraction calls)');
+ assert.equal(h.el('mem-dismiss-rebuild').classList.contains('hidden'),false);
+ const before=structuredClone(chat.memorySnapshot()),reads={history:h.calls.historyReads,lore:h.calls.loreReads,session:h.calls.sessionReads};
+ await (surface==='lorebooks'?namedButton(root,'Dismiss'):h.el('mem-dismiss-rebuild')).click();await settle();
+ assert.equal(banner(),undefined);assert.equal(h.el('mem-dismiss-rebuild').classList.contains('hidden'),true);
+ assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,false);assert.equal(store.confirmed.session.memoryState.needsRebuild,false);assert.equal(server.memoryState.needsRebuild,false);
+ for(const key of ['extractedThroughOrder','paused','failureStreak'])assert.equal(chat.memorySnapshot().session.memoryState[key],before.session.memoryState[key]);
+ assert.deepEqual(chat.memorySnapshot().session.memory,before.session.memory);assert.deepEqual(chat.memorySnapshot().entries,before.entries);
+ assert.equal(h.calls.dismissWrites,1);assert.equal(h.calls.requests.length,0);assert.equal(h.calls.memoryStarts ?? 0,0);assert.equal(h.calls.catchUps ?? 0,0);
+ assert.deepEqual({history:h.calls.historyReads,lore:h.calls.loreReads,session:h.calls.sessionReads},reads);
+ const cache=await h.use('chat-cache.js'),saved=await cache.loadStoryData('test-user','improvement');
+ assert.equal(saved.confirmed.session.memoryState.needsRebuild,false);assert.equal((await cache.loadChatCache('test-user','improvement')).session.memoryState.needsRebuild,false);
+ chat.setSession(null);chat.setSession('improvement');assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,false);
+ const fresh=await harness({chatCache}),restored=await fresh.use('ui/chat-view.js');restored.initChatView();restored.setSession('improvement');await settle();
+ assert.equal(restored.memorySnapshot().session.memoryState.needsRebuild,false);
+});
+
+test('Dismiss rebuild refreshes the list while retaining the open unsaved card draft',async()=>{
+ const {h,lore,root,card,banner}=await rebuildDismissHarness();lore.openLorebooks({entryId:card.id});await settle();
+ const editor=root.querySelector('.lore-editor'),appearance=editor.querySelectorAll('.lore-section')[1].querySelector('textarea');
+ appearance.value='Unsaved author correction';await appearance.dispatchEvent({type:'input'});
+ await namedButton(root,'Dismiss').click();
+ assert.equal(banner(),undefined);assert.equal(root.querySelector('.lore-editor'),editor);assert.equal(appearance.value,'Unsaved author correction');assert.equal(h.calls.cardWrites,undefined);
+});
+
+for(const surface of ['lorebooks','settings'])test('Dismiss rebuild from '+surface+' keeps edits made after the displayed notice',async()=>{
+ const {h,chat,store,server,root,banner}=await rebuildDismissHarness();
+ server.historyRevision=6;server.memoryInvalidations.push({revision:6,fromOrder:110,toOrder:122});
+ h.calls.historyRevision=6;h.calls.sessionCallbacks.at(-1)({data:()=>structuredClone(server)});
+ await (surface==='lorebooks'?namedButton(root,'Dismiss'):h.el('mem-dismiss-rebuild')).click();
+ const remaining=JSON.parse(JSON.stringify(chat.memorySnapshot().session.memoryInvalidations));
+ assert.deepEqual(remaining,[{revision:6,fromOrder:110,toOrder:122}]);assert.equal(store.confirmed.session.memoryState.needsRebuild,true);
+ assert.equal(server.memoryState.rebuildFromOrder,110);assert.ok(banner());assert.equal(h.el('mem-dismiss-rebuild').classList.contains('hidden'),false);
+});
+
+test('Dismiss rebuild retains a newer snapshot delivered after its transaction',async()=>{
+ const {h,chat,store,server,root}=await rebuildDismissHarness();
+ h.calls.beforeDismissReturn=()=>{server.historyRevision=6;server.memoryInvalidations=[{revision:6,fromOrder:110,toOrder:122}];server.memoryState.needsRebuild=true;server.memoryState.rebuildFromOrder=110;h.calls.historyRevision=6;h.calls.sessionCallbacks.at(-1)({data:()=>structuredClone(server)});};
+ await namedButton(root,'Dismiss').click();
+ assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,true);assert.equal(chat.memorySnapshot().session.memoryState.rebuildFromOrder,110);
+ assert.equal(chat.memorySnapshot().session.memoryInvalidations.length,1);
+ assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(store.requiresReconciliation,true);
+});
+
+for(const surface of ['lorebooks','settings'])test('Dismiss rebuild from '+surface+' keeps the notice on failure and allows retry',async()=>{
+ const {h,chat,store,root,banner}=await rebuildDismissHarness();h.calls.failDismiss=true;
+ const button=surface==='lorebooks'?namedButton(root,'Dismiss'):h.el('mem-dismiss-rebuild');await button.click();
+ assert.ok(banner());assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,true);assert.equal(store.status.paused,false);assert.equal(!!button.disabled,false);
+ assert.ok(h.document.body.querySelectorAll('.toast').some(t=>/Offline/.test(t.textContent)));assert.equal(h.calls.requests.length,0);
+ h.calls.failDismiss=false;await button.click();assert.equal(banner(),undefined);assert.equal(h.calls.dismissWrites,1);
+});
+
+test('Dismiss rebuild flushes pending edits, blocks duplicate writes and preserves their new invalidation',async()=>{
+ const {h,chat,store,server,root}=await rebuildDismissHarness(),upload=deferred();
+ h.calls.editMessage=async(_sid,id,content)=>{await upload.promise;const replacement={...h.calls.history.find(m=>m.id===id),content,revision:1};Object.assign(server,structuredClone(store.view.session));h.calls.historyRevision=server.historyRevision;h.calls.sessionDocs.improvement=structuredClone(server);h.calls.history=h.calls.history.map(m=>m.id===id?replacement:m);return {session:structuredClone(server),replacement,historyRevision:server.historyRevision};};
+ store.enqueue('edit',{id:'m0',order:101,content:'Newer correction',expectedRevision:0});await settle();
+ const saving=namedButton(root,'Dismiss').click();await settle();assert.equal(h.calls.dismissAttempts ?? 0,0);
+ await assert.rejects(chat.dismissMemoryRebuild('improvement',5),/already saving/);assert.throws(()=>store.enqueue('delete',{id:'m1',order:102}),/Sync/);
+ upload.resolve();await saving;assert.equal(h.calls.dismissWrites,1);assert.equal(store.status.paused,false);assert.equal(store.confirmed.messages[0].content,'Newer correction');
+ assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,true);assert.equal(chat.memorySnapshot().session.memoryInvalidations[0].revision,6);
+});
+
+for(const change of ['story','account','away-back'])test('Dismiss rebuild after '+change+' switch cannot patch the active story and releases its save lock',async()=>{
+ const {h,chat,store,root}=await rebuildDismissHarness(),wait=deferred();h.calls.onDismissSave=()=>wait.promise;
+ let refreshes=0;h.document.addEventListener('memory-refresh',()=>{refreshes++;});
+ const saving=namedButton(root,'Dismiss').click();await settle();assert.equal(store.status.paused,true);
+ if(change==='account')h.calls.uid='other';else{chat.setSession(null);if(change==='away-back')chat.setSession('improvement');}
+ wait.resolve();await saving;
+ assert.equal(store.status.paused,false);assert.equal(refreshes,0);assert.equal(store.confirmed.session.memoryState.needsRebuild,true);
+ assert.notEqual(chat.memorySnapshot()?.session.memoryState?.needsRebuild,false);
 });

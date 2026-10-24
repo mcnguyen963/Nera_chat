@@ -12,14 +12,13 @@ import { resolveCore } from '../character-core.js';
 import { renderCoreEditor } from './character-core-editor.js';
 import { currentUid } from '../auth.js';
 import { maxOf } from '../math-utils.js';
-import {dismissRebuild} from '../session-memory.js';
 import {rebuildLabel} from '../memory-rebuild.js';
 import {getPref,setPref} from '../local-pref.js';
 import { noteNeedsReview, snapshotNeedsReview, sectionMeta, cutoffLabel } from '../continuity.js';
 import { rebuild, rebuildFrom } from '../memory-updater.js';
 import { state } from '../state.js';
 import { normalizeMemory } from '../memory-settings.js';
-import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
+import { memorySnapshot, prepareMemorySnapshot, dismissMemoryRebuild } from './chat-view.js';
 import * as store from '../lore-store.js';
 import { makeEntry, newLoreId, normalizeName, duplicateCards, STOPLIST, SECTION_KEYS } from '../lore-lines.js';
 import { sortLines, renderEntry, sectionLabel } from '../lore-select.js';
@@ -99,6 +98,10 @@ export function initLorebookView() {
     renderRail(); renderList();
   });
   document.addEventListener('session-changed',e => { if (opened && e.detail.sessionId !== sid) closeManager(true); });
+  document.addEventListener('memory-refresh',e => {
+    if (!opened || sid !== state.sessionId || e.detail?.sessionId !== sid) return;
+    renderRail(); renderList();
+  });
   document.addEventListener('memory-toast',e => toast(e.detail.text,e.detail.action,() => document.dispatchEvent(new CustomEvent(e.detail.event,{ detail:e.detail.options }))));
   document.addEventListener('keydown',e => { if (!opened) return; if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if(staged)void saveCard().catch(error=>toast(error)); } if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); list?.querySelector('input')?.focus(); } });
 }
@@ -174,7 +177,7 @@ function renderList() {
   const edited=live()?.session.memoryState?.rebuildFromOrder;
   if(live()?.session.memoryState?.needsRebuild && edited!=null){
     const snapshot=live();
-    list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}}));
+    list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissMemoryRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);}catch(e){toast(e.message);}}));
   }
   list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
   list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),...(book==='plan' ? [] : [button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small')]));

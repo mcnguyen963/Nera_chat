@@ -2,6 +2,7 @@
 const paths = {
   stories: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 3v18m4-13h4m-4 4h4"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  down: '<path d="M12 4v16m-7-7 7 7 7-7"/>',
   send: '<path d="M12 20V4m-7 7 7-7 7 7"/>',
   continue: '<path d="M4 12h16m-7-7 7 7-7 7"/>',
   rewrite: '<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/>',
@@ -40,4 +41,21 @@ export function contextRingPresentation({used, max}) {
   const gray = [148, 155, 167], red = [244, 92, 92];
   const color = gray.map((channel, index) => Math.round(channel + (red[index] - channel) * ratio));
   return {dash: `${ratio * 100} 100`, color: `rgb(${color.join(', ')})`};
+}
+
+// Distinct silhouettes retain the full native mode menu on touch devices.
+export function thinkingIcon(mode) {
+  const bulb = '<path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z"/>';
+  const marks = {
+    off: '<path d="m13 2-8 12h6l-1 8 9-12h-6Z"/>',
+    none: '<circle cx="12" cy="12" r="8"/><path d="m6 6 12 12"/>',
+    minimal: '<circle cx="12" cy="12" r="3"/>',
+    low: bulb,
+    medium: bulb + '<path d="M12 7v4"/>',
+    high: bulb + '<path d="M10 9h4m-2-2v4M2 6l2 1m16 0 2-1"/>',
+    xhigh: bulb + '<path d="M10 9h4m-2-2v4M2 6l2 1m16 0 2-1M5 2l1 2m12 0 1-2"/>',
+    max: '<path d="m12 2 3 6 7 1-5 5 1 8-6-4-6 4 1-8-5-5 7-1Z"/>',
+    max_tokens: '<path d="M5 3h14M5 21h14M7 3v4l10 10v4M17 3v4L7 17v4"/>',
+  };
+  return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${marks[mode] || marks.off}</svg>`;
 }

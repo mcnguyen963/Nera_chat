@@ -1,5 +1,4 @@
 import { normalizeCalendar, parseStoryDate, parseClock, formatStoryDate, clockText, calendarInstruction } from '../story-calendar.js';
-import {dismissRebuild} from '../session-memory.js';
 import {rebuildLabel} from '../memory-rebuild.js';
 import { skippedNotesText } from '../memory-skipped.js';
 import {getPref,setPref} from '../local-pref.js';
@@ -10,7 +9,7 @@ import { normalizeMemory, memoryValidationRanges } from '../memory-settings.js';
 import { parseScene, sceneLine } from '../scene.js';
 import { computeTurns, dueRange, dueRangeStatus } from '../turns.js';
 import { state } from '../state.js';
-import { memorySnapshot, prepareMemorySnapshot } from './chat-view.js';
+import { memorySnapshot, prepareMemorySnapshot, dismissMemoryRebuild } from './chat-view.js';
 import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-updater.js';
 import { copyText } from './clipboard.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
@@ -19,7 +18,7 @@ const booleans = ['characterSelection','scene','sceneFallback','lorebooks','auto
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
 const seedKeys = ['date','time','place','present'];
 const numbers = ['loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
-let filled = null;
+let filled = null, rebuildNotice = null;
 export function fillMemory(raw) {
   filled = normalizeMemory(raw);
   for (const key of booleans) get(key).checked = filled[key];
@@ -73,7 +72,7 @@ export function initMemorySettings(openLore) {
   get('open-lore').addEventListener('click',openLore);
   get('update-now').addEventListener('click',() => void manualUpdate());
   get('reextract')?.addEventListener('click',async()=>{try{const live=memorySnapshot(),order=live?.session.memoryState?.rebuildFromOrder;if(order==null)return;if(!confirm('Re-extract edited history from this turn? Generated notes will be marked for review and backed up.'))return;const finished=await rebuildFrom(live.session.id,order);toast(finished ? 'Re-extraction finished; review prior notes in Lorebooks.' : 'Re-extraction stopped. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);}});
-  get('dismiss-rebuild')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}const live=memorySnapshot();if(!live)return;await dismissRebuild(live.session.id,live.session.historyRevision ?? 0);document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
+  get('dismiss-rebuild')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}if(!rebuildNotice)return;await dismissMemoryRebuild(rebuildNotice.sessionId,rebuildNotice.seenRevision);}catch(e){toast(e.message);}});
   get('choose-start')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}const live=await prepareMemorySnapshot(),mem=normalizeMemory(live.session.memory),pointer=await chooseMemoryStart(mem,mem,live.session,true);if(pointer==='cancel' || pointer==null)return;await updateSession(live.session.id,{'memoryState.extractedThroughOrder':pointer});document.dispatchEvent(new CustomEvent('memory-refresh'));}catch(e){toast(e.message);}});
   get('retry').addEventListener('click',() => void manualUpdate(true));
   get('catch-up').addEventListener('click',() => void catchUpDialog());
@@ -122,6 +121,7 @@ export function updateMemorySettingsHints() {
   for (const key of ['update-now','catch-up','retry']) { get(key).disabled = !!state.busy || preparingUpdate || isRunning(state.sessionId); get(key).title = state.busy ? 'Wait for the current reply or summary.' : preparingUpdate || isRunning(state.sessionId) ? 'A memory update is already running.' : ''; }
   get('retry').classList.toggle('hidden',!paused);
   const rebuildOrder=live?.session.memoryState?.rebuildFromOrder;get('reextract')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);if(get('reextract') && rebuildOrder!=null)get('reextract').textContent=rebuildLabel(live);get('dismiss-rebuild')?.classList.toggle('hidden',!live?.session.memoryState?.needsRebuild);
+  rebuildNotice=live?.session.memoryState?.needsRebuild ? {sessionId:live.session.id,seenRevision:live.session.historyRevision ?? 0} : null;
   get('choose-start')?.classList.toggle('hidden',pointer!=null);
   const status=dueRangeStatus(live?.messages ?? [],live?.session.memoryState,mem);
   get('update-status').textContent = paused ? ['Paused.',live.session.memoryState.lastError].filter(Boolean).join(' ') : pointer == null ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : done ? `Updated through turn ${done} · next update after turn ${done+mem.batchTurns+mem.lagTurns}.` : `Waiting for ${Math.max(0,mem.batchTurns-pending)} more turns.`;
