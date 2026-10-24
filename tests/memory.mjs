@@ -410,7 +410,7 @@ test('equal dates preserve source turns and distinct hidden truth, belief and of
   assert.match(select.MEMORY_RULE,/intentions and attempts, not completed events/);
   const e = l.makeEntry('characters','Player'); e.sections.personality.text = 'Bold';
   const { prompts } = await use('system-prompts.js');
-  assert.match(prompts.narrator,/personality card does not authorize acting for the PC/i);
+  assert.match(prompts.narrator,/personality card does not authorize (?:you to act|acting) for the PC/i);
 });
 test('extraction validates source turns, attaches all turn evidence and preserves attempts and qualifiers',async () => {
   const use = await setup(), l = await use('lore-lines.js'), { computeTurns } = await use('turns.js');
@@ -480,11 +480,11 @@ test('version 2 chat imports preserve hidden metadata and fixed author plan; ver
   const old = api.parseSillyTavernJsonl('{"character_name":"Old"}\n{"is_user":true,"mes":"Hello"}'); assert.equal(old.messages[0].role,'user'); assert.equal(old.metadata,null);
 });
 
-test('narrator requests inject each shared contract once and keep plan rules outside the narrative prompt', async () => {
+test('narrator requests retain the Classic default and inject each shared contract once', async () => {
   const use = await setup({ 'messages.js':{ getMessages:async () => [] },'tokenizer.js':{ countTokens:count } });
   const { prompts } = await use('system-prompts.js');
   const builder = await use('context-builder.js');
-  assert.doesNotMatch(prompts.narrator, /plan/i);
+  assert.match(prompts.narrator, /The scene tag is the only structured state you output when its contract is active/);
   const options = { messages:[{ id:'u',order:1,role:'user',content:'Begin.' }],requireLatestUser:true };
   const base = { id:'s',longTermPlan:'Meet Mira at the inn.' };
   const config = { ...settings,narratorSystemPrompt:prompts.narrator };

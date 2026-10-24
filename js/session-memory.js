@@ -58,6 +58,6 @@ export async function dismissRebuild(sid,seenRevision) {
     let order=Infinity;for(const i of remaining)order=Math.min(order,i.fromOrder);
     const memoryState={needsRebuild:remaining.length>0,rebuildFromOrder:remaining.length?order:null};
     tx.update(target,{memoryInvalidations:remaining,'memoryState.needsRebuild':memoryState.needsRebuild,'memoryState.rebuildFromOrder':memoryState.rebuildFromOrder,updatedAt:serverTimestamp()});
-    return {memoryInvalidations:remaining,memoryState};
+    return {memoryInvalidations:remaining,memoryState,historyRevision:session.historyRevision ?? 0};
   });
 }

@@ -10,7 +10,7 @@ import * as directorStore from '../director-store.js';
 import { prepareDirectorTurn } from '../director-turn.js';
 import { directorScene, directorSceneWarnings } from '../director-state.js';
 import { requestSource } from '../continuity.js';
-import {setIcon, rewritePresentation, contextRingPresentation} from './icons.js';
+import {setIcon, rewritePresentation, contextRingPresentation, thinkingIcon} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
@@ -41,6 +41,7 @@ import { computeTurns, dueRangeStatus } from '../turns.js';
 import { getLore, configureLoreWrites, holdLoreWrites } from '../lore-store.js';
 import * as loreStore from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
+import { dismissRebuild } from '../session-memory.js';
 import { initPetView, startPetTurn, finishPetTurn, refreshPetPlacement, updatePetPhase, invalidatePetLayout } from "./pet-view.js";
 import { state } from "../state.js";
 import * as messagesApi from "../messages.js";
@@ -264,6 +265,23 @@ export async function saveDirectorLiveState(sid,value,expected,{owner=currentUid
     store.adopt({session,messages:historyMessages,turns:{...store.view.turns,[result.checkpoint.id]:result.checkpoint}},{serverConfirmed:true});
     return true;
   },{sid,owner,epoch,reconcile:true});
+}
+export async function dismissMemoryRebuild(sid,seenRevision,{owner=currentUid(),epoch=historyEpoch}={}) {
+  const result=await saveStoryState(()=>dismissRebuild(sid,seenRevision),(saved,store)=>{
+    // Preserve edits that arrived after the notice, including a newer local snapshot.
+    const newer=(session.memoryInvalidations ?? []).filter(i=>i.revision>seenRevision);
+    const remaining=[...new Map([...saved.memoryInvalidations,...newer].map(i=>[JSON.stringify([i.revision,i.fromOrder,i.toOrder]),i])).values()];
+    session={...session,memoryInvalidations:remaining,memoryState:{...session.memoryState,...saved.memoryState,
+      needsRebuild:remaining.length>0,rebuildFromOrder:remaining.length ? Math.min(...remaining.map(i=>i.fromOrder)) : null}};
+    if(!historyMessages || historyRevision!==(session.historyRevision ?? 0) || saved.historyRevision!==(session.historyRevision ?? 0))return false;
+    store.adopt({session,messages:historyMessages,turns:store.view.turns},{serverConfirmed:true});
+    return true;
+  },{sid,owner,epoch});
+  if(owner!==currentUid() || sid!==state.sessionId || epoch!==historyEpoch)return result;
+  saveLocalCache(owner,sid,chatSnapshot());
+  updateMemoryChip();
+  document.dispatchEvent(new CustomEvent('memory-refresh',{detail:{sessionId:sid}}));
+  return result;
 }
 function applyLocalChange(token,result,mutate) {
   assertActive(token);
@@ -672,6 +690,7 @@ export function initChatView() {
     document.getElementById("btn-new-session")?.click();
   });
   initMessageMenus();
+  document.getElementById('jump-to-latest')?.addEventListener('click', scrollToEnd);
   refreshFloatingCopy = initFloatingCopy({list:el.list, button:document.getElementById('floating-copy'), editing:()=>!!editingState, onError:error=>showToast(error,false)}) || (()=>{});
   updateWelcome();
   initQuickControls();
@@ -769,7 +788,15 @@ function refreshQuickControls() {
   el.quickProfile.title = p?.name
     ? `Narrator: ${p.name} · ${connection.modelId || "no model"}`
     : connection.modelId || "Model not set";
-  el.quickThinking.title = `Narrator thinking: ${quickThinkingValue(connection)}`;
+  const thinkingMode = quickThinkingValue(connection);
+  const thinkingLabel = `Thinking: ${Array.from(el.quickThinking.options || []).find(option=>option.value===thinkingMode)?.textContent || thinkingMode}`;
+  el.quickThinking.title = thinkingLabel;
+  el.quickThinking.setAttribute('aria-label', thinkingLabel);
+  const thinkingGlyph = document.getElementById('quick-thinking-icon');
+  if (thinkingGlyph) {
+    thinkingGlyph.innerHTML = thinkingIcon(thinkingMode);
+    thinkingGlyph.parentElement?.setAttribute('title', thinkingLabel);
+  }
   const director=state.storySettings?.values?.narrationMode==='director',id=state.storySettings?.values?.directorProfileId ?? '';
   document.getElementById('quick-director-control').classList.toggle('hidden',!director);
   el.quickDirector.replaceChildren();
