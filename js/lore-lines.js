@@ -7,6 +7,7 @@ import { computeTurns } from './turns.js';
 import { latestScene } from './scene.js';
 export const STOPLIST = new Set('he she they him her them i you me we it someone somebody man woman boy girl guard the a narrator user unknown'.split(' '));
 export const COMMON_ALIAS_WORDS = new Set('captain guard old lady lord man woman girl boy'.split(' '));
+export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? (a.by==='user'?Infinity:0))-(b.turn ?? (b.by==='user'?Infinity:0))||(a.at ?? 0)-(b.at ?? 0)); }
 export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’]/g,"'").replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
 export function validRecallAlias(value) {
   const name=normalizeName(value), words=name.replace(/^the /,'').split(' ');

@@ -112,6 +112,12 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
         await batch.commit();
       }
     }
+    const recoveries=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,'storyRecovery'));
+    for(const recovery of recoveries.docs){
+      const parts=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,'storyRecovery',recovery.id,'parts'));
+      for(let i=0;i<parts.docs.length;i+=450){const batch=writeBatch(db);for(const part of parts.docs.slice(i,i+450))batch.delete(part.ref);await batch.commit();}
+      await deleteDoc(recovery.ref);
+    }
     await loreStore.deleteRecordGenerations?.({id:sessionId,uid:owner});
     if(snap.exists() && snap.data().loreSchemaVersion===3)await updateDoc(target,{loreGenerationsDeleted:true});
     // The tombstone stays until every subtree sweep has completed.

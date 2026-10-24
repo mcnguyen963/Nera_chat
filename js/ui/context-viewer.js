@@ -68,6 +68,16 @@ function preview(key, title, text) {
     pre.scrollTop = scrollPositions.get(key) ?? 0;
   });
 }
+function noteLimitDetails(parent,omitted,prefix) {
+  const groups=new Map();
+  for(const item of omitted) {
+    const key=JSON.stringify([item.entryId,item.section,item.reason]),items=groups.get(key) ?? [];
+    items.push(item);groups.set(key,items);
+  }
+  for(const [key,items] of groups) {
+    const e=items[0];parent.append(preview(prefix+'-'+key,`${e.name} · ${e.section}: ${items.length} omitted · ${e.reason} (${e.limit} per section)`,()=>items.map(n=>n.text).join('\n')));
+  }
+}
 function messageList(parent, key, messages) {
   const list = node('div', null, 'context-turn-list context-scroll');
   list.dataset.scrollKey = key;
@@ -123,6 +133,7 @@ function renderCached() {
     const section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString(),false,d=>{
       if(sent.report?.characterSelection)characterReport(d,sent.report.characterSelection,'sent-character');
       if(sent.report?.recordSelection)recordReport(d,sent.report.recordSelection,'sent-records');
+      noteLimitDetails(d,sent.report?.noteLimits?.omitted ?? [],'sent-note-limits');
       d.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
     });body.append(section);
   }else if(record?.kind!=='estimate' && record)body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
@@ -207,10 +218,13 @@ async function render({current=false}={}) {
       const total = cards.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0),0);
       const sent = loaded.reduce((n,e) => n+(e.linesSent ?? 0),0);
       const reasons = new Set(skipped.map(e => e.reason));
-      if (loaded.some(e => e.linesCut)) reasons.add('book token budget');
+      if (loaded.some(e => (e.budgetLinesCut ?? e.linesCut)>0)) reasons.add('book token budget');
+      const limited=(r.noteLimits?.omitted ?? []).filter(e=>e.book===book);
+      for(const reason of new Set(limited.map(e=>e.reason)))reasons.add(reason);
       if (!mem.books[book].on) reasons.add('book disabled');
       if (total>sent && !reasons.size) reasons.add('not selected for this scene or memory disabled');
       bookGroup.append(node('p', `${sent} notes sent · ${total-sent} omitted${reasons.size ? ' · '+[...reasons].join('; ') : ''}`, 'context-coverage muted'));
+      noteLimitDetails(bookGroup,limited,'note-limits-'+book);
       if (sections[book]) bookGroup.append(preview('book-'+book+'-text', 'Read included '+label.toLowerCase(), sections[book]));
       lore.append(bookGroup);
     }
@@ -226,6 +240,7 @@ async function render({current=false}={}) {
       if(sent.report.characterBudget)characterBudgetReport(section,sent.report.characterBudget);
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
       if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
+      noteLimitDetails(section,sent.report.noteLimits?.omitted ?? [],'sent-note-limits');
       section.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
       body.append(section);
     }

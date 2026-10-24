@@ -4,6 +4,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {appHarness} from './app-harness.mjs';
+
+test('Deleting a story also removes nested device upload recovery backups',async()=>{
+ const h=await setup();h.documents.set(h.sessionPath+'/storyRecovery/upload',{state:'completed'});
+ h.documents.set(h.sessionPath+'/storyRecovery/upload/parts/one',{side:'cloud',data:{messages:['old story']}});
+ h.documents.set(h.sessionPath+'/storyRecovery/upload/parts/two',{side:'device',data:{messages:['phone story']}});
+ await h.sessions.deleteSession('s');assert.ok(![...h.documents.keys()].some(path=>path===h.sessionPath || path.startsWith(h.sessionPath+'/')));
+});
 
 async function setup(legacyCount = 0) {
   const documents = new Map();
@@ -553,6 +561,23 @@ test('L6 changed sent text refuses replacement and missing snapshot notes are re
  const h=await setup(),e=loreEntry();await h.lore.createEntry('s',e);const sent=e.sections.appearance.lines.map(l=>({id:l.id,text:l.text})),snapshot={appearance:sent.map(l=>l.id)},preview={entry:e,sent:{appearance:sent},snapshot,sections:{appearance:[{id:'new',text:'tidied',by:'reorganize',at:5}]}};
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text='Edited elsewhere';await assert.rejects(h.lore.replaceLines('s',[preview],3),/changed since the preview/);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text,'Edited elsewhere');
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text=sent[0].text;h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'fresh',text:'fresh',by:'auto',at:6},{id:'user',text:'mine',by:'user',at:1});await h.lore.replaceLines('s',[preview],3);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['user','new','fresh']);
+});
+test('capped reorganization saves only sent notes, preserves concurrent unsent changes and supports Undo',async()=>{
+ const h=await setup(),use=appHarness(),reorg=await use('memory-reorganize.js'),mem=await use('memory-settings.js');
+ const e=h.lines.makeEntry('characters','Mira',{id:'mira'}),history=Array.from({length:12},(_,i)=>({id:'m'+(i+1),order:i+1,role:i%2?'assistant':'user',revision:0,content:'Story '+i}));
+ e.sections.status.lines=Array.from({length:6},(_,i)=>({id:'n'+(i+1),text:'Saved note '+(i+1),turn:i+1,src:(i+1)*2,by:'auto',at:i+1,evidence:[{id:'m'+(i+1)*2,order:(i+1)*2,revision:0}]}));
+ e.sections.status.lines.push({id:'manual',text:'My note',by:'user',at:1});await h.lore.createEntry('s',e);
+ const path=h.sessionPath+'/lore/mira',live={settings:{maxContextTokens:50000,maxResponseTokens:2000},session:{id:'s'},mem:mem.normalizeMemory({loreNotesPerSection:2}),messages:history};
+ const result=await reorg.runReorganizeBatch(live,[e],{mira:['status']},'',{count:async t=>t.length,complete:async options=>{
+   assert.doesNotMatch(JSON.stringify(options.messages),/Saved note [1234]/);
+   const current=h.documents.get(path);current.sections.status.lines[0].text='Edited unsent note';current.sections.status.lines=current.sections.status.lines.filter(l=>l.id!=='n2');current.sections.status.lines.push({id:'late',text:'Concurrent note',by:'auto',at:100});
+   return {content:'T6 [char] Mira | status: Consolidated latest notes.'};
+ }});
+ assert.deepEqual(JSON.parse(JSON.stringify(result.previews[0].sent.status.map(l=>l.id))),['n5','n6']);
+ const backup=await h.lore.replaceLines('s',result.previews,20),saved={id:'mira',...h.documents.get(path)},lines=saved.sections.status.lines;
+ assert.deepEqual(lines.filter(l=>l.by!=='reorganize').map(l=>l.id),['manual','n1','n3','n4','late']);assert.equal(lines.find(l=>l.id==='n1').text,'Edited unsent note');assert.equal(lines.filter(l=>l.by==='reorganize').length,1);
+ await h.lore.restoreBackup('s',backup,[saved]);const restored=h.documents.get(path).sections.status.lines;
+ assert.ok(restored.some(l=>l.id==='n5'));assert.ok(restored.some(l=>l.id==='n6'));assert.ok(restored.some(l=>l.id==='late'));assert.equal(restored.some(l=>l.id==='n2'),false);assert.equal(restored.find(l=>l.id==='n1').text,'Edited unsent note');
 });
 test('L1 content edits cap the edit log without pausing and scene corrections create revisioned invalidations',async()=>{
  const h=await setup(),a=await h.api.addMessage('s',{role:'assistant',content:'Story'});h.documents.get(h.sessionPath).memoryState={extractedThroughOrder:a.order};for(let i=0;i<25;i++)await h.api.editMessage('s',a.id,'Story '+i,a.order);const session=h.documents.get(h.sessionPath);assert.equal(session.contentEdits.length,20);assert.ok(session.contentEditsFloor>0);assert.notEqual(session.memoryState.paused,true);const n=session.memoryInvalidations.length,revision=(await h.api.getMessages('s'))[0].revision;await h.api.updateMessageScene('s',a.id,a.order,'date: Day 1 · time: night · place: Inn · present: Mira');assert.equal(h.documents.get(h.sessionPath).memoryInvalidations.length,n+1);assert.equal((await h.api.getMessages('s'))[0].revision,revision+1);

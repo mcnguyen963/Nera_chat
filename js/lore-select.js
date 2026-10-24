@@ -5,11 +5,12 @@ import { renderPlanUnit } from './scheduled-plan.js';
 import { maxOf } from './math-utils.js';
 import { prompts, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
-import { normalizeName, STOPLIST, COMMON_ALIAS_WORDS, SECTION_KEYS } from './lore-lines.js';
+import { normalizeName, STOPLIST, COMMON_ALIAS_WORDS, SECTION_KEYS, sortLines } from './lore-lines.js';
 import { stripTurnStamps } from './story-text.js';
 import {threadSummary} from './thread-lifecycle.js';
+import { capLoreNotes, noteOmissions, fittedNoteStats } from './lore-note-window.js';
+export { sortLines } from './lore-lines.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
-export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? (a.by==='user'?Infinity:0))-(b.turn ?? (b.by==='user'?Infinity:0))||(a.at ?? 0)-(b.at ?? 0)); }
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function buildLoreIndex(entries) {
   const index = { entries, characters:[], locations:[], facts:[], events:[] };
@@ -166,7 +167,8 @@ export function renderEntry(entry, lineIds = null, protagonist = '', { provenanc
   }
   return out.join('\n');
 }
-export async function fitBook(selected, budget, count, { protagonist = '', events = false, provenance = false, requiredIds=[] } = {}) {
+export async function fitBook(selected, budget, count, { protagonist = '', events = false, provenance = false, requiredIds=[], loreNotesPerSection=3 } = {}) {
+  selected=selected.map(item=>({...item,entry:capLoreNotes(item.entry,loreNotesPerSection)}));
   if(selected.length && selected.every(item=>item.entry.book==='characters'))return fitLegacyCharacters(selected,budget,count,{protagonist,provenance,requiredIds});
   const cap = Math.floor(Math.max(0,budget)*.98), included = [], skipped = []; let used = 0;
   for (const item of selected) {
@@ -198,9 +200,9 @@ export async function fitBook(selected, budget, count, { protagonist = '', event
     else { const e = included.pop(); skipped.push({ entryId:e.entry.id, book:e.entry.book, name:e.entry.name, ranking:e.ranking, reason:'over budget' }); }
     text = included.map(e => renderEntry(e.entry,e.lineIds,protagonist,{provenance})).join('\n\n'); actual = await count(text);
   }
-  for (const e of included) { e.linesSent = e.lineIds.size; e.linesCut = Object.values(e.entry.sections).reduce((n,s) => n+(s.lines?.length ?? 0),0)-e.linesSent; e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist,{provenance})); }
+  for (const e of included) { Object.assign(e,fittedNoteStats(e.entry,e.lineIds)); e.tokens = await count(renderEntry(e.entry,e.lineIds,protagonist,{provenance})); }
   const userLinesCut=selected.reduce((n,item)=>n+Object.values(item.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user' && !included.find(e=>e.entry.id===item.entry.id)?.lineIds.has(l.id)).length,0);
-  return { included, skipped, text, tokens:actual,userLinesCut, cut:included.reduce((n,e) => n+e.linesCut,0) };
+  return { included, skipped, text, tokens:actual,userLinesCut, noteOmissions:selected.flatMap(i=>noteOmissions(i.entry)),cut:included.reduce((n,e) => n+e.linesCut,0) };
 }
 async function fitLegacyCharacters(selected,budget,count,options) {
   const records=selected.map(item=>({...item,identity:false,lineIds:new Set(),queue:sortLines(Object.values(item.entry.sections).flatMap(s=>s.lines ?? [])).reverse().sort((a,b)=>Number(b.by==='user')-Number(a.by==='user'))}));
@@ -214,11 +216,11 @@ async function fitLegacyCharacters(selected,budget,count,options) {
   const characterBudget=await allocateCharacterPools(records,Math.max(0,budget),count,renderOne,fill,options),included=[],skipped=[];
   for(const r of records){
     if(!r.identity){skipped.push({entryId:r.entry.id,book:'characters',name:r.entry.name,ranking:r.ranking,reason:'over budget; complete character background does not fit'});continue;}
-    included.push({...r,linesSent:r.lineIds.size,linesCut:r.queue.length-r.lineIds.size,tokens:await count(renderOne(r))});
+    included.push({...r,...fittedNoteStats(r.entry,r.lineIds),tokens:await count(renderOne(r))});
   }
   const text=records.map(renderOne).filter(Boolean).join('\n\n');
   const userLinesCut=records.reduce((n,r)=>n+r.queue.filter(line=>line.by==='user'&&!r.lineIds.has(line.id)).length,0);
-  return {text,included,skipped,tokens:await count(text),userLinesCut,cut:included.reduce((n,r)=>n+r.linesCut,0),characterBudget};
+  return {text,included,skipped,tokens:await count(text),userLinesCut,noteOmissions:selected.flatMap(i=>noteOmissions(i.entry)),cut:included.reduce((n,r)=>n+r.linesCut,0),characterBudget};
 }
 export function renderFactsBlock(fit) { return fit.text ? prompts.factsHeader+'\n'+fit.text : ''; }
 export function renderEventsBlock(fit, { provenance = false } = {}) {

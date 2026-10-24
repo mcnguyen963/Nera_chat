@@ -17,7 +17,7 @@ const get = key => document.getElementById('mem-'+key);
 const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
 const seedKeys = ['date','time','place','present'];
-const numbers = ['loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
+const numbers = ['loreNotesPerSection','loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
 let filled = null, rebuildNotice = null;
 export function fillMemory(raw) {
   filled = normalizeMemory(raw);

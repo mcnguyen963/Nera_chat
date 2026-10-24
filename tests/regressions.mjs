@@ -51,7 +51,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     if (!elements.has(id)) {
       const element = new Element();
       element.id = id;
-      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-thinking': 0, 'set-summarizer-chunk': 2000, 'mem-loreLookbackMessages': 0, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
+      const mins = { 'set-rewrite-n': 0, 'set-max-resp': 1, 'set-reasoning-maxtokens': 1, 'set-max-context': 256, 'set-auto-threshold': 1, 'set-keep-n': 0, 'set-summarizer-maxtokens': 256, 'set-summarizer-thinking': 0, 'set-summarizer-chunk': 2000, 'mem-loreNotesPerSection': 0, 'mem-loreLookbackMessages': 0, 'mem-batchTurns': 2, 'mem-lagTurns': 0, 'mem-updateMaxTokens': 256, 'mem-reorganizeMaxTokens': 256, 'mem-blockDepth': 1, 'mem-characters-budget': 0, 'mem-locations-budget': 0, 'mem-facts-budget': 0, 'mem-events-budget': 0, 'mem-characters-maxCards': 1, 'mem-locations-maxCards': 1 };
       if (id in mins) element.dataset.min = String(mins[id]);
       if (id === 'set-auto-threshold') element.dataset.max = '100';
       elements.set(id, element);
@@ -211,7 +211,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   stubs['lore-store.js'].readLoreEntry=async(_sid,id)=>structuredClone(calls.loreEntries?.find(e=>e.id===id) ?? null);
   stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{loreSnapshots.delete(uid+':'+sid);};
   Object.assign(stubs,extraStubs);
-  if(chatCache)stubs['chat-cache.js']={replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
+  if(chatCache)stubs['chat-cache.js']={replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
   const cache = new Map();
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
@@ -1756,6 +1756,20 @@ test('lore message lookback hydrates, stages and saves per story while rejecting
  for(const value of ['-1','1.5','not a number']){h.el('mem-loreLookbackMessages').value=value;await h.fire('btn-save-session');assert.match(h.el('settings-saved-msg').textContent,/whole number/);assert.equal(h.calls.sessionWrites.length,count);}
 });
 
+test('generated note limit stages, saves, reloads independently by story and rejects invalid input',async()=>{
+ const h=await harness();h.calls.sessionDocs={one:{id:'one',title:'One',memory:{}},two:{id:'two',title:'Two',memory:{loreNotesPerSection:7}}};h.state.sessionId='one';
+ const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await new Promise(r=>setImmediate(r));
+ assert.equal(Number(h.el('mem-loreNotesPerSection').value),3);
+ h.el('mem-loreNotesPerSection').value='2';await h.fire('nav-story');await h.fire('nav-memory');assert.equal(Number(h.el('mem-loreNotesPerSection').value),2);
+ await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreNotesPerSection'],2);
+ h.calls.sessionDocs.one.memory.loreNotesPerSection=2;
+ h.state.sessionId='two';await h.document.dispatchEvent({type:'session-changed',detail:{sessionId:'two',session:h.calls.sessionDocs.two}});assert.equal(Number(h.el('mem-loreNotesPerSection').value),7);
+ h.el('mem-loreNotesPerSection').value='0';await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreNotesPerSection'],0);
+ const saves=h.calls.sessionWrites.length;
+ for(const value of ['-1','1.5','not a number','9007199254740992']){h.el('mem-loreNotesPerSection').value=value;await h.fire('btn-save-session');assert.match(h.el('settings-saved-msg').textContent,/whole number/);assert.equal(h.calls.sessionWrites.length,saves);}
+ h.state.sessionId='one';await h.document.dispatchEvent({type:'session-changed',detail:{sessionId:'one',session:h.calls.sessionDocs.one}});assert.equal(Number(h.el('mem-loreNotesPerSection').value),2);
+});
+
 test('character selection captures the exact sent request and keeps its report after preview changes',async()=>{
   const h=await harness(),lore=await h.use('lore-lines.js'),core=await h.use('character-core.js'),e=lore.makeEntry('characters','Mira',{id:'mira',alwaysLoad:true});
   e.sections.personality.text='Independent; cannot command the council.';e.sections.appearance.text='Silver eyes.';e.sections.notes.text='Background '.repeat(100);e.coreReferences=[core.reviewCore(e,[core.coreSource(e,'personality'),core.coreSource(e,'appearance')])];h.calls.loreEntries=[e];
@@ -2611,6 +2625,8 @@ test('Sync resolves a persisted stale-save conflict after reload and removes dep
  assert.deepEqual(second.chat.memorySnapshot().messages.map(m=>m.content),['Old history','Phone reply']);
  assert.equal(await second.cache.storyQueueStorage.load(uid,sid),null);assert.ok(await second.cache.storyQueueStorage.load(uid,'other'));assert.equal(unsaved.has(uid+':'+sid),false);
  assert.equal(second.h.calls.requests.length,0);
+ const recovery=(await second.cache.loadStoryData(uid,sid)).deviceRecoveryBackups;
+ assert.ok(recovery.some(b=>b.snapshot.messages.some(m=>m.content==='Dependent local reply')),'Sync must keep the discarded local branch recoverable');
  const third=await open('back_forward');assert.equal(third.store.status.pending,0);assert.equal(third.store.view.messages.at(-1).content,'Phone reply');
 });
 
@@ -3142,4 +3158,97 @@ for(const change of ['story','account','away-back'])test('Dismiss rebuild after 
  wait.resolve();await saving;
  assert.equal(store.status.paused,false);assert.equal(refreshes,0);assert.equal(store.confirmed.session.memoryState.needsRebuild,true);
  assert.notEqual(chat.memorySnapshot()?.session.memoryState?.needsRebuild,false);
+});
+
+async function deviceUploadChat() {
+ const {appHarness}=await import('./app-harness.mjs'),pure=await appHarness({stubs:{'db.js':{db:{}},'auth.js':{currentUid:()=> 'test-user'},'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{}}})('device-story-upload.js');
+ const saved=new Map();let h;
+ const chatCache={loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},
+  loadStoryData:async(uid,sid)=>structuredClone(saved.get(uid+':'+sid) ?? null),
+  saveStoryData:async(uid,sid,data)=>{const key=uid+':'+sid;saved.set(key,{...saved.get(key),...structuredClone(data)});return true;},
+  saveDeviceRecoveryBackup:async(...args)=>{(h.calls.deviceBackups ??= []).push(structuredClone(args));return !h.calls.failDeviceBackup;},
+  replaceStoryCache:async(...args)=>{await h.calls.onDeviceCache?.();if(h.calls.failDeviceCache)throw Error('Cache failed');(h.calls.deviceReplacements ??= []).push(structuredClone(args));},
+ };
+ h=await harness({chatCache,extraStubs:{'device-story-upload.js':{deviceStoryCopies:pure.deviceStoryCopies,validateDeviceStory:pure.validateDeviceStory,
+  uploadDeviceStory:async(copy,options)=>{
+   (h.calls.deviceUploads ??= []).push(structuredClone(copy));await h.calls.onDeviceUpload?.();
+   const session={...copy.session,historyRevision:20,loreRevision:10,storySettingsRevision:10},loreSnapshot={...copy.loreSnapshot,entries:copy.lore,initialized:true,loadedRevision:10,lastCommittedRevision:10};
+   const ranges=[{id:'device-chunk',firstOrder:copy.messages[0].order,lastOrder:copy.messages.at(-1).order}];
+   return {session,messages:copy.messages,storySettings:{...copy.storySettings,revision:10},loreSnapshot,turns:{},messageSnapshot:{messages:copy.messages,records:[],chunkRanges:ranges},backupId:'cloud-backup',cloudBackup:{...copy,session:{...copy.session,title:'Previous cloud copy'}}};
+  }}}});
+ const {makeEntry}=await h.use('lore-lines.js'),card=makeEntry('facts','Phone canon');card.sections.text.text='Preserve this author canon.';h.calls.loreEntries=[card];
+ const chat=await openImprovementChat(h,{memory:{lorebooks:true,autoUpdate:true},memoryState:{extractedThroughOrder:2}},[{id:'u',order:1,revision:0,role:'user',content:'Phone action'},{id:'a',order:2,revision:0,role:'assistant',content:'Phone reply',thinking:'Private thinking'}]);
+ h.state.storySettings.values.narratorSystemPrompt='Phone custom prompt';await chat.prepareMemorySnapshot();await settle();
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');
+ const open=async()=>{await chat.openDeviceStoryUpload();return h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);};
+ return {h,chat,store,open,card};
+}
+
+test('Device upload preview reads only local copies and cancellation makes no cloud or model calls',async()=>{
+ const {h,open}=await deviceUploadChat(),before={history:h.calls.historyReads,session:h.calls.sessionReads,lore:h.calls.loreReads},root=await open();
+ assert.ok(root.querySelector('select'));assert.ok(namedButton(root,'Download device backup'));
+ h.calls.confirm=false;await namedButton(root,'Replace Firebase with this copy').click();
+ assert.equal(h.calls.deviceUploads,undefined);assert.equal(h.calls.deviceBackups,undefined);assert.equal(h.calls.requests.length,0);
+ assert.deepEqual({history:h.calls.historyReads,session:h.calls.sessionReads,lore:h.calls.loreReads},before);
+});
+
+test('Force device upload bypasses a stale queue conflict, preserves the whole local branch and clears it only after the cloud save',async()=>{
+ const {h,chat,store,open,card}=await deviceUploadChat();let attempts=0;
+ h.calls.addMessage=async()=>{attempts++;throw Object.assign(Error('Stale save'),{code:'story-conflict'});};
+ store.enqueue('add',{id:'lost-u',message:{role:'user',content:'My lost action'}});store.enqueue('add',{id:'lost-a',message:{role:'assistant',content:'My lost reply'}});await assert.rejects(store.flush());await store.settled();
+ const root=await open(),wait=deferred();h.calls.onDeviceUpload=()=>wait.promise;const saving=namedButton(root,'Replace Firebase with this copy').click();await settle();
+ assert.equal(h.calls.deviceUploads.length,1);assert.equal(store.status.pending,2);assert.equal(store.status.paused,true);const tried=attempts;
+ const upload=h.calls.deviceUploads[0];assert.equal(upload.messages.length,4);assert.equal(upload.messages.at(-1).content,'My lost reply');assert.equal(upload.messages[1].thinking,'Private thinking');
+ assert.equal(upload.storySettings.values.narratorSystemPrompt,'Phone custom prompt');assert.equal(upload.lore[0].sections.text.text,card.sections.text.text);
+ wait.resolve();await saving;
+ assert.equal(attempts,tried,'force upload must not retry the stale queue first');assert.equal(store.status.pending,0);assert.equal(store.status.paused,false);
+ assert.equal(chat.memorySnapshot().messages.at(-1).content,'My lost reply');assert.equal(chat.memorySnapshot().session.historyRevision,20);assert.equal(h.state.storySettings.revision,10);
+ assert.equal(h.calls.deviceReplacements[0][4].discardPending,true);assert.equal(h.calls.requests.length,0);
+ assert.match(root.querySelectorAll('p')[0].textContent,/Uploaded to Firebase/);assert.equal(namedButton(root,'Download previous cloud backup').hidden,false);
+});
+
+test('Force device upload keeps pending local turns and releases the queue when the cloud upload fails',async()=>{
+ const {h,chat,store,open}=await deviceUploadChat();h.calls.onDeviceUpload=()=>{throw Error('Offline');};const before=structuredClone(chat.memorySnapshot());
+ const root=await open();await namedButton(root,'Replace Firebase with this copy').click();
+ assert.deepEqual(chat.memorySnapshot().messages,before.messages);assert.equal(store.status.paused,false);assert.equal(h.calls.deviceReplacements,undefined);assert.equal(h.calls.requests.length,0);
+ assert.match(root.querySelectorAll('p')[0].textContent,/Offline/);assert.equal(h.calls.deviceBackups.length,1);
+});
+
+test('Force device upload detects changes after preview and never uploads a stale phone snapshot',async()=>{
+ const {h,chat,store,open}=await deviceUploadChat(),root=await open();
+ store.enqueue('add',{id:'new-action',message:{role:'user',content:'Newer phone action'}});await store.flush();
+ await namedButton(root,'Replace Firebase with this copy').click();assert.equal(h.calls.deviceUploads,undefined);
+ assert.equal(chat.memorySnapshot().messages.at(-1).content,'Newer phone action');assert.match(root.querySelectorAll('p')[0].textContent,/changed after the preview/);
+});
+
+test('Force device upload requires a device backup before any cloud call when local storage is unavailable',async()=>{
+ const {h,store,open}=await deviceUploadChat();h.calls.failDeviceBackup=true;const root=await open();await namedButton(root,'Replace Firebase with this copy').click();
+ assert.equal(h.calls.deviceUploads,undefined);assert.equal(store.status.paused,false);assert.match(root.querySelectorAll('p')[0].textContent,/Download the device backup/);
+ await namedButton(root,'Download device backup').click();await namedButton(root,'Replace Firebase with this copy').click();assert.equal(h.calls.deviceUploads.length,1);
+});
+
+test('Force device upload reports committed cloud data and retains the queue if local cache replacement fails',async()=>{
+ const {h,chat,store,open}=await deviceUploadChat();h.calls.failDeviceCache=true;const before=structuredClone(chat.memorySnapshot()),root=await open();
+ await namedButton(root,'Replace Firebase with this copy').click();assert.equal(h.calls.deviceUploads.length,1);assert.equal(store.status.paused,true);assert.equal(store.requiresReconciliation,true);
+ assert.deepEqual(chat.memorySnapshot().messages,before.messages);assert.match(root.querySelectorAll('p')[0].textContent,/upload reached Firebase/);
+});
+
+test('Force device upload cannot apply an old account result to a new account',async()=>{
+ const {h,chat,store,open}=await deviceUploadChat(),root=await open(),wait=deferred();h.calls.onDeviceUpload=()=>wait.promise;
+ const saving=namedButton(root,'Replace Firebase with this copy').click();await settle();h.calls.uid='new-account';wait.resolve();await saving;
+ assert.equal(h.calls.deviceReplacements,undefined);assert.notEqual(chat.memorySnapshot()?.session.historyRevision,20);assert.equal(store.requiresReconciliation,true);
+});
+
+test('Force device upload preserves the local queue when the cloud outcome cannot be confirmed',async()=>{
+ const {h,chat,store,open}=await deviceUploadChat(),root=await open(),before=structuredClone(chat.memorySnapshot());
+ h.calls.onDeviceUpload=()=>{throw Object.assign(Error('Cloud result could not be confirmed'),{uploadUncertain:true});};
+ await namedButton(root,'Replace Firebase with this copy').click();assert.equal(store.status.paused,true);assert.equal(store.requiresReconciliation,true);assert.equal(h.calls.deviceReplacements,undefined);
+ assert.deepEqual(chat.memorySnapshot().messages,before.messages);assert.match(root.querySelectorAll('p')[0].textContent,/could not be confirmed/);
+});
+
+test('Sync refuses to discard conflicted local work if its recovery backup cannot be saved',async()=>{
+ const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},saveDeviceRecoveryBackup:async()=>false}}),chat=await openImprovementChat(h,{},[{id:'a',role:'assistant',order:1,content:'Opening'}]);await settle();
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.addMessage=async()=>{throw Object.assign(Error('Stale save'),{code:'story-conflict'});};
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'lost',message:{role:'user',content:'Do not lose this local action'}});await assert.rejects(store.flush());
+ assert.equal(await chat.syncChatData(),false);assert.equal(store.status.pending,1);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Do not lose this local action');assert.equal(h.calls.requests.length,0);
 });

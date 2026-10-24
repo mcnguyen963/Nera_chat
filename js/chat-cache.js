@@ -102,6 +102,12 @@ export async function cachedSessionIds(uid){
 // Auxiliary data contains story content only, never provider connection settings.
 export async function loadStoryData(uid,sid) {return readRecord('storyData',`${uid}:${sid}`);}
 export async function saveStoryData(uid,sid,value) {return writeRecords(['storyData'],tx=>(()=>{const store=tx.objectStore('storyData'),key=`${uid}:${sid}`,r=store.get(key);r.onsuccess=()=>store.put({key,value:{...r.result?.value,...value}});})());}
+export async function saveDeviceRecoveryBackup(uid,sid,snapshot) {
+  return writeRecords(['storyData'],tx=>{
+    const store=tx.objectStore('storyData'),key=`${uid}:${sid}`,request=store.get(key);
+    request.onsuccess=()=>{const value=request.result?.value ?? {},backup={at:new Date().toISOString(),snapshot};store.put({key,value:{...value,deviceRecoveryBackups:[backup,...(value.deviceRecoveryBackups ?? [])].slice(0,3)}});};
+  });
+}
 async function readRecord(store,key) {const db=await database();if(!db)return null;return new Promise(resolve=>{const tx=db.transaction(store,'readonly'),r=tx.objectStore(store).get(key);r.onsuccess=()=>resolve(r.result?.value ?? null);r.onerror=()=>resolve(null);});}
 async function writeRecords(stores,action) {const db=await database();if(!db)return false;return new Promise(resolve=>{try{const tx=db.transaction(stores,'readwrite');action(tx);tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>resolve(false);}catch{resolve(false);}});}
 export const loadLoreCache=(uid,sid)=>readRecord('loreCache',`${uid}:${sid}`);
