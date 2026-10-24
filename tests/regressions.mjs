@@ -1330,9 +1330,12 @@ test('the current checkpoint divider marks the covered-history boundary and disa
  await h.document.dispatchEvent({type:'reset-summary'});assert.equal(list.querySelector('.checkpoint-divider'),null);assert.equal(list.querySelector('[data-message-id="sum"]').querySelector('.msg-meta').querySelector('span').textContent,'Summary checkpoint');
 });
 
-test('Q3 P0.14 omitted history indicator shows turns not sent with actionable tooltip',async()=>{
+test('Q3 P0.14 omitted history indicator shows turns not sent with actionable tooltip',{timeout:10000},async()=>{
   const h=await harness(),history=Array.from({length:40},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'story '+i+' '+ 'x'.repeat(300)}));
-  const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:3000,maxResponseTokens:100,autoSummarizationEnabled:false});await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,10));
+  const chat=await openImprovementChat(h,{},history);Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',maxContextTokens:3000,maxResponseTokens:100,autoSummarizationEnabled:false});
+  // Background preparation can yield across tasks; wait for its result on slower CI runners.
+  const updated=new Promise(resolve=>h.document.addEventListener('token-usage-changed',resolve));
+  await chat.updateIndicator();await updated;
   assert.match(h.el('context-label').textContent,/input \/ [\d,]+ tokens/);assert.doesNotMatch(h.el('context-label').textContent,/max reply/);
   assert.match(h.el('context-label').textContent,/\d+ turns not sent/);assert.match(h.el('context-label').title,/Older turns no longer fit/);assert.match(h.el('context-label').title,/Turn on auto-summary or run Summarize/);
 });
