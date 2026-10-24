@@ -567,7 +567,7 @@ async function reorganize(cards) {
   const cost = node('p','Estimating…','muted'); body.append(cost); let plan;
   const getSections = () => Object.fromEntries(cards.map(e => [e.id,Object.entries(selectedSections[e.id]).filter(([,input]) => input.checked).map(([key]) => key)]));
   const build = async () => planReorganize({ ...snapshot,mem },cards.filter(e => selectedCards[e.id].checked),getSections(),instruction.input.value);
-  async function estimate() { try { plan = await build(); cost.textContent = `${plan.batches.length} model call${plan.batches.length === 1 ? '' : 's'} · about ${plan.inputTokens.toLocaleString()} input tokens.`; } catch (e) { cost.textContent = e.message; } }
+  async function estimate() { try { plan = await build(); cost.textContent = `${plan.batches.length} model call${plan.batches.length === 1 ? '' : 's'} · about ${plan.inputTokens.toLocaleString()} input tokens.${plan.warnings.length ? '\n'+plan.warnings.join('\n') : ''}`; } catch (e) { cost.textContent = e.message; } }
   body.addEventListener('change',estimate); void estimate();
   body.append(button('Cancel',s.hide),button('Reorganize',async b => {
     b.disabled = true;
@@ -582,10 +582,11 @@ async function reorganize(cards) {
         try {
           const result = await runReorganizeBatch({ ...snapshot,mem },batch,sections,extra,{ signal:controller.signal,onDelta:t => { tail = (tail+t).slice(-2000); cost.textContent = `Reorganizing ${i+1} of ${plan.batches.length}…\n${tail}`; } });
           for (const preview of result.previews) {
-            const original = cards.find(e => e.id === preview.entry.id), sent = batch.find(e => e.id === preview.entry.id);
+            const original = cards.find(e => e.id === preview.entry.id);
             for (const key of Object.keys(preview.sections)) {
-              const sentIds = new Set(sent.sections[key].lines.map(l => l.id));
-              const untouched = original.sections[key].lines.filter(l => l.by !== 'user' && !sentIds.has(l.id));
+              const sentIds = new Set((preview.sent[key] ?? []).map(l => l.id));
+              const returnedIds = new Set(preview.sections[key].map(l=>l.id));
+              const untouched = original.sections[key].lines.filter(l => l.by !== 'user' && !sentIds.has(l.id) && !returnedIds.has(l.id));
               preview.sections[key] = [...untouched,...preview.sections[key]];
             }
             preview.snapshot=Object.fromEntries(Object.entries(original.sections).map(([key,section])=>[key,section.lines.map(l=>l.id)]));

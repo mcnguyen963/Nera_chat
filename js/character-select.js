@@ -2,6 +2,7 @@ import { allocateCharacterPools, characterPoolReport } from './character-budget.
 import { renderEntry, sortLines } from './lore-select.js';
 import { SECTION_KEYS, normalizeName } from './lore-lines.js';
 import { resolveCore } from './character-core.js';
+import { capLoreNotes, noteOmissions, fittedNoteStats } from './lore-note-window.js';
 const GENERIC = new Set(('a an the and or but if when then of to in on for with from by as at is are was were be been being has have had do does did not no can could will would may might must shall should his her their its he she they it you your we our i me my this that these those who what how where now only also very more most some all any each own said says character person people story scene turn personality appearance status notes bond relations').split(' '));
 const words = text => new Set((normalizeName(text).match(/[\p{L}\p{N}]+/gu) ?? []).filter(w => w.length > 2 && !GENERIC.has(w)));
 export function detailMatches(text, currentText, recentText, entry) {
@@ -70,7 +71,8 @@ function sourceCoverage(source, chosen) {
   if(cursor<source.end)omitted.push(part(cursor,source.end));
   return {...source,included,omitted};
 }
-export async function fitCharacters(selected, budget, count, {protagonist='',currentText='',recentText='',requiredIds=[]} = {}) {
+export async function fitCharacters(selected, budget, count, {protagonist='',currentText='',recentText='',requiredIds=[],loreNotesPerSection=3} = {}) {
+  selected=selected.map(item=>({...item,entry:capLoreNotes(item.entry,loreNotesPerSection)}));
   const cap=Math.max(0,budget), records=selected.map(item=>({...item,...resolveCharacterUnits(item.entry,currentText,recentText),chosen:[],identity:false}));
   const render=()=>records.filter(r=>r.identity).map(r=>renderCharacterSelection(r.entry,r.chosen,protagonist)).join('\n\n');
   const full=selected.map(i=>renderEntry(i.entry,null,protagonist)).join('\n\n'), fullFit=await count(full)<=cap;
@@ -102,13 +104,12 @@ export async function fitCharacters(selected, budget, count, {protagonist='',cur
   const text=fullFit ? full : render(), included=[],skipped=[],report=[];
   for(const r of records) {
     const chosen=new Set(r.chosen.map(u=>u.id)),lineIds=new Set(r.chosen.flatMap(u=>u.sources.filter(s=>s.lineId!=null).map(s=>s.lineId)));
-    const total=Object.values(r.entry.sections).reduce((n,s)=>n+(s.lines?.length ?? 0),0);
     const coverage=new Set(r.chosen.flatMap(u=>u.coverage));
     const rendered=r.identity ? renderCharacterSelection(r.entry,r.chosen,protagonist) : '';
-    if(r.identity)included.push({...r,lineIds,linesSent:lineIds.size,linesCut:total-lineIds.size,tokens:await count(rendered)});
+    if(r.identity)included.push({...r,lineIds,...fittedNoteStats(r.entry,lineIds),tokens:await count(rendered)});
     else skipped.push({entryId:r.entry.id,book:'characters',name:r.entry.name,ranking:r.ranking,reason:'identity over budget'});
     report.push({entryId:r.entry.id,name:r.entry.name,identity:r.identity,full:fullFit,coreCoverage:{personality:coverage.has('personality'),constraints:coverage.has('constraints'),appearance:coverage.has('appearance')},missingCoverage:['personality','constraints','appearance'].filter(k=>!coverage.has(k)),invalidCores:r.invalid,text:rendered,units:r.units.map(u=>({id:u.id,round:u.round,selected:chosen.has(u.id),reason:chosen.has(u.id) ? u.reason : r.identity ? 'unit over budget' : 'identity over budget',currentMatches:u.current,recentMatches:u.recent,authorPreference:u.author,recency:u.recency,sources:u.sources.map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end,text:s.text,...sourceCoverage(s,r.chosen)}))}))});
   }
   const userLinesCut=records.reduce((n,r)=>n+Object.values(r.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user' && !included.find(i=>i.entry.id===r.entry.id)?.lineIds.has(l.id)).length,0);
-  return {text,included,skipped,tokens:await count(text),cut:included.reduce((n,r)=>n+r.linesCut,0),userLinesCut,characterBudget,selectionReport:{budget:cap,fullFit,characters:report}};
+  return {text,included,skipped,tokens:await count(text),cut:included.reduce((n,r)=>n+r.linesCut,0),userLinesCut,noteOmissions:selected.flatMap(i=>noteOmissions(i.entry)),characterBudget,selectionReport:{budget:cap,fullFit,characters:report}};
 }

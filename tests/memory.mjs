@@ -21,7 +21,7 @@ async function setup(stubs = {}, globals = {}) {
 const count = async text => text.length;
 const settings = { narratorSystemPrompt:'Narrate.',maxContextTokens:230000,maxResponseTokens:8192 };
 const messages = Array.from({ length:12 },(_,i) => ({ id:'m'+(i+1),order:i+1,role:i%2 ? 'assistant' : 'user',content:'text '+i,scene:i%2 ? 'Day '+Math.ceil((i+1)/2)+' · night · Inn · present: Nera, Mira' : null,tokenCount:6 }));
-function line(id,text,turn,by = 'auto') { return { id,text,turn,when:turn ? 'Day '+turn : null,src:turn ? turn*2 : null,by,at:turn ?? 0 }; }
+function line(id,text,turn,by = 'auto') { return { id,text,turn,when:turn ? 'Day '+turn : null,src:turn ? turn*2 : null,by,at:turn ?? 0,evidence:turn ? [{id:'m'+turn*2,order:turn*2,revision:0}] : [] }; }
 
 test('memory defaults are off, deep normalized, bounded and request activity excludes collection alone',async () => {
   const use = await setup(), { normalizeMemory,memoryActive } = await use('memory-settings.js');
@@ -464,9 +464,9 @@ test('JSON and Markdown version 2 preserve evidence, classification and review m
 });
 test('reorganized lines retain matched evidence and omitted inputs remain in the preview source',async () => {
   const use = await setup({ 'tokenizer.js':{ countTokens:count },'llm-client.js':{ chatCompletion:async () => ({ content:'T2 [char] Mira | status: Still at Inn; departure only intended.' }) } }), r = await use('memory-reorganize.js'), l = await use('lore-lines.js'), { normalizeMemory } = await use('memory-settings.js');
-  const e = l.makeEntry('characters','Mira'); e.sections.status.lines = [{ ...line('a','At Inn',1),evidence:[{ id:'u',revision:1,order:1 }] },{ ...line('b','Intends departure',2),evidence:[{ id:'a',revision:0,order:4 }] }];
+  const e = l.makeEntry('characters','Mira'); e.sections.status.lines = [{ ...line('a','At Inn',1),evidence:[{ id:'m2',revision:0,order:2 }] },{ ...line('b','Intends departure',2),evidence:[{ id:'m4',revision:0,order:4 }] }];
   const result = await r.runReorganizeBatch({ settings,mem:normalizeMemory(),messages },[e],{ [e.id]:['status'] },'');
-  assert.deepEqual(plain(result.previews[0].sections.status[0].evidence),[{ id:'a',revision:0,order:4 }]);
+  assert.deepEqual(plain(result.previews[0].sections.status[0].evidence),[{ id:'m4',revision:0,order:4 }]);
   assert.equal(e.sections.status.lines.length,2); assert.match(result.previews[0].sections.status[0].text,/only intended/);
 });
 

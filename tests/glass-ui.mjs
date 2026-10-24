@@ -41,8 +41,8 @@ test('Context ring fills and gradually shifts from gray to red toward its input 
 test('More routes settings and every existing maintenance action', async () => {
   const {routeTopMenu} = await appHarness()('ui/menu-routing.js');
   const calls = [], handlers = {settings:()=>calls.push('settings'),dispatch:name=>calls.push(name)};
-  for (const name of ['settings','lorebooks','context-details','sync-chat','summarize-full','reset-summary']) assert.equal(routeTopMenu(name,handlers),true);
-  assert.deepEqual(calls,['settings','lorebooks','context-details','sync-chat','summarize-full','reset-summary']);
+  for (const name of ['settings','lorebooks','context-details','sync-chat','upload-device-story','summarize-full','reset-summary']) assert.equal(routeTopMenu(name,handlers),true);
+  assert.deepEqual(calls,['settings','lorebooks','context-details','sync-chat','upload-device-story','summarize-full','reset-summary']);
   assert.equal(routeTopMenu(undefined,handlers),false); assert.equal(routeTopMenu('unknown',handlers),false);
 });
 

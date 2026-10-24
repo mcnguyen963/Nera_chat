@@ -3,6 +3,7 @@ import { reconcileRecords, resolveRecord, archivedRecord, approvedRecord, validS
 import { renderEntry, findMentions, sortLines } from './lore-select.js';
 import { normalizeName } from './lore-lines.js';
 import { detailMatches } from './character-select.js';
+import { capLoreNotes, noteOmissions, cappedRecordReason, supersededBeforeCap, fittedNoteStats } from './lore-note-window.js';
 
 const overlaps=(a,b)=>a.sourceId===b.sourceId && a.start<b.end && b.start<a.end;
 const phraseMatch=(text,phrase)=>{
@@ -27,12 +28,22 @@ export function renderRecordSelection(entry,records,protagonist='') {
     return [key,{...s,text:merged.map(([a,b])=>s.text.slice(a,b)).join('\n'),lines:(s.lines ?? []).filter(l=>ids.has(l.id))}];
   }));return renderEntry({...entry,sections},null,protagonist);
 }
-export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index}={}) {
-  entry=reconcileRecords(entry);
+export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3}={}) {
+  const complete=reconcileRecords(entry);
+  entry=capLoreNotes(complete,loreNotesPerSection);
+  const direct=new Set(noteOmissions(entry).map(n=>JSON.stringify([n.section,n.lineId]))),companions=new Map();
+  for(const record of complete.recordLayout.records) {
+    const reason=cappedRecordReason(entry,record.id);if(!reason)continue;
+    for(const source of resolveRecord(complete,record).sources) {
+      const key=JSON.stringify([source.section,source.lineId]);
+      if(source.lineId==null || direct.has(key))continue;
+      companions.set(key,{entryId:entry.id,book:entry.book,name:entry.name,section:source.section,lineId:source.lineId,text:source.text,reason:'complete record omitted: '+reason,kind:reason.startsWith('pinned')?'pinned':'ordinary',limit:loreNotesPerSection});
+    }
+  }
   const resolved=entry.recordLayout.records.map(record=>({...record,resolved:resolveRecord(entry,record)}));
-  const replaced=new Set(resolved.filter(r=>validSupersession(entry,r)).flatMap(r=>r.supersedes));
+  const replaced=new Set([...supersededBeforeCap(entry),...resolved.filter(r=>validSupersession(entry,r)).flatMap(r=>r.supersedes)]);
   const units=resolved.map(r=>{
-    const core=approvedRecord(entry,r),matches=detailMatches(r.resolved.text,currentText,recentText,entry);
+    const capReason=cappedRecordReason(entry,r.id),core=approvedRecord(entry,r),matches=detailMatches(r.resolved.text,currentText,recentText,entry);
     const explicitCurrent=(r.triggers ?? []).filter(t=>phraseMatch(currentText,t)),explicitRecent=(r.triggers ?? []).filter(t=>phraseMatch(recentText,t));
     const literalLinks=index ? ['characters','locations','facts','events'].flatMap(book=>findMentions(r.resolved.text,index,book)) : [];
     const linked=[...new Set([...(r.relatedEntryIds ?? []),...literalLinks])].filter(id=>id!==entry.id && anchors.has(id));
@@ -40,7 +51,7 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
     const activeState=r.category==='state'&&anchors.has(entry.id);
     const round=r.pinned||core ? 1 : current||activeState ? 2 : recent||linked.length ? 3 : ['characterization','appearance','relationship','constraint'].includes(r.category)&&anchors.has(entry.id) ? 4 : 5;
     const recency=Math.max(0,...r.resolved.sources.map(s=>s.source.data.turn ?? s.source.data.cutoff?.order ?? s.source.data.at ?? 0));
-    return {...r,core,round,current,recent,linked,recency,author:Number(r.resolved.sources.some(s=>s.source.data.by==='user'||s.source.data.origin==='user')),currentMatches:[...matches.current,...explicitCurrent],recentMatches:[...matches.recent,...explicitRecent],reason:!r.resolved.valid ? r.resolved.reason : replaced.has(r.id) ? 'explicitly superseded' : r.pinned ? 'pinned' : core ? 'approved core' : current ? 'current input match' : activeState ? 'state of relevant subject' : recent ? 'recent conversation match' : linked.length ? 'related subject' : round===4 ? 'selected subject detail' : 'background',blocked:!r.resolved.valid||replaced.has(r.id)};
+    return {...r,core,round,current,recent,linked,recency,author:Number(r.resolved.sources.some(s=>s.source.data.by==='user'||s.source.data.origin==='user')),currentMatches:[...matches.current,...explicitCurrent],recentMatches:[...matches.recent,...explicitRecent],reason:capReason ?? (!r.resolved.valid ? r.resolved.reason : replaced.has(r.id) ? 'explicitly superseded' : r.pinned ? 'pinned' : core ? 'approved core' : current ? 'current input match' : activeState ? 'state of relevant subject' : recent ? 'recent conversation match' : linked.length ? 'related subject' : round===4 ? 'selected subject detail' : 'background'),blocked:!!capReason||!r.resolved.valid||replaced.has(r.id)};
   });
   const cores=units.filter(u=>u.core&&!u.blocked);
   for(const u of units.filter(u=>!u.blocked)) {
@@ -52,7 +63,7 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
     const group=units.filter(u=>!u.blocked&&u.resolved.sources.some(s=>s.section===key));
     if(group.length)units.push({id:'fallback:'+key,category:key==='personality'?'characterization':'appearance',resolved:{valid:true,sources:group.flatMap(u=>u.resolved.sources),text:group.map(u=>u.resolved.text).join('\n')},round:1,core:false,fallback:true,current:0,recent:0,author:1,recency:0,reason:'unreviewed complete '+key+' fallback',linked:[],currentMatches:[],recentMatches:[]});
   }
-  return {entry,units:units.sort((a,b)=>a.round-b.round||b.current-a.current||b.recent-a.recent||b.author-a.author||b.recency-a.recency||a.id.localeCompare(b.id))};
+  return {entry,capCompanions:[...companions.values()],units:units.sort((a,b)=>a.round-b.round||b.current-a.current||b.recent-a.recent||b.author-a.author||b.recency-a.recency||a.id.localeCompare(b.id))};
 }
 export async function fitRecords(selected,budget,count,options={}) {
   const cap=Math.max(0,budget),records=selected.map(item=>({...item,...recordUnits(item.entry,options),chosen:[],identity:false}));
@@ -74,17 +85,18 @@ export async function fitRecords(selected,budget,count,options={}) {
   const included=[],skipped=[],report=[];
   for(const r of records) {
     const chosen=new Set(r.chosen.map(u=>u.id)),lineIds=new Set(r.chosen.flatMap(u=>u.resolved.sources.filter(s=>s.lineId!=null).map(s=>s.lineId)));
-    const total=Object.values(r.entry.sections).reduce((n,s)=>n+(s.lines?.length ?? 0),0),text=r.identity ? renderRecordSelection(r.entry,r.chosen,options.protagonist) : '';
+    r.capCompanions=r.capCompanions.filter(n=>!lineIds.has(n.lineId));
+    const text=r.identity ? renderRecordSelection(r.entry,r.chosen,options.protagonist) : '';
     const selectedEntry=r.identity ? {...r.entry,sections:Object.fromEntries(Object.entries(r.entry.sections).map(([key,s])=>{
       const refs=r.chosen.flatMap(u=>u.resolved.sources).filter(v=>v.section===key),spans=refs.filter(v=>v.lineId==null).sort((a,b)=>a.start-b.start),merged=[];
       for(const v of spans){const last=merged.at(-1);if(last&&v.start<=last[1])last[1]=Math.max(last[1],v.end);else merged.push([v.start,v.end]);}
       return [key,{...s,text:merged.map(([a,b])=>s.text.slice(a,b)).join('\n'),lines:sortLines((s.lines ?? []).filter(l=>lineIds.has(l.id)))}];
     }))} : r.entry;
-    if(r.identity&&r.chosen.length)included.push({...r,entry:selectedEntry,lineIds,linesSent:lineIds.size,linesCut:total-lineIds.size,tokens:await count(text)});
+    if(r.identity&&r.chosen.length)included.push({...r,entry:selectedEntry,lineIds,...fittedNoteStats(r.entry,lineIds,r.capCompanions),tokens:await count(text)});
     else skipped.push({entryId:r.entry.id,book:r.entry.book,name:r.entry.name,ranking:r.ranking,reason:r.identity?'no information fits':'identity over budget'});
     report.push({entryId:r.entry.id,book:r.entry.book,name:r.entry.name,text,identity:r.identity,records:r.units.map(u=>({id:u.id,category:u.category,selected:chosen.has(u.id),core:u.core,pinned:!!u.pinned,coreCandidate:!!u.coreCandidate,reason:u.blocked ? u.reason : chosen.has(u.id) ? u.reason : 'over budget',currentMatches:u.currentMatches,recentMatches:u.recentMatches,linked:u.linked,linkedSubjects:u.linked.map(id=>({entryId:id,name:options.index?.entries.find(e=>e.id===id)?.name ?? id})),sources:(u.resolved.valid?u.resolved.sources:archivedRecord(r.entry,u)).map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end,text:s.text}))}))});
   }
   const text=records.filter(r=>r.identity&&r.chosen.length).map(r=>renderRecordSelection(r.entry,r.chosen,options.protagonist)).join('\n\n');
   const userLinesCut=selected.reduce((n,item)=>n+Object.values(item.entry.sections).flatMap(s=>s.lines ?? []).filter(l=>l.by==='user'&&!included.find(e=>e.entry.id===item.entry.id)?.lineIds.has(l.id)).length,0);
-  return {text,tokens:await count(text),included,skipped,userLinesCut,cut:included.reduce((n,r)=>n+r.linesCut,0),...(characterBudget ? {characterBudget} : {}),recordReport:{budget:cap,entries:report}};
+  return {text,tokens:await count(text),included,skipped,userLinesCut,noteOmissions:records.flatMap(r=>[...noteOmissions(r.entry),...r.capCompanions]),cut:included.reduce((n,r)=>n+r.linesCut,0),...(characterBudget ? {characterBudget} : {}),recordReport:{budget:cap,entries:report}};
 }

@@ -9,6 +9,7 @@ import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
 import { selectEntries, renderEntry, findMentions } from './lore-select.js';
 import { recordUnits } from './lore-record-select.js';
+import { capLoreNotes, noteOmissions } from './lore-note-window.js';
 import * as tokenizer from './tokenizer.js';
 const {countTokens}=tokenizer;
 import { requestInputLimit, MESSAGE_FRAME_TOKENS, REQUEST_FRAME_TOKENS } from './request-budget.js';
@@ -47,6 +48,15 @@ export function directorTaskSettings(settings) {
 export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens}={}) {
   count=cachedCount(count);
   const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session,Infinity,before.scene).entries;
+  const capCompanions=[];
+  const capped=available.map(entry=>{
+    if(entry.schemaVersion!==3)return capLoreNotes(entry,mem.loreNotesPerSection);
+    const selected=recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection});
+    capCompanions.push(...selected.capCompanions);
+    const ids=new Set(selected.units.filter(u=>!u.blocked).flatMap(u=>u.resolved.sources.map(s=>s.lineId)));
+    return {...selected.entry,sections:Object.fromEntries(Object.entries(selected.entry.sections).map(([key,s])=>[key,{...s,lines:s.lines.filter(l=>ids.has(l.id))}]))};
+  });
+  const cappedById=new Map(capped.map(entry=>[entry.id,entry]));
   const raw=messages.filter(m=>['user','assistant'].includes(m.role) && !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order);
   const latest=continuation ? {role:'user',content:'Continue the latest completed narration within player-agency boundaries.'} : raw.findLast(m=>m.role==='user');
   if(!latest)throw new Error('Director needs a user action.');
@@ -54,7 +64,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   for(const m of recent){if(m.role==='user' && pair.length){if(pair.some(x=>x.role==='assistant'))pairs.push(pair);pair=[];}pair.push(m);}
   if(pair.some(x=>x.role==='assistant'))pairs.push(pair);
   let window=pairs.slice(-settings.directorRecentTurns).flat();
-  const index=entityIndex(available);
+  const index=entityIndex(capped);
   const controlMem={...mem,scene:true,lorebooks:true};
   const text=latest.content,recentText=window.map(m=>m.content).join('\n');
   const selection=selectEntries(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3});
@@ -64,12 +74,12 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const candidates=[...new Map([...requested,...selection.selected.characters,...selection.selected.locations,...selection.selected.facts,...selection.selected.events].map(item=>[item.entry.id,item])).values()];
   const protagonist=available.find(e=>e.book==='characters' && e.name===mem.protagonist);
   if(protagonist){const i=candidates.findIndex(item=>item.entry.id===protagonist.id);if(i>=0)candidates.splice(i,1);candidates.unshift({entry:protagonist});}
-  const roster=attendanceHints(available,text,before.scene);
+  const roster=attendanceHints(capped,text,before.scene);
   const control=[...selectScheduledPlan(available,before.scene.date,latest.planJump ?? null).selected.map(item=>({id:item.entry.id,name:item.entry.name,text:renderPlanUnit(item).slice(0,6000)})),...roster];let controlTokens=0;
   while(control.length && await count(JSON.stringify(control))>4500)control.pop();
   controlTokens=await count(JSON.stringify(control));
   for(const {entry} of candidates){
-    const constraints=entry.schemaVersion===3 ? recordUnits(entry,{anchors,currentText:text,recentText,index:selection.index}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(entry,null,mem.protagonist);
+    const constraints=entry.schemaVersion===3 ? recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection,anchors,currentText:text,recentText,index:selection.index}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(cappedById.get(entry.id),null,mem.protagonist);
     const excerpt=constraints.slice(0,6000),tokens=await count(excerpt);
     if(excerpt && controlTokens+tokens<=4500){control.push({id:entry.id,name:entry.name,text:excerpt});controlTokens+=tokens;}
   }
@@ -98,7 +108,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   }
   const usedTokens=await total();
   if(usedTokens>limit)throw new Error('Director state, entity index and latest input exceed its input budget. Increase the Director limit or shorten the live ledger.');
-  return {apiMessages:render(),responseFormat:responseFormat(),entries:available,report:{mode:'director',responseFormat:responseFormat().type,responseSchemaTokens:await schemaCost(),offeredMemoryIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],totals:{input:usedTokens,max:limit},recentMessages:window.map(m=>m.id),controlMemoryIds:control.map(e=>e.id),rosterHints:control.filter(e=>e.kind).map(e=>({group:e.group,memberIds:e.memberIds,source:e.source})),focusLimit:settings.directorFocusLimit ?? 5,fixedAuthorPlan:{tokens:authorPlanTokens,limit:authorPlanLimit,included:!planOmitted},warnings:[...(control.length<candidates.length?['Some control lore was omitted; unknown transitions must remain unresolved.']:[]),...(planOmitted?['The fixed author plan exceeds the Director plan budget and stays in Narrator context. Put essential current constraints in the live ledger or control lore.']:[])]},usedTokens};
+  return {apiMessages:render(),responseFormat:responseFormat(),entries:available,report:{noteLimits:{limit:mem.loreNotesPerSection,omitted:[...capped.flatMap(noteOmissions),...capCompanions]},mode:'director',responseFormat:responseFormat().type,responseSchemaTokens:await schemaCost(),offeredMemoryIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],totals:{input:usedTokens,max:limit},recentMessages:window.map(m=>m.id),controlMemoryIds:control.map(e=>e.id),rosterHints:control.filter(e=>e.kind).map(e=>({group:e.group,memberIds:e.memberIds,source:e.source})),focusLimit:settings.directorFocusLimit ?? 5,fixedAuthorPlan:{tokens:authorPlanTokens,limit:authorPlanLimit,included:!planOmitted},warnings:[...(control.length<candidates.length?['Some control lore was omitted; unknown transitions must remain unresolved.']:[]),...(planOmitted?['The fixed author plan exceeds the Director plan budget and stays in Narrator context. Put essential current constraints in the live ledger or control lore.']:[])]},usedTokens};
 }
 function brief(entry) {
   const section=[entry.sections?.description,entry.sections?.state,entry.sections?.status,...Object.values(entry.sections ?? {})].find(s=>s && [s.text,...(s.lines ?? []).map(l=>l.text)].some(t=>t?.trim()));
