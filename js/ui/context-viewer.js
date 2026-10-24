@@ -1,35 +1,35 @@
-import * as tokenizer from '../tokenizer.js';
-import { buildDirectorContext } from '../director-context.js';
-import { seedDirectorState } from '../director-state.js';
 import { renderCoreEditor } from './character-core-editor.js';
 import { saveEntry } from '../lore-store.js';
 import { currentUid } from '../auth.js';
-import {effectiveActiveSettings} from '../story-settings-store.js';
 import {computeTurns} from '../turns.js';
 import {normalizeMemory, anyMemory} from '../memory-settings.js';
 import {BOOK_LABELS} from '../lore-format.js';
 import {state} from '../state.js';
-import {buildContextForRequest} from '../context-builder.js';
-import {memorySnapshot, prepareMemorySnapshot, scheduledPlanDraftJump} from './chat-view.js';
+import {tokenUsageSnapshot,calculateCurrentTokenPreview} from './chat-view.js';
 import {lastRawAnswer, updateNow, isRunning} from '../memory-updater.js';
 import {node, button, sheet, subSheet, copy, toast} from './memory-ui.js';
-let open = false, version = 0, timer, viewedSession;
+let open = false, version = 0, viewedSession, viewedOwner;
 const expanded = new Map(), scrollPositions = new Map();
+let viewMode='cached',currentViewSource=null;
 
 export function initContextViewer() {
   document.addEventListener('context-details', openContextViewer);
-  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed','story-settings-changed','turn-finished']) {
-    document.addEventListener(event, () => { if (open) void render(); });
+  for (const event of ['lore-changed','memory-refresh','session-changed','settings-changed','story-settings-changed','turn-finished','token-usage-changed']) {
+    document.addEventListener(event, () => {
+      if(!open)return;
+      const view=tokenUsageSnapshot();
+      if(viewMode==='current' && currentViewSource?.owner===view.owner && currentViewSource?.sid===view.sid && currentViewSource?.key===view.contextKey)return;
+      void render();
+    });
   }
 }
 export function openContextViewer() {
   if (open) return;
   open = true;
-  sheet(document.getElementById('context-viewer'), 'NEXT REQUEST', {className:'context-sheet', close:() => {
-    rememberView(); open = false; ++version; clearTimeout(timer); return true;
+  sheet(document.getElementById('context-viewer'), 'TOKEN USAGE', {className:'context-sheet', close:() => {
+    rememberView(); open = false; ++version; return true;
   }});
-  // Opening a read-only preview uses the local story immediately. Explicit
-  // Refresh can still reconcile saves without blocking first display.
+  // Opening reads cached telemetry only; expensive previews require a click.
   void render();
 }
 function rememberView() {
@@ -60,7 +60,7 @@ function group(key, title, initiallyOpen = false, populate) {
 }
 function preview(key, title, text) {
   return group(key, title, false, d => {
-    const pre = node('pre', text, 'context-preview context-scroll');
+    const pre = node('pre', typeof text==='function' ? text() : text, 'context-preview context-scroll');
     pre.dataset.scrollKey = key;
     pre.tabIndex = 0;
     pre.dataset.focusKey = key+'-text';
@@ -83,26 +83,61 @@ function textSection(body, key, title, text, empty) {
   section.append(text ? preview(key+'-text', 'Read included text', text) : node('p', empty, 'muted'));
   body.append(section);
 }
-async function render({accurate=false}={}) {
-  const dialog = document.querySelector('#context-viewer .sheet');
-  if (!dialog || !open) return;
-  const run = ++version, live = memorySnapshot();
-  if (viewedSession !== state.sessionId) {
-    viewedSession = state.sessionId;
-    expanded.clear(); scrollPositions.clear();
+function replaceBody(dialog,body) {
+  dialog.querySelector('.memory-content')?.remove();dialog.append(body);
+  body.scrollTop=scrollPositions.get('body') ?? 0;
+}
+function renderCached() {
+  viewMode='cached';currentViewSource=null;
+  const dialog=document.querySelector('#context-viewer .sheet');if(!dialog || !open)return;
+  const view=tokenUsageSnapshot();
+  if(viewedSession!==view.sid || viewedOwner!==view.owner){
+    viewedSession=view.sid;viewedOwner=view.owner;expanded.clear();scrollPositions.clear();
     dialog.querySelector('.memory-content')?.remove();
-  }
-  if (!live) {
-    dialog.querySelector('.memory-content')?.remove();
-    dialog.append(node('p', 'Open a story to see its context.', 'memory-content muted'));
-    return;
-  }
+  }else rememberView();
+  const focusKey=document.activeElement?.dataset?.focusKey;
+  const body=node('div',null,'memory-content context-content'),overview=node('section',null,'context-overview');
+  overview.append(node('h3','Overview'));
+  const record=view.record;
+  if(record){
+    overview.append(node('p',`${record.tokens.toLocaleString()} input / ${view.max.toLocaleString()} tokens`,'context-total'));
+    const source=record.kind==='provider' ? 'Last sent · provider input count' : record.kind==='sent-estimate' ? 'Last sent · local estimate' : 'Cached context estimate';
+    overview.append(node('p',source+' · excludes unsent input','muted context-count-status'));
+    overview.append(node('p',new Date(record.at).toLocaleString()+(record.modelId ? ' · '+record.modelId : ''),'muted'));
+    if(view.contextChanged)overview.append(node('p',record.kind==='estimate' ? 'Context changed. The cached estimate is being updated.' : 'Context changed since last send. This remains the last request’s input count.','muted'));
+    if(record.recentOnly)overview.append(node('p','Estimate covers the history available on this device.','muted'));
+    if(record.report?.blocks?.length){
+      const breakdown=group('tokens','Local token breakdown');
+      breakdown.append(node('p','Local estimates from the prepared request; these may differ from the provider total.','muted'));
+      for(const block of record.report.blocks){const row=node('div',null,'context-block-row');row.append(node('span',BOOK_LABELS[block.key] ?? block.label),node('span',block.tokens.toLocaleString()));breakdown.append(row);}
+      overview.append(breakdown);
+    }
+  }else overview.append(node('p',!view.sid ? 'Open a story to see its token usage.' : view.error || 'Preparing a cached estimate…','muted context-count-status'));
+  const calculate=button(view.previewCached ? 'View cached current preview' : 'Calculate current preview',async b=>{
+    b.disabled=true;b.textContent='Calculating current preview…';await render({current:true});
+  });
+  calculate.dataset.focusKey='calculate-preview';calculate.disabled=!view.sid || view.busy || view.loading;
+  overview.append(calculate);body.append(overview);
+  const sent=view.sentContext;
+  if(sent){
+    const section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString(),false,d=>{
+      if(sent.report?.characterSelection)characterReport(d,sent.report.characterSelection,'sent-character');
+      if(sent.report?.recordSelection)recordReport(d,sent.report.recordSelection,'sent-records');
+      d.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
+    });body.append(section);
+  }else if(record?.kind!=='estimate' && record)body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
+  replaceBody(dialog,body);
+  if(focusKey)[...body.querySelectorAll('summary,pre,button')].find(e=>e.dataset.focusKey===focusKey)?.focus({preventScroll:true});
+}
+async function render({current=false}={}) {
+  if(!current){++version;renderCached();return;}
+  const dialog=document.querySelector('#context-viewer .sheet');if(!dialog || !open)return;
+  const run=++version,source=tokenUsageSnapshot();
+  viewMode='current';currentViewSource={owner:source.owner,sid:source.sid,key:source.contextKey};
+  let live;
   try {
-    const draftText = '';
-    const check=()=>{if(run!==version || !open || state.sessionId!==live.session.id)throw new Error('Context preview changed.');};
-    const built = await buildContextForRequest(live.session, effectiveActiveSettings(), {
-      messages:live.messages, loreEntries:live.entries, draftText, draftPlanJump:scheduledPlanDraftJump(), includeInspection:true, tokenCountMode:accurate ? undefined : 'estimate', check,
-    });
+    const previewResult=await calculateCurrentTokenPreview();
+    const {built,countingMethod}=previewResult;live=previewResult.live;
     if (run !== version || !open || state.sessionId !== live.session.id) return;
     rememberView();
     const focusKey = document.activeElement?.dataset?.focusKey;
@@ -111,7 +146,7 @@ async function render({accurate=false}={}) {
     const mem = normalizeMemory(live.session.memory);
     const overview = node('section', null, 'context-overview');
     const heading = node('div', null, 'context-overview-heading');
-    const refresh = button('Refresh', async () => { await prepareMemorySnapshot(); void render(); });
+    const refresh = button('Last sent', () => render());
     refresh.dataset.focusKey = 'refresh';
     heading.append(node('h3', 'Overview'), refresh);
     overview.append(heading, node('p', `${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens`, 'context-total'));
@@ -124,8 +159,8 @@ async function render({accurate=false}={}) {
       seg.title = b.label+': '+b.tokens; bar.append(seg);
     }
     overview.append(bar, node('p', 'Separate max reply: '+r.totals.reserved.toLocaleString(), 'muted'));
-    const counted=accurate && tokenizer.tokenizerStatus?.()==='ok';
-    overview.append(node('p', (counted ? 'Tokenizer count' : 'Fast estimate')+' · excludes unsent input'+(!accurate && live.settings.tokenCountingMode==='accurate' ? ' · refining count…' : ''), 'muted context-count-status'));
+    const counted=countingMethod==='tokenizer';
+    overview.append(node('p', (counted ? 'Tokenizer count' : 'Local estimate')+' · current preview · excludes unsent input', 'muted context-count-status'));
     if (live.providerUsage) overview.append(node('p', `Last sent request: provider counted ${live.providerUsage.promptTokens.toLocaleString()} input tokens (local estimate ${live.providerUsage.estimate.toLocaleString()}).`, 'muted'));
     for (const warning of r.warnings) overview.append(node('p', warning, 'memory-warning'));
     const breakdown = group('tokens', 'Token breakdown');
@@ -191,10 +226,15 @@ async function render({accurate=false}={}) {
       if(sent.report.characterBudget)characterBudgetReport(section,sent.report.characterBudget);
       if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
       if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
-      section.append(preview('last-sent-json','Read exact serialized request body',JSON.stringify(sent.requestBody,null,2)));
+      section.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
       body.append(section);
     }
-    if(live.settings.narrationMode==='director'){const dg=group('director-preview','Director · next request preview');try{const d=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries),accurate ? {} : {count:tokenizer.estimateTokens});dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`, 'muted'),preview('director-next-json','Read Director input',JSON.stringify({messages:d.apiMessages,response_format:d.responseFormat},null,2)));}catch(error){dg.append(node('p',error.message,'muted'));}if(run!==version || !open || state.sessionId!==live.session.id)return;body.append(dg);}
+    if(live.settings.narrationMode==='director'){
+      const dg=group('director-preview','Director · next request preview'),d=previewResult.director;
+      if(d)dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`,'muted'),preview('director-next-json','Read Director input',JSON.stringify({messages:d.apiMessages,response_format:d.responseFormat},null,2)));
+      else dg.append(node('p',previewResult.directorError ?? 'Director preview unavailable.','muted'));
+      body.append(dg);
+    }
     const scene = group('scene', 'Current scene & memory');
     scene.append(node('p', r.scene ? r.scene.raw+' (from turn '+r.scene.fromTurn+')' : 'No current scene included.', 'muted'));
     for (const [key,label] of [['memory','Read assembled memory block'],['replyContract','Read reply contract'],['reminder','Read scene reminder']]) {
@@ -251,19 +291,10 @@ async function render({accurate=false}={}) {
     body.scrollTop = scrollPositions.get('body') ?? 0;
     for (const e of body.querySelectorAll('.context-scroll')) e.scrollTop = scrollPositions.get(e.dataset.scrollKey) ?? 0;
     if (focusKey) [...body.querySelectorAll('summary,pre,button')].find(e => e.dataset.focusKey===focusKey)?.focus({preventScroll:true});
-    if(!accurate && live.settings.tokenCountingMode==='accurate' && !live.busy){
-      clearTimeout(timer);timer=setTimeout(()=>{if(run===version && open)void render({accurate:true});},0);
-    }
   } catch (e) {
-    if (run !== version || !open || state.sessionId!==live.session.id) return;
-    if(accurate && dialog.querySelector('.context-overview')){
-      const status=dialog.querySelector('.context-count-status');
-      if(status)status.textContent='Fast estimate · could not refine count · excludes unsent input';
-      return;
-    }
-    const body = node('div', null, 'memory-content');
-    body.append(node('p', e.message, 'memory-warning'), button('Refresh', () => render()));
-    dialog.querySelector('.memory-content')?.remove(); dialog.append(body);
+    if(run!==version || !open || live && state.sessionId!==live.session.id)return;
+    renderCached();
+    dialog.querySelector('.memory-content')?.append(node('p',e.message,'memory-warning'));
   }
 }
 function closeViewer() { document.querySelector('#context-viewer .settings-close')?.click(); }
