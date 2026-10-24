@@ -239,7 +239,7 @@
               <section data-panel="context" class="settings-panel hidden">
                 <h2>Context &amp; summaries</h2>
                 <div class="settings-grid">
-                  <label>Token counting<select id="set-token-counting"><option value="estimate">Lightweight estimate (faster)</option><option value="accurate">Tokenizer (more accurate)</option></select><small>Lightweight mode uses less processing with approximate counts. The indicator excludes unsent input and refreshes after replies.</small></label>
+                  <label>Token counting<select id="set-token-counting"><option value="estimate">Lightweight estimate (faster)</option><option value="accurate">Tokenizer (more accurate)</option></select><small>This mode applies when preparing requests or calculating a current preview. The token window normally reuses the last sent count.</small></label>
                   <label>Max input tokens<input type="text" id="set-max-context" inputmode="numeric" data-min="256" required /></label><label>Model total context size (optional)<input type="text" id="set-model-context" inputmode="numeric" data-min="256" placeholder="Unknown" /></label>
                   <label class="checkbox-label"><input type="checkbox" id="set-auto-summary-enabled" /> Automatically summarize when context fills</label>
                   <label>Auto-summary threshold (%)<input type="text" id="set-auto-threshold" inputmode="numeric" data-min="1" data-max="100" required /></label>

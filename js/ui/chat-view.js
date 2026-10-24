@@ -1,3 +1,8 @@
+import {buildDirectorContext} from '../director-context.js';
+import {seedDirectorState} from '../director-state.js';
+import {tokenUsageCache,tokenContextFingerprint} from './token-usage-cache.js';
+import * as deviceCache from '../chat-cache.js';
+import {requestInputLimit} from '../request-budget.js';
 import {afterUiPaint} from '../ui-work.js';
 import {openStoryStore,storyStore,flushStory,closeStoryStores,forgetStoryStore} from '../local-story-store.js';
 import {loadStoryData,saveStoryData,storyQueueStorage,replaceStoryCache} from '../chat-cache.js';
@@ -65,7 +70,6 @@ let session = null;      // latest snapshot of the active session doc
 let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
-let tokenizerWarned=false;
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
 const releaseBusy=token=>{
   if(busyGate.active!==token)return false;
@@ -310,6 +314,64 @@ export function memorySnapshot(sid = state.sessionId) {
   if (sid === state.sessionId && session && state.storySettings && !state.storySettingsLoadFailed) return { storyEpoch:historyEpoch,session:{...session,storySettingsRevision:state.storySettings.revision}, settings: effectiveActiveSettings(), messages:(historyMessages ?? lastMessages).filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)), historyComplete:!!historyMessages && historyRevision===(session.historyRevision ?? 0), entries: loreEntries, busy:busy || /* Disabled refresh lock: !!storyStore(sid)?.requiresReconciliation || */ !!storyStore(sid)?.status.paused || !!storyStore(sid)?.status.pending || !!storyStore(sid)?.status.error, report: lastMemoryReport, sentContext:lastSentContext, providerUsage:lastProviderUsage?.sessionId === sid ? lastProviderUsage : null };
   if(sid===state.sessionId)return null;
   const cached = memoryStories.get(sid); return cached?.owner === currentUid() ? cached : null;
+}
+let tokenUsageError=null;
+let persistedTokenUsage=new WeakSet();
+let tokenKeyMemo=null,tokenDisplayMeta=null;
+function tokenContextKey(activeSettings=null) {
+  if(!session || !state.settings || !state.storySettings)return null;
+  const settings=activeSettings ?? effectiveActiveSettings();
+  // Context-affecting settings only: never persist credentials in a cache key.
+  const values=[session.historyRevision ?? 0,session.loreRevision ?? 0,state.storySettings.revision,
+    session.directorRevision ?? 0,session.directorPending,session.directorCheckpoint,session.longTermPlan,
+    session.activeSummaryMessageId,session.breakpointOrder,session.memory,session.memoryState?.extractedThroughOrder,
+    settings.modelId,settings.narrationMode,settings.maxContextTokens,settings.modelContextTokens,settings.maxResponseTokens,
+    settings.tokenCountingMode,settings.narratorSystemPrompt,settings.directorNarratorSystemPrompt,
+    historyMessages?.length ?? lastMessages.length,historyMessages ? historyStartOrder : lastMessages[0]?.order];
+  if(tokenKeyMemo && values.every((value,i)=>value===tokenKeyMemo.values[i]))return tokenKeyMemo.key;
+  const key=tokenContextFingerprint(values);tokenKeyMemo={values,key};return key;
+}
+function persistTokenUsage() {
+  const owner=currentUid(),sid=state.sessionId,record=tokenUsageCache.read(owner,sid);
+  if(!record || persistedTokenUsage.has(record))return;
+  persistedTokenUsage.add(record);
+  const pending=deviceCache.saveTokenUsage?.(owner,sid,tokenUsageCache.serialize(owner,sid));
+  if(pending){pendingCacheWrites.add(pending);void Promise.resolve(pending).catch(()=>{}).finally(()=>pendingCacheWrites.delete(pending));}
+}
+function tokenUsageChanged() {
+  document.dispatchEvent(new CustomEvent('token-usage-changed',{detail:{sessionId:state.sessionId}}));
+}
+function tokenOwner(){try{return currentUid();}catch{return null;}}
+function refreshTokenDisplayMeta() {
+  const owner=tokenOwner(),sid=state.sessionId;
+  if(!owner || !session || !state.settings || !state.storySettings){tokenDisplayMeta=null;return;}
+  try{const settings=effectiveActiveSettings();tokenDisplayMeta={owner,sid,key:tokenContextKey(settings),max:requestInputLimit(settings)};}catch{tokenDisplayMeta=null;}
+}
+export function tokenUsageSnapshot() {
+  // Opening the window reads this prepared metadata, never resolves settings,
+  // fingerprints prompts, traverses history, or starts a calculation.
+  const owner=tokenOwner();if(!owner)return {owner:null,sid:null,record:null,max:0,contextKey:null,busy:false,loading:false,error:null};
+  const sid=state.sessionId,record=tokenUsageCache.read(owner,sid);
+  const meta=tokenDisplayMeta?.owner===owner && tokenDisplayMeta.sid===sid ? tokenDisplayMeta : null;
+  const key=meta?.key ?? null;
+  return {owner,sid,record,max:meta?.max ?? record?.max ?? 0,contextKey:key,busy,loading:!!sid && (!session || !latestReady || !state.storySettings),error:tokenUsageError,
+    contextChanged:!!record && key!==null && record.contextKey!==key,
+    previewCached:!!key && tokenUsageCache.hasPreview(owner,sid,key),
+    sentContext:record && lastSentContext?.sentAt===record.at ? lastSentContext : null};
+}
+export async function calculateCurrentTokenPreview() {
+  if(busy || editingState)throw new Error('Finish the current reply or edit before calculating a preview.');
+  const live=memorySnapshot();if(!live)throw new Error('Open a story first.');
+  refreshTokenDisplayMeta();
+  const owner=currentUid(),sid=state.sessionId,key=tokenContextKey(),epoch=historyEpoch;
+  return tokenUsageCache.preview(owner,sid,key,async check=>{
+    const built=await buildContextForRequest(live.session,live.settings,{
+      messages:live.messages,loreEntries:live.entries,draftText:'',includeInspection:true,check,
+    });
+    let director=null,directorError=null;
+    if(live.settings.narrationMode==='director'){try{director=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));}catch(error){check();directorError=error.message;}}
+    check();return {built,live,director,directorError,countingMethod:tokenizer.tokenizerStatus?.()==='ok' ? 'tokenizer' : 'estimate'};
+  },()=>currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
 }
 export async function prepareMemorySnapshot() {
   if (!session) throw new Error('Open a story first.');
@@ -732,9 +794,10 @@ export function setSession(sessionId) {
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   rememberMemoryStory();
+  tokenUsageCache.cancelPending(owner,state.sessionId);
   clearChatRetry();chatRetry=0;chatStatus='ok';
   indicatorRefresh.invalidate();clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
-  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastSentContext = null; lastProviderUsage = null;
+  loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastSentContext = null; lastProviderUsage = null; tokenUsageError=null;tokenDisplayMeta=null;
   msgUnsub?.();
   sessUnsub?.();
   msgUnsub = sessUnsub = null;
@@ -786,6 +849,7 @@ export function setSession(sessionId) {
   }
   void loadChatCache(currentUid(), sessionId).then((saved) => {
     if (state.sessionId !== sessionId || currentUid() !== owner || loadEpoch!==dataEpoch) return;
+    if(saved?.tokenUsage)tokenUsageCache.restore(owner,sessionId,saved.tokenUsage);
     if (saved?.session && Array.isArray(saved.recent)) {
       historyCache.set(currentUid()+':'+sessionId, saved);
       if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
@@ -802,8 +866,8 @@ export function setSession(sessionId) {
 
 function chatSnapshot() {
   const local=storyStore(state.sessionId);
-  if(local?.status.pending){const base=local.confirmed;return structuredClone({session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages,historyRevision:base.session.historyRevision ?? 0});}
-  return structuredClone({ session, recent: lastMessages, hasEarlier, history: historyMessages,historyRevision });
+  if(local?.status.pending){const base=local.confirmed;return structuredClone({tokenUsage:tokenUsageCache.serialize(currentUid(),state.sessionId),session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages,historyRevision:base.session.historyRevision ?? 0});}
+  return structuredClone({ tokenUsage:tokenUsageCache.serialize(currentUid(),state.sessionId),session, recent: lastMessages, hasEarlier, history: historyMessages,historyRevision });
 }
 
 function saveLocalCache(owner, sid, snapshot) {
@@ -823,7 +887,7 @@ export async function prepareChatLogout() {
   busyGate.active?.abort?.();
   rewriteController?.abort();
   memoryUpdater.stopAll();
-  historyCache.clear(); memoryStories.clear();closeStoryStores();
+  historyCache.clear(); memoryStories.clear();tokenUsageCache.clear();persistedTokenUsage=new WeakSet();tokenKeyMemo=null;tokenDisplayMeta=null;closeStoryStores();
   await Promise.allSettled([...pendingCacheWrites]);
 }
 
@@ -841,6 +905,7 @@ function queueCacheSave() {
 }
 
 function restoreCachedChat(sessionId, saved) {
+  if(saved.tokenUsage)tokenUsageCache.restore(currentUid(),sessionId,saved.tokenUsage);
   session = saved.session;
   syncLore(); rememberMemoryStory();
   historyMessages = saved.history ?? null;
@@ -1416,62 +1481,47 @@ function showToast(text, ok) {
 
 // ---------- context indicator ----------
 
-const indicatorHint = 'Saved context estimate, excluding unsent input. Refreshes after replies.';
-let indicatorUsageCache=null;
+const indicatorHint = 'Last completed request input; unsent input is excluded. Current context may differ.';
 const indicatorRefresh = createIndicatorRefresh({
   focused: () => busy || !!editingState,
-  key: () => JSON.stringify([(() => { try { return currentUid(); } catch { return null; } })(), state.sessionId, historyEpoch, session?.historyRevision, state.settings?.tokenCountingMode]),
-  compute: async ({isCurrent}) => {
-    if (cacheWritesPaused || !session || !state.settings || !latestReady) return null;
-    const source = session, settings = effectiveActiveSettings(), draftText = '';
-    const messages = historyMessages ?? lastMessages;
-    const key=JSON.stringify([currentUid(),state.sessionId,historyEpoch,preparationKey(source),settings,draftText]);
-    if(indicatorUsageCache?.key===key)return indicatorUsageCache.usage;
-    const check=()=>{if(!isCurrent())throw new StaleTurn();};
-    const usage=await computeContextUsage(source, settings, messages, { loreEntries, draftText, tokenCountMode:'estimate', check });
-    usage.countingMethod='estimate';
-    // Publish a useful count first. A slow worker can refine it without hiding it.
-    if(settings.tokenCountingMode==='accurate')setTimeout(async()=>{
-      if(!isCurrent())return;
-      try {
-        const refined=await computeContextUsage(source,settings,messages,{loreEntries,draftText,check});
-        if(!isCurrent())return;
-        refined.countingMethod=tokenizer.tokenizerStatus?.()==='ok' ? 'tokenizer' : 'fallback';
-        indicatorUsageCache={key,usage:refined};applyIndicator(refined);
-      }catch{/* Keep the fast estimate if refinement fails or becomes stale. */}
-    },0);
-    indicatorUsageCache={key,usage};return usage;
+  key: () => JSON.stringify([tokenOwner(),state.sessionId,tokenContextKey()]),
+  compute: async () => {
+    if(cacheWritesPaused || !session || !state.settings || !latestReady || !state.storySettings)return null;
+    const owner=currentUid(),sid=state.sessionId,key=tokenContextKey(),epoch=historyEpoch,settings=effectiveActiveSettings();
+    const record=await tokenUsageCache.estimate(owner,sid,key,async check=>{
+      const usage=await computeContextUsage(session,settings,historyMessages ?? lastMessages,{loreEntries,draftText:'',tokenCountMode:'estimate',check});
+      return {tokens:usage.usedTokens,max:usage.max,reserved:settings.maxResponseTokens,modelId:settings.modelId,
+        at:Date.now(),report:usage.report,droppedCount:usage.droppedCount,recentOnly:!historyMessages && hasEarlier};
+    },()=>currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
+    tokenUsageError=null;return record;
   },
-  apply: usage => { if (usage) applyIndicator(usage); },
-  onError: error => { if (el.contextLabel) el.contextLabel.textContent = error.message; },
+  apply: record => {if(record){applyIndicator(record);persistTokenUsage();tokenUsageChanged();}},
+  onError: error => {const owner=tokenOwner();if(!owner)return;const record=tokenUsageCache.read(owner,state.sessionId);if(record?.kind && record.kind!=='estimate'){applyIndicator(record);return;}tokenUsageError=error.message;if(el.contextLabel)el.contextLabel.textContent=error.message;tokenUsageChanged();},
 });
 export function scheduledPlanDraftJump() {return null;}
 export async function updateIndicator() {
+  refreshTokenDisplayMeta();
   if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
   clearTimeout(indicatorTimer);
   indicatorTimer=setTimeout(()=>{indicatorTimer=null;void indicatorRefresh.request();},300);
 }
-function applyIndicator(usage) {
-  lastMemoryReport = usage.report;
-  const fallback=usage.countingMethod==='fallback',estimated=usage.countingMethod!=='tokenizer';if(fallback && !tokenizerWarned){tokenizerWarned=true;showTransientInfo('Token counts are estimates; the tokenizer failed to load.');}
-  el.contextLabel.title = indicatorHint + ' ' + (usage.droppedCount > 0 && state.settings.autoSummarizationEnabled !== true ? 'Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
-  const ring = contextRingPresentation({used:usage.usedTokens, max:usage.max});
-  el.contextFill.style.strokeDasharray = ring.dash;
-  el.contextFill.style.stroke = ring.color;
-  el.contextFill.classList.toggle("over", usage.overThreshold);
-  el.contextThreshold.style.left =
-    (usage.max > 0 ? (usage.threshold / usage.max) * 100 : 0) + "%";
-  el.contextLabel.textContent =
-    `${usage.usedTokens.toLocaleString()} input / ${usage.max.toLocaleString()} tokens` +
-    (usage.droppedCount > 0 ? ` · ${usage.droppedCount} ${state.settings.autoSummarizationEnabled === true ? "out of window" : "turns not sent"}` : "") +
-    (chatStatus==='reconnecting' ? ' · reconnecting' : '') +
-    (estimated ? (fallback ? ' · estimate (tokenizer unavailable)' : ' · estimate') : '') +
-    (!historyMessages && hasEarlier ? " · recent history estimate" : "") +
-    (normalizeMemory(session.memory).autoUpdate ? ' · memory T'+(turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (session.memoryState?.extractedThroughOrder ?? 0)).at(-1)?.turn ?? 0) : '');
-  const indicator = document.getElementById('context-indicator');
-  indicator.setAttribute('aria-label', 'View context: ' + el.contextLabel.textContent + '. ' + el.contextLabel.title);
-  indicator.title = el.contextLabel.textContent + '. ' + el.contextLabel.title;
-  updateMemoryChip();
+function applyIndicator(record) {
+  refreshTokenDisplayMeta();
+  const view=tokenUsageSnapshot(),max=view.max,settings=effectiveActiveSettings();
+  const lastSent=record.kind!=='estimate',estimated=record.kind!=='provider';
+  el.contextLabel.title=(lastSent ? indicatorHint : 'Cached context estimate, excluding unsent input.')+(view.contextChanged ? ' Context changed since last send.' : '')+
+    (record.droppedCount>0 && !settings.autoSummarizationEnabled ? ' Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
+  const ring=contextRingPresentation({used:record.tokens,max});
+  el.contextFill.style.strokeDasharray=ring.dash;el.contextFill.style.stroke=ring.color;
+  el.contextFill.classList.toggle('over',record.tokens>=max*settings.autoSummaryThresholdPercent/100);
+  el.contextThreshold.style.left=settings.autoSummaryThresholdPercent+'%';
+  el.contextLabel.textContent=`${record.tokens.toLocaleString()} input / ${max.toLocaleString()} tokens`+
+    (lastSent ? ' · last sent' : '')+(estimated ? ' · estimate' : ' · provider')+
+    (record.droppedCount>0 ? ` · ${record.droppedCount} ${settings.autoSummarizationEnabled ? 'out of window' : 'turns not sent'}` : '')+
+    (view.contextChanged ? ' · context changed' : '')+(record.recentOnly ? ' · recent history only' : '');
+  const indicator=document.getElementById('context-indicator');
+  indicator.setAttribute('aria-label','View context: '+el.contextLabel.textContent+'. '+el.contextLabel.title);
+  indicator.title=el.contextLabel.textContent+'. '+el.contextLabel.title;updateMemoryChip();
 }
 export const refreshContextIndicator = updateIndicator;
 
@@ -1648,7 +1698,7 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       account.check();
       const entries=loreSnapshot.entries;
       const messages=messageData.messages,view={session:latest,messages,turns:Object.fromEntries(turns.filter(([,turn])=>turn))};
-      const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false};
+      const snapshot={session:latest,recent:messages.slice(-Math.max(visibleCount,PAGE_SIZE)),history:messages,hasEarlier:false,tokenUsage:tokenUsageCache.serialize(owner,sid)};
       await loreStore.publishLoreSnapshot({uid:owner,id:sid},loreSnapshot,{persist:false,commit:()=>replaceStoryCache(owner,sid,snapshot,{confirmed:view,requiresReconciliation:false,turns:view.turns,storySettings:prompts,loreSnapshot,chunkRanges:messageData.chunkRanges},{discardPending})});
       // Keep the queue aligned with the committed cache even if navigation
       // changes while IndexedDB finishes. Its scoped observer publishes later.
@@ -1798,7 +1848,6 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     assertActive(token);
     if(directorMode && lastSentContext){lastSentContext.narratorElapsedMs=Date.now()-narratorStarted;lastSentContext.narratorUsage=usage ?? null;}
     const truncated = finishReason === 'length';
-    lastProviderUsage = usage?.prompt_tokens != null ? { sessionId:sid,promptTokens:usage.prompt_tokens,estimate:built.usedTokens } : null;
     const fresh=session;
     const mem=normalizeMemory(sourceSession.memory),sceneEnabled=directorMode || mem.scene;
     const out=readSceneOutput(content,{sceneEnabled}),clean=out.clean;
@@ -1873,6 +1922,13 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     historyMessages = historyChanged ? null : mergeMessages(sourceMessages,[saved]);
     historyRevision = historyChanged ? null : session.historyRevision;
     if (streamState) { streamState.savedId = saved.id; streamState.saveCompleted = true; }
+    const promptTokens=usage?.prompt_tokens ?? usage?.input_tokens;
+    const providerCount=Number.isSafeInteger(promptTokens) && promptTokens>=0;
+    lastProviderUsage=providerCount ? {sessionId:sid,promptTokens,estimate:built.usedTokens} : null;
+    const usageRecord=tokenUsageCache.remember(currentUid(),sid,{kind:providerCount ? 'provider' : 'sent-estimate',
+      tokens:providerCount ? promptTokens : built.usedTokens,max:built.report.totals.max,reserved:settings.maxResponseTokens,
+      at:lastSentContext?.sentAt ?? Date.now(),modelId:settings.modelId,contextKey:tokenContextKey(),report:built.report,droppedCount:built.droppedCount ?? 0});
+    tokenUsageError=null;applyIndicator(usageRecord);persistTokenUsage();tokenUsageChanged();
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
     if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
@@ -1896,8 +1952,8 @@ async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
     try {
     const backoff=summaryBackoff.get(sid) ?? 0;if(backoff)summaryBackoff.set(sid,backoff-1);
     const due=memoryUpdater.dueRangeFor?.(sid) ?? (memoryUpdater.maybeStartAfterTurn && null);
-    const hist=historyMessages ?? await ensureHistory();assertActive(token);
-    const contextUsage=await computeContextUsage(session,settings,hist,{loreEntries});assertActive(token);
+    const hist=settings.autoSummarizationEnabled===true ? historyMessages ?? await ensureHistory() : historyMessages ?? lastMessages;assertActive(token);
+    const contextUsage=settings.autoSummarizationEnabled===true ? await computeContextUsage(session,settings,hist,{loreEntries}) : null;assertActive(token);
     const planned=settings.autoSummarizationEnabled===true && !backoff && (contextUsage.overThreshold || contextUsage.droppedCount>0) ? planSummary(session,settings,hist,{maxChunks:1,urgent:contextUsage.droppedCount>0}) : null;
     const summary=planned && !planned.skip ? planned : null;
     const pick=maintenanceUsed ? null : pickMaintenance({overwrite:!!opts.overwriteId,summary,memoryDue:!!due,memoryRunning:memoryUpdater.isRunning(sid),memoryDeferrals:memoryDeferrals.get(sid) ?? 0});

@@ -33,6 +33,17 @@ export async function loadChatCache(uid, sessionId) {
   });
 }
 
+// Update only display telemetry; do not clone or rewrite the story on a count update.
+export async function saveTokenUsage(uid,sessionId,usage) {
+  const db=await database();if(!db)return false;
+  return new Promise(resolve=>{
+    const tx=db.transaction(STORE,'readwrite'),store=tx.objectStore(STORE),key=`${uid}:${sessionId}`;
+    const request=store.get(key);
+    request.onsuccess=()=>{const existing=request.result;store.put({...existing,key,uid,savedAt:Date.now(),value:{...existing?.value,tokenUsage:usage}});};
+    tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>resolve(false);
+  });
+}
+
 export function nextOrder(order,sid) {return [sid,...order.filter(id=>id!==sid)].slice(0,3);}
 export async function saveChatCache(uid,sessionId,value) {
   const db=await database();if(!db)return;

@@ -146,7 +146,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     'db.js': { db: {} },
     'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
-    'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>Math.ceil(text.length*0.306), countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
+    'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>{calls.estimateCalls=(calls.estimateCalls ?? 0)+1;return Math.ceil(text.length*0.306);}, countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
       subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
@@ -960,7 +960,7 @@ test('lorebook editor stages canon text and saves only on Save; closing dirty ed
 });
 test('context viewer excludes unsent input and Copy request matches the saved-context preview',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Opening' }],hasEarlier:false });
-  h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer'); assert.ok(root.querySelectorAll('p').some(p => p.textContent.includes('excludes unsent input')));
+  h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer');await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click(); assert.ok(root.querySelectorAll('p').some(p => p.textContent.includes('excludes unsent input')));
   await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.ok(!h.calls.clipboard.includes('Ask Mira'));assert.ok(h.calls.clipboard.includes('Opening')); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
 
@@ -971,7 +971,7 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'}, {id:'a',order:2,role:'assistant',content:'Opening'}],hasEarlier:false});
   h.el('chat-input').value='<script>Draft as literal text</script>';
   viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve=>setTimeout(resolve,0));
-  const root=h.el('context-viewer'),get=key=>root.querySelectorAll('details').find(d=>d.dataset.contextKey===key);
+  const root=h.el('context-viewer');await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();const get=key=>root.querySelectorAll('details').find(d=>d.dataset.contextKey===key);
   assert.equal(get('lorebooks').open,true);
   for(const key of ['instructions','summary','book-characters','book-locations','book-facts','book-events','scene','conversation','updates','full-request']) assert.equal(get(key).open,false,key);
   assert.equal(root.querySelectorAll('pre').length,0,'Long text is lazy');
@@ -983,7 +983,7 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   root.querySelector('.memory-content').scrollTop=120;
   root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='opening').scrollTop=35;
   draft.querySelector('summary').focus();
-  await root.querySelectorAll('button').find(b=>b.textContent==='Refresh').click();await new Promise(resolve=>setTimeout(resolve,0));
+  await root.querySelectorAll('button').find(b=>b.textContent==='Last sent').click();await root.querySelectorAll('button').find(b=>b.textContent==='View cached current preview').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(get('conversation').open,true);
   assert.equal(get(draft.dataset.contextKey).open,true);
   assert.equal(h.document.activeElement.dataset.focusKey,draft.dataset.contextKey);
@@ -992,7 +992,7 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   const full=get('full-request');full.open=true;await full.dispatchEvent({type:'toggle'});
   const request=root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='request');
   for(const d of request.querySelectorAll('details')) {d.open=true;await d.dispatchEvent({type:'toggle'});}
-  const built=await (await h.use('context-builder.js')).buildContextForRequest(chat.memorySnapshot().session,chat.memorySnapshot().settings,{messages:chat.memorySnapshot().messages,draftText:'',tokenCountMode:'estimate'});
+  const built=await (await h.use('context-builder.js')).buildContextForRequest(chat.memorySnapshot().session,chat.memorySnapshot().settings,{messages:chat.memorySnapshot().messages,draftText:''});
   assert.deepEqual(request.querySelectorAll('pre').map(p=>p.textContent),Array.from(built.apiMessages,m=>m.content));
   await root.querySelectorAll('button').find(b=>b.textContent==='Copy request as text').click();
   assert.equal(h.calls.clipboard,built.apiMessages.map(m=>'=== '+m.role.toUpperCase()+' ===\n'+m.content).join('\n\n'));
@@ -1001,6 +1001,7 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   h.calls.sessionCallbacks.at(-1)({id:'other',exists:()=>true,data:()=>({title:'Other'})});
   h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
   await h.document.dispatchEvent({type:'session-changed'});await new Promise(resolve=>setTimeout(resolve,0));
+  await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();
   assert.equal(get('conversation').open,false);
   assert.equal(get('lorebooks').open,true);
   assert.equal(root.querySelector('.memory-content').scrollTop,0);
@@ -1346,9 +1347,9 @@ test('B14 scene-save revision jumps defer coherent reconciliation until dependen
  h.calls.updateScene=async()=>{h.calls.historyRevision=4;h.calls.sessionDocs.improvement.historyRevision=4;return {replacement:{...initial[1],scene:'date: Day 1 · time: night · place: Hall'},baseHistoryRevision:3,historyRevision:4,session:h.calls.sessionDocs.improvement};};
  await h.el('message-list').querySelector('.scene-chip').click();await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Save').click();assert.equal(h.calls.historyReads ?? 0,readsBefore);assert.equal(chat.memorySnapshot().historyComplete,false);assert.match(chat.memorySnapshot().messages[1].scene,/Hall/);assert.equal(h.state.busy,false);h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);await chat.prepareMemorySnapshot();assert.ok(h.calls.historyReads>readsBefore);assert.equal(chat.memorySnapshot().messages[0].content,'Remote action');
 });
-test('B2 indicator and post-turn usage both receive the current lore entries',async()=>{
+test('initial estimates receive lore and disabled auto-summary avoids a post-turn recount',async()=>{
  const source=await readFile(new URL('../js/context-builder.js',import.meta.url),'utf8');const observations=[];const h=await harness({globals:{recordUsage:opts=>observations.push(opts)},sources:{'context-builder.js':source.replace('  messages ??= await getMessages(session.id);','  globalThis.recordUsage(opts);\n  messages ??= await getMessages(session.id);')}});
- h.calls.loreEntries=[{id:'l',book:'facts',name:'Magic',alwaysLoad:true,sections:{text:{text:'Canon',lines:[]}}}];await openImprovementChat(h,{memory:{lorebooks:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.calls.response='Reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();await new Promise(resolve=>setTimeout(resolve,10));assert.ok(observations.length>=2);assert.ok(observations.every(o=>o.loreEntries?.some(e=>e.id==='l')));
+ h.calls.loreEntries=[{id:'l',book:'facts',name:'Magic',alwaysLoad:true,sections:{text:{text:'Canon',lines:[]}}}];const chat=await openImprovementChat(h,{memory:{lorebooks:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,10));const before=observations.length;h.calls.response='Reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();await new Promise(resolve=>setTimeout(resolve,10));assert.ok(before>0);assert.equal(observations.length,before);assert.ok(observations.every(o=>o.loreEntries?.some(e=>e.id==='l')));
 });
 
 test('R2 sidebar guards duplicate creation and catches failed create, rename and logout',async()=>{
@@ -1761,7 +1762,7 @@ test('character selection captures the exact sent request and keeps its report a
   const original=JSON.stringify(sent);h.el('chat-input').value='A new draft with ribbons.';e.sections.personality.text='Edited after sending.';
   const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(JSON.stringify(chat.memorySnapshot().sentContext),original);assert.equal(h.calls.requests.length,1);
-  const root=h.el('context-viewer'),last=root.querySelectorAll('details').find(d=>d.dataset.contextKey==='last-sent');assert.ok(last);assert.ok(last.querySelectorAll('summary').some(s=>s.textContent==='Read exact serialized request body'));
+  const root=h.el('context-viewer'),last=root.querySelectorAll('details').find(d=>d.dataset.contextKey==='last-sent');assert.ok(last);last.open=true;await last.dispatchEvent({type:'toggle'});assert.ok(last.querySelectorAll('summary').some(s=>s.textContent==='Read exact serialized request body'));
   chat.setSession('other');assert.equal(chat.memorySnapshot()?.sentContext ?? null,null);
 });
 
@@ -1802,8 +1803,8 @@ test('Context indicator excludes unsent input, skips typing recounts, and refres
   assert.equal(h.calls.messages[0][1].content,'Exact latest action');assert.ok(h.calls.requests[0].messages.some(m=>m.role==='user'&&m.content==='Exact latest action'));
   for(const [id,j]of [...jobs])if(j.ms===300){jobs.delete(id);j.fn();}
   await new Promise(r=>setImmediate(r));
-  assert.ok(tracker.drafts.length>0);assert.ok(tracker.drafts.every(text=>!text));
-  assert.match(h.el('context-label').title,/excluding unsent input/);
+  assert.equal(tracker.drafts.length,0,'Use the completed request estimate without a post-turn recount');
+  assert.match(h.el('context-label').title,/unsent input/);assert.match(h.el('context-label').textContent,/last sent/);
 });
 
 async function oldMessageEditor({read, save}={}) {
@@ -2886,33 +2887,31 @@ test('stream text appends preserve the text node and unchanged frames do no writ
 });
 
 
-test('context preview and indicator show a fast saved-context estimate while accurate counting never responds',async()=>{
+test('cached token window and indicator never start the accurate tokenizer automatically',async()=>{
  const h=await harness();const chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Opening.'}]);
- h.state.settings.tokenCountingMode='accurate';
- let exactCalls=0;h.calls.onTokenCount=()=>{exactCalls++;return new Promise(()=>{});};
- h.el('chat-input').value='Unsent action never counted';
- const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();
- await new Promise(resolve=>setTimeout(resolve,25));
- const root=h.el('context-viewer');assert.ok(root.querySelector('.context-total'));
- assert.ok(root.querySelectorAll('p').some(p=>p.textContent.includes('Fast estimate')));
- assert.ok(!root.querySelectorAll('p,pre').some(p=>p.textContent?.includes('Unsent action never counted')));assert.ok(exactCalls>0);
- await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,320));
+ h.state.settings.tokenCountingMode='accurate';let exactCalls=0;h.calls.onTokenCount=()=>{exactCalls++;return new Promise(()=>{});};
+ h.el('chat-input').value='Unsent action never counted';await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,25));
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();const estimates=h.calls.estimateCalls,requests=h.calls.requests.length,reads=h.calls.historyReads ?? 0;
+ for(let i=0;i<5;i++){
+  viewer.openContextViewer();const root=h.el('context-viewer');assert.ok(root.querySelector('.context-total'));
+  assert.match(root.querySelector('.context-count-status').textContent,/Cached context estimate/);
+  await root.querySelector('.settings-close').click();
+ }
+ assert.equal(exactCalls,0);assert.equal(h.calls.estimateCalls,estimates);assert.equal(h.calls.requests.length,requests);assert.equal(h.calls.historyReads ?? 0,reads);
  assert.match(h.el('context-label').textContent,/input.*tokens.*estimate/);
- assert.ok(root.querySelector('.context-total'),'Worker still pending, preview remains visible');
- assert.equal(h.calls.requests.length,0);
- await root.querySelector('.settings-close').click();
 });
 
-
-test('accurate preview refines a visible fast estimate when the tokenizer becomes ready',async()=>{
- const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start refining.'},{id:'a',order:2,role:'assistant',content:'Opening refining.'}]);
- h.state.settings.tokenCountingMode='accurate';let release;const ready=new Promise(resolve=>release=resolve);
- h.calls.onTokenCount=async text=>{await ready;return text.length;};
- const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();
- await new Promise(resolve=>setTimeout(resolve,25));const root=h.el('context-viewer');
- assert.match(root.querySelector('.context-count-status').textContent,/Fast estimate/);
- release();await new Promise(resolve=>setTimeout(resolve,25));
- assert.match(root.querySelector('.context-count-status').textContent,/Tokenizer count/);
+test('accurate current preview runs only on request and is cached after completion',async()=>{
+ const h=await harness();const chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start refining.'},{id:'a',order:2,role:'assistant',content:'Opening refining.'}]);
+ h.state.settings.tokenCountingMode='accurate';let release,calls=0;const ready=new Promise(resolve=>release=resolve);
+ h.calls.onTokenCount=async text=>{calls++;await ready;return text.length;};await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,25));
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();const root=h.el('context-viewer');
+ assert.equal(calls,0);assert.match(root.querySelector('.context-count-status').textContent,/Cached context estimate/);
+ const calculating=root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();await settle();assert.ok(calls>0);
+ assert.ok(root.querySelector('.context-total'),'Cached overview stays visible during calculation');
+ release();await calculating;assert.match(root.querySelector('.context-count-status').textContent,/Tokenizer count/);
+ const before=calls;await root.querySelector('.settings-close').click();viewer.openContextViewer();
+ await root.querySelectorAll('button').find(b=>b.textContent==='View cached current preview').click();assert.equal(calls,before);
  assert.equal(h.calls.requests.length,0);await root.querySelector('.settings-close').click();
 });
 
@@ -2969,4 +2968,72 @@ test('replacing content above the viewport preserves the visible message anchor'
  const visible=()=>list.children.find(node=>node.dataset.messageId==='a');const before=visible().getBoundingClientRect().top;
  chat.renderMessages(chat.memorySnapshot().messages.map(m=>m.id==='u'?{...m,content:'Shortened above viewport'}:m));
  assert.equal(visible().getBoundingClientRect().top,before);assert.ok(list.scrollTop>=0);assert.ok(list.scrollTop<=list.scrollHeight-list.clientHeight);
+});
+
+
+test('provider input usage is shared by indicator and cached window; context changes never recount it',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'A short reply.'}}],usage:{prompt_tokens:75000,completion_tokens:1200,total_tokens:76200}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const before=chat.tokenUsageSnapshot();assert.equal(before.record.kind,'provider');assert.equal(before.record.tokens,75000);
+ assert.equal(before.contextChanged,false);assert.match(h.el('context-label').textContent,/75,000.*last sent.*provider/);
+ const localInput=chat.memorySnapshot().sentContext.report.totals.input;assert.equal(before.record.report.totals.input,localInput);assert.notEqual(localInput,75000);
+ const estimates=h.calls.estimateCalls,reads=h.calls.historyReads ?? 0,requests=h.calls.requests.length;
+ h.calls.onTokenCount=()=>{throw Error('Cached usage must never invoke tokenizer');};
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();
+ for(let i=0;i<3;i++){viewer.openContextViewer();assert.match(h.el('context-viewer').querySelector('.context-total').textContent,/75,000/);await h.el('context-viewer').querySelector('.settings-close').click();}
+ h.state.settings.maxContextTokens=100000;await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(chat.tokenUsageSnapshot().contextChanged,true);assert.equal(chat.tokenUsageSnapshot().record.tokens,75000);
+ assert.equal(h.calls.estimateCalls,estimates);assert.equal(h.calls.historyReads ?? 0,reads);assert.equal(h.calls.requests.length,requests);
+ assert.ok(h.calls.messages.every(([,message])=>!Object.hasOwn(message,'tokenUsage') && !Object.hasOwn(message,'prompt_tokens')));
+});
+
+test('missing provider usage reuses sent-context estimate; a failed following request preserves that count',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.response='Completed reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const expected=chat.memorySnapshot().sentContext.report.totals.input;
+ assert.equal(chat.tokenUsageSnapshot().record.kind,'sent-estimate');assert.equal(chat.tokenUsageSnapshot().record.tokens,expected);
+ const before=JSON.stringify(chat.tokenUsageSnapshot().record);
+ h.calls.responseData={error:{message:'Provider unavailable'}};h.el('chat-input').value='Another action';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(JSON.stringify(chat.tokenUsageSnapshot().record),before);
+});
+
+test('provider count survives reload through device cache without being added to story messages',async()=>{
+ const idb=indexedDBFixture(),h=await harness({globals:{indexedDB:idb.indexedDB}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'Cached reply.'}}],usage:{prompt_tokens:75000}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();await settle();
+ const cache=await h.use('chat-cache.js'),saved=await cache.loadChatCache('test-user','improvement');assert.equal(saved.tokenUsage.tokens,75000);
+ const fresh=await harness({globals:{indexedDB:idb.indexedDB}});const restored=await openImprovementChat(fresh,{},chat.memorySnapshot().messages);await settle();
+ assert.equal(restored.tokenUsageSnapshot().record.tokens,75000);assert.equal(restored.tokenUsageSnapshot().record.kind,'provider');
+ assert.equal(fresh.calls.requests.length,0);assert.equal(fresh.calls.estimateCalls ?? 0,0);
+});
+
+
+test('regeneration replaces the cached provider count with the new completed request usage',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'First reply.'}}],usage:{prompt_tokens:75000}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.equal(chat.tokenUsageSnapshot().record.tokens,75000);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'Replacement reply.'}}],usage:{prompt_tokens:76000,completion_tokens:1800,total_tokens:77800}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Regenerate').click();
+ assert.equal(chat.tokenUsageSnapshot().record.tokens,76000);assert.equal(chat.tokenUsageSnapshot().record.kind,'provider');
+ assert.match(h.el('context-label').textContent,/76,000.*last sent/);
+});
+
+test('a manual preview is invalidated by context changes and cannot publish a stale result',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Reply.'}]);
+ await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,15));
+ h.state.settings.tokenCountingMode='accurate';let release,started;const gate=new Promise(resolve=>release=resolve),ready=new Promise(resolve=>started=resolve);
+ h.calls.onTokenCount=async text=>{started();await gate;return text.length;};
+ const computing=chat.calculateCurrentTokenPreview();await ready;h.state.settings.maxContextTokens=110000;release();
+ await assert.rejects(computing,/changed/);assert.equal(chat.tokenUsageSnapshot().previewCached,false);
+});
+
+
+test('provider input_tokens usage is accepted without adding output or reasoning usage',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'Reply.'}}],usage:{input_tokens:75000,output_tokens:21000}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.equal(chat.tokenUsageSnapshot().record.tokens,75000);assert.equal(chat.tokenUsageSnapshot().record.kind,'provider');
 });
