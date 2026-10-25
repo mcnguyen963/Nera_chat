@@ -29,7 +29,7 @@ test('prompt files load once at a Pages subpath and preserve text and template d
   for (const [key, value] of Object.entries(api.prompts)) {
     assert.ok(value.trim(), key);
   }
-  assert.match(api.prompts.narrator, /RESOLVE IN THE SCENE: NO DEFERRAL/);
+  assert.match(api.prompts.narrator, /RESOLVE IN THE SCENE: NO ARTIFICIAL DEFERRAL/);
   assert.match(api.prompts.plan, /Never output <plan>/);
   assert.match(api.prompts.planThread, /Omit it for pure OOC/);
   assert.match(api.prompts.continuity, /A lower line is not automatically truer/);

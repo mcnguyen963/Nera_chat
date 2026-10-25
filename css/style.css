@@ -168,6 +168,8 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .composer-memory-status { display: flex; align-items: center; justify-content: flex-end; gap: 6px; max-width: var(--reading-width, 740px); margin: 0 auto 5px; color: #ff949b; font-size: 11px; line-height: 18px; }
 .composer-memory-status[hidden] { display: none; }
 .composer-memory-status::before { content: ''; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: #ff626b; animation: memory-pulse 1.2s infinite alternate; }
+.composer-memory-status.upcoming { color: #e8bb6a; }
+.composer-memory-status.upcoming::before { background: #e8bb6a; animation: none; }
 .composer-box.memory-updating::after { content: ''; position: absolute; top: -1px; right: -1px; width: 44px; height: 24px; border-top: 2px solid #ff626b; border-right: 2px solid #ff626b; border-top-right-radius: inherit; pointer-events: none; }
 .composer textarea { display: block; min-height: 30px; max-height: min(40vh, 260px); padding: 0 4px; resize: none; border: 0; border-radius: 0; background: none; overflow-y: auto; font-size: 14px; }
 .composer textarea:focus { border: 0; outline: none; }
@@ -380,11 +382,11 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .pet-choice input { width: 18px; height: 18px; flex: none; margin: 0; }
 .pet-choice-preview { display: block; width: 88px; aspect-ratio: 192 / 208; flex: none; background-repeat: no-repeat; background-size: 800% auto; }
 /* Pet branding remains visible before account settings load. */
-.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/Cinderella.png")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
+.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/Lilith_11_Animations_8_Frames.png")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
 .login-card .brand-pet { width: 112px; }
 .welcome-pet { width: 192px; }
 .has-pet .welcome-pet { display: none; }
-.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/Cinderella.png")); background-repeat: no-repeat; background-size: 800% auto; }
+.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/Lilith_11_Animations_8_Frames.png")); background-repeat: no-repeat; background-size: 800% auto; }
 @media (max-width: 720px) {
   .pet-home-slot.pet-welcome-slot { width: 156px; height: 156px; }
   .pet-choice { min-width: min(160px, 100%); flex: 1 1 42%; }

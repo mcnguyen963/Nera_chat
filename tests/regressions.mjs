@@ -380,7 +380,7 @@ test('Thinking and sampling controls use only enabled request parameters', async
   const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
   assert.equal(h.settings.DEFAULT_SETTINGS.maxResponseTokens, 8192);
   assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive (?:dark fantasy )?roleplay/);
-  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /RESOLVE IN THE SCENE: NO DEFERRAL/);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /RESOLVE IN THE SCENE: NO ARTIFICIAL DEFERRAL/);
   assert.equal(h.el('thinking-options').classList.contains('hidden'), true);
   assert.equal(h.el('advanced-options').classList.contains('hidden'), true);
   h.el('set-reasoning-enabled').checked = true;
@@ -1179,6 +1179,66 @@ test('S12 recent narration selects cards after current input mentions; rendering
  const selection=s.selectEntries(cards,normalizeMemory({lorebooks:true}), 'Mira',null,'Kael arrives.');
  assert.deepEqual(Array.from(selection.selected.characters,x => x.reason),['mentioned','recent mention']);
  assert.doesNotMatch(s.renderEntry(cards[0]),/origin:/);assert.match(s.renderEntry(cards[0],null,'',{provenance:true}),/origin:/);
+});
+test('composer memory notice advances from next turn through deferred, running and completed updates',async()=>{
+ const h=await harness(),memory={autoUpdate:true,batchTurns:2,lagTurns:1},memoryState={extractedThroughOrder:0};
+ const history=n=>Array.from({length:n*2},(_,i)=>({id:'notice'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Story',narratorTurn:Math.floor(i/2)+1}));
+ const chat=await openImprovementChat(h,{memory,memoryState},history(1));
+ await chat.seedMessagesFixture({messages:history(1),hasEarlier:false});
+ const notice=h.el('composer-memory-status'),box=h.el('composer-box');
+ assert.equal(notice.hidden,true);
+ await chat.seedMessagesFixture({messages:history(2),hasEarlier:false});
+ assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Memory update after next turn.');assert.equal(notice.classList.contains('upcoming'),true);assert.equal(box.classList.contains('memory-updating'),false);
+ let toasts=0;h.document.addEventListener('memory-toast',()=>toasts++);
+ await chat.seedMessagesFixture({messages:history(3),hasEarlier:false});
+ assert.equal(notice.textContent,'Memory update pending.');
+ const reads=h.calls.reads,historyReads=h.calls.historyReads,requests=h.calls.requests.length;
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'idle'}});
+ assert.equal(notice.textContent,'Memory update pending.');assert.equal(h.calls.reads,reads);assert.equal(h.calls.historyReads,historyReads);assert.equal(h.calls.requests.length,requests);assert.equal(toasts,0);
+ h.calls.memoryRunning=true;
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'running'}});
+ assert.equal(notice.textContent,'Updating memory · Keep open');assert.equal(notice.classList.contains('upcoming'),false);assert.equal(box.classList.contains('memory-updating'),true);
+ await h.document.dispatchEvent({type:'memory-session-saved',detail:{sessionId:'improvement',partial:{'memoryState.extractedThroughOrder':4}}});
+ h.calls.memoryRunning=false;
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'idle'}});
+ assert.equal(notice.hidden,true);assert.equal(box.classList.contains('memory-updating'),false);
+ await chat.seedMessagesFixture({messages:history(4),hasEarlier:false});
+ assert.equal(notice.textContent,'Memory update after next turn.');
+ chat.setSession('another-story');assert.equal(notice.hidden,true);assert.equal(notice.classList.contains('upcoming'),false);
+});
+test('composer advance notice responds to settings, checkpoints, history edits, failures and logout',async()=>{
+ const h=await harness(),memory={autoUpdate:true,batchTurns:2,lagTurns:0},memoryState={extractedThroughOrder:0};
+ const messages=[{id:'u',order:1,role:'user',content:'Go'},{id:'a',order:2,role:'assistant',content:'Story'}];
+ const chat=await openImprovementChat(h,{memory,memoryState},messages);
+ await chat.seedMessagesFixture({messages,hasEarlier:false});
+ const notice=h.el('composer-memory-status');assert.equal(notice.hidden,false);
+ const patch=partial=>h.document.dispatchEvent({type:'memory-session-saved',detail:{sessionId:'improvement',partial}});
+ for(const partial of [{'memory.autoUpdate':false},{'memory.autoUpdate':true,'memoryState.paused':true},{'memoryState.paused':false,'memoryState.extractedThroughOrder':null}]) {
+  await patch(partial);assert.equal(notice.hidden,true);
+ }
+ await patch({'memoryState.extractedThroughOrder':0});assert.equal(notice.hidden,false);
+ await patch({'memory.batchTurns':3});assert.equal(notice.hidden,true);
+ await patch({'memory.batchTurns':2});assert.equal(notice.hidden,false);
+ await chat.seedMessagesFixture({messages:[],hasEarlier:false});assert.equal(notice.hidden,true);
+ await chat.seedMessagesFixture({messages,hasEarlier:false});assert.equal(notice.hidden,false);
+ await patch({'memoryState.paused':true,'memoryState.failureStreak':3,'memoryState.lastError':'Update failed'});assert.equal(notice.hidden,true);
+ h.calls.memoryRunning=true;
+ await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'running'}});
+ assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Updating memory · Keep open');
+ await chat.prepareChatLogout();assert.equal(notice.hidden,true);assert.equal(h.el('composer-box').classList.contains('memory-updating'),false);
+});
+test('composer advance notice stays hidden for incomplete or stale history without fetching history',async()=>{
+ const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
+ const h=await harness({sources:{'ui/chat-view.js':source+`\nexport function noticeHistoryFixture({revision,earlier,full}){historyMessages=full ? lastMessages : null;historyRevision=revision;hasEarlier=earlier;updateMemoryChip();}`}});
+ const messages=[{id:'u',order:1,role:'user',content:'Go'},{id:'a',order:2,role:'assistant',content:'Story'}];
+ const chat=await openImprovementChat(h,{memory:{autoUpdate:true,batchTurns:2,lagTurns:0},memoryState:{extractedThroughOrder:0},historyRevision:5},messages);
+ await chat.seedMessagesFixture({messages,hasEarlier:false});
+ const notice=h.el('composer-memory-status');assert.equal(notice.hidden,false);
+ const reads=h.calls.historyReads;
+ chat.noticeHistoryFixture({revision:5,earlier:true,full:false});assert.equal(notice.hidden,true);
+ chat.noticeHistoryFixture({revision:4,earlier:false,full:true});assert.equal(notice.hidden,true);
+ chat.noticeHistoryFixture({revision:5,earlier:false,full:false});assert.equal(notice.hidden,false);
+ assert.equal(h.calls.historyReads,reads);
 });
 test('memory failure details appear on the first failure in the toast and settings panel',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
@@ -3251,4 +3311,31 @@ test('Sync refuses to discard conflicted local work if its recovery backup canno
  h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.addMessage=async()=>{throw Object.assign(Error('Stale save'),{code:'story-conflict'});};
  const store=(await h.use('local-story-store.js')).storyStore('improvement');store.enqueue('add',{id:'lost',message:{role:'user',content:'Do not lose this local action'}});await assert.rejects(store.flush());
  assert.equal(await chat.syncChatData(),false);assert.equal(store.status.pending,1);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Do not lose this local action');assert.equal(h.calls.requests.length,0);
+});
+
+test('Imported copy-only recovery offers Copy and Discard without changing a Director contract',async()=>{
+ const reply={id:'recovered',sid:'improvement',owner:'test-user',recoveredFromBackup:true,recoveryCopyOnly:true,recoveryReason:'The original target is missing.',replanReplacement:true,
+  message:{role:'assistant',content:'Recovered narration.',thinking:'Preserved reasoning.',directorTurnId:'old-contract',truncated:true}};
+ let stored=reply;
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async()=>stored,storeUnsavedReply:async(_owner,_sid,value)=>{stored=value;return true;}}}});
+ const chat=await openImprovementChat(h,{directorState:saveSeed,directorPending:'unrelated-contract'},[{id:'a',role:'assistant',order:1,content:'Original reply.'}]);await settle();
+ const root=h.el('message-list').querySelector('.unsaved');assert.ok(root);
+ assert.deepEqual(root.querySelectorAll('button').map(b=>b.textContent),['Copy','Discard']);
+ assert.ok(root.querySelectorAll('p').some(p=>p.textContent.includes('original target is missing')));
+ await namedButton(root,'Copy').click();assert.equal(h.calls.clipboard,'Recovered narration.');
+ await namedButton(root,'Discard').click();assert.equal(stored,null);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+ assert.equal(chat.memorySnapshot().session.directorPending,'unrelated-contract');assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
+});
+
+for(const replacement of [false,true])test('Imported safe '+(replacement?'replacement':'append')+' saves existing narration without a model call',async()=>{
+ const reply={id:replacement?'a':'recovered',sid:'improvement',owner:'test-user',sourceRevision:0,minOrder:2,recoveredFromBackup:true,recoveryCopyOnly:false,
+  ...(replacement?{overwriteId:'a',order:2}:{}),message:{role:'assistant',content:'Recovered narration.',thinking:'Retained reasoning.'}};
+ let stored=reply;
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async()=>stored,storeUnsavedReply:async(_owner,_sid,value)=>{stored=value;return true;}}}});
+ const messages=[{id:'u',order:1,role:'user',content:'Begin.'},...(replacement?[{id:'a',order:2,role:'assistant',content:'Old reply.'}]:[])];
+ const chat=await openImprovementChat(h,{nextOrder:replacement?2:1,historyRevision:0},messages);await settle();
+ const root=h.el('message-list').querySelector('.unsaved');assert.ok(root);await namedButton(root,'Save again').click();await settle();
+ assert.equal(stored,null);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Recovered narration.');
+ assert.equal(chat.memorySnapshot().messages.at(-1).thinking,'Retained reasoning.');assert.equal(h.calls.requests.length,0);
+ assert.equal(chat.memorySnapshot().messages.length,2);
 });

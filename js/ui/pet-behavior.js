@@ -1,6 +1,16 @@
 // Pure sprite, gesture, and geometry helpers shared by the pet view and tests.
 const animation = (row, frames = 6, fps = 6) => ({ row, frames, fps });
 export function petAnimations(file) {
+  if (/^Lilith_11_Animations_8_Frames\.png$/i.test(file)) {
+    return {
+      idle: animation(0, 8, 5), right: animation(1, 8, 10),
+      left: { ...animation(1, 8, 10), flip: true },
+      wave: animation(2, 8), jump: animation(4, 8, 8),
+      yawn: animation(7, 8, 5), curious: animation(3, 8),
+      thinking: animation(5, 8, 5), writing: animation(6, 8),
+      sleep: animation(10, 8, 3),
+    };
+  }
   const lilith = /^(?:lilith|lillith-v2|cinderella)\.(webp|png)$/i.test(file);
   return {
     idle: animation(0, 6, 5), right: animation(1, 8, 10), left: animation(2, 8, 10),

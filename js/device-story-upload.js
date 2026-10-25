@@ -22,9 +22,10 @@ export function deviceStoryCopies({sid,current,cached,aux,outbox,storySettings,l
   const copies=[],seen=new Set();copies.warnings=[];
   const add=(label,view,backupSnapshot=null)=>{
     if(!view?.session || view.session.id!==sid || !Array.isArray(view.messages))return;
-    const key=fingerprint({session:view.session,messages:view.messages});if(seen.has(key))return;seen.add(key);
-    copies.push({label,snapshot:backupSnapshot?clean(backupSnapshot):{format:'nera-chat-backup',version:1,deviceHistoryComplete:true,exportedAt:new Date().toISOString(),session:clean(view.session),messages:clean(view.messages),
-      storySettings:clean(storySettings),lore:clean(loreSnapshot?.entries ?? []),loreSnapshot:clean(loreSnapshot ?? {}),directorTurns:clean(Object.values({...aux?.turns,...view.turns})),...(unsavedReply?{unsavedReply:clean(unsavedReply)}:{})}});
+    const snapshot=backupSnapshot?clean(backupSnapshot):{format:'nera-chat-backup',version:1,deviceHistoryComplete:true,exportedAt:new Date().toISOString(),session:clean(view.session),messages:clean(view.messages),
+      storySettings:clean(storySettings),lore:clean(loreSnapshot?.entries ?? []),loreSnapshot:clean(loreSnapshot ?? {}),directorTurns:clean(Object.values({...aux?.turns,...view.turns})),...(unsavedReply?{unsavedReply:clean(unsavedReply)}:{})};
+    const {exportedAt,...contents}=snapshot,key=fingerprint(contents);if(seen.has(key))return;seen.add(key);
+    copies.push({label,snapshot});
   };
   const addUnsaved=(label,view,reply,backupSnapshot=null)=>{
   if(view && reply?.message && !view.messages.some(m=>m.id===reply.id && m.content===reply.message.content)){

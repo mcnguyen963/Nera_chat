@@ -1017,8 +1017,8 @@ for(const migrated of [false,true])test(`Timeline uniqueness uses a query limite
  assert.equal(h.reads.collections.filter(p=>p===collection).length,baseline+1);assert.equal(h.documents.has(collection+'/'+next.id),false);
 });
 for(const migrated of [false,true])test(`cached ${migrated?'selective':'legacy'} lore round trips IDs, sources, approvals and schedules through JSON and JSONL`,async()=>{
- const h=await setup();await h.api.addMessage('s',{role:'assistant',content:'Story'});
- const character=loreEntry();character.sections.appearance.lines[0].sourceRevision=0;
+ const h=await setup(),narrated=await h.api.addMessage('s',{role:'assistant',content:'Story'});
+ const character=loreEntry();Object.assign(character.sections.appearance.lines[0],{sourceRevision:0,src:narrated.order,evidence:[{id:narrated.id,order:narrated.order,revision:0}]});
  const plan=h.lines.makeEntry('plan','Festival',{schedule:{start:'1/10/738',end:'20/10/738',status:'pending',phases:[{id:'intro',title:'Introduction',start:'1/10/738',end:'5/10/738',text:'Welcome',status:'completed'}]}});plan.id='festival';
  await h.lore.createEntry('s',character);await h.lore.createEntry('s',plan);
  if(migrated){const entries=await h.lore.getLore('s');entries[0]=h.records.reconcileRecords(entries[0]);h.records.approveRecord(entries[0],entries[0].recordLayout.records[0]);await h.lore.migrateRecords('s',entries,{expectedRevision:2});}
@@ -1031,6 +1031,19 @@ for(const migrated of [false,true])test(`cached ${migrated?'selective':'legacy'}
   assert.equal(reads,migrated?2:0,'only explicit schema conversion reads the empty destination; import writes populate its cache');
   await h.lore.getLore(imported);assert.equal(h.reads.collections.filter(p=>p==='users/u/sessions/'+imported+'/lore').length,migrated?2:0);
  }
+});
+
+for(const migrated of [false,true])test(`imported ${migrated?'selective':'legacy'} stale memory stays blocked through real lore persistence`,async()=>{
+ const h=await setup(),narrated=await h.api.addMessage('s',{role:'assistant',content:'Story'}),character=loreEntry();
+ Object.assign(character.sections.appearance.lines[0],{sourceRevision:90,src:narrated.order,evidence:[{id:narrated.id,order:narrated.order,revision:0}]});
+ await h.lore.createEntry('s',character);
+ if(migrated){const entries=await h.lore.getLore('s');entries[0]=h.records.reconcileRecords(entries[0]);for(const r of entries[0].recordLayout.records)h.records.approveRecord(entries[0],r);await h.lore.migrateRecords('s',entries,{expectedRevision:1});}
+ Object.assign(h.documents.get(h.sessionPath),{historyRevision:120,memoryInvalidations:[{revision:110,fromOrder:narrated.order,toOrder:narrated.order}],memoryState:{extractedThroughOrder:narrated.order,needsRebuild:true,rebuildFromOrder:narrated.order}});
+ const backup=await h.transfer.buildFullBackup('s'),id=await h.transfer.importSillyTavern({name:'stale.json',size:1000,text:async()=>JSON.stringify(backup)});
+ const session=h.documents.get('users/u/sessions/'+id),entries=await h.lore.getLore(id),history=await h.api.getMessages(id),note=entries[0].sections.appearance.lines[0];
+ assert.equal(note.needsReview,true);assert.equal(note.sourceRevision,0);assert.equal(session.memoryState.needsRebuild,true);
+ assert.equal(h.source.usableLore(entries,history,session).entries[0].sections.appearance.lines.length,0);
+ if(migrated){const record=entries[0].recordLayout.records.find(r=>h.records.resolveRecord(entries[0],r).sources.some(s=>s.lineId===note.id));assert.ok(record);assert.equal(record.approval,undefined);}
 });
 
 test('Story JSONL and full backups round trip only allowed settings and old files use the preserved seed',async()=>{

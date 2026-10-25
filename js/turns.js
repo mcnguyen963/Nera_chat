@@ -34,6 +34,20 @@ export function dueRange(messages, memoryState, mem, { manual = false } = {}) {
   const chosenTurns = new Set(chosen.map(a => a.turn));
   return { messages:messages.filter(m => m.role !== 'summary' && chosenTurns.has(turns.turnById.get(m.id))), fromTurn: chosen[0].turn, toTurn: end.turn, endOrder: end.order, assistants: chosen, turns };
 }
+// Eligibility only: callers handle automatic-update settings and paused/running state.
+export function memoryUpdateTiming(messages, memoryState, mem) {
+  if (memoryState?.extractedThroughOrder == null) return null;
+  if (dueRange(messages,memoryState,mem)) return 'due';
+  const order = messages.reduce((max,m) => Math.max(max,m.order),0);
+  const turn = computeTurns(messages).lastTurn+1;
+  // A later user input also accepts earlier reviewable replies, just as Send does.
+  // Symbols keep these temporary IDs distinct from every saved message ID.
+  const projected = [...messages,
+    { id:Symbol('next-user'),role:'user',order:order+1,narratorTurn:turn },
+    { id:Symbol('next-reply'),role:'assistant',order:order+2,narratorTurn:turn,acceptance:'accepted' },
+  ];
+  return dueRange(projected,memoryState,mem) ? 'next-turn' : null;
+}
 export function formatTurnsTranscript(messages, turns = computeTurns(messages), { range, protagonist = '', title } = {}) {
   const lines = title ? [`# ${title} — transcript for lorebook generation`, `# Protagonist: ${protagonist || 'the main character'}`, '# Turn N = stable narrator turn; deleted turns keep their numbers. User messages belong to the following reply.', ''] : [];
   const timeline=sceneTimeline(messages);

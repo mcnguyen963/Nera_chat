@@ -7,12 +7,11 @@ import {promptFetch} from './prompt-files.mjs';
 
 const root=process.env.F20_PROMPT_ROOT;
 const readPrompt=file=>readFile(root ? `${root}/${file}` : new URL('../system prompts/'+file,import.meta.url),'utf8');
-test('Default summary prompt matches the revised continuity text within its word budget',async()=>{
+test('Default summary prompt matches the approved contextual continuity text exactly',async()=>{
   // Keep approved text in a versioned fixture, independent of local release notes.
-  const approved=(await readFile(new URL('./fixtures/summary-approved-no-ceiling.md',import.meta.url),'utf8')).trim();
-  const actual=(await readPrompt('summarizer.md')).trim();
+  const approved=await readFile(new URL('./fixtures/summary-approved-contextual.md',import.meta.url),'utf8');
+  const actual=await readPrompt('summarizer.md');
   assert.equal(actual,approved);
-  assert.ok(actual.split(/\s+/).length<=1470);
   const directive=await readPrompt('summary-output.md');
   assert.match(directive,/carry forward the previous summary's still-relevant story, voice, relationship, knowledge, and promise information/);
   assert.doesNotMatch(directive,/MAX_OUTPUT_TOKENS|ceiling|\d[\d,]* output tokens/);

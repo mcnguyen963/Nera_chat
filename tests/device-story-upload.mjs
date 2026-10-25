@@ -139,3 +139,24 @@ test('Device upload backs up the active legacy history before publishing a chunk
  const result=await api.uploadDeviceStory(device);assert.equal(result.cloudBackup.messages[1].content,'Original legacy reply');assert.equal(result.cloudBackup.messages[1].id,'legacy-a');
  assert.equal(documents.get(root).storageVersion,2);assert.equal(documents.get(root+'/messages/legacy-a').content,'Original legacy reply');
 });
+
+for(const [difference,mutate] of [
+ ['prompts',s=>s.storySettings.values.narratorSystemPrompt='Recovered custom prompt'],
+ ['lore',s=>s.lore[0].sections.text.text='Different saved canon'],
+ ['lore metadata',s=>s.loreSnapshot.loadedRevision=7],
+ ['Director records',s=>s.directorTurns=[{id:'extra-checkpoint',version:1}]],
+ ['unsaved narration',s=>s.unsavedReply={id:'paid',overwriteId:'missing',message:{role:'assistant',content:'Recovered paid reply'}}],
+])test('Recovery keeps identical histories with different '+difference+' selectable without Firebase reads',async()=>{
+ const {api,device,calls}=await setup(),options={sid:'story',current:{session:device.session,messages:device.messages,turns:{}},storySettings:device.storySettings,loreSnapshot:device.loreSnapshot};
+ const saved=plain(api.deviceStoryCopies(options)[0].snapshot);mutate(saved);saved.exportedAt='yesterday';
+ const before=JSON.stringify(saved),copies=api.deviceStoryCopies({...options,aux:{deviceRecoveryBackups:[{at:'yesterday',snapshot:saved}]}});
+ assert.equal(copies.length,2);assert.equal(copies[0].label,'Open story');assert.equal(copies[1].label,'Device backup · yesterday');
+ assert.equal(JSON.stringify(saved),before);assert.deepEqual(plain(copies[1].snapshot),saved);assert.equal(calls.reads,0);
+});
+
+test('Recovery collapses equivalent complete copies despite export time and object-key order differences',async()=>{
+ const {api,device}=await setup(),options={sid:'story',current:{session:device.session,messages:device.messages,turns:{}},storySettings:device.storySettings,loreSnapshot:device.loreSnapshot};
+ const saved=plain(api.deviceStoryCopies(options)[0].snapshot);saved.exportedAt='yesterday';saved.session=Object.fromEntries(Object.entries(saved.session).reverse());
+ const copies=api.deviceStoryCopies({...options,aux:{deviceRecoveryBackups:[{at:'yesterday',snapshot:saved}]}});
+ assert.equal(copies.length,1);assert.equal(copies[0].label,'Open story');
+});

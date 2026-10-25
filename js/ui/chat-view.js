@@ -40,7 +40,7 @@ import { normalizeMemory, anyMemory } from '../memory-settings.js';
 import { formatSceneForDisplay, latestScene, MAX_SCENE_LENGTH, carryScene, validateSceneValues, readSceneOutput, classifyUserInput, sceneTimeline, parseScene, sceneFromThinking } from '../scene.js';
 import { lintPlayerAgency, lintDirectorGestures, lintDirectorHistory, lintDirectorResponseBoundary, lintUnestablishedTime, isAcceptedTurn, lastUserOrderOf } from '../turn-review.js';
 import { recoverScene } from '../scene-recovery.js';
-import { computeTurns, dueRangeStatus } from '../turns.js';
+import { computeTurns, dueRangeStatus, memoryUpdateTiming } from '../turns.js';
 import { getLore, configureLoreWrites, holdLoreWrites } from '../lore-store.js';
 import * as loreStore from '../lore-store.js';
 import * as memoryUpdater from '../memory-updater.js';
@@ -486,12 +486,22 @@ function validateSavedStorySettings() {
 }
 
 function updateMemoryChip() {
-  const running = memoryUpdater.isRunning(session?.id);
+  const active = !!session && session.id === state.sessionId && !cacheWritesPaused;
+  const running = active && memoryUpdater.isRunning(session.id);
+  const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
+  const completeHistory = historyRevision === (session?.historyRevision ?? 0)
+    && (historyMessages ? historyStartOrder === 0 : latestReady && !hasEarlier);
+  const timing = active && !running && mem.autoUpdate && !effectivelyPaused(session.memoryState) && completeHistory
+    ? memoryUpdateTiming(historyMessages ?? lastMessages,session.memoryState,mem) : null;
   const composerStatus = document.getElementById('composer-memory-status');
-  if (composerStatus) composerStatus.hidden = !running;
+  if (composerStatus) {
+    const text = running ? 'Updating memory · Keep open' : timing === 'due' ? 'Memory update pending.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
+    if (composerStatus.textContent !== text) composerStatus.textContent = text;
+    composerStatus.hidden = !text;
+    composerStatus.classList.toggle('upcoming',!!timing);
+  }
   document.getElementById('composer-box')?.classList.toggle('memory-updating', running);
   const chip = document.getElementById('btn-memory'); if (!chip) return;chip.setAttribute('aria-controls','lorebook-overlay');chip.setAttribute('aria-expanded',String(managerOpen));
-  const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
   const turn = turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
   chip.classList.toggle('running', running); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
@@ -914,6 +924,7 @@ function saveLocalCache(owner, sid, snapshot) {
 export async function prepareChatLogout() {
   void selectStorySettings(null);
   cacheWritesPaused = true;indicatorRefresh.invalidate();clearChatRetry();
+  updateMemoryChip();
   clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
   busyGate.active?.abort?.();
   rewriteController?.abort();
@@ -1149,6 +1160,7 @@ function renderMessages(msgs) {
   } else restoreListPosition(position);
   queueCacheSave();
   updateRewriteControls();
+  updateMemoryChip();
 }
 
 function renderCheckpointDivider(history,visible) {
@@ -1532,6 +1544,7 @@ const indicatorRefresh = createIndicatorRefresh({
 export function scheduledPlanDraftJump() {return null;}
 export async function updateIndicator() {
   refreshTokenDisplayMeta();
+  updateMemoryChip();
   if (cacheWritesPaused || !session || !state.settings || !latestReady) return;
   clearTimeout(indicatorTimer);
   indicatorTimer=setTimeout(()=>{indicatorTimer=null;void indicatorRefresh.request();},300);
@@ -2095,6 +2108,7 @@ async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
 
 async function saveNarration(reply,asNew=false,token=null) {
   if(reply.owner!==currentUid() || reply.sid!==state.sessionId)throw new StaleTurn();
+  if(reply.recoveryCopyOnly)throw new Error(reply.recoveryReason || 'Copy this recovered reply; it cannot safely be saved into this story.');
   const store=await ensureLocalStory();if(token)assertActive(token);
   assertSource(store.view.session,reply.expectedSource ?? {historyRevision:reply.sourceRevision});
   if(reply.replanReplacement && reply.message.truncated)throw new Error('Replacement is incomplete. Continue it before saving.');
@@ -2115,9 +2129,14 @@ function renderUnsavedReply() {
   unsavedNode?.remove();unsavedNode=null;
   const reply=unsavedReplies.get(unsavedKey(currentUid(),state.sessionId));if(!reply || !el.list)return;
   const wrap=document.createElement('div');wrap.className='msg assistant unsaved';
-  const label=document.createElement('div');label.className='msg-meta';label.textContent=(reply.replanReplacement ? 'Replacement cut off · original reply kept' : 'Not saved')+(reply.conflict ? ' · story changed on another device' : '');
+  const label=document.createElement('div');label.className='msg-meta';label.textContent=(reply.recoveredFromBackup ? 'Recovered reply · not saved' : reply.replanReplacement ? 'Replacement cut off · original reply kept' : 'Not saved')+(reply.conflict ? ' · story changed on another device' : '');
   const body=document.createElement('div');body.className='msg-content';body.textContent=reply.message.content;
   const controls=document.createElement('div');controls.className='msg-actions';
+  if(reply.recoveryCopyOnly){
+    const reason=document.createElement('p');reason.className='muted';reason.textContent=reply.recoveryReason+' Copy the text to keep it, or discard this recovered copy.';
+    controls.append(actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(confirm('Discard this recovered reply?')){clearUnsaved(reply.owner,reply.sid);updateWelcome();}}));
+    wrap.append(label,body,reason,controls);if(reply.message.thinking)wrap.append(buildThinking(reply.message.thinking));el.list.append(wrap);unsavedNode=wrap;return;
+  }
   const retry=asNew=>historyAction('save-reply',async token=>{
     const pending=unsavedReplies.get(unsavedKey(reply.owner,reply.sid));if(pending!==reply)return;
     const found=await messagesApi.findSavedMessage(reply.sid,reply.id,reply.overwriteId ? reply.order : reply.minOrder,{overwrite:!!reply.overwriteId});assertActive(token);

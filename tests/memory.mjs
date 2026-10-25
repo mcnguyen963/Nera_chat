@@ -52,6 +52,40 @@ test('turn numbering handles greeting, consecutive users, summaries, trailing us
   assert.equal(t.dueRange(messages,{ extractedThroughOrder:8 },mem),null); assert.equal(t.dueRange(messages,{ extractedThroughOrder:8 },mem,{ manual:true }).endOrder,10);
   const transcript = t.formatTurnsTranscript(ms,turns); assert.match(transcript,/AUTHOR NOTE: canon/); assert.doesNotMatch(transcript,/<ad>|greeting.*thinking/s);
 });
+test('memory update timing predicts one accepted turn with lag, checkpoints and stable numbering',async () => {
+  const use = await setup(), { memoryUpdateTiming } = await use('turns.js'), { normalizeMemory } = await use('memory-settings.js');
+  const history = count => Array.from({length:count*2},(_,i) => ({id:'t'+i,order:i+1,role:i%2 ? 'assistant' : 'user',narratorTurn:Math.floor(i/2)+1,content:'Story'}));
+  for (const lagTurns of [0,2]) {
+    const mem = normalizeMemory({batchTurns:3,lagTurns});
+    for (let n=0;n<=7;n++) {
+      const input=history(n),snapshot=JSON.stringify(input);
+      assert.equal(memoryUpdateTiming(input,{extractedThroughOrder:0},mem),n>=3+lagTurns ? 'due' : n===2+lagTurns ? 'next-turn' : null,`lag ${lagTurns}, turns ${n}`);
+      assert.equal(JSON.stringify(input),snapshot);
+    }
+    assert.equal(memoryUpdateTiming(history(4+lagTurns),{extractedThroughOrder:4},mem),'next-turn');
+    assert.equal(memoryUpdateTiming(history(5+lagTurns),{extractedThroughOrder:4},mem),'due');
+    assert.equal(memoryUpdateTiming(history(7),{extractedThroughOrder:null},mem),null);
+  }
+  const gaps=history(2).map((m,i)=>({...m,narratorTurn:i<2 ? 7 : 19}));
+  assert.equal(memoryUpdateTiming(gaps,{extractedThroughOrder:0},normalizeMemory({batchTurns:3,lagTurns:0})),'next-turn');
+  // Consecutive/trailing user input and summaries do not count as completed replies.
+  const trailing=[...history(1),{id:'note',role:'summary',order:3},{id:'u1',role:'user',order:4},{id:'u2',role:'user',order:5}];
+  assert.equal(memoryUpdateTiming(trailing,{extractedThroughOrder:0},normalizeMemory({batchTurns:2,lagTurns:0})),'next-turn');
+});
+test('memory timing follows review acceptance and never projects past an incomplete Director reply',async () => {
+  const use = await setup(), { memoryUpdateTiming,dueRange } = await use('turns.js'), { normalizeMemory } = await use('memory-settings.js');
+  const mem=normalizeMemory({batchTurns:2,lagTurns:0,scene:true}),ms={extractedThroughOrder:0};
+  const input=[{id:'u1',order:1,role:'user'},{id:'a1',order:2,role:'assistant'},
+    {id:'u2',order:3,role:'user'},{id:'a2',order:4,role:'assistant',acceptance:'pending'}];
+  assert.equal(dueRange(input,ms,mem),null);
+  assert.equal(memoryUpdateTiming(input,ms,mem),'next-turn');
+  assert.equal(memoryUpdateTiming(input,ms,{...mem,scene:false}),'due');
+  assert.equal(memoryUpdateTiming(input.map(m=>m.id==='a2' ? {...m,acceptance:'accepted'} : m),ms,mem),'due');
+  for (const lagTurns of [0,1]) {
+    const blocked=input.map(m=>m.id==='a1' ? {...m,directorIncomplete:true} : m);
+    assert.equal(memoryUpdateTiming(blocked,ms,{...mem,lagTurns}),null);
+  }
+});
 test('mention boundaries, diacritics, possessives and overlapping longest names',async () => {
   const use = await setup(), { makeEntry } = await use('lore-lines.js'), select = await use('lore-select.js');
   const tom = makeEntry('characters','Tom'), old = makeEntry('characters','Old Tom'), mira = makeEntry('characters','Míra'); const index = select.buildLoreIndex([tom,old,mira]);

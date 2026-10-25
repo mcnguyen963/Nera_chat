@@ -289,7 +289,7 @@ function tap() {
   if (Date.now() - lastTap < 1000) return;
   lastTap = lastInput = Date.now();
   closeMenu();
-  const choices = /^(?:lilith|lillith-v2|cinderella)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
+  const choices = /^(?:lilith|lillith-v2|cinderella|Lilith_11_Animations_8_Frames)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
   react(choices[Math.floor(Math.random() * choices.length)]);
 }
 
@@ -490,6 +490,8 @@ function drawFrame() {
   const col = REDUCED_MOTION.matches ? 0 : frame % animation.frames;
   const position=`${-col * width}px ${-animation.row * height}px`;
   if(sprite.style.backgroundPosition!==position)sprite.style.backgroundPosition=position;
+  const transform = animation.flip ? "scaleX(-1)" : "";
+  if (sprite.style.transform !== transform) sprite.style.transform = transform;
 }
 function stop() { cancelAnimationFrame(raf); raf = 0; frameAt = 0; }
 function start() {
