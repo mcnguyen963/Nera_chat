@@ -218,7 +218,6 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .composer-thinking:focus-within { outline: 2px solid var(--muted); outline-offset: 2px; }
 #jump-to-latest { display: none; }
 @media (max-width: 720px) {
-  #floating-copy { bottom: calc(100% + 62px); }
   .chat-tab:not(.is-empty) #jump-to-latest { display: inline-flex; }
-  .jump-to-latest { width: 44px; height: 44px; border-radius: 50%; align-items: center; justify-content: center; }
+  .jump-to-latest { right: 50%; transform: translateX(50%); width: 44px; height: 44px; border-radius: 50%; align-items: center; justify-content: center; }
 }
