@@ -16,6 +16,7 @@ import { requestSource } from '../continuity.js';
 import {setIcon, rewritePresentation, contextRingPresentation, thinkingIcon} from './icons.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
+import {initJumpToLatest} from './jump-to-latest.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
@@ -704,7 +705,7 @@ export function initChatView() {
     document.getElementById("btn-new-session")?.click();
   });
   initMessageMenus();
-  document.getElementById('jump-to-latest')?.addEventListener('click', scrollToEnd);
+  initJumpToLatest({list:el.list, button:document.getElementById('jump-to-latest'), onJump:scrollToEnd});
   refreshFloatingCopy = initFloatingCopy({list:el.list, button:document.getElementById('floating-copy'), editing:()=>!!editingState, onError:error=>showToast(error,false)}) || (()=>{});
   updateWelcome();
   initQuickControls();
