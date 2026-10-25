@@ -62,6 +62,26 @@ test('persisted usage is compact, excludes private request/settings data, and su
  assert.equal(reloaded.hasPreview('u','s','v1'),false);
  await storage.clearChatCache('u');assert.equal(await storage.loadChatCache('u','s'),null);
 });
+
+test('saving token telemetry never reads or rewrites story content, and merges with legacy snapshots on reload',async()=>{
+ const device=indexedDBFixture(),use=appHarness({globals:{indexedDB:device.indexedDB}}),storage=await use('chat-cache.js');
+ const history=Array.from({length:5000},(_,i)=>({id:'m'+i,content:'x'.repeat(1000)}));
+ const legacy={...sent({at:90,tokens:10}),version:1};
+ await storage.saveChatCache('u','s',{session:{id:'s'},history,recent:history.slice(-100),tokenUsage:legacy});
+ assert.equal((await storage.loadChatCache('u','s')).tokenUsage.tokens,10);
+ const accesses=[],putSizes=[],transaction=device.db.transaction;
+ device.db.transaction=(...args)=>{const tx=transaction(...args),objectStore=tx.objectStore;tx.objectStore=name=>{
+  const store=objectStore(name);return {...store,get:key=>{accesses.push([name,'get']);return store.get(key);},put:value=>{accesses.push([name,'put']);putSizes.push(JSON.stringify(value).length);return store.put(value);}};
+ };return tx;};
+ assert.equal(await storage.saveTokenUsage('u','s',{...legacy,at:100,tokens:123}),true);
+ assert.ok(accesses.every(([name])=>name!=='sessions'));assert.ok(Math.max(...putSizes)<2048);
+ await storage.saveChatCache('u','s',{session:{id:'s'},history,recent:[],tokenUsage:legacy});
+ const reopened=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
+ assert.equal((await reopened.loadChatCache('u','s')).tokenUsage.tokens,123);
+ await reopened.saveChatCache('other','s',{session:{id:'s'},recent:[]});await reopened.saveTokenUsage('other','s',{...legacy,tokens:456});
+ await reopened.clearChatCache('u');assert.equal(await reopened.loadChatCache('u','s'),null);
+ assert.equal((await reopened.loadChatCache('other','s')).tokenUsage.tokens,456);
+});
 test('context fingerprints are compact and change for context settings',async()=>{
  const {tokenContextFingerprint}=await appHarness()('ui/token-usage-cache.js');
  const text='Long prompt '.repeat(10000),a=tokenContextFingerprint([text,1]);

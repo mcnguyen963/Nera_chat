@@ -2145,9 +2145,15 @@ function renderUnsavedReply() {
       const fresh=await getSessionFromServer(reply.sid);assertActive(token);if(!fresh || fresh.deleting)throw new Error('This story was deleted.');
       session=fresh;historyMessages=null;historyRevision=null;clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[found]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');return;
     }
-    if(asNew){const fresh=await getSessionFromServer(reply.sid);assertActive(token);if(!fresh || fresh.deleting)throw new Error('This story was deleted.');reply.sourceRevision=fresh.historyRevision ?? 0;reply.id=messagesApi.newMessageId();reply.minOrder=(fresh.nextOrder ?? 0)+1;reply.overwriteId=null;reply.order=null;}
+    if(asNew){
+      // Append against one coherent current story, including the local save queue.
+      // Failed refreshes preserve the recovery text and any pending local work.
+      await refreshStoryFromServer(token);assertActive(token);
+      Object.assign(reply,{sourceRevision:session.historyRevision ?? 0,expectedSource:requestSource(session),id:messagesApi.newMessageId(),minOrder:(session.nextOrder ?? 0)+1,overwriteId:null,order:null});
+      await storeUnsavedReply(reply.owner,reply.sid,reply);assertActive(token);
+    }
     try {
-      const result=await saveNarration(reply,asNew);assertActive(token);
+      const result=await saveNarration(reply,asNew,token);assertActive(token);
       session=result.session ?? {...session,historyRevision:result.historyRevision};historyMessages=null;historyRevision=null;
       clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[result.message]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');
     }catch(error){if(error.name==='HistoryConflict'){reply.conflict=true;void storeUnsavedReply(reply.owner,reply.sid,reply);renderUnsavedReply();}throw error;}

@@ -3327,6 +3327,34 @@ test('Imported copy-only recovery offers Copy and Discard without changing a Dir
  assert.equal(chat.memorySnapshot().session.directorPending,'unrelated-contract');assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
 });
 
+for(const failRefresh of [false,true])test('Save as new reply '+(failRefresh?'keeps recovery text after a failed refresh':'loads the latest story and appends once without regenerating'),async()=>{
+ let stored={id:'recovered',sid:'improvement',owner:'test-user',sourceRevision:0,minOrder:2,conflict:true,
+  message:{role:'assistant',content:'Recovered narration.',thinking:'Retained reasoning.'}};
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async()=>stored,storeUnsavedReply:async(_owner,_sid,value)=>{stored=value;return true;}}}});
+ const opening={id:'u',order:1,role:'user',content:'Begin.'};
+ const chat=await openImprovementChat(h,{historyRevision:0,nextOrder:1},[opening]);await settle();
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ const remote={...h.calls.sessionDocs.improvement,historyRevision:1,nextOrder:2},phone={id:'phone',role:'assistant',order:2,content:'Reply on phone.'};
+ h.calls.sessionDocs.improvement=remote;h.calls.historyRevision=1;h.calls.serverHistory=[opening,phone];
+ h.calls.onMessagesRefresh=async()=>{if(failRefresh)throw Error('Refresh offline');};
+ const {assertSource}=await h.use('continuity.js');
+ h.calls.addMessage=async(sid,message,options)=>{
+  assertSource(remote,options.expectedSource);h.calls.messages.push([sid,message,options]);
+  const saved={...message,id:options.id,order:3,revision:0},session={...remote,historyRevision:2,nextOrder:3};
+  h.calls.sessionDocs[sid]=session;return {message:saved,session,historyRevision:2};
+ };
+ const button=namedButton(h.el('message-list').querySelector('.unsaved'),'Save as new reply at the end');
+ await Promise.all([button.click(),button.click()]);await settle();
+ if(failRefresh){assert.ok(stored);assert.equal(stored.id,'recovered');assert.equal(h.calls.messages.length,0);assert.equal(chat.memorySnapshot().messages.length,1);}
+ else {
+  await(await h.use('local-story-store.js')).storyStore('improvement').flush();
+  assert.equal(stored,null);assert.equal(h.calls.messages.length,1);
+  assert.deepEqual(Array.from(chat.memorySnapshot().messages,m=>m.content),['Begin.','Reply on phone.','Recovered narration.']);
+  assert.equal(chat.memorySnapshot().messages.at(-1).thinking,'Retained reasoning.');
+ }
+ assert.equal(h.calls.requests.length,0);
+});
+
 for(const replacement of [false,true])test('Imported safe '+(replacement?'replacement':'append')+' saves existing narration without a model call',async()=>{
  const reply={id:replacement?'a':'recovered',sid:'improvement',owner:'test-user',sourceRevision:0,minOrder:2,recoveredFromBackup:true,recoveryCopyOnly:false,
   ...(replacement?{overwriteId:'a',order:2}:{}),message:{role:'assistant',content:'Recovered narration.',thinking:'Retained reasoning.'}};

@@ -132,6 +132,30 @@ test('ordinary card edits preserve concurrent importance changes and conflicting
  staged.importance=2;assert.throws(()=>h.store.mergeEntryEdits(current,staged,base),/importance changed/);
 });
 
+for(const migrated of [false,true])test(`card saves merge independent edits and reject overlapping edits in ${migrated?'record':'legacy'} storage`,async()=>{
+ const h=await setup();h.entry.sections.notes.lines=[{id:'existing',text:'Original note',by:'user',at:1}];
+ h.docs.set(h.path+'/lore/mira',structuredClone(h.entry));
+ if(migrated)await h.store.migrateRecords('s',[h.entry],{expectedRevision:0});
+ const base=(await h.store.getLore('s'))[0],remote=structuredClone(base),local=structuredClone(base);
+ remote.name='Renamed elsewhere';remote.sections.notes.text='Updated elsewhere';remote.sections.notes.lines[0].text='Note updated elsewhere';
+ await h.store.saveEntry('s',remote,base);
+ local.aliases=['New alias'];local.sections.bond.text='Independent local edit';
+ await h.store.saveEntry('s',local,base);
+ const saved=(await h.store.getLore('s'))[0];
+ assert.equal(saved.name,remote.name);assert.equal(saved.sections.notes.text,remote.sections.notes.text);
+ assert.equal(saved.sections.notes.lines[0].text,remote.sections.notes.lines[0].text);
+ assert.equal(saved.aliases[0],'New alias');assert.equal(saved.sections.bond.text,'Independent local edit');
+ for(const edit of [e=>e.name='Local rename',e=>e.sections.notes.text='Local text',e=>e.sections.notes.lines[0].text='Local note',e=>e.sections.notes.lines=[]]){
+  const conflicting=structuredClone(base);edit(conflicting);
+  await assert.rejects(h.store.saveEntry('s',conflicting,base),/changed while editing/);
+ }
+ assert.equal((await h.store.getLore('s'))[0].sections.notes.lines[0].text,remote.sections.notes.lines[0].text);
+ const removed=structuredClone(saved);removed.sections.notes.lines=[];await h.store.saveEntry('s',removed,saved);
+ const stale=structuredClone(saved);stale.aliases=['Another alias'];await h.store.saveEntry('s',stale,saved);
+ assert.equal((await h.store.getLore('s'))[0].sections.notes.lines.length,0);
+ stale.sections.notes.lines[0].text='Edit deleted note';await assert.rejects(h.store.saveEntry('s',stale,saved),/changed while editing/);
+});
+
 for(const migrated of [false,true])test(`thread archive commits and restores with conflict protection in ${migrated?'record':'legacy'} storage`,async()=>{
  const h=await setup();if(migrated)await h.store.migrateRecords('s',[h.entry],{expectedRevision:0});
  const messages=[{id:'u1',role:'user',order:1,revision:0,content:'Nera accepts the search.'},{id:'a1',role:'assistant',order:2,revision:0,content:'The search starts.',scene:'date: 24/10/738 · time: 08:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}},{id:'u2',role:'user',order:3,revision:0,content:'Nera returns the heirloom.'},{id:'a2',role:'assistant',order:4,revision:0,content:'The owner confirms the return.',scene:'date: 25/10/738 · time: 10:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}];

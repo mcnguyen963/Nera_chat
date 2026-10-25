@@ -474,6 +474,18 @@ test('stale notes remain stored while edits, deleted evidence and regeneration e
   }
   assert.equal(e.sections.text.lines.length,1);
 });
+test('lore evidence shares one history lookup per pass and checks fresh revisions on the next pass',async()=>{
+ const use=await setup(),c=await use('continuity.js'),l=await use('lore-lines.js');
+ const history=Array.from({length:5000},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',revision:0}));
+ const e=l.makeEntry('facts','Evidence');e.sections.text.lines=Array.from({length:1000},(_,i)=>({id:'n'+i,text:'Note '+i,by:'auto',src:2,evidence:[{id:'m1',order:2,revision:0}]}));
+ let scans=0;const map=history.map;history.map=function(...args){scans++;return map.apply(this,args);};
+ assert.equal(c.usableLore([e],history,{}).entries[0].sections.text.lines.length,1000);
+ assert.equal(scans,1);
+ history[1].revision=1;scans=0;
+ const changed=c.usableLore([e],history,{});
+ assert.equal(changed.entries[0].sections.text.lines.length,0);assert.equal(changed.skipped.length,1000);assert.equal(scans,1);
+ assert.equal(e.sections.text.lines.length,1000);
+});
 test('snapshots at regeneration cutoff cannot supply state; undated imports remain background',async () => {
   const use = await setup(), c = await use('continuity.js'), l = await use('lore-lines.js'), f = await use('lore-format.js');
   const e = l.makeEntry('characters','Elise'); Object.assign(e.sections.status,{ text:'At the palace',kind:'snapshot',cutoff:{ turn:5,order:10 },sourceRevision:0 });

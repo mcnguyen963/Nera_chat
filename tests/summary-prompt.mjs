@@ -7,6 +7,23 @@ import {promptFetch} from './prompt-files.mjs';
 
 const root=process.env.F20_PROMPT_ROOT;
 const readPrompt=file=>readFile(root ? `${root}/${file}` : new URL('../system prompts/'+file,import.meta.url),'utf8');
+test('Classic summaries with zero retained messages reserve only the opening and latest user context',async()=>{
+ const history=Array.from({length:20},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:'Event '+i+' '+'x'.repeat(100),narratorTurn:Math.floor(i/2)+1}));
+ const requests=[];
+ const use=appHarness({stubs:{
+  'messages.js':{getMessages:async()=>history,getCheckpointMessages:async()=>history,newMessageId:()=> 'sum',addMessage:async(_sid,message)=>({id:message.id,message})},
+  'tokenizer.js':{countTokens:async text=>text.length},
+  'llm-client.js':{chatCompletion:async request=>{requests.push(request);return {content:'Complete summary.',finishReason:'stop'};}},
+ }});
+ const settings={narratorSystemPrompt:'Narrate',summarizerSystemPrompt:'Summarize',maxContextTokens:5000,maxResponseTokens:100,summarizerMaxTokens:1000,summarizerThinkingTokens:0,keepRecentMessagesAfterSummary:0};
+ const builder=await use('context-builder.js');
+ const probe=await builder.buildContextForRequest({id:'s'},settings,{messages:history,onlyRequiredWindow:true,requireLatestUser:true});
+ assert.deepEqual(Array.from(probe.entries.filter(e=>e.id),e=>e.id),['m0','m1','m18']);
+ assert.ok(!probe.report.warnings.some(w=>w.startsWith('Recent window reduced')));
+ const result=await(await use('summarizer.js')).runSummarization({id:'s'},settings,{messages:history});
+ assert.equal(result.skipped,false);assert.equal(result.newBreakpointOrder,20);assert.ok(requests.length>0);
+ assert.ok(requests.every(r=>r.messages.reduce((n,m)=>n+m.content.length+8,8)<=5000));
+});
 test('Default summary prompt matches the approved contextual continuity text exactly',async()=>{
   // Keep approved text in a versioned fixture, independent of local release notes.
   const approved=await readFile(new URL('./fixtures/summary-approved-contextual.md',import.meta.url),'utf8');

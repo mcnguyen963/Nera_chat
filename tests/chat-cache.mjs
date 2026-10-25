@@ -15,6 +15,29 @@ test('Device recovery backups retain three complete copies and survive Sync for 
  assert.equal((await cache.loadStoryData('other','A')).deviceRecoveryBackups[0].snapshot.messages[0].content,'Other account');
 });
 
+test('new and legacy recovery backups survive cache eviction and reload, and explicit deletion stays account-scoped',async()=>{
+ const {indexedDBFixture}=await import('./indexeddb-fixture.mjs'),{appHarness}=await import('./app-harness.mjs');
+ const backup={at:'2026-10-25',snapshot:{session:{id:'legacy'},messages:[{content:'Only local copy'}]}};
+ const device=indexedDBFixture({storyData:[['u:legacy',{key:'u:legacy',value:{confirmed:{session:{id:'legacy'}},deviceRecoveryBackups:[backup]}}]]});
+ const cache=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
+ await cache.saveChatCache('u','legacy',{session:{id:'legacy'},recent:[]});
+ await cache.saveChatCache('u','new',{session:{id:'new'},recent:[]});
+ await cache.saveDeviceRecoveryBackup('u','new',{session:{id:'new'},messages:[{content:'New recovery copy'}]});
+ await cache.saveDeviceRecoveryBackup('other','legacy',backup.snapshot);
+ for(const sid of ['B','C','D'])await cache.saveChatCache('u',sid,{session:{id:sid},recent:[]});
+ const reopened=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
+ for(const [sid,text]of [['legacy','Only local copy'],['new','New recovery copy']]){
+  assert.equal(await reopened.loadChatCache('u',sid),null);
+  const saved=await reopened.loadStoryData('u',sid);
+  assert.equal(saved.deviceRecoveryBackups[0].snapshot.messages[0].content,text);assert.equal(saved.confirmed,undefined);
+ }
+ await reopened.clearChatCache('u');assert.ok((await reopened.loadStoryData('u','legacy')).deviceRecoveryBackups.length);
+ await reopened.saveDeviceRecoveryBackup('u','legacy',{session:{id:'legacy'},messages:[{content:'Another backup'}]});
+ assert.equal((await reopened.loadStoryData('u','legacy')).deviceRecoveryBackups.length,2);
+ await reopened.deleteChatCache('u','legacy');assert.equal(await reopened.loadStoryData('u','legacy'),null);
+ assert.ok((await reopened.loadStoryData('other','legacy')).deviceRecoveryBackups.length);
+});
+
 test('Clearing device chat caches removes only the current account entries', async () => {
   const entries = new Map([
     ['u:A', { uid: 'u' }], ['u:B', { uid: 'u' }], ['other:A', { uid: 'other' }],

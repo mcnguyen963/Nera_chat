@@ -43,18 +43,19 @@ export async function buildContextForRequest(session, settings, opts = {}) {
   const messages = opts.messages ?? await getMessages(session.id);
   if(opts.continuationId)continuationTarget(session,messages,opts.continuationId);
   if (settings.narrationMode !== 'director' && !memoryActive(normalizeMemory(session.memory))) {
+    const keep=Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
     let all=[...messages];
     if (opts.draftText?.trim()) all.push({id:'__legacy_draft',order:(all.filter(m=>m.role!=='summary').at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText});
     if (opts.onlyRequiredWindow) {
       const raw=all.filter(m=>['user','assistant'].includes(m.role) && m.order < (opts.upToOrder ?? Infinity));
       const first=raw.find(m=>m.role==='user'),second=first && raw.find(m=>m.role==='assistant' && m.order>first.order),last=raw.findLast(m=>m.role==='user');
-      const ids=new Set([first?.id,second?.id,last?.id,...raw.slice(-Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10)).map(m=>m.id)]);
+      const ids=new Set([first?.id,second?.id,last?.id,...(keep ? raw.slice(-keep) : []).map(m=>m.id)]);
       all=all.filter(m=>m.role==='summary' || ids.has(m.id));
     }
     const {planOverride,...options}=opts;
     const result=await buildLegacyContext({...session,allowLlmPlanUpdates:false},settings,{...options,messages:all});
     const anchors=new Set(result.entries.filter(e=>e.source==='Opening exchange').map(e=>e.id));
-    const target=all.filter(m=>['user','assistant'].includes(m.role) && !anchors.has(m.id) && m.order>(session.activeSummaryMessageId ? session.breakpointOrder ?? 0 : 0)).slice(-Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10));
+    const target=keep ? all.filter(m=>['user','assistant'].includes(m.role) && !anchors.has(m.id) && m.order>(session.activeSummaryMessageId ? session.breakpointOrder ?? 0 : 0)).slice(-keep) : [];
     const retained=target.filter(m=>result.entries.some(e=>e.id===m.id)).length;
     const warnings=[];
     if(retained<target.length) warnings.push(`Recent window reduced from ${target.length} to ${retained} messages to fit the request budget.`);

@@ -107,12 +107,21 @@ const clean = entry => {
 export function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
 export function subscribeLore(sid, callback, onError) { return subscribeVersionedLore(sid,callback,onError); }
 async function createEntryImpl(sid,entry) { validateImportance(entry); if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
+function mergeCardField(current,staged,base,label) {
+  const before=cardFingerprint(base),edited=cardFingerprint(staged),latest=cardFingerprint(current);
+  if(edited===before)return current;
+  if(latest!==before && latest!==edited)throw new Error(label+' changed while editing. Reopen the card. Your draft was not saved.');
+  return staged;
+}
 export function mergeEntryEdits(current, staged, base) {
   validateImportance(staged);
   const out = { ...current };
   if(staged.kind==='thread' && cardFingerprint(staged.threadHistory ?? null)!==cardFingerprint(base.threadHistory ?? null)){if(cardFingerprint(current.threadHistory ?? null)!==cardFingerprint(base.threadHistory ?? null))throw new Error('Thread archive changed while editing. Reopen the thread.');out.threadHistory=structuredClone(staged.threadHistory ?? null);}
   if(staged.kind==='thread' && cardFingerprint(staged.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null)){if(cardFingerprint(current.threadMeta ?? null)!==cardFingerprint(base.threadMeta ?? null))throw new Error('Thread timing changed while editing. Reopen the thread.');out.threadMeta=normalizeThreadMeta(staged.threadMeta);out.threadMetaSource=null;}
-  for (const key of ['name','aliases','alwaysLoad','draft','status']) out[key] = staged[key];
+  for (const key of ['name','aliases','alwaysLoad','draft','status']) {
+    const value=mergeCardField(current[key],staged[key],base[key],'Card '+key);
+    if(value===undefined)delete out[key];else out[key]=value;
+  }
   if(staged.book==='characters' && characterImportance(staged)!==characterImportance(base)){
     if(characterImportance(current)!==characterImportance(base))throw new Error('Character importance changed while editing. Reopen the card.');
     out.importance=characterImportance(staged);
@@ -134,12 +143,19 @@ export function mergeEntryEdits(current, staged, base) {
   }
   out.sections = { ...current.sections };
   for (const [key,section] of Object.entries(staged.sections)) {
-    const baseLines = base.sections[key]?.lines ?? [], ids = new Set(baseLines.map(l => l.id));
-    const edited = new Map(section.lines.map(l => [l.id,l]));
-    const deleted = new Set(baseLines.filter(l => !edited.has(l.id)).map(l => l.id));
-    const lines = (current.sections[key]?.lines ?? []).filter(l => !deleted.has(l.id)).map(l => ids.has(l.id) && edited.has(l.id) ? edited.get(l.id) : l);
-    for (const l of section.lines) if (!ids.has(l.id) && !lines.some(x => x.id === l.id)) lines.push(l);
-    out.sections[key] = { ...current.sections[key],...section,lines };
+    const original=base.sections[key] ?? {},latest=current.sections[key] ?? {};
+    const before=new Map((original.lines ?? []).map(l=>[l.id,l])),edited=new Map((section.lines ?? []).map(l=>[l.id,l])),saved=new Map((latest.lines ?? []).map(l=>[l.id,l]));
+    const lines=[];
+    for(const id of new Set([...saved.keys(),...edited.keys()])) {
+      const line=mergeCardField(saved.get(id),edited.get(id),before.get(id),'Note in '+key);
+      if(line)lines.push(line);
+    }
+    const merged={...latest,lines};
+    for(const field of new Set([...Object.keys(original),...Object.keys(section)]))if(field!=='lines') {
+      const value=mergeCardField(latest[field],section[field],original[field],'Section '+key+' '+field);
+      if(value===undefined)delete merged[field];else merged[field]=value;
+    }
+    out.sections[key] = merged;
   }
   return out;
 }

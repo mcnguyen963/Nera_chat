@@ -7,10 +7,10 @@ let opening;
 function database() {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
   if (!opening) opening = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 3);
+    const request = indexedDB.open(DATABASE, 4);
     let blocked=false;
     request.onupgradeneeded = () => {
-      for(const name of [STORE,'outbox','storyData','operations','loreCache'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
+      for(const name of [STORE,'outbox','storyData','operations','loreCache','recoveryBackups','tokenUsage'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
     };
     request.onblocked=()=>{blocked=true;resolve(null);};
     request.onsuccess = () => {
@@ -27,35 +27,45 @@ export async function loadChatCache(uid, sessionId) {
   const db = await database();
   if (!db) return null;
   return new Promise((resolve) => {
-    const request = db.transaction(STORE, "readonly").objectStore(STORE).get(`${uid}:${sessionId}`);
-    request.onsuccess = () => resolve(request.result?.value ?? null);
+    const tx=db.transaction([STORE,'tokenUsage'],'readonly'),key=`${uid}:${sessionId}`;
+    const request = tx.objectStore(STORE).get(key);
+    request.onsuccess = () => {
+      const saved=request.result?.value ?? null,usage=tx.objectStore('tokenUsage').get(key);
+      usage.onsuccess=()=>{const latest=usage.result?.value;resolve(latest && (!saved?.tokenUsage || latest.at>=saved.tokenUsage.at) ? {...saved,tokenUsage:latest} : saved);};
+      usage.onerror=()=>resolve(saved);
+    };
     request.onerror = () => resolve(null);
   });
 }
 
 // Update only display telemetry; do not clone or rewrite the story on a count update.
 export async function saveTokenUsage(uid,sessionId,usage) {
-  const db=await database();if(!db)return false;
-  return new Promise(resolve=>{
-    const tx=db.transaction(STORE,'readwrite'),store=tx.objectStore(STORE),key=`${uid}:${sessionId}`;
-    const request=store.get(key);
-    request.onsuccess=()=>{const existing=request.result;store.put({...existing,key,uid,savedAt:Date.now(),value:{...existing?.value,tokenUsage:usage}});};
-    tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>resolve(false);
-  });
+  return writeRecords(['tokenUsage'],tx=>tx.objectStore('tokenUsage').put({key:`${uid}:${sessionId}`,value:usage}));
 }
 
 export function nextOrder(order,sid) {return [sid,...order.filter(id=>id!==sid)].slice(0,3);}
+function evictStoryData(tx,key) {
+  const aux=tx.objectStore('storyData'),request=aux.get(key);
+  request.onsuccess=()=>{
+    const legacy=request.result?.value?.deviceRecoveryBackups;
+    if(!legacy?.length){aux.delete(key);return;}
+    // Older versions stored recovery copies inside the disposable story cache.
+    // Move them atomically before evicting that cache, including unopened stories.
+    const backups=tx.objectStore('recoveryBackups'),saved=backups.get(key);
+    saved.onsuccess=()=>{if(!saved.result)backups.put({key,value:legacy});aux.delete(key);};
+  };
+}
 export async function saveChatCache(uid,sessionId,value) {
   const db=await database();if(!db)return;
   await new Promise(resolve=>{
-    const tx=db.transaction([STORE,'outbox','storyData'],'readwrite'),store=tx.objectStore(STORE);
+    const tx=db.transaction([STORE,'outbox','storyData','recoveryBackups','tokenUsage'],'readwrite'),store=tx.objectStore(STORE);
     const pins=tx.objectStore('outbox').getAllKeys(),keys=store.getAllKeys();
     const request=store.get('meta:'+uid);
     const apply=order=>{
       store.put({key:`${uid}:${sessionId}`,uid,savedAt:Date.now(),value});
       const recent=[sessionId,...order.filter(id=>id!==sessionId)].slice(0,3);
       if(!request.result || order[0]!==sessionId)store.put({key:'meta:'+uid,order:recent});
-      for(const key of keys.result ?? [])if(key.startsWith(uid+':') && !recent.includes(key.slice(uid.length+1)) && !(pins.result ?? []).includes(key)){store.delete(key);tx.objectStore('storyData').delete(key);}
+      for(const key of keys.result ?? [])if(key.startsWith(uid+':') && !recent.includes(key.slice(uid.length+1)) && !(pins.result ?? []).includes(key)){store.delete(key);tx.objectStore('tokenUsage').delete(key);evictStoryData(tx,key);}
     };
     request.onsuccess=()=>{if(request.result)apply(request.result.order);else{const old=store.getAll();old.onsuccess=()=>apply((old.result ?? []).filter(e=>e.uid===uid).sort((a,b)=>b.savedAt-a.savedAt).map(e=>e.key.slice(uid.length+1)));}};
     tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;
@@ -78,16 +88,17 @@ export async function replaceStoryCache(uid,sid,snapshot,data,{discardPending=fa
 }
 export async function clearChatCache(uid) {
   const db=await database();if(!db)return;
-  await new Promise(resolve=>{const tx=db.transaction(STORE,'readwrite'),store=tx.objectStore(STORE),req=store.getAllKeys();req.onsuccess=()=>{for(const key of req.result)if(key.startsWith(uid+':') || key==='meta:'+uid)store.delete(key);};tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;});
+  await new Promise(resolve=>{const tx=db.transaction([STORE,'tokenUsage'],'readwrite');for(const name of [STORE,'tokenUsage']){const store=tx.objectStore(name),req=store.getAllKeys();req.onsuccess=()=>{for(const key of req.result)if(key.startsWith(uid+':') || key==='meta:'+uid)store.delete(key);};}tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;});
 }
 
 export async function deleteChatCache(uid, sessionId) {
   const db = await database();
   if (!db) return;
   await new Promise((resolve) => {
-    const transaction = db.transaction([STORE,'outbox','storyData','loreCache'], "readwrite");
+    const transaction = db.transaction([STORE,'outbox','storyData','loreCache','recoveryBackups','tokenUsage'], "readwrite");
     transaction.objectStore('loreCache').delete(`${uid}:${sessionId}`);
-    const pin=transaction.objectStore('outbox').get(`${uid}:${sessionId}`);pin.onsuccess=()=>{if(!pin.result)transaction.objectStore('storyData').delete(`${uid}:${sessionId}`);};
+    transaction.objectStore('tokenUsage').delete(`${uid}:${sessionId}`);
+    const pin=transaction.objectStore('outbox').get(`${uid}:${sessionId}`);pin.onsuccess=()=>{if(!pin.result){transaction.objectStore('storyData').delete(`${uid}:${sessionId}`);transaction.objectStore('recoveryBackups').delete(`${uid}:${sessionId}`);}};
     const store=transaction.objectStore(STORE);store.delete(`${uid}:${sessionId}`);const request=store.get('meta:'+uid);request.onsuccess=()=>{if(request.result)store.put({...request.result,order:request.result.order.filter(id=>id!==sessionId)});};
     transaction.oncomplete = resolve;
     transaction.onerror = resolve;
@@ -100,12 +111,27 @@ export async function cachedSessionIds(uid){
 }
 
 // Auxiliary data contains story content only, never provider connection settings.
-export async function loadStoryData(uid,sid) {return readRecord('storyData',`${uid}:${sid}`);}
+export async function loadStoryData(uid,sid) {
+  const db=await database();if(!db)return null;
+  return new Promise(resolve=>{
+    const key=`${uid}:${sid}`,tx=db.transaction(['storyData','recoveryBackups'],'readonly');
+    const data=tx.objectStore('storyData').get(key),backups=tx.objectStore('recoveryBackups').get(key);
+    tx.oncomplete=()=>resolve(backups.result?.value ? {...data.result?.value,deviceRecoveryBackups:backups.result.value} : data.result?.value ?? null);
+    tx.onerror=tx.onabort=()=>resolve(null);
+  });
+}
 export async function saveStoryData(uid,sid,value) {return writeRecords(['storyData'],tx=>(()=>{const store=tx.objectStore('storyData'),key=`${uid}:${sid}`,r=store.get(key);r.onsuccess=()=>store.put({key,value:{...r.result?.value,...value}});})());}
 export async function saveDeviceRecoveryBackup(uid,sid,snapshot) {
-  return writeRecords(['storyData'],tx=>{
-    const store=tx.objectStore('storyData'),key=`${uid}:${sid}`,request=store.get(key);
-    request.onsuccess=()=>{const value=request.result?.value ?? {},backup={at:new Date().toISOString(),snapshot};store.put({key,value:{...value,deviceRecoveryBackups:[backup,...(value.deviceRecoveryBackups ?? [])].slice(0,3)}});};
+  return writeRecords(['storyData','recoveryBackups'],tx=>{
+    const aux=tx.objectStore('storyData'),store=tx.objectStore('recoveryBackups'),key=`${uid}:${sid}`,request=aux.get(key);
+    request.onsuccess=()=>{
+      const value=request.result?.value ?? {},saved=store.get(key);
+      saved.onsuccess=()=>{
+        const backups=saved.result?.value ?? value.deviceRecoveryBackups ?? [],backup={at:new Date().toISOString(),snapshot};
+        store.put({key,value:[backup,...backups].slice(0,3)});
+        if('deviceRecoveryBackups' in value){delete value.deviceRecoveryBackups;aux.put({key,value});}
+      };
+    };
   });
 }
 async function readRecord(store,key) {const db=await database();if(!db)return null;return new Promise(resolve=>{const tx=db.transaction(store,'readonly'),r=tx.objectStore(store).get(key);r.onsuccess=()=>resolve(r.result?.value ?? null);r.onerror=()=>resolve(null);});}

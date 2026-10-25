@@ -13,13 +13,13 @@ export function cutoffLabel(cutoff) {
   if (!cutoff) return 'unknown cutoff';
   return [cutoff.turn != null ? `T${cutoff.turn}` : null, cutoff.order != null ? `message order ${cutoff.order}` : null, cutoff.when].filter(Boolean).join(' · ') || 'unknown cutoff';
 }
-export function noteNeedsReview(line, messages, session = {}, upToOrder = Infinity) {
+export function noteNeedsReview(line, messages, session = {}, upToOrder = Infinity, messageIndex = null) {
   if (line.needsReview || line.kind === 'snapshot' && snapshotNeedsReview(line,null,session,upToOrder)) return true;
   if (line.by === 'user' || line.by === 'import') return false;
   const sourceOrder=line.src ?? Math.max(0,...(line.evidence ?? []).map(e=>e.order ?? 0));
   if ((session.memoryInvalidations ?? []).some(i => (line.sourceRevision ?? 0)<i.revision && sourceOrder>=i.fromOrder && sourceOrder<=(i.toOrder ?? session.memoryState?.extractedThroughOrder ?? Infinity))) return true;
   if (!line.evidence?.length) return true;
-  const byId = new Map(messages.map(m => [m.id,m]));
+  const byId = messageIndex ?? new Map(messages.map(m => [m.id,m]));
   if (line.evidence.some(e => !byId.has(e.id) || revisionOf(byId.get(e.id)) !== e.revision || byId.get(e.id).order >= upToOrder)) return true;
   return false;
 }
@@ -28,12 +28,15 @@ export function snapshotNeedsReview(section, entry, session = {}, upToOrder = In
   return !!(section.unavailable || meta.kind === 'snapshot' && (meta.cutoff?.order >= upToOrder));
 }
 export function usableLore(entries, messages, session, upToOrder = Infinity, sceneOverride = null, {includeArchived=false} = {}) {
-  const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && noteNeedsReview(entry.statusSource,messages,session,upToOrder) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
+  // Share one lookup within this pass; the next pass must see edits and deletions.
+  let messageIndex;
+  const needsReview=line=>noteNeedsReview(line,messages,session,upToOrder,messageIndex ??= new Map(messages.map(m=>[m.id,m])));
+  const skipped = [], available = entries.map(entry => ({ ...entry,...(entry.statusSource && needsReview(entry.statusSource) ? { status:'open' } : {}),sections:Object.fromEntries(Object.entries(entry.sections).map(([key,s]) => {
     const meta = sectionMeta(s,entry);
     const unavailable = snapshotNeedsReview(s,entry,session,upToOrder);
     if (unavailable && s.text) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,section:key,text:s.text,reason:`${key}: snapshot needs review` });
     const lines = (s.lines ?? []).filter(l => {
-      const stale = noteNeedsReview(l,messages,session,upToOrder);
+      const stale = needsReview(l);
       if (stale) skipped.push({ entryId:entry.id,book:entry.book,name:entry.name,lineId:l.id,section:key,text:l.text,reason:'Needs review: stale or unverified evidence' });
       return !stale;
     });
@@ -42,10 +45,10 @@ export function usableLore(entries, messages, session, upToOrder = Infinity, sce
   const safe=available.map(e=>{
     if(e.kind!=='thread')return e;
     const history=e.threadHistory;
-    const archiveStale=history?.archive && [history.opened,history.resolved,history.archive.source].filter(Boolean).some(s=>noteNeedsReview(s,messages,session,upToOrder));
+    const archiveStale=history?.archive && [history.opened,history.resolved,history.archive.source].filter(Boolean).some(needsReview);
     if(archiveStale)e={...e,threadHistory:{...history,archive:null}};
-    const timingStale=e.threadMetaSource && noteNeedsReview(e.threadMetaSource,messages,session,upToOrder);
-    const closureStale=e.statusSource && noteNeedsReview(e.statusSource,messages,session,upToOrder);
+    const timingStale=e.threadMetaSource && needsReview(e.threadMetaSource);
+    const closureStale=e.statusSource && needsReview(e.statusSource);
     return {...e,...(timingStale?{threadMeta:null,threadTimingNeedsReview:true}:closureStale && e.threadMeta?{threadMeta:{...e.threadMeta,outcome:null}}:{})};
   });
   const projected=projectThreads(safe,sceneOverride ?? latestScene(messages,upToOrder,session?.memory?.startingScene).scene);
