@@ -1,6 +1,11 @@
 // OpenRouter provider discovery and device-local health. No credentials are stored here.
 export const PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
 const memory = new Map();
+const localOnly = new Set();
+globalThis.addEventListener?.('storage',event=>{
+  if(event.key===null){memory.clear();localOnly.clear();}
+  else if(event.key?.startsWith('nera.provider.cooldown.')){memory.delete(event.key);localOnly.delete(event.key);}
+});
 
 export function supportsProviders(endpoint) {
   try {
@@ -69,18 +74,18 @@ export function providerRetryAt(settings,tag,now=Date.now()) {
   if(!supportsProviders(settings.endpoint))return 0;
   const key = cooldownKey(settings,tag);
   let value = memory.get(key) ?? 0;
-  try { value = Number(localStorage.getItem(key)) || 0; } catch {}
+  try { if(!localOnly.has(key))value = Number(localStorage.getItem(key)) || 0; } catch {}
   return Number.isFinite(value) && value > now ? value : 0;
 }
 export function coolDownProvider(settings,tag,now=Date.now()) {
   const key=cooldownKey(settings,tag),until=now+PROVIDER_COOLDOWN_MS;
   memory.set(key,until);
-  try { localStorage.setItem(key,String(until)); } catch {}
+  try { localStorage.setItem(key,String(until));localOnly.delete(key); } catch {localOnly.add(key);}
   return until;
 }
 export function resetProviderCooldown(settings,tag) {
   const key=cooldownKey(settings,tag);memory.delete(key);
-  try { localStorage.removeItem(key); } catch {}
+  try { localStorage.removeItem(key);localOnly.delete(key); } catch {localOnly.add(key);}
 }
 export function availabilityFailure(error) {
   if (error.classification === 'cancelled') return false;

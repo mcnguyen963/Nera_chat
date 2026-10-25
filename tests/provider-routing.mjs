@@ -57,6 +57,29 @@ test('cooldowns separate accounts and models and share matching identities acros
   h.store.removeItem([...h.store.data.keys()][0]);assert.equal(h.routing.providerRetryAt(settings,'first'),0);
 });
 
+test('cooldowns survive failed writes, ignore stale persisted values, and allow an explicit in-page reset',async()=>{
+ const store=storage();let fail=false;
+ const originalSet=store.setItem,originalRemove=store.removeItem;
+ store.setItem=(...args)=>{if(fail)throw Error('QuotaExceededError');return originalSet(...args);};
+ store.removeItem=(...args)=>{if(fail)throw Error('Read-only storage');return originalRemove(...args);};
+ const h=await fixture(()=>ok(),store);
+ fail=true;h.routing.coolDownProvider(settings,'first');assert.equal(h.routing.providerRetryAt(settings,'first'),2800000);
+ h.advance(30*60*1000);assert.equal(h.routing.providerRetryAt(settings,'first'),0);
+ fail=false;h.routing.coolDownProvider(settings,'first');const old=h.routing.providerRetryAt(settings,'first');
+ h.advance(1000);fail=true;h.routing.coolDownProvider(settings,'first');assert.equal(h.routing.providerRetryAt(settings,'first'),old+1000);
+ h.routing.resetProviderCooldown(settings,'first');assert.equal(h.routing.providerRetryAt(settings,'first'),0);
+ assert.equal(Number([...store.data.values()][0]),old,'a failed reset must not resurrect the old persisted deadline');
+});
+
+test('another tab resetting cooldown clears a failed local persistence fallback',async()=>{
+ const listeners=[];
+ const store=storage();store.setItem=()=>{throw Error('QuotaExceededError');};
+ const api=await appHarness({globals:{localStorage:store,addEventListener:(type,fn)=>{if(type==='storage')listeners.push(fn);}}})('provider-routing.js');
+ const until=api.coolDownProvider(settings,'first',1000);assert.equal(api.providerRetryAt(settings,'first',1001),until);
+ listeners.forEach(fn=>fn({key:'nera.provider.cooldown.'+JSON.stringify(['owner','https://openrouter.ai','author/model','first']),newValue:null}));
+ assert.equal(api.providerRetryAt(settings,'first',1001),0);
+});
+
 test('authentication, credit, invalid requests, refusals and unrelated 404 stop immediately without cooldown',async()=>{
   for(const status of [400,401,402,403,404,422]) {
     const h=await fixture(()=>failure(status,'Invalid request'));

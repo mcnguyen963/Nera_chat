@@ -19,13 +19,13 @@ The Director's contract is saved before narration. Canonical state advances only
 
 History edits require live-state review. Copies and backups preserve completed checkpoints; pending attempts are archived rather than resumed automatically. A missing connection profile, invalid Director JSON, or insufficient context budget stops the request with a recoverable error.
 
-Pages deployment is configured for `feature/director-narrator`. Automated checks cover request assembly and persistence; live model quality, Firebase behavior, and device rendering require runtime validation.
+Pages deployment publishes `main` after the regression tests and build pass. Automated checks cover request assembly and persistence; live model quality, Firebase behavior, and device rendering require runtime validation.
 
 ### Local-first chat
 
 Chat edits, deletions, and new turns now update on this device immediately. Firebase saves run in order in the background. A small **Saving…** indicator disappears when everything is synced; **Changes not synced** keeps your local work and can be clicked to retry without generating another LLM reply. **Local only** means device storage is unavailable: keep the page open until syncing finishes.
 
-The device retains three recent story caches, plus stories with pending saves. Pending operations survive reopening when IndexedDB is available. Routine chat use reuses cached history, lore and story settings. Use **Sync latest data** or reload the page to fetch external changes; pending saves must finish first. Existing stories and lorebook import/export formats need no migration.
+The device retains three recent story caches, plus stories with pending saves. Pending operations survive reopening when IndexedDB is available. Routine chat use and page reloads reuse cached history, lore and story settings. Use **Sync latest data** to fetch external changes; pending saves must finish first. Existing stories and lorebook import/export formats need no migration.
 
 **Stop** discards unfinished narration immediately and frees the composer. Retrying the same user turn reuses its validated Director contract. Sending a different turn supersedes that pending contract and starts from the last completed canonical state. A reply already queued for saving before Stop remains saved.
 

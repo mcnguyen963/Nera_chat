@@ -133,12 +133,13 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     // The real pet controller is exercised independently in pets.mjs.
     'lore-store.js': {
+      markGeneratedForReview:async()=>[],commitExtraction:async(...args)=>{(calls.memoryCommits ??= []).push(args);return calls.onMemoryCommit?.(...args) ?? {entries:[],cacheApplied:true};},
       getLore:async () => {calls.loreCallbacks ??= [entries=>fixtureLore?.(entries)];calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {},holdLoreWrites:()=>({ready:calls.lorePending ? calls.onLoreWait?.() : Promise.resolve(),release(){}}), loreWritesPending: () => calls.lorePending===true, waitForLoreWrites: async () => calls.onLoreWait?.(),
       subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); Promise.resolve().then(() => cb(calls.loreEntries ?? [])); return () => {}; },
       createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
       saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); return await calls.onCardSave?.(...args); }, deleteEntry: async (...args) => {await calls.onCardDelete?.(...args);return 'backup';}, mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
     },
-    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stopAndWait:async id=>{(calls.memoryStopped ??= []).push(id);await calls.onMemoryStop?.();},stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
+    'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAlongsideTurn:()=>false, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stopAndWait:async id=>{(calls.memoryStopped ??= []).push(id);await calls.onMemoryStop?.();},stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
       initPetView() {}, startPetTurn() {}, finishPetTurn:status=>{(calls.petFinishes ??= []).push(status);},
       refreshPetPlacement() {}, updatePetPhase() {}, invalidatePetLayout() {},
@@ -1138,6 +1139,126 @@ async function openImprovementChat(h, metadata = {}, messages = []) {
   return chat;
 }
 
+const waitForParallel = async predicate => {
+  for(let i=0;i<150 && !predicate();i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(predicate(),'Parallel requests did not reach the expected stage');
+};
+async function parallelChat({scene=false,retry=false,director=false}={}) {
+  let pendingDirector;
+  const h=await harness({extraStubs:{'memory-updater.js':null,...(director ? {'director-store.js':{getDirectorTurn:async()=>pendingDirector,savePendingDirectorTurn:async(_sid,turn)=>{pendingDirector=turn;},discardPendingDirector:async()=>{pendingDirector=null;}}} : {})}});
+  const history=Array.from({length:26},(_,i)=>({id:'parallel-chat'+i,order:i+1,role:i%2 ? 'assistant' : 'user',narratorTurn:Math.floor(i/2)+1,content:'Established event '+i,...(i%2 && scene ? {scene:'date: Day 1 · time: night · place: Inn · present: Mira'} : {})}));
+  if(retry)history.push({id:'retry-user',order:27,role:'user',narratorTurn:14,content:'NEW INPUT FOR TURN 14'});
+  const seed={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+  const chat=await openImprovementChat(h,{nextOrder:history.length,nextNarratorTurn:14,memory:{autoUpdate:true,updateProfileId:'parallel-memory',scene,sceneFallback:scene},memoryState:{extractedThroughOrder:0},...(director ? {directorState:seed} : {})},history);
+  h.calls.onMessageSave=()=>{h.calls.messageOrder++;};
+  Object.assign(h.state.settings,{maxContextTokens:230000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0});
+  h.state.settings.profiles.push({id:'parallel-memory',name:'Memory',endpoint:'https://memory.test',apiKey:'key',modelId:'memory-model',streaming:false});
+  const updater=await h.use('memory-updater.js'),narrator=deferred(),memory=deferred();
+  if(director) {
+    Object.assign(h.state.settings,{narrationMode:'director',directorProfileId:'parallel-director',directorMaxInputTokens:20000,directorMaxOutputTokens:4000});
+    h.state.settings.profiles.push({id:'parallel-director',endpoint:'https://director.test',apiKey:'key',modelId:'director-model',streaming:false});
+    h.calls.onMessageSaved=result=>{if(result.directorTurnId)Object.assign(result.session,{directorState:seed,directorRevision:1,directorCheckpoint:result.directorTurnId,directorPending:null,directorNeedsReview:false,directorStateHistoryOrder:result.order});};
+  }
+  const localStory=await h.use('local-story-store.js');
+  h.calls.onMemoryCommit=async sid=>{await localStory.flushStory(sid);return {entries:[],cacheApplied:true};};
+  h.calls.onRequest=async request=>{
+    if(request.model==='director-model') {
+      assert.equal(updater.isRunning('improvement'),false);assert.equal(h.calls.requests.length,1);
+      h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'completed',objective:'Describe the room',stopCondition:'Stop before the next voluntary action',memoryIds:[],requiredMemoryIds:[],updates:{}});
+    }
+    else if(request.model==='memory-model'){await memory.promise;h.calls.response='NONE';}
+    else if(request.response_format)h.calls.response=JSON.stringify({date:'Day 2',time:'night',place:'Inn',present:['Mira'],planThread:null});
+    else {await narrator.promise;h.calls.response='Mira waits beside the door.';}
+  };
+  h.el('chat-input').value='NEW INPUT FOR TURN 14';
+  const send=retry ? h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click() : h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  await waitForParallel(()=>h.calls.requests.some(r=>r.model==='memory-model'));
+  assert.equal(h.calls.requests[director ? 1 : 0].model,'model');assert.equal(h.state.busy,true);
+  const extraction=h.calls.requests.find(r=>r.model==='memory-model');
+  assert.doesNotMatch(extraction.messages.map(m=>m.content).join('\n'),/NEW INPUT FOR TURN 14|=== Turn 11|=== Turn 14/);
+  return {h,chat,updater,narrator,memory,send};
+}
+for(const outcome of ['success','failure','stop','retry'])test('real parallel memory survives narrator '+outcome+' and waits before saving',async()=>{
+  const {h,chat,updater,narrator,memory,send}=await parallelChat({retry:outcome==='retry'});
+  memory.resolve();await waitForParallel(()=>updater.lastRawAnswer('improvement')==='NONE');
+  assert.equal(h.calls.memoryCommits?.length ?? 0,0);assert.equal(h.el('composer-memory-status').textContent,'Updating memory · Keep open');
+  if(outcome==='failure')narrator.reject(Error('Narrator failed'));
+  else if(outcome==='stop')await h.stopAfterGuard();
+  else narrator.resolve();
+  await send;await waitForParallel(()=>!updater.isRunning('improvement'));
+  assert.equal(h.state.busy,false);assert.equal(h.calls.memoryCommits.length,1);
+  assert.equal(h.calls.memoryCommits[0][2].endOrder,20);assert.equal(chat.memorySnapshot().session.memoryState.extractedThroughOrder,20);
+  if(outcome==='stop')narrator.resolve();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(h.calls.requests.length,2);assert.equal(h.calls.memoryCommits.length,1);
+});
+test('narration can finish first while parallel memory remains active and commits later',async()=>{
+  const {h,chat,updater,narrator,memory,send}=await parallelChat();
+  narrator.resolve();await send;assert.equal(h.state.busy,false);assert.equal(updater.isRunning('improvement'),true);
+  assert.equal(h.calls.memoryCommits?.length ?? 0,0);
+  memory.resolve();await waitForParallel(()=>!updater.isRunning('improvement'));
+  assert.equal(chat.memorySnapshot().session.memoryState.extractedThroughOrder,20);
+  await new Promise(resolve=>setTimeout(resolve,10));assert.equal(h.calls.requests.length,2);
+});
+test('scene repair still runs alongside memory and no automatic summary or second memory job follows',async()=>{
+  const {h,updater,narrator,memory,send}=await parallelChat({scene:true});
+  narrator.resolve();await send;
+  assert.equal(h.calls.requests.length,3);assert.equal(h.calls.requests.filter(r=>r.model==='memory-model').length,1);
+  assert.equal(h.calls.requests[2].response_format.json_schema.strict,true);
+  const saved=h.calls.messages.find(([_sid,m])=>m.role==='assistant')?.[1];assert.equal(saved.sceneMeta.kind,'inferred');
+  memory.resolve();await waitForParallel(()=>!updater.isRunning('improvement'));
+  await new Promise(resolve=>setTimeout(resolve,10));assert.equal(h.calls.requests.length,3);
+});
+test('Retry reply starts eligible memory once and reuses an in-flight batch after a failed narrator request',async()=>{
+  const {h,updater,narrator,memory,send}=await parallelChat();
+  narrator.reject(Error('Narrator failed'));await send;assert.equal(updater.isRunning('improvement'),true);
+  h.calls.onRequest=async request=>{assert.notEqual(request.model,'memory-model');h.calls.response='Retry succeeded.';};
+  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+  assert.equal(h.calls.requests.filter(r=>r.model==='memory-model').length,1);
+  memory.resolve();await waitForParallel(()=>!updater.isRunning('improvement'));
+  assert.equal(h.calls.memoryCommits.length,1);
+});
+test('Director preparation finishes before narration and memory start together',async()=>{
+  const {h,chat,updater,narrator,memory,send}=await parallelChat({director:true});
+  assert.deepEqual(h.calls.requests.map(r=>r.model),['director-model','model','memory-model']);
+  narrator.resolve();await send;memory.resolve();await waitForParallel(()=>!updater.isRunning('improvement'));
+  assert.equal(h.calls.memoryCommits?.length ?? 0,1,JSON.stringify({memory:chat.memorySnapshot().session.memoryState,status:(await h.use('local-story-store.js')).storyStore('improvement').status}));
+});
+test('a failed parallel extraction is not retried by the same turn maintenance',async()=>{
+  const {h,chat,updater,narrator,memory,send}=await parallelChat();
+  memory.reject(Error('Memory provider failed'));narrator.resolve();await send;
+  await waitForParallel(()=>!updater.isRunning('improvement'));await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(h.calls.requests.filter(r=>r.model==='memory-model').length,1);assert.equal(h.calls.requests.length,2);
+  assert.equal(chat.memorySnapshot().session.memoryState.extractedThroughOrder,0);assert.equal(chat.memorySnapshot().session.memoryState.failureStreak,1);
+});
+for(const save of ['success','failure'])test('parallel memory waits for the pending narrator cloud save: '+save,async()=>{
+  const {h,chat,updater,narrator,memory,send}=await parallelChat(),cloud=deferred();let saving=false;
+  h.calls.onMessageSave=async(_sid,message)=>{h.calls.messageOrder++;if(message.role==='assistant'){saving=true;await cloud.promise;}};
+  memory.resolve();await waitForParallel(()=>updater.lastRawAnswer('improvement')==='NONE');narrator.resolve();await send;
+  await waitForParallel(()=>saving);assert.equal(updater.isRunning('improvement'),true);assert.equal(h.calls.memoryCommits?.length ?? 0,0);
+  if(save==='success')cloud.resolve();else cloud.reject(Error('Cloud unavailable'));
+  await waitForParallel(()=>!updater.isRunning('improvement'));
+  assert.equal(h.calls.memoryCommits?.length ?? 0,save==='success' ? 1 : 0);
+  assert.equal(chat.memorySnapshot().session.memoryState.extractedThroughOrder,save==='success' ? 20 : 0);
+});
+test('zero-delay memory that needs the new reply retains after-turn extraction',async()=>{
+  const h=await harness({extraStubs:{'memory-updater.js':null}});
+  const chat=await openImprovementChat(h,{nextOrder:2,nextNarratorTurn:2,memory:{autoUpdate:true,batchTurns:2,lagTurns:0,updateProfileId:'zero-memory'},memoryState:{extractedThroughOrder:0}},[{id:'u1',order:1,role:'user',content:'Begin'},{id:'a1',order:2,role:'assistant',content:'First reply'}]);
+  h.calls.onMessageSave=()=>{h.calls.messageOrder++;};
+  Object.assign(h.state.settings,{maxContextTokens:230000,maxResponseTokens:1000});
+  h.state.settings.profiles.push({id:'zero-memory',endpoint:'https://memory.test',apiKey:'key',modelId:'memory-model',streaming:false});
+  const updater=await h.use('memory-updater.js'),narrator=deferred(),memory=deferred();
+  const localStory=await h.use('local-story-store.js');h.calls.onMemoryCommit=async sid=>{await localStory.flushStory(sid);return {entries:[],cacheApplied:true};};
+  h.calls.onRequest=async request=>{if(request.model==='memory-model'){await memory.promise;h.calls.response='NONE';}else{await narrator.promise;h.calls.response='NEW COMPLETED REPLY';}};
+  h.el('chat-input').value='New action';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  await waitForParallel(()=>h.calls.requests.length===1);assert.equal(updater.isRunning('improvement'),false);
+  narrator.resolve();await send;await waitForParallel(()=>h.calls.requests.length===2);
+  assert.equal(h.state.busy,false);assert.match(h.calls.requests[1].messages.map(m=>m.content).join('\n'),/NEW COMPLETED REPLY/);
+  memory.resolve();await waitForParallel(()=>!updater.isRunning('improvement'));
+  const snapshot=chat.memorySnapshot(),reply=snapshot.messages.filter(m=>m.role==='assistant').at(-1);
+  assert.equal(snapshot.session.memoryState.extractedThroughOrder,reply.order);assert.equal(h.calls.memoryCommits[0][2].toTurn,2);
+});
+
 
 
 test('P0 cut-off reply persists without scene recovery and provider usage clears on story reset',async () => {
@@ -1188,7 +1309,7 @@ test('composer memory notice advances from next turn through deferred, running a
  const notice=h.el('composer-memory-status'),box=h.el('composer-box');
  assert.equal(notice.hidden,true);
  await chat.seedMessagesFixture({messages:history(2),hasEarlier:false});
- assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Memory update after next turn.');assert.equal(notice.classList.contains('upcoming'),true);assert.equal(box.classList.contains('memory-updating'),false);
+ assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Memory update with next reply.');assert.equal(notice.classList.contains('upcoming'),true);assert.equal(box.classList.contains('memory-updating'),false);
  let toasts=0;h.document.addEventListener('memory-toast',()=>toasts++);
  await chat.seedMessagesFixture({messages:history(3),hasEarlier:false});
  assert.equal(notice.textContent,'Memory update pending.');
@@ -1203,7 +1324,7 @@ test('composer memory notice advances from next turn through deferred, running a
  await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'idle'}});
  assert.equal(notice.hidden,true);assert.equal(box.classList.contains('memory-updating'),false);
  await chat.seedMessagesFixture({messages:history(4),hasEarlier:false});
- assert.equal(notice.textContent,'Memory update after next turn.');
+ assert.equal(notice.textContent,'Memory update with next reply.');
  chat.setSession('another-story');assert.equal(notice.hidden,true);assert.equal(notice.classList.contains('upcoming'),false);
 });
 test('composer advance notice responds to settings, checkpoints, history edits, failures and logout',async()=>{

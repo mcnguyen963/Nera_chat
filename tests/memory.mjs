@@ -59,10 +59,10 @@ test('memory update timing predicts one accepted turn with lag, checkpoints and 
     const mem = normalizeMemory({batchTurns:3,lagTurns});
     for (let n=0;n<=7;n++) {
       const input=history(n),snapshot=JSON.stringify(input);
-      assert.equal(memoryUpdateTiming(input,{extractedThroughOrder:0},mem),n>=3+lagTurns ? 'due' : n===2+lagTurns ? 'next-turn' : null,`lag ${lagTurns}, turns ${n}`);
+      assert.equal(memoryUpdateTiming(input,{extractedThroughOrder:0},mem),n>=3+lagTurns ? 'due' : n===2+lagTurns ? lagTurns ? 'with-next-turn' : 'next-turn' : null,`lag ${lagTurns}, turns ${n}`);
       assert.equal(JSON.stringify(input),snapshot);
     }
-    assert.equal(memoryUpdateTiming(history(4+lagTurns),{extractedThroughOrder:4},mem),'next-turn');
+    assert.equal(memoryUpdateTiming(history(4+lagTurns),{extractedThroughOrder:4},mem),lagTurns ? 'with-next-turn' : 'next-turn');
     assert.equal(memoryUpdateTiming(history(5+lagTurns),{extractedThroughOrder:4},mem),'due');
     assert.equal(memoryUpdateTiming(history(7),{extractedThroughOrder:null},mem),null);
   }
@@ -78,7 +78,7 @@ test('memory timing follows review acceptance and never projects past an incompl
   const input=[{id:'u1',order:1,role:'user'},{id:'a1',order:2,role:'assistant'},
     {id:'u2',order:3,role:'user'},{id:'a2',order:4,role:'assistant',acceptance:'pending'}];
   assert.equal(dueRange(input,ms,mem),null);
-  assert.equal(memoryUpdateTiming(input,ms,mem),'next-turn');
+  assert.equal(memoryUpdateTiming(input,ms,mem),'with-next-turn');
   assert.equal(memoryUpdateTiming(input,ms,{...mem,scene:false}),'due');
   assert.equal(memoryUpdateTiming(input.map(m=>m.id==='a2' ? {...m,acceptance:'accepted'} : m),ms,mem),'due');
   for (const lagTurns of [0,1]) {
@@ -176,23 +176,23 @@ test('extraction input bounds whole turns and excludes thinking and hidden plans
   const entry = l.makeEntry('characters','Mira'); entry.sections.appearance.text = 'canon'; entry.sections.appearance.lines = [line('a','scar',2)]; const input = p.buildReorganizeMessages({ settings,mem,entries:[entry] }); assert.match(input[1].content,/canon, unknown cutoff/); assert.equal(entry.sections.appearance.text,'canon');
 });
 
-async function updaterHarness(complete) {
+async function updaterHarness(complete, { countTokens=count,commitExtraction,prepare } = {}) {
   const events = [], commits = [], writes = [];
-  let live;
+  let live,owner='owner';
   const use = await setup({
-    'tokenizer.js':{ countTokens:count },'llm-client.js':{ chatCompletion:complete },
-    'lore-store.js':{ markGeneratedForReview:async () => {},commitExtraction:async (...args) => commits.push(args) },
+    'tokenizer.js':{ countTokens },'llm-client.js':{ chatCompletion:complete },
+    'lore-store.js':{ markGeneratedForReview:async () => {},commitExtraction:async (...args) => { commits.push(args);return commitExtraction?.(...args); } },
     'session-memory.js':{
       recordMemoryFailure:async (sid,lastError) => {const failureStreak=(live.session.memoryState.failureStreak ?? 0)+1,paused=failureStreak>=3;writes.push([sid,{'memoryState.failureStreak':failureStreak,'memoryState.lastError':lastError,'memoryState.paused':paused}]);return {failureStreak,lastError,paused};},
       clearMemoryInvalidations:async (_sid,{pointer}) => ({memoryInvalidations:[],memoryState:{extractedThroughOrder:pointer,needsRebuild:false,rebuildFromOrder:null,paused:false,failureStreak:0}}),
     },
-    'sessions.js':{ updateSession:async (...args) => writes.push(args) },'auth.js':{ currentUid:() => 'owner' },
+    'sessions.js':{ updateSession:async (...args) => writes.push(args) },'auth.js':{ currentUid:() => owner },
   },{ document:{ dispatchEvent:e => events.push(e.detail) },CustomEvent:class { constructor(type,init) { this.type=type; this.detail=init.detail; } } });
   const updater = await use('memory-updater.js'), { normalizeMemory } = await use('memory-settings.js');
-  live = { session:{ id:'s',memory:normalizeMemory({ autoUpdate:true,batchTurns:2,lagTurns:0,updateMaxTokens:256 }),memoryState:{ extractedThroughOrder:0,failureStreak:0 } },settings,messages:structuredClone(messages),entries:[] };
+  live = { session:{ id:'s',memory:normalizeMemory({ autoUpdate:true,batchTurns:2,lagTurns:0,updateMaxTokens:256 }),memoryState:{ extractedThroughOrder:0,failureStreak:0 } },settings:structuredClone(settings),messages:structuredClone(messages),entries:[] };
   let busy = false, unlock;
-  updater.configureMemoryUpdater({ get:() => live,busy:() => busy,waitIdle:() => busy ? new Promise(resolve => unlock=resolve) : Promise.resolve(),patch:(sid,patch,entries) => { Object.assign(live.session.memoryState,patch); if (entries) live.entries=entries; } });
-  return { updater,live,events,commits,writes,setBusy(value) { busy=value; },unlock:() => unlock?.() };
+  updater.configureMemoryUpdater({ get:() => live,busy:() => busy,prepare,waitIdle:() => busy ? new Promise(resolve => unlock=resolve) : Promise.resolve(),patch:(sid,patch,entries) => { Object.assign(live.session.memoryState,patch); if (entries) live.entries=entries; } });
+  return { updater,live,events,commits,writes,setBusy(value) { busy=value; },setOwner(value) { owner=value; },unlock:() => unlock?.() };
 }
 test('updater waits for narration before commit, advances only on success and targets original story',async () => {
   let finish;
@@ -217,6 +217,82 @@ test('ledger starts one update, rejects duplicate starts and skips auto-summary 
   assert.equal(h.updater.shouldSkipAutoSummary({ autoUpdate:true },false,{}),true); assert.equal(h.updater.shouldSkipAutoSummary({ autoUpdate:false },true,null),true); assert.equal(h.updater.shouldSkipAutoSummary({ autoUpdate:false },false,null),false);
   for (let i=0;i<30 && !finish;i++) await new Promise(resolve => setImmediate(resolve)); finish({ content:'NONE' });
   for (let i=0;i<30 && h.updater.isRunning('s');i++) await new Promise(resolve => setImmediate(resolve)); assert.equal(h.commits.length,1); assert.equal(h.live.session.memoryState.extractedThroughOrder,4);
+});
+const parallelHistory = count => Array.from({length:count*2},(_,i)=>({id:'parallel'+i,order:i+1,role:i%2 ? 'assistant' : 'user',narratorTurn:Math.floor(i/2)+1,content:'Established event '+i}));
+const waitForMemory = async predicate => {
+  for(let i=0;i<100 && !predicate();i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(predicate(),'Memory work did not reach the expected stage');
+};
+function readyParallelHistory(h) {
+  h.live.session.memory={...h.live.session.memory,batchTurns:10,lagTurns:4};
+  h.live.messages=[...parallelHistory(13),{id:'new-user',role:'user',order:27,narratorTurn:14,content:'NEW INPUT MUST NOT BE EXTRACTED'}];
+  h.live.storyEpoch=1;
+}
+test('early extraction counts the upcoming reply without inventing evidence or bypassing acceptance',async()=>{
+  const use=await setup(),t=await use('turns.js'),{normalizeMemory}=await use('memory-settings.js'),ms={extractedThroughOrder:0};
+  for(const lagTurns of [0,1,4]) {
+    const mem=normalizeMemory({batchTurns:10,lagTurns}),completed=9+lagTurns;
+    const history=parallelHistory(completed),input=[...history,{id:'next',order:history.length+1,role:'user',content:'NEW'}];
+    const before=JSON.stringify(input),range=t.alongsideTurnRange(input,ms,mem);
+    assert.equal(t.dueRange(input,ms,mem),null);
+    if(!lagTurns)assert.equal(range,null);
+    else {assert.equal(range.endOrder,20);assert.equal(range.toTurn,10);assert.equal(range.messages.length,20);assert.ok(range.messages.every(m=>history.includes(m)));}
+    assert.equal(JSON.stringify(input),before);assert.equal(t.alongsideTurnRange(history,ms,mem),null);
+    assert.equal(t.alongsideTurnRange(input,{extractedThroughOrder:null},mem),null);
+  }
+  const mem=normalizeMemory({batchTurns:2,lagTurns:0,scene:true}),input=[...parallelHistory(2),{id:'next',role:'user',order:5}];
+  input[3].acceptance='pending';assert.equal(t.alongsideTurnRange(input,ms,mem).endOrder,4);
+  input[1].directorIncomplete=true;assert.equal(t.alongsideTurnRange(input,ms,mem),null);
+});
+for(const outcome of ['success','failure','stop'])test('parallel memory saves old turns after narrator '+outcome,async()=>{
+  let finish,request,preparations=0;
+  const h=await updaterHarness(options=>{request=options;return new Promise(resolve=>finish=resolve);},{prepare:async()=>{preparations++;}});
+  readyParallelHistory(h);h.setBusy(true);
+  assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),true);
+  assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),false);
+  await waitForMemory(()=>!!finish);
+  assert.equal(preparations,0);assert.doesNotMatch(request.messages.map(m=>m.content).join('\n'),/NEW INPUT MUST NOT BE EXTRACTED|=== Turn 11|=== Turn 14/);
+  finish({content:'NONE'});await new Promise(resolve=>setImmediate(resolve));assert.equal(h.commits.length,0);
+  if(outcome==='success')h.live.messages.push({id:'reply14',role:'assistant',order:28,narratorTurn:14,content:'New reply'});
+  h.setBusy(false);h.unlock();await waitForMemory(()=>!h.updater.isRunning('s'));
+  assert.equal(request.signal.aborted,false);assert.equal(h.commits.length,1);assert.equal(h.commits[0][2].endOrder,20);
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,20);assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),false);
+});
+test('parallel memory captures inputs before asynchronous token counting and can finish after narration',async()=>{
+  let releaseCount,finish,request;
+  const counting=new Promise(resolve=>releaseCount=resolve);
+  const h=await updaterHarness(options=>{request=options;return new Promise(resolve=>finish=resolve);},{countTokens:async text=>{await counting;return text.length;}});
+  readyParallelHistory(h);h.live.settings.modelId='captured-model';h.setBusy(true);
+  assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),true);
+  h.live.settings.modelId='later-model';h.live.session.memory.lagTurns=50;
+  h.live.messages.push({id:'reply14',role:'assistant',order:28,narratorTurn:14,content:'NEW NARRATION'});
+  h.setBusy(false);releaseCount();await waitForMemory(()=>!!finish);
+  assert.equal(request.settings.modelId,'captured-model');assert.doesNotMatch(request.messages.map(m=>m.content).join('\n'),/NEW NARRATION/);
+  finish({content:'NONE'});await waitForMemory(()=>!h.updater.isRunning('s'));
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,20);
+});
+for(const change of ['edit','settings','checkpoint','epoch','account','disabled','stop'])test('parallel memory rejects stale or cancelled work: '+change,async()=>{
+  let finish;
+  const h=await updaterHarness(()=>new Promise(resolve=>finish=resolve));readyParallelHistory(h);
+  h.live.settings._storySettingsRevision=1;h.live.session.storySettingsRevision=1;
+  assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),true);await waitForMemory(()=>!!finish);
+  if(change==='edit')h.live.messages[0].content='Edited';
+  if(change==='settings')h.live.session.storySettingsRevision=2;
+  if(change==='checkpoint')h.live.session.memoryState.extractedThroughOrder=4;
+  if(change==='epoch')h.live.storyEpoch++;
+  if(change==='account')h.setOwner('another-owner');
+  if(change==='disabled')h.live.session.memory.autoUpdate=false;
+  if(change==='stop')await h.updater.stopAndWait('s');
+  finish({content:'NONE'});await new Promise(resolve=>setImmediate(resolve));await waitForMemory(()=>!h.updater.isRunning('s'));
+  assert.equal(h.commits.length,0);assert.equal(h.live.session.memoryState.extractedThroughOrder,change==='checkpoint' ? 4 : 0);assert.equal(h.writes.length,0);
+});
+test('parallel memory honors automatic settings and failed writes do not advance its checkpoint',async()=>{
+  const h=await updaterHarness(async()=>({content:'NONE'}),{commitExtraction:async()=>{throw Error('Cloud save failed');}});readyParallelHistory(h);
+  h.live.session.memory.autoUpdate=false;assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),false);
+  h.live.session.memory.autoUpdate=true;h.live.session.memoryState.paused=true;assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),false);
+  h.live.session.memoryState.paused=false;h.live.session.memoryState.extractedThroughOrder=null;assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),false);
+  h.live.session.memoryState.extractedThroughOrder=0;assert.equal(h.updater.maybeStartAlongsideTurn('s',h.live),true);
+  await waitForMemory(()=>!h.updater.isRunning('s'));assert.equal(h.live.session.memoryState.extractedThroughOrder,0);assert.equal(h.live.session.memoryState.failureStreak,1);
 });
 test('memory updates preserve profile thinking settings without changing the floor model or output budget',async () => {
   let request;

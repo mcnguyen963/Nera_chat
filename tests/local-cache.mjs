@@ -21,3 +21,23 @@ test('Server replacement atomically removes only the active story journal and su
  assert.ok(await reopened.storyQueueStorage.load('u','other'));assert.ok(await reopened.storyQueueStorage.load('other','s'));
  assert.equal(fixture.stores.get('operations').size,2);
 });
+
+test('Sync cannot reopen the old account journal under a new account after a device read',async()=>{
+ let owner='u',release;const reads=[];
+ const load=appHarness({stubs:{'auth.js':{currentUid:()=>owner},'messages.js':{},'chat-cache.js':{
+  storyQueueStorage:{load:async(uid,sid)=>{reads.push([uid,sid]);return reads.length===1?new Promise(resolve=>release=()=>resolve({base,records:[]})):null;}},
+  loadStoryData:async()=>null,saveStoryData:async()=>true,
+ }}});
+ const stores=await load('local-story-store.js');const pending=stores.flushStory('s');owner='other';release();
+ await assert.rejects(pending,/Account changed/);assert.equal(stores.storyStore('s'),undefined);
+ assert.deepEqual(reads,[['u','s']],'recovery must not read the next account or add a server refresh');
+});
+
+test('opening a local story stops if the account changes while restoring chunk metadata',async()=>{
+ let owner='u',release;const restored=[];
+ const load=appHarness({stubs:{'auth.js':{currentUid:()=>owner},'messages.js':{restoreMessageChunkCache:async sid=>{restored.push(sid);await new Promise(resolve=>release=resolve);}},
+  'chat-cache.js':{storyQueueStorage:{load:async()=>null},loadStoryData:async()=>null,saveStoryData:async()=>true}}});
+ const stores=await load('local-story-store.js');const pending=stores.openStoryStore('s',base,()=>{throw Error('stale observer');});
+ await new Promise(resolve=>setImmediate(resolve));owner='other';release();
+ await assert.rejects(pending,/Account changed/);assert.equal(stores.storyStore('s'),undefined);assert.deepEqual(restored,['s']);
+});

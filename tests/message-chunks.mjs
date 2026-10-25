@@ -27,10 +27,10 @@ async function setup(legacyCount = 0) {
     });
   }
   const ref = (...parts) => ({ path: parts.slice(1).join('/') });
-  const snapshot = (path) => ({
-    id: path.split('/').at(-1), ref: { path }, exists: () => documents.has(path),
-    data: () => structuredClone(documents.get(path)),
-  });
+  const snapshot = (path) => {
+    const value=structuredClone(documents.get(path)),exists=documents.has(path);
+    return {id:path.split('/').at(-1),ref:{path},exists:()=>exists,data:()=>structuredClone(value)};
+  };
   const apply = (type, target, value) => {
     if (type === 'delete') return documents.delete(target.path);
     const current = type === 'set' ? {} : documents.get(target.path);
@@ -169,8 +169,101 @@ async function setup(legacyCount = 0) {
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
   const storySettings=await load('story-settings-store.js');await link(storySettings);await storySettings.evaluate();
   const transfer=await load('import-export.js');await link(transfer);await transfer.evaluate();
-  return {format:modules.get('lore-format.js').namespace,records:modules.get('lore-records.js').namespace,lines:modules.get('lore-lines.js').namespace,director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
+  return {sync:modules.get('story-sync.js').namespace,format:modules.get('lore-format.js').namespace,records:modules.get('lore-records.js').namespace,lines:modules.get('lore-lines.js').namespace,director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
+
+for(const operation of ['append','edit'])test('late legacy migration preserves another client migration and '+operation,async()=>{
+ const h=await setup(2);let raced=false;
+ h.fault.afterCollectionRead=path=>{
+  if(raced||!path.endsWith('/messages'))return;raced=true;
+  const messages=[{id:'m1',order:1,role:'user',content:operation==='edit'?'New edited text':'event 1'},
+   {id:'m2',order:2,role:'assistant',content:'event 2'},...(operation==='append'?[{id:'new',order:3,role:'user',content:'New action'}]:[])];
+  h.documents.set(h.sessionPath+'/messageChunks/chunk_000000000001',{firstOrder:1,lastOrder:messages.length,count:messages.length,byteSize:2000,messages});
+  Object.assign(h.documents.get(h.sessionPath),{storageVersion:2,nextOrder:messages.length,historyRevision:1,activeChunkId:'chunk_000000000001',activeChunkBytes:2000,activeChunkCount:messages.length});
+ };
+ await h.api.ensureChunked('s');
+ const saved=h.documents.get(h.sessionPath+'/messageChunks/chunk_000000000001');
+ assert.equal(saved.messages.length,operation==='append'?3:2);assert.equal(saved.messages[0].content,operation==='edit'?'New edited text':'event 1');
+ assert.equal(h.documents.get(h.sessionPath).nextOrder,operation==='append'?3:2);
+ assert.equal(h.documents.get(h.sessionPath).activeChunkBytes,2000);
+ assert.ok(h.transactions.every(t=>t.length===0),'the stale migrator must not write active data');
+});
+
+test('legacy migration refuses a changed source revision and can retry without downloading active chunks',async()=>{
+ const h=await setup(2);let changed=false;
+ h.fault.afterCollectionRead=path=>{if(!changed&&path.endsWith('/messages')){changed=true;h.documents.get(h.sessionPath).historyRevision=1;}};
+ await assert.rejects(h.api.ensureChunked('s'),/History changed/);
+ assert.equal(h.documents.get(h.sessionPath).storageVersion,undefined);
+ assert.equal([...h.documents.keys()].some(p=>p.includes('/messageChunks/')),false);
+ await h.api.ensureChunked('s');assert.equal(h.documents.get(h.sessionPath).storageVersion,2);
+});
+
+for(const action of ['update','delete','copy','export','backup'])test(action+' cannot retarget another account while pending saves finish',async()=>{
+ const h=await setup();let release;
+ h.documents.set('users/other/sessions/s',{title:'Keep this account',nextOrder:0,historyRevision:0});
+ h.sync.configureStorySync(()=>new Promise(resolve=>release=resolve));
+ const actions={update:()=>h.sessions.updateSession('s',{title:'Old account edit'}),delete:()=>h.sessions.deleteSession('s'),copy:()=>h.sessions.duplicateSession('s',0),export:()=>h.transfer.serializeStory('s'),backup:()=>h.transfer.buildFullBackup('s')};
+ const pending=actions[action]();h.fault.owner='other';release();
+ await assert.rejects(pending,/Account changed/);
+ assert.equal(h.documents.get('users/other/sessions/s').title,'Keep this account');assert.equal(h.transactions.length,0);
+});
+
+test('bulk import stops after an account change without publishing metadata into the next account',async()=>{
+ const h=await setup();await h.api.ensureChunked('s');
+ h.documents.set('users/other/sessions/s',{storageVersion:2,nextOrder:0,historyRevision:0});let changed=false;
+ h.fault.beforeCommit=changes=>{if(!changed&&changes.some(([kind,target])=>kind==='set'&&target.path.includes('/messageChunks/'))){changed=true;h.fault.owner='other';}};
+ await assert.rejects(h.api.addMessagesBulk('s',[{id:'imported',role:'user',order:1,content:'Old account import'}]),/Account changed/);
+ assert.equal(h.documents.get('users/other/sessions/s').nextOrder,0);
+ assert.equal(h.documents.get('users/other/sessions/s').activeChunkId,undefined);
+});
+
+test('a competing migration committed at publication cannot roll back a newer chunk or counter',async()=>{
+ const h=await setup(2);let changed=false;
+ h.fault.beforeCommit=changes=>{
+  if(changed||!changes.some(([kind,target,data])=>kind==='update'&&target.path===h.sessionPath&&data.storageVersion===2))return;
+  changed=true;h.documents.set(h.sessionPath+'/messageChunks/chunk_000000000001',{firstOrder:1,lastOrder:3,count:3,byteSize:2000,messages:[
+   {id:'m1',role:'user',order:1,content:'First'},{id:'m2',role:'assistant',order:2,content:'Second'},{id:'third',role:'user',order:3,content:'New action'}]});
+  Object.assign(h.documents.get(h.sessionPath),{storageVersion:2,nextOrder:3,historyRevision:1,activeChunkBytes:2000,activeChunkCount:3});
+ };
+ await h.api.ensureChunked('s');assert.equal(changed,true);
+ assert.equal(h.documents.get(h.sessionPath).nextOrder,3);assert.equal(h.documents.get(h.sessionPath).activeChunkCount,3);
+ assert.equal(h.documents.get(h.sessionPath+'/messageChunks/chunk_000000000001').messages.at(-1).id,'third');
+});
+
+test('legacy migration resumes after an interrupted batch without losing any messages',async()=>{
+ const h=await setup(650);h.fault.failAt=2;
+ await assert.rejects(h.api.ensureChunked('s'),/Injected transaction failure/);
+ assert.equal(h.documents.get(h.sessionPath).storageVersion,undefined);
+ await h.api.ensureChunked('s');const messages=await h.api.getMessages('s');
+ assert.equal(messages.length,650);assert.equal(new Set(messages.map(m=>m.id)).size,650);assert.equal(messages.at(-1).order,650);
+});
+
+test('a session transaction retry rechecks its initiating owner',async()=>{
+ const h=await setup();h.documents.set('users/other/sessions/s',{title:'Keep new account'});let changed=false;
+ h.fault.beforeCommit=changes=>{if(!changed&&changes.some(([,target])=>target.path===h.sessionPath)){changed=true;h.fault.owner='other';h.documents.get(h.sessionPath).historyRevision=1;}};
+ await assert.rejects(h.sessions.updateSession('s',{title:'Old account edit'}),/Account changed/);
+ assert.equal(h.documents.get('users/other/sessions/s').title,'Keep new account');assert.equal(h.documents.get(h.sessionPath).title,undefined);
+});
+
+test('ordinary message saves and explicit refresh keep bounded Firebase operation counts',async()=>{
+ for(const size of [100,1000,10000]) {
+  const h=await setup();const messages=Array.from({length:size},(_,i)=>({id:'cost-'+i,order:i+1,role:i%2?'assistant':'user',content:'Passage '+i}));
+  await h.api.addMessagesBulk('s',messages);await h.storySettings.ensureStorySettings('s');await h.api.getMessages('s');
+  const measure=async(fn,expectedReads,expectedWrites)=>{
+   const reads=h.reads.documents,at=h.transactions.length;await fn();
+   assert.equal(h.reads.documents-reads,expectedReads,'document reads at '+size+' messages');
+   assert.equal(h.transactions.slice(at).reduce((n,tx)=>n+tx.length,0),expectedWrites,'writes at '+size+' messages');
+  };
+  await measure(async()=>{
+   await h.api.addMessage('s',{role:'user',content:'Next action'},{operationId:'cost-user'});
+   await h.api.addMessage('s',{role:'assistant',content:'Reply'},{operationId:'cost-reply'});
+  },7,6);
+  await measure(async()=>{
+   await h.sessions.getSessionFromServer('s');await h.storySettings.ensureStorySettings('s');await h.api.readMessageSnapshot('s');
+   await h.lore.getLoreSnapshot('s',{source:'server',publish:false});await h.sessions.getSessionFromServer('s');
+  },size/100+7,0);
+ }
+});
 
 test('migration packs existing messages once and checkpoint reads use chunks', async () => {
   const h = await setup(1000);

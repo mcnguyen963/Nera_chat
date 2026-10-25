@@ -43,3 +43,31 @@ test('F10 user abort retains its user reason and captured partial reply', async 
     return true;
   });
 });
+
+test('terminal DONE completes an open stream, preserves prior usage and ignores later events',async()=>{
+ for(const finalNewline of [true,false]) {
+  let reads=0,cancelled=0,released=0;
+  const events='data: '+JSON.stringify({choices:[{delta:{content:'Complete reply'},finish_reason:'stop'}]})+'\n\n'
+   +'data: '+JSON.stringify({choices:[],usage:{prompt_tokens:17,completion_tokens:3}})+'\n\n'
+   +'data: [DONE]'+(finalNewline?'\n\ndata: malformed after DONE\n':'');
+  const reader={read:async()=>++reads===1?{done:false,value:new TextEncoder().encode(events)}:new Promise(()=>{}),cancel:async()=>{cancelled++;},releaseLock:()=>{released++;}};
+  const api=await appHarness({globals:{fetch:async()=>({ok:true,body:{getReader:()=>reader}})}})('llm-client.js');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort('test did not finish'),100);
+  try {
+   const result=await api.chatCompletion({settings:{modelId:'model',endpoint:'https://example.test',streaming:true},messages:[],signal:controller.signal});
+   assert.equal(result.content,'Complete reply');assert.equal(result.finishReason,'stop');assert.equal(result.usage.prompt_tokens,17);
+   assert.equal(reads,1);assert.equal(cancelled,1);assert.equal(released,1);
+  }finally{clearTimeout(timer);controller.abort();}
+ }
+});
+
+test('terminal DONE excludes later content in the same or following chunk',async()=>{
+ for(const sameChunk of [true,false]) {
+  const end='data: '+JSON.stringify({choices:[{delta:{content:'First'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n';
+  const late='data: '+JSON.stringify({choices:[{delta:{content:'After DONE'}}]})+'\n\n';
+  const chunks=sameChunk?[end+late]:[end,late],received=[];let reads=0;
+  const api=await appHarness({globals:{fetch:async()=>({ok:true,body:{getReader:()=>({read:async()=>++reads<=chunks.length?{done:false,value:new TextEncoder().encode(chunks[reads-1])}:{done:true},cancel:async()=>{}})}})}})('llm-client.js');
+  const result=await api.chatCompletion({settings:{modelId:'model',endpoint:'https://example.test',streaming:true},messages:[],onDelta:t=>received.push(t)});
+  assert.equal(result.content,'First');assert.deepEqual(received,['First']);assert.equal(reads,1);
+ }
+});

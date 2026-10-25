@@ -34,6 +34,14 @@ export function dueRange(messages, memoryState, mem, { manual = false } = {}) {
   const chosenTurns = new Set(chosen.map(a => a.turn));
   return { messages:messages.filter(m => m.role !== 'summary' && chosenTurns.has(turns.turnById.get(m.id))), fromTurn: chosen[0].turn, toTurn: end.turn, endOrder: end.order, assistants: chosen, turns };
 }
+// The upcoming reply counts toward scheduling, but only existing completed
+// turns can enter the batch. Its success is not required to save that batch.
+export function alongsideTurnRange(messages, memoryState, mem) {
+  const latest = messages.filter(m => m.role !== 'summary').sort((a,b) => a.order-b.order).at(-1);
+  if (latest?.role !== 'user') return null;
+  const range = dueRange(messages,memoryState,{...mem,lagTurns:Math.max(0,mem.lagTurns-1)});
+  return range ? {...range,messages:range.messages.filter(m=>m.order<=range.endOrder)} : null;
+}
 // Eligibility only: callers handle automatic-update settings and paused/running state.
 export function memoryUpdateTiming(messages, memoryState, mem) {
   if (memoryState?.extractedThroughOrder == null) return null;
@@ -42,8 +50,9 @@ export function memoryUpdateTiming(messages, memoryState, mem) {
   const turn = computeTurns(messages).lastTurn+1;
   // A later user input also accepts earlier reviewable replies, just as Send does.
   // Symbols keep these temporary IDs distinct from every saved message ID.
-  const projected = [...messages,
-    { id:Symbol('next-user'),role:'user',order:order+1,narratorTurn:turn },
+  const upcoming = [...messages,{ id:Symbol('next-user'),role:'user',order:order+1,narratorTurn:turn }];
+  if (alongsideTurnRange(upcoming,memoryState,mem)) return 'with-next-turn';
+  const projected = [...upcoming,
     { id:Symbol('next-reply'),role:'assistant',order:order+2,narratorTurn:turn,acceptance:'accepted' },
   ];
   return dueRange(projected,memoryState,mem) ? 'next-turn' : null;

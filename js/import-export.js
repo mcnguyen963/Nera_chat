@@ -130,20 +130,21 @@ export async function importSillyTavern(file) {
 }
 
 export async function serializeStory(sessionId) {
+  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
   await flushStory(sessionId);
-  const owner=currentUid();
-  await messagesApi.ensureChunked(sessionId);
-  const storySettings=await ensureStorySettings(sessionId);
-  const loreSnapshot=await loreStore.getLoreSnapshot(sessionId),lore=loreSnapshot.entries,loreInfo=loreStore.loreSnapshotInfo(loreSnapshot);
-  const session = await sessionsApi.getSessionFromServer(sessionId);
+  check();
+  await messagesApi.ensureChunked(sessionId);check();
+  const storySettings=await ensureStorySettings(sessionId,owner);check();
+  const loreSnapshot=await loreStore.getLoreSnapshot(sessionId),lore=loreSnapshot.entries,loreInfo=loreStore.loreSnapshotInfo(loreSnapshot);check();
+  const session = await sessionsApi.getSessionFromServer(sessionId);check();
   if (!session) throw new Error("No active session to export.");
   assertSnapshotRevisions({...session,storySettingsRevision:storySettings.revision},session);
-  const msgs = await getMessages(sessionId);
+  const msgs = await getMessages(sessionId);check();
   const directorTurns=session.directorState || session.directorPending ? await exportDirectorTurns(sessionId) : [];
   // Disabled: exports capture cached lore, rather than rereading the collection.
   // lore=await getLore(sessionId);
   assertSnapshotRevisions(session,await sessionsApi.getSessionFromServer(sessionId),{cachedLore:true});
-  if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');
+  check();
 
   const lines = [
     JSON.stringify({
@@ -180,8 +181,8 @@ export async function exportAllStories({signal,onProgress=()=>{},save=download}=
 
 // Preserve MAIN's full JSON backup alongside the v2 story/account exports.
 export async function buildFullBackup(sessionId){
-  await flushStory(sessionId);
  const owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed while exporting. Try again.');};
+ await flushStory(sessionId);check();
  await messagesApi.ensureChunked(sessionId);check();
  const storySettings=await ensureStorySettings(sessionId);check();
  const loreSnapshot=await loreStore.getLoreSnapshot(sessionId),lore=loreSnapshot.entries;check();

@@ -243,6 +243,7 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   let thinking = "";
   let usage = null;
   let completed = false;
+  let terminal = false;
   let finishReason = null;
 
   if (!res.body) throw classified("The model returned no response stream.",'malformed_response');
@@ -251,13 +252,14 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   let buffer = "";
 
   const processLine = (line) => {
+    if(terminal)return;
     line = line.trim();
     if (!line) return;
     // OpenRouter sends ":"-prefixed keep-alive comments — skip, do not JSON.parse (spec §14.2).
     if (line.startsWith(":")) return;
     if (!line.startsWith("data:")) return;
     const payload = line.slice(5).trim();
-    if (payload === "[DONE]") { completed = true; return; }
+    if (payload === "[DONE]") { completed = true; terminal = true; return; }
     let json;
     try {
       json = JSON.parse(payload);
@@ -287,22 +289,23 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
   const cancelReader=()=>{Promise.resolve(reader.cancel?.()).catch(()=>{});};
   signal?.addEventListener('abort',cancelReader,{once:true});
   try {
-  while (true) {
+  while (!terminal) {
     let part;try{part=await reader.read();}catch(error){error.classification='transport_loss';throw error;}
     const { done, value } = part;
     kick?.();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let nl;
-    while ((nl = buffer.indexOf("\n")) !== -1) {
+    while (!terminal && (nl = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
       processLine(line);
     }
+    // A terminal marker may be the final bytes of a chunk without a newline.
+    if(!terminal && /^\s*data:\s*\[DONE\]\s*$/.test(buffer))processLine(buffer);
   }
-  } finally {signal?.removeEventListener('abort',cancelReader);cancelReader();}
-  buffer += decoder.decode();
-  if (buffer.trim()) processLine(buffer);
+  } finally {signal?.removeEventListener('abort',cancelReader);cancelReader();try{reader.releaseLock?.();}catch{}}
+  if(!terminal){buffer += decoder.decode();if (buffer.trim()) processLine(buffer);}
   if (!completed) throw classified("The model response stream ended before completion. The partial reply was not saved.","transport_loss",{aborted:"dropped",partial:{content,thinking},finishReason});
   if (!content.trim()) throw emptyReplyError(finishReason);
   checkFinishReason(finishReason, allowTruncated);

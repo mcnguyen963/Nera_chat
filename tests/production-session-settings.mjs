@@ -22,7 +22,7 @@ async function setup(session,{review,failWrites=false}={}) {
   const stubs={
     'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':firestore,'db.js':{db:{}},'auth.js':{currentUid:()=> 'owner'},
     'continuity.js':{requestSource(){},usableLore:()=>({entries:[]}),effectivelyPaused(){return false;},StaleSourceError:class extends Error{},SupersededError:class extends Error{},assertExtractionSource(){}},
-    'memory-settings.js':{normalizeMemory:m=>m ?? {},memoryTaskSettings:()=>({})},'turns.js':{dueRange:()=>null},
+    'memory-settings.js':{normalizeMemory:m=>m ?? {},memoryTaskSettings:()=>({})},'turns.js':{dueRange:()=>null,alongsideTurnRange:()=>null},
     'memory-prompts.js':{buildExtractionMessages(){}},'lore-lines.js':{parseMemoryLines(){},applyOps(){}},'llm-client.js':{chatCompletion(){}},'tokenizer.js':{countTokens(){}},
     'lore-store.js':{commitExtraction(){},markGeneratedForReview:async()=>{review?.({server,replace:value=>{server=value;version++;}});return [];}},
     'sessions.js':{updateSession:async(_sid,partial)=>{patches.push(partial);Object.assign(server,partial);}},

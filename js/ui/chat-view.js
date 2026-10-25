@@ -496,7 +496,7 @@ function updateMemoryChip() {
     ? memoryUpdateTiming(historyMessages ?? lastMessages,session.memoryState,mem) : null;
   const composerStatus = document.getElementById('composer-memory-status');
   if (composerStatus) {
-    const text = running ? 'Updating memory · Keep open' : timing === 'due' ? 'Memory update pending.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
+    const text = running ? 'Updating memory · Keep open' : timing === 'due' ? 'Memory update pending.' : timing === 'with-next-turn' ? 'Memory update with next reply.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
     if (composerStatus.textContent !== text) composerStatus.textContent = text;
     composerStatus.hidden = !text;
     composerStatus.classList.toggle('upcoming',!!timing);
@@ -525,6 +525,7 @@ export function initChatView() {
   configureLoreWrites(sid=>flushStory(sid));
   memoryUpdater.configureMemoryUpdater({
     get: memorySnapshot, busy: () => busy || !!storyStore(state.sessionId)?.status.pending || !!storyStore(state.sessionId)?.status.error,
+    flush: flushStory,
     prepare: async sid => { if (sid !== state.sessionId) throw new Error("Open the story before maintenance."); return reconcileStory(); },
     patch(sid, patch, entries,loreRevision) {
       const live = memorySnapshot(sid); if (!live) return;
@@ -1928,7 +1929,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
   const controller=new AbortController();el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
   const vibration=createStreamVibration(settings.streamVibrationMode ?? 'spaces');
   const petTurn = startPetTurn();token.abort=()=>cancelGeneration(token,controller,vibration,petTurn);
-  let maintenanceUsed = false,turnStream=null;
+  let maintenanceUsed = false,earlyMemoryStarted = false,turnStream=null;
   try {
     await waitForPreparation(chatLoading,controller);assertActive(token);
     await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);settings=effectiveActiveSettings();
@@ -1970,10 +1971,15 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     startStreamUI(prefix);turnStream=streamState;
     let result,stopReason=null;const narratorStarted=Date.now();
     try {
-      result=await chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
+      const narration=chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
         if(!busyGate.stillActive(token))return;const requestBody=JSON.parse(serialized);
         lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,timings:directorTurn.timings,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
       },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
+      if (!opts.overwriteId && !opts.continuationId && !opts.upToOrder && (opts.savedUserId || opts.expectLatestUserId)) {
+        try { earlyMemoryStarted=memoryUpdater.maybeStartAlongsideTurn(sid,{session:sourceSession,settings,messages:sourceMessages,entries:loreEntries,storyEpoch:historyEpoch}); }
+        catch(error) { console.error('Background memory start:',error); }
+      }
+      result=await narration;
     } catch(error) {
       assertActive(token);
       if(error.classification==='cancelled' || !['transport_loss','timeout'].includes(error.classification) || !error.partial?.content?.trim() || !confirm('Keep the partial reply? It will be marked as cut off.'))throw error;
@@ -2072,7 +2078,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     lastMemoryReport = built.report;
     if(directorMode && truncated)return;
     finishPetTurn('ready',petTurn);
-    pendingMaintenance={sid,owner:currentUid(),key:preparationKey(session),settings,opts,maintenanceUsed,petTurn};
+    pendingMaintenance={sid,owner:currentUid(),key:preparationKey(session),settings,opts,maintenanceUsed:maintenanceUsed || earlyMemoryStarted,petTurn};
     scheduleIdleMaintenance();
 
   } catch (err) {

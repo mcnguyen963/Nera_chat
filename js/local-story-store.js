@@ -8,10 +8,11 @@ import {savePendingDirectorTurn,discardPendingDirector,getDirectorTurn} from './
 import {currentUid} from './auth.js';
 const stores=new Map(),opening=new Map();
 const ownerNow=()=>{try{return currentUid();}catch{return null;}};
+const checkOwner=owner=>{if(ownerNow()!==owner)throw new Error('Account changed; local story operation cancelled.');};
 export function storyStore(sid){return stores.get(ownerNow()+':'+sid);}
 export async function openStoryStore(sid,base,onChange){
-  const key=currentUid()+':'+sid;
-  if(opening.has(key)){const entry=await opening.get(key);entry.observe=onChange;onChange(entry.view,entry.status);return entry;}
+  const owner=currentUid(),key=owner+':'+sid;
+  if(opening.has(key)){const entry=await opening.get(key);checkOwner(owner);entry.observe=onChange;onChange(entry.view,entry.status);return entry;}
   const pending=openStoryStoreImpl(sid,base,onChange);opening.set(key,pending);
   try{return await pending;}finally{opening.delete(key);}
 }
@@ -28,6 +29,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
   if(!base)throw new Error('Story history has not loaded.');
   base={...base,turns:{...aux?.turns,...base.turns}};
   await messages.restoreMessageChunkCache?.(sid,base.messages);
+  checkOwner(owner);
   // Disabled persisted refresh locks. A stale receipt is only an in-memory recovery hint.
   // let entry,requiresReconciliation=!!aux?.requiresReconciliation;
   let entry,requiresReconciliation=false;
@@ -62,7 +64,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
   for(const [other,value]of idle.slice(0,Math.max(0,idle.length-2))){value.close();stores.delete(other);}
   queue.start();return entry;
 }
-export async function flushStory(sid){if(!sid)return;let store=storyStore(sid);if(!store){const owner=ownerNow();if(!owner)return;const outbox=await storyQueueStorage.load(owner,sid);if(!outbox)return;store=await openStoryStore(sid,outbox.base,()=>{});}await store.flush();}
+export async function flushStory(sid){if(!sid)return;const owner=ownerNow();if(!owner)return;let store=storyStore(sid);if(!store){const outbox=await storyQueueStorage.load(owner,sid);checkOwner(owner);if(!outbox)return;store=await openStoryStore(sid,outbox.base,()=>{});checkOwner(owner);}await store.flush();checkOwner(owner);}
 export function forgetStoryStore(sid){const key=ownerNow()+':'+sid,entry=stores.get(key);if(entry?.status.pending)return;entry?.close();stores.delete(key);}
 export function closeStoryStores(){for(const entry of stores.values())entry.observe=null;}
 

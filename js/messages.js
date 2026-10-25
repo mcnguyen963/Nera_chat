@@ -68,14 +68,21 @@ const readySessions = new Set();
 const metadataReady = new Set();
 const migrations = new Map();
 
-async function writePackedChunks(sessionId, groups, owner = currentUid()) {
+function checkOwner(owner) {if(owner!==currentUid())throw new Error('Account changed; history operation cancelled.');}
+async function writePackedChunks(sessionId, groups, owner = currentUid(),checkSource=()=>true) {
   // Six worst-case oversized chunks stay below Firestore's 10 MiB request cap.
   for (let i = 0; i < groups.length; i += 6) {
-    await runTransaction(db,async tx => {
-      assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+    checkOwner(owner);
+    const written=await runTransaction(db,async tx => {
+      checkOwner(owner);
+      const session=assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+      checkOwner(owner);if(checkSource(session)===false)return false;
       for (const group of groups.slice(i, i + 6)) tx.set(chunkRef(sessionId, chunkId(group[0].order), owner), chunkRecord(group));
+      return true;
     });
+    checkOwner(owner);if(written===false)return false;
   }
+  return true;
 }
 
 // Legacy message documents remain untouched. Chunk writes finish before the
@@ -86,25 +93,32 @@ export function ensureChunked(sessionId) {
   if (migrations.has(key)) return migrations.get(key);
   const pending = (async () => {
     const sessionSnap = await getDocFromServer(sessionRef(sessionId, owner));
-    assertStory(sessionSnap.data());
-    if (sessionSnap.data().storageVersion !== 2) {
+    checkOwner(owner);const source=assertStory(sessionSnap.data());
+    if (source.storageVersion !== 2) {
+      const checkSource=session=>{
+        if(session.storageVersion===2)return false;
+        if(session.storageVersion!==source.storageVersion || (session.historyRevision ?? 0)!==(source.historyRevision ?? 0) || (session.nextOrder ?? 0)!==(source.nextOrder ?? 0))throw new StoryConflict('History changed during migration. Retry.');
+        return true;
+      };
       const old = await getDocsFromServer(query(legacyMessagesCol(sessionId, owner), orderBy("order", "asc")));
+      checkOwner(owner);
       const messages = old.docs.map((d) => ({ id: d.id, ...d.data() }));
       const groups = packMessages(messages);
-      await writePackedChunks(sessionId, groups, owner);
+      const written=await writePackedChunks(sessionId, groups, owner,checkSource);
       const last = groups.at(-1);
-      await runTransaction(db,async tx => {
-        assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+      if(written)await runTransaction(db,async tx => {
+        checkOwner(owner);const current=assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+        checkOwner(owner);if(checkSource(current)===false)return;
         tx.update(sessionRef(sessionId, owner), {
         storageVersion: 2,
-        nextOrder: Math.max(sessionSnap.data().nextOrder ?? 0, messages.at(-1)?.order ?? 0),
+        nextOrder: Math.max(current.nextOrder ?? 0, messages.at(-1)?.order ?? 0),
         activeChunkId: last ? chunkId(last[0].order) : null,
         activeChunkBytes: last ? chunkBytes(last) : 0,
         activeChunkCount: last?.length ?? 0,
         });
       });
     }
-    readySessions.add(key);
+    checkOwner(owner);readySessions.add(key);
   })().finally(() => migrations.delete(key));
   migrations.set(key, pending);
   return pending;
@@ -257,27 +271,34 @@ export async function addMessage(sessionId, message, opts = {}) {
 // final order counter so an interrupted import can be retried safely.
 export async function addMessagesBulk(sessionId, items) {
   if (!items.length) return [];
+  const owner=currentUid();
   await ensureChunked(sessionId);
-  const snap = await getDocFromServer(sessionRef(sessionId));
-  assertStory(snap.data());
-  if (snap.data().nextOrder) {
+  checkOwner(owner);
+  const snap = await getDocFromServer(sessionRef(sessionId,owner));
+  checkOwner(owner);const source=assertStory(snap.data());
+  if (source.nextOrder) {
     const results = [];
-    for (const item of items) results.push(await addMessage(sessionId, item));
+    for (const item of items){checkOwner(owner);results.push(await addMessage(sessionId, item));checkOwner(owner);}
     return results;
   }
   const counts = await Promise.all(items.map((item) => countTokens(item.content)));
+  checkOwner(owner);
   const messages = items.map((item,index) => makeMessage(item.id ?? newMsgId(),item.order ?? index+1,item,counts[index]));
   if (new Set(messages.map(m => m.id)).size !== messages.length || messages.some((m,i) => !Number.isSafeInteger(m.order) || m.order < 1 || i > 0 && m.order <= messages[i-1].order)) throw new Error('Imported message IDs and orders must be unique and ordered.');
   const turns = computeTurns(messages);
   for (const m of messages) if (m.role !== 'summary') m.narratorTurn ??= turns.turnById.get(m.id);
   const groups = packMessages(messages);
-  await writePackedChunks(sessionId, groups);
+  const checkSource=current=>{
+    if(current.storageVersion!==source.storageVersion || (current.historyRevision ?? 0)!==(source.historyRevision ?? 0) || (current.nextOrder ?? 0)!==(source.nextOrder ?? 0))throw new StoryConflict('History changed during import. Nothing was activated.');
+  };
+  await writePackedChunks(sessionId, groups,owner,checkSource);
   const last = groups.at(-1);
   await runTransaction(db,async tx=>{
-    assertStory((await tx.get(sessionRef(sessionId))).data());
-    tx.update(sessionRef(sessionId), {
+    checkOwner(owner);const current=assertStory((await tx.get(sessionRef(sessionId,owner))).data());
+    checkOwner(owner);checkSource(current);
+    tx.update(sessionRef(sessionId,owner), {
     nextOrder: messages.at(-1).order,
-    historyRevision:(snap.data().historyRevision ?? 0)+1,continuityVersion:2,lookupVersion:1,...summaryLookup(messages),
+    historyRevision:(current.historyRevision ?? 0)+1,continuityVersion:2,lookupVersion:1,...summaryLookup(messages),
     nextNarratorTurn:Math.max(0,maxOf(messages.map(m => m.narratorTurn ?? 0)))+(messages.at(-1)?.role === "user" ? 0 : 1),
     updatedAt: serverTimestamp(),
     activeChunkId: chunkId(last[0].order),
@@ -285,6 +306,7 @@ export async function addMessagesBulk(sessionId, items) {
     activeChunkCount: last.length,
     });
   });
+  checkOwner(owner);
   return messages.map(({ id, order, tokenCount }) => ({ id, order, tokenCount }));
 }
 

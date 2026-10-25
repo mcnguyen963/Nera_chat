@@ -10,7 +10,7 @@ async function fixture(){
  const live={session:{id:'s',historyRevision:0,loreRevision:0,memory:{autoUpdate:true},memoryState:{extractedThroughOrder:0}},messages,entries:[],settings:{}};
  const use=appHarness({globals:{document:{dispatchEvent:e=>events.push(e.detail)},CustomEvent:class{constructor(_type,{detail}){this.detail=detail;}}},stubs:{
   'auth.js':{currentUid:()=>owner},'sessions.js':{updateSession:async()=>{}},
-  'turns.js':{dueRange:()=>range},'continuity.js':{requestSource:()=>({}),usableLore:entries=>({entries}),effectivelyPaused:()=>false,StaleSourceError:class extends Error{},SupersededError:class extends Error{},assertExtractionSource(){}},
+  'turns.js':{dueRange:()=>range,alongsideTurnRange:()=>range},'continuity.js':{requestSource:()=>({}),usableLore:entries=>({entries}),effectivelyPaused:()=>false,StaleSourceError:class extends Error{},SupersededError:class extends Error{},assertExtractionSource(){}},
   'lore-lines.js':{parseMemoryLines:()=>({valid:true,ops:[],skipped:[]}),applyOps:()=>({entries:[],appends:[],creates:[],skipped:[]})},
   'memory-prompts.js':{buildExtractionMessages:async()=>({range,messages:[]})},'tokenizer.js':{countTokens:async()=>1},
   'llm-client.js':{chatCompletion:async()=>{const p=deferred();providers.push(p);return p.promise;}},

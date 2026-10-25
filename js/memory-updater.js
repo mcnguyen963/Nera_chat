@@ -1,6 +1,6 @@
 import { requestSource, usableLore, effectivelyPaused, StaleSourceError, SupersededError, assertExtractionSource } from './continuity.js';
 import { normalizeMemory, memoryTaskSettings } from './memory-settings.js';
-import { dueRange } from './turns.js';
+import { dueRange, alongsideTurnRange } from './turns.js';
 import { buildExtractionMessages } from './memory-prompts.js';
 import { parseMemoryLines, applyOps } from './lore-lines.js';
 import { chatCompletion } from './llm-client.js';
@@ -35,6 +35,16 @@ export function maybeStartAfterTurn(sid) {
   const range = dueRange(live.messages,live.session.memoryState,mem);
   if (!range) return false;
   void start(sid,range,false).catch(e => console.error('Memory update:',e)); return true;
+}
+export function maybeStartAlongsideTurn(sid, snapshot) {
+  const current = runtime?.get(sid);
+  if (!snapshot || !current || snapshot.session.id !== sid || current.session.id !== sid || snapshot.storyEpoch !== current.storyEpoch || isRunning(sid)) return false;
+  const mem = normalizeMemory(snapshot.session.memory);
+  if (!mem.autoUpdate || effectivelyPaused(snapshot.session.memoryState)) return false;
+  const range = alongsideTurnRange(snapshot.messages,snapshot.session.memoryState,mem);
+  if (!range) return false;
+  const captured = structuredClone({session:snapshot.session,settings:snapshot.settings,messages:snapshot.messages,entries:snapshot.entries,storyEpoch:snapshot.storyEpoch,range});
+  void start(sid,captured.range,false,captured).catch(e => console.error('Memory update:',e)); return true;
 }
 export async function updateNow(sid,{ retry = false } = {}) {
   if (isRunning(sid) || runtime?.busy()) return false;
@@ -71,28 +81,42 @@ export async function catchUp(sid,{ signal,onProgress } = {}) {
   }
   return false;
 }
-async function start(sid,range,manual) {
+async function start(sid,range,manual,captured=null) {
   if (isRunning(sid)) return false;
   const controller = new AbortController(),owner = currentUid();
   let live,mem,settings,source,entries,streamedAnswer='';
+  const stillCurrent = () => {
+    if (controller.signal.aborted || currentUid()!==owner) return false;
+    if (!captured) return true;
+    const latest=runtime?.get(sid);
+    return !!latest && latest.storyEpoch===captured.storyEpoch;
+  };
+  const waitForWrites = async () => {
+    await runtime.waitIdle(controller.signal);
+    if (!stillCurrent()) return;
+    await runtime.flush?.(sid);
+    if (stillCurrent()) await runtime.waitIdle(controller.signal);
+  };
   inFlight.set(sid,controller); rawAnswers.delete(sid); emit({ sessionId:sid,status:'running' });
   try {
-    await runtime?.prepare?.(sid);
-    if (controller.signal.aborted || currentUid() !== owner) return false;
-    live = runtime.get(sid); if (!live) return false;
-    mem = normalizeMemory(live.session.memory); settings = structuredClone(memoryTaskSettings(live.settings,mem)); source = structuredClone(live.messages); entries = structuredClone(live.entries);
-    range = dueRange(source,live.session.memoryState,mem,{ manual }); if (!range) return false;
+    if (!captured) await runtime?.prepare?.(sid);
+    if (!stillCurrent()) return false;
+    live = captured ?? runtime.get(sid); if (!live) return false;
+    mem = normalizeMemory(live.session.memory); settings = structuredClone(memoryTaskSettings(live.settings,mem));
+    source = captured ? live.messages : structuredClone(live.messages); entries = captured ? live.entries : structuredClone(live.entries);
+    if (!captured) range = dueRange(source,live.session.memoryState,mem,{ manual });
+    if (!range) return false;
     const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session,Infinity,null,{includeArchived:true}).entries,messages:source,range,count:countTokens }); range = built.range;
-    if(controller.signal.aborted || currentUid()!==owner)return false;
+    if(!stillCurrent())return false;
     const snapshot = stamp(range.messages);
     const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
     const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
-    if(controller.signal.aborted || currentUid()!==owner)return false;
+    if(!stillCurrent())return false;
     rawAnswers.set(sid,result.content);
     const parsed = parseMemoryLines(result.content,{ range,mem,entries,messages:source,protagonist:mem.protagonist });
     if (!parsed.valid) throw new Error("The model's answer wasn't in the note format."+(parsed.skipped[0] ? ' Line '+parsed.skipped[0].line+': '+parsed.skipped[0].reason+'.' : ''));
-    await runtime.waitIdle(controller.signal);
-    if (controller.signal.aborted || currentUid() !== owner) return false;
+    await waitForWrites();
+    if (!stillCurrent()) return false;
     const latest = runtime.get(sid);
     if(!latest)return false;
     assertExtractionSource(latest.session,guard);
@@ -104,7 +128,7 @@ async function start(sid,range,manual) {
     const skipped=[...parsed.skipped,...changes.skipped,...(parsed.adjusted ?? [])].map(note=>({...note,card:note.card ?? note.name ?? latest.entries.find(e=>e.id===note.entryId)?.name ?? ''}));
     controller.committing=commitExtraction(sid,changes,{...range,guard,skipped,signal:controller.signal});
     const committed=await controller.committing;
-    if(controller.signal.aborted || currentUid()!==owner)return false;
+    if(!stillCurrent())return false;
     const lastSkipped=committed?.lastSkipped ?? limitSkippedNotes([...skipped,...(committed?.skipped ?? [])]);
     const nextEntries=committed?.entries ? latest.entries.filter(e=>!committed.entries.some(w=>w.id===e.id)).concat(committed.entries) : changes.entries;
     // Real commits publish their canonical entries once through local-lore-saved.
@@ -112,16 +136,19 @@ async function start(sid,range,manual) {
     const notes = committed?.notes ?? changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
     emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
   } catch (error) {
-    if(controller.signal.aborted || currentUid()!==owner)return false;
+    if(!stillCurrent())return false;
     if(error instanceof StaleSourceError || error instanceof SupersededError){emit({sessionId:sid,status:'info',message:error.message,manual});return false;}
-    if (controller.signal.aborted || currentUid() !== owner) return false;
     if (error.partial?.content || streamedAnswer) rawAnswers.set(sid,error.partial?.content || streamedAnswer);
-    await runtime.waitIdle(controller.signal);
-    if (controller.signal.aborted || !runtime.get(sid)) return false;
+    try { await waitForWrites(); }
+    catch(saveError) {
+      if(stillCurrent())emit({sessionId:sid,status:'info',message:'Memory update could not be saved: '+String(saveError.message).slice(0,240),manual});
+      return false;
+    }
+    if (!stillCurrent() || !runtime.get(sid)) return false;
     const lastError = /output limit|cut off/i.test(error.message) ? "The update was cut off. Raise 'Max response tokens for updates' in Memory settings." : /card storage full/i.test(error.message) ? 'A memory card is full. Reorganize it, then retry; no turns were marked updated.' : String(error.message).slice(0,240);
     controller.committing=recordMemoryFailure(sid,lastError);
     const failure=await controller.committing;
-    if(controller.signal.aborted || currentUid()!==owner)return false;
+    if(!stillCurrent())return false;
     runtime.patch(sid,failure); emit({ sessionId:sid,status:'failed',...failure,manual }); return false;
   } finally { if(inFlight.get(sid)===controller){inFlight.delete(sid);emit({ sessionId:sid,status:'idle' });} }
 }
