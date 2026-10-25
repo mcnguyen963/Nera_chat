@@ -7,10 +7,10 @@ The four synthetic scenarios cover a pending registration choice, a promise outs
 Prepare and review without an API key or completion calls:
 
 ```sh
-node --experimental-vm-modules tests/tools/director-eval.mjs prepare --out investigate/director-eval
+node --experimental-vm-modules tests/tools/director-eval.mjs prepare --out play-history/diagnostics/director-eval
 ```
 
-Use `prepare --suite chained --out investigate/director-chain` for four connected turns: finish dinner and activate an old promise, confirm travel across hour 24, receive a choice from the established healer, then answer it. Each turn uses the preceding real Director state and Narrator reply. A deliberately incorrect historical scene tag checks that it cannot override canonical state. The runner also checks that Regenerate reuses each completed contract and Continue makes no call at pending choices. Checkpoints are simulated in memory; this does not test Firestore persistence.
+Use `prepare --suite chained --out play-history/diagnostics/director-chain` for four connected turns: finish dinner and activate an old promise, confirm travel across hour 24, receive a choice from the established healer, then answer it. Each turn uses the preceding real Director state and Narrator reply. A deliberately incorrect historical scene tag checks that it cannot override canonical state. The runner also checks that Regenerate reuses each completed contract and Continue makes no call at pending choices. Checkpoints are simulated in memory; this does not test Firestore persistence.
 
 The application recognizes clear unquoted instructions such as “Stop when we arrive” and “stop upon arrival.” It passes that boundary to both models and rejects a completed-journey Director contract that opens a new player decision beyond it before saving or calling the Narrator. A genuine interruption may stop an attempted or blocked journey earlier. Other stopping instructions remain model-interpreted. The gesture review is a limited diagnostic, not proof that the prose preserves agency.
 
@@ -22,7 +22,7 @@ OpenRouter Director requests use request-specific `response_format: {type: 'json
 
 ```sh
 node --experimental-vm-modules tests/tools/director-eval.mjs run \
-  --out investigate/director-eval --key-file /path/to/dedicated-openrouter-key.txt \
+  --out play-history/diagnostics/director-eval --key-file /path/to/dedicated-openrouter-key.txt \
   --confirm-live yes --approved-budget 0.10
 ```
 

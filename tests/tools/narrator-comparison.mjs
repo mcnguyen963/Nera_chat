@@ -8,7 +8,7 @@ import {promptFetch} from '../prompt-files.mjs';
 import {countTokens,tokenizerStatus} from './production-tokenizer.mjs';
 import {EvaluationBudget,inputBounds} from './lorebook-eval-core.mjs';
 import {eligible,LIMITS,MODEL,API,assertPaidApproval} from './director-eval.mjs';
-export const BASELINE_COMMIT='86b910f148ead0a983e9d26ee486d3a55915c3cc';
+export const BASELINE_COMMIT='3f5be8a8ee8a759c862520f4f265c0bcff81a823';
 const CATALOG='https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints';
 const json=x=>JSON.stringify(x,null,2),hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const save=(path,value)=>writeFile(path,json(value)+'\n',{mode:0o600});
@@ -52,7 +52,7 @@ export async function buildComparisonRequests(baselineUse,candidateUse){
 export async function prepare(options){
  const root=resolve(options['baseline-root']??''),candidateRoot=fileURLToPath(new URL('../../',import.meta.url));
  if(!options['baseline-root'])throw Error('Provide the frozen --baseline-root extracted from '+BASELINE_COMMIT);
- const dir=resolve(options.out??'investigate/narrator-comparison');await mkdir(dir,{recursive:true});
+ const dir=resolve(options.out??'play-history/diagnostics/narrator-comparison');await mkdir(dir,{recursive:true});
  try{if(JSON.parse(await readFile(resolve(dir,'ledger.json'),'utf8')).length)throw Error('Never replace a prepared paid run');}catch(e){if(e.code!=='ENOENT')throw e;}
  const baselineFingerprint=await codeFingerprint(root);
  if(baselineFingerprint!==EXPECTED_BASELINE_FINGERPRINT)throw Error('Baseline snapshot differs from the frozen commit');
@@ -83,7 +83,7 @@ export function comparisonWarnings(text,scenario) {
 }
 export async function run(options){
  assertPaidApproval(options);
- const dir=resolve(options.out??'investigate/narrator-comparison'),prepared=JSON.parse(await readFile(resolve(dir,'prepared.json'),'utf8')),preflight=JSON.parse(await readFile(resolve(dir,'preflight.json'),'utf8'));
+ const dir=resolve(options.out??'play-history/diagnostics/narrator-comparison'),prepared=JSON.parse(await readFile(resolve(dir,'prepared.json'),'utf8')),preflight=JSON.parse(await readFile(resolve(dir,'preflight.json'),'utf8'));
  const candidateRoot=fileURLToPath(new URL('../../',import.meta.url));
  if(hash(prepared)!==preflight.preparedFingerprint||prepared.candidateFingerprint!==await codeFingerprint(candidateRoot)||prepared.runnerFingerprint!==hash(await readFile(new URL('./narrator-comparison.mjs',import.meta.url),'utf8'))||prepared.baselineFingerprint!==await codeFingerprint(prepared.baselineRoot))throw Error('Prepared code or requests changed; prepare and confirm again');
  if(prepared.model!==MODEL||!['paired','candidate'].includes(prepared.suite)||JSON.stringify(prepared.limits)!==JSON.stringify({...LIMITS,calls:prepared.suite==='candidate'?4:8})||prepared.requests.length!==prepared.limits.calls||prepared.suite==='candidate'&&prepared.requests.some(r=>r.variant!=='candidate')||prepared.baselineCommit!==BASELINE_COMMIT||prepared.baselineFingerprint!==EXPECTED_BASELINE_FINGERPRINT)throw Error('Prepared comparison violates the fixed model, baseline or limits');

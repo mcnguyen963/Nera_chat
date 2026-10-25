@@ -1,7 +1,7 @@
 # Narrator before/after comparison
 
 This optional evaluator compares the Narrator builder at commit
-`86b910f148ead0a983e9d26ee486d3a55915c3cc` with the current implementation.
+`3f5be8a8ee8a759c862520f4f265c0bcff81a823` with the current implementation.
 It uses synthetic story data and identical validated Director contracts. It
 makes no paid Director requests and never reads or writes Firebase stories.
 
@@ -14,7 +14,7 @@ conversation. Both legacy and selective lorebooks are covered.
 ```sh
 node --experimental-vm-modules tests/tools/narrator-comparison.mjs prepare \
   --baseline-root /path/to/frozen-baseline \
-  --out investigate/narrator-comparison-1
+  --out play-history/diagnostics/narrator-comparison-1
 ```
 
 For a focused retest after fixes, prepare in a fresh output directory with
@@ -30,7 +30,7 @@ before running:
 
 ```sh
 node --experimental-vm-modules tests/tools/narrator-comparison.mjs run \
-  --out investigate/narrator-comparison-1 \
+  --out play-history/diagnostics/narrator-comparison-1 \
   --key-file /path/to/private/key.txt \
   --confirm-live yes --approved-budget 0.10
 ```

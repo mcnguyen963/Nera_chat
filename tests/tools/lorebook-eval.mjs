@@ -62,7 +62,7 @@ async function setupPrepared(options) {
   return {fixture,preview,narrator,extractor};
 }
 async function prepare(options) {
-  const dir=resolve(options.out??'investigate/selective-eval');await mkdir(dir,{recursive:true,mode:0o700});
+  const dir=resolve(options.out??'play-history/diagnostics/selective-eval');await mkdir(dir,{recursive:true,mode:0o700});
   const prepared=await setupPrepared(options),metadata=await catalog();
   const biggest=Math.max(...Object.values(prepared.preview).map(p=>p.inputBound));
   const eligible=eligibleEndpoints(metadata,biggest,8192);
@@ -79,7 +79,7 @@ async function run(options) {
   const limits=expanded?EXPANDED_EVAL_LIMITS:EVAL_LIMITS;
   if(options['approved-budget']!==limits.budget.toFixed(2))throw new Error('Paid tests require explicit user approval and --approved-budget '+limits.budget.toFixed(2)+'.');
   if(!options['key-file'])throw new Error('Supply --key-file; keys are never read from exported story settings.');
-  const dir=resolve(options.out??'investigate/selective-eval'),prepared=JSON.parse(await readFile(resolve(dir,'prepared.json'),'utf8'));
+  const dir=resolve(options.out??'play-history/diagnostics/selective-eval'),prepared=JSON.parse(await readFile(resolve(dir,'prepared.json'),'utf8'));
   const lock=await open(resolve(dir,'run.lock'),'wx',0o600);
   try {
     // Each prepared run is immutable and cannot be accidentally replayed.

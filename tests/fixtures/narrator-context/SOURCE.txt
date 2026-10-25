@@ -1,1 +1,1 @@
-Frozen Director-mode Narrator builder from 86b910f148ead0a983e9d26ee486d3a55915c3cc. Used only for offline comparisons; the paid comparison validates the full archived baseline checkout.
+Frozen Director-mode Narrator builder from 3f5be8a8ee8a759c862520f4f265c0bcff81a823. Used only for offline comparisons; the paid comparison validates the full archived baseline checkout.

@@ -1,6 +1,7 @@
 import { promptFetch, promptImportMeta } from '../prompt-files.mjs';
 import vm from 'node:vm';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 const JS = new URL('../../js/', import.meta.url);
 async function setup(stubs = {}) {
   const cache = new Map(), context = vm.createContext({ URL,fetch:promptFetch,console,structuredClone,TextEncoder,Date,Map,Set,AbortController,setTimeout,clearTimeout });
@@ -14,7 +15,7 @@ async function setup(stubs = {}) {
   }
   return async path => { const m = await load(path); if (m.status !== 'evaluated') await m.evaluate(); return m.namespace; };
 }
-const [file, upArg = 'Infinity', out = 'req.json', blockRole] = process.argv.slice(2);
+const [file, upArg = 'Infinity', out = 'play-history/diagnostics/replay/req.json', blockRole] = process.argv.slice(2);
 const lines = (await readFile(file,'utf8')).split('\n').filter(Boolean);
 const head = JSON.parse(lines[0]).nera;
 const ts = v => v && typeof v === 'object' && 'seconds' in v ? v.seconds*1000 : v;
@@ -28,6 +29,7 @@ if(blockRole && !['user','system'].includes(blockRole)) throw new Error('Optiona
 const session={ id:'s',...head.session };
 if(blockRole) session.memory={...session.memory,blockRole};
 const r = await builder.buildContextForRequest(session,settings,{ messages,loreEntries:lore,requireLatestUser:true,upToOrder:Number(upArg) });
+await mkdir(dirname(out),{recursive:true,mode:0o700});
 await writeFile(out,JSON.stringify(r.apiMessages,null,1));
 console.log('messages',r.apiMessages.length,'tokens',r.usedTokens,'memoryTokens',r.report.blocks.find(b=>b.key==='memory')?.tokens);
 r.apiMessages.forEach((m,i) => console.log(String(i).padStart(2),m.role.padEnd(9),'T-refs',(m.content.match(/\bT\d{1,5}\b/g) ?? []).length,'|',JSON.stringify(m.content.slice(0,90))));

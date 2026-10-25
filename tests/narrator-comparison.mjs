@@ -10,7 +10,7 @@ import {countTokens,tokenizerStatus} from './tools/production-tokenizer.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
 test('Paid Narrator comparison requires confirmation before any key read or completion',async()=>{
  for(const args of [[],['--approved-budget','0.10'],['--confirm-live','yes','--approved-budget','0.40']])await assert.rejects(main(['run','--key-file','/missing-key',...args]),/separate user confirmation/);
- assert.equal(BASELINE_COMMIT,'86b910f148ead0a983e9d26ee486d3a55915c3cc');
+ assert.equal(BASELINE_COMMIT,'3f5be8a8ee8a759c862520f4f265c0bcff81a823');
 });
 test('Eight offline requests compare identical contracts, alternate order, and stay within the price/budget caps',async()=>{
  const frozen=await readFile(new URL('./fixtures/narrator-context/memory-context.js',import.meta.url),'utf8');

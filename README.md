@@ -28,3 +28,9 @@ Chat edits, deletions, and new turns now update on this device immediately. Fire
 The device retains three recent story caches, plus stories with pending saves. Pending operations survive reopening when IndexedDB is available. Routine chat use reuses cached history, lore and story settings. Use **Sync latest data** or reload the page to fetch external changes; pending saves must finish first. Existing stories and lorebook import/export formats need no migration.
 
 **Stop** discards unfinished narration immediately and frees the composer. Retrying the same user turn reuses its validated Director contract. Sending a different turn supersedes that pending contract and starts from the last completed canonical state. A reply already queued for saving before Stop remains saved.
+
+## Local story files
+
+Keep character cards, lorebooks, canon notes, and character reference art in `lorebooks/`. Keep exported conversations in `play-history/history/`, summaries in `play-history/summaries/`, and model request/response captures in `play-history/diagnostics/`. Both top-level folders are ignored by Git and excluded from deployment. Evaluation tools default to the diagnostics folder; explicit output paths remain supported.
+
+`resources/pets/` is public: keep only the pet catalog and built-in pet image sheets there. Never put story exports, reference art, or lore documents in public resources.
