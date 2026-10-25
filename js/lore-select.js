@@ -14,9 +14,11 @@ export const MEMORY_RULE = CONTINUITY_RULE;
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function buildLoreIndex(entries) {
   const index = { entries, characters:[], locations:[], facts:[], events:[] };
+  const firstCounts=new Map(),titles=new Set('lord lady sir dame king queen prince princess master mistress captain father mother brother sister mr. mrs. ms. dr.'.split(' '));
+  for(const e of entries)if(e.book==='characters'){const first=normalizeName(e.name).split(' ')[0];firstCounts.set(first,(firstCounts.get(first) ?? 0)+1);}
   for (const e of entries) {
     const terms = [e.name,...(e.aliases ?? [])];
-    if (e.book === 'characters') {const first=normalizeName(e.name).split(' ')[0];if(first.length>=3 && !new Set('lord lady sir dame king queen prince princess master mistress captain father mother brother sister mr. mrs. ms. dr.'.split(' ')).has(first) && entries.filter(x=>x.book==='characters' && normalizeName(x.name).split(' ')[0]===first).length===1)terms.push(e.name.split(' ')[0]);}
+    if (e.book === 'characters') {const first=normalizeName(e.name).split(' ')[0];if(first.length>=3 && !titles.has(first) && firstCounts.get(first)===1)terms.push(e.name.split(' ')[0]);}
     const seen = new Set();
     for (const [i,term] of terms.entries()) {
       const normTerm = normalizeName(term);
@@ -28,13 +30,22 @@ export function buildLoreIndex(entries) {
   }
   return index;
 }
-export function findMentionOccurrences(text, index, book) {
-  const matches = [], nfc = String(text).normalize('NFC').replace(/[‘’]/g,"'");
-  for (const term of index[book] ?? []) {
+function mentionMatchers(index,book) {
+  return (index[book] ?? []).map(term=>{
     // All matches share offsets in the same string; allow names across whitespace.
     const phrase = escapeRegex(term.firstName ? term.term.replace(/[‘’]/g,"'") : term.normTerm).replace(/\s+/g, '\\s+');
     const re = new RegExp('(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',term.firstName ? 'gu' : 'giu');
-    for (const m of nfc.matchAll(re)) matches.push({ id:term.entryId, start:m.index, end:m.index+m[0].length });
+    return {entryId:term.entryId,re};
+  });
+}
+export function findMentionOccurrences(text, index, book) {
+  return matchOccurrences(text,mentionMatchers(index,book));
+}
+function matchOccurrences(text,matchers) {
+  const matches = [], nfc = String(text).normalize('NFC').replace(/[‘’]/g,"'");
+  for (const {entryId,re} of matchers) {
+    re.lastIndex=0;
+    for (const m of nfc.matchAll(re)) matches.push({ id:entryId, start:m.index, end:m.index+m[0].length });
   }
   matches.sort((a,b) => (b.end-b.start)-(a.end-a.start)||a.start-b.start||stableId(a.id,b.id));
   const chosen = [];
@@ -77,16 +88,18 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     selected[book] = [];
     const list = [...new Map(entries.filter(e => e.book === book).map(e => [e.id,e])).values()];
     if (!mem.lorebooks || !mem.books[book].on) { for (const e of list) skipped.push({ entryId:e.id, book, name:e.name, reason:'book off' }); continue; }
+    // Compile once for this selection; exported lookups still see mutable indexes.
+    const matchers=mentionMatchers(index,book);
     const evidence = messages => {
       const hits = new Map();
-      for (const m of messages) for (const hit of findMentionOccurrences(m.content ?? '',index,book)) {
+      for (const m of messages) for (const hit of matchOccurrences(m.content ?? '',matchers)) {
         const mention = {messageId:m.id ?? null,order:m.order ?? 0,role:m.role ?? null,offset:hit.start};
         if (!hits.has(hit.id) || compareMention(mention,hits.get(hit.id)) < 0) hits.set(hit.id,mention);
       }
       return hits;
     };
     const currentHits = evidence(current), recentHits = evidence(recent), latestHits = evidence([...recent,...current]);
-    const sceneHits = new Set(findMentions(scene?.raw ?? '',index,book));
+    const sceneHits = new Set(matchOccurrences(scene?.raw ?? '',matchers).map(hit=>hit.id));
     const candidates = new Map();
     const add = (entry,priority,reason) => {
       if(transition)priority=['always','protagonist','pinned record'].includes(reason) ? 0 : required.has(entry.id) ? 1 : ['in scene','current place'].includes(reason) ? 2 : ['starting character','starting place'].includes(reason) ? 3 : directorIds.has(entry.id) ? 4 : 5+priority;

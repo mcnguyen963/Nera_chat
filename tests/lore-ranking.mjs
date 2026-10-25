@@ -90,3 +90,23 @@ test('an oversized higher-ranked card can be skipped for a smaller card with its
   const fit=await h.select.fitBook(s.selected.locations,50,async text=>text.length);
   assert.deepEqual(Array.from(fit.included,e=>e.entry.id),['small']);assert.equal(fit.included[0].ranking.rank,2);assert.equal(fit.skipped[0].entryId,'large');assert.equal(fit.skipped[0].ranking.rank,1);
 });
+
+test('mention matching reuses compiled terms across evidence messages without retaining a mutable index',async()=>{
+ let compilations=0;
+ function CountedRegExp(...args){compilations++;return new RegExp(...args);}
+ const use=appHarness({globals:{RegExp:CountedRegExp}}),lines=await use('lore-lines.js'),select=await use('lore-select.js'),{normalizeMemory}=await use('memory-settings.js');
+ const entries=['Míra Vale','Old Tom','Tom Stone'].map((name,i)=>lines.makeEntry('characters',name,{id:'c'+i}));
+ const index=select.buildLoreIndex(entries),mem=normalizeMemory({lorebooks:true});
+ const recent=Array.from({length:20},(_,i)=>({id:'r'+i,order:i+1,role:i%2?'assistant':'user',content:"Old\tTom meets Míra Vale, not Tommy."}));
+ compilations=0;
+ const result=select.selectEntries(entries,mem,'Míra returns.',null,'',{recent,current:[{id:'latest',order:21,role:'user',content:'Míra returns.'}]});
+ assert.equal(compilations,index.characters.length,'compile once per term, independent of evidence message count');
+ assert.equal(result.selected.characters[0].entry.id,'c0');assert.ok(result.selected.characters.some(x=>x.entry.id==='c1'));
+ assert.deepEqual(Array.from(select.findMentions('Míra',index,'characters')),['c0']);
+ index.characters.splice(0,index.characters.length,{entryId:'new',term:'Nera',normTerm:'nera',isMain:true,firstName:false});
+ assert.deepEqual(Array.from(select.findMentions('Nera',index,'characters')),['new']);
+ assert.deepEqual(Array.from(select.findMentions('Míra',index,'characters')),[]);
+ entries[0].name='Nera Solenne';entries[0].aliases=['Silver Captain'];
+ const changed=select.selectEntries(entries,mem,'Silver Captain',null,'',{recent:[]});
+ assert.equal(changed.selected.characters[0].entry.id,'c0');assert.ok(changed.index.characters.every(t=>t.normTerm!==lines.normalizeName('Míra Vale')));
+});

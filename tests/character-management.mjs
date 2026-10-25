@@ -15,7 +15,9 @@ test('management defaults protect constraints, future conditions and author cont
    assert.match(text,/NPC beliefs, rumors, evidence, suspicions, intentions, and plans distinct/);
  }
  assert.match(extraction.messages[0].content,/Keep each note under 400 characters/);
- assert.match(extraction.messages[0].content,/Dialogue establishes that a claim was made, not that the claim is true/);
+ assert.match(extraction.messages[0].content,/Aim for 10–30 tokens per note\. Never exceed 50 tokens/);
+ assert.match(extraction.messages[0].content,/These token limits apply to the note text, excluding the turn label, card name, section label, and structured metadata/);
+ assert.match(extraction.messages[0].content,/Dialogue establishes that a claim was made, not that (?:the claim|it) is true/);
  assert.match(extraction.messages[0].content,/Never turn an attempt into success, a suggestion into an accepted promise, or suspicion into guilt/);
  assert.match(reorganize[0].content,/Preserve every distinct claim and qualifier/);
  assert.match(reorganize[0].content,/Apply explicit corrections or established changes only within their scope/);

@@ -144,9 +144,12 @@ async function setup(legacyCount = 0) {
     },
   };
   const context = vm.createContext({ URL, fetch:promptFetch, TextEncoder, Date, structuredClone, console });
-  const modules = new Map();
+  const modules = new Map(),loading=new Map();
   async function load(path) {
-    if (modules.has(path)) return modules.get(path);
+    if (loading.has(path)) return loading.get(path);
+    const pending=create(path);loading.set(path,pending);return pending;
+  }
+  async function create(path) {
     const stub = path.startsWith('https:') ? firestore : {
       'db.js': { db: {} },
       'auth.js': { currentUid: () => fault.owner ?? 'u' },
@@ -158,8 +161,7 @@ async function setup(legacyCount = 0) {
       }, { context, identifier: path })
       : new vm.SourceTextModule((await readFile(new URL('../js/' + path, import.meta.url), 'utf8'))+(path==='messages.js' ? `\nexport function cachedChunksFixture(sid){return chunkCache.get(currentUid()+':'+sid)?.flatMap(c=>c.data().messages ?? []);}` : ''),
         { context, identifier: path, initializeImportMeta:promptImportMeta });
-    modules.set(path, module);
-    return module;
+    modules.set(path,module);return module;
   }
   const link=async module => { if (module.status==='unlinked') await module.link((specifier,parent) => load(specifier.startsWith('https:') ? specifier : new URL(specifier,'https://local/'+parent.identifier).pathname.slice(1))); };
   const messages = await load('messages.js'); await link(messages);

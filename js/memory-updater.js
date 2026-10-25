@@ -46,47 +46,64 @@ export function maybeStartAlongsideTurn(sid, snapshot) {
   const captured = structuredClone({session:snapshot.session,settings:snapshot.settings,messages:snapshot.messages,entries:snapshot.entries,storyEpoch:snapshot.storyEpoch,range});
   void start(sid,captured.range,false,captured).catch(e => console.error('Memory update:',e)); return true;
 }
+const sameOwner=owner=>{try{return currentUid()===owner;}catch{return false;}};
+// Manual maintenance keeps its initiating account/story across preparation and batches.
+function maintenanceScope(sid) {
+  const owner=currentUid(),epoch=runtime?.get(sid)?.storyEpoch;
+  const activeAtStart=runtime?.get()?.session?.id===sid;
+  const current=()=>sameOwner(owner) && (epoch==null || runtime?.get(sid)?.storyEpoch===epoch) && (!activeAtStart || runtime?.get()?.session?.id===sid);
+  return {current,check(){if(!current())throw new StaleSourceError('Account or story changed; memory action cancelled.');}};
+}
 export async function updateNow(sid,{ retry = false } = {}) {
   if (isRunning(sid) || runtime?.busy()) return false;
-  await runtime?.prepare?.(sid);
+  const scope=maintenanceScope(sid);
+  await runtime?.prepare?.(sid);scope.check();
+  if(isRunning(sid))return false;
   const live = runtime?.get(sid); if (!live) throw new Error('Open the story first.');
-  if (retry) { await updateSession(sid,{ 'memoryState.paused':false,'memoryState.failureStreak':0 }); runtime.patch(sid,{ paused:false,failureStreak:0 }); }
+  if (retry) { await updateSession(sid,{ 'memoryState.paused':false,'memoryState.failureStreak':0 }); scope.check();runtime.patch(sid,{ paused:false,failureStreak:0 }); }
   const range = dueRange(live.messages,live.session.memoryState,normalizeMemory(live.session.memory),{ manual:true });
   if (!range) { emit({ sessionId:sid,status:'idle',message:'Waiting for more eligible turns.',manual:true }); return false; }
-  return start(sid,range,true);
+  return start(sid,range,true,null,scope);
 }
 export async function rebuild(sid, options = {}) {
   if (isRunning(sid) || runtime?.busy()) return false;
-  await runtime?.prepare?.(sid);
+  const scope=maintenanceScope(sid);
+  await runtime?.prepare?.(sid);scope.check();
+  if(isRunning(sid))return false;
   const live=runtime?.get(sid);if(!live)return false;
   const seenRevision=live.session.historyRevision ?? 0;
-  const changed=await markGeneratedForReview(sid);
-  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder:0,pointer:0});
+  const changed=await markGeneratedForReview(sid);scope.check();
+  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder:0,pointer:0});scope.check();
   const latest=runtime?.get(sid);if(latest)latest.session.memoryInvalidations=cleared.memoryInvalidations;
   runtime.patch(sid,cleared.memoryState,changed);
-  const finished=await catchUp(sid,options);
+  const finished=await catchUpScoped(sid,options,scope);scope.check();
   offerRebuildCleanup(sid,0,options);
   return finished;
 }
-export async function catchUp(sid,{ signal,onProgress } = {}) {
-  await runtime?.prepare?.(sid);
+export async function catchUp(sid,options = {}) {
+  return catchUpScoped(sid,options,maintenanceScope(sid));
+}
+async function catchUpScoped(sid,{ signal,onProgress } = {},scope) {
+  await runtime?.prepare?.(sid);scope.check();
   let i = 0;
   while (!signal?.aborted) {
+    scope.check();
     const live = runtime?.get(sid), mem = normalizeMemory(live?.session.memory);
     if (!live) return false;
     const range = dueRange(live.messages,live.session.memoryState,mem,{ manual:true }); if (!range) return true;
-    onProgress?.({ range,index:++i });
+    onProgress?.({ range,index:++i });scope.check();
     const cancel = () => stop(sid); signal?.addEventListener('abort',cancel,{ once:true });
-    try { if (!await start(sid,range,true)) return false; } finally { signal?.removeEventListener('abort',cancel); }
+    try { if (!await start(sid,range,true,null,scope)) return false; } finally { signal?.removeEventListener('abort',cancel); }
   }
   return false;
 }
-async function start(sid,range,manual,captured=null) {
+async function start(sid,range,manual,captured=null,scope=null) {
+  scope?.check();
   if (isRunning(sid)) return false;
   const controller = new AbortController(),owner = currentUid();
   let live,mem,settings,source,entries,streamedAnswer='';
   const stillCurrent = () => {
-    if (controller.signal.aborted || currentUid()!==owner) return false;
+    if (controller.signal.aborted || !sameOwner(owner) || scope && !scope.current()) return false;
     if (!captured) return true;
     const latest=runtime?.get(sid);
     return !!latest && latest.storyEpoch===captured.storyEpoch;
@@ -160,15 +177,17 @@ export function dueRangeFor(sid) {
 }
 export async function rebuildFrom(sid,fromOrder,options={}) {
   if(isRunning(sid) || runtime?.busy())return false;
-  await runtime?.prepare?.(sid);
+  const scope=maintenanceScope(sid);
+  await runtime?.prepare?.(sid);scope.check();
+  if(isRunning(sid))return false;
   const live=runtime?.get(sid);if(!live)return false;
   const seenRevision=live.session.historyRevision ?? 0;
   const previous=live.messages.filter(m=>m.role==='assistant' && m.order<fromOrder).at(-1)?.order ?? 0;
-  const changed=await markGeneratedForReview(sid,fromOrder);
-  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder,pointer:previous});
+  const changed=await markGeneratedForReview(sid,fromOrder);scope.check();
+  const cleared=await clearMemoryInvalidations(sid,{seenRevision,fromOrder,pointer:previous});scope.check();
   const latest=runtime?.get(sid);if(latest)latest.session.memoryInvalidations=cleared.memoryInvalidations;
   runtime.patch(sid,cleared.memoryState,changed);
-  const finished=await catchUp(sid,options);offerRebuildCleanup(sid,fromOrder,options);return finished;
+  const finished=await catchUpScoped(sid,options,scope);scope.check();offerRebuildCleanup(sid,fromOrder,options);return finished;
 }
 
 function offerRebuildCleanup(sid,fromOrder,options) {

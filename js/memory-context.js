@@ -132,9 +132,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     }] : []);
     return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
   };
-  // Plain costs are computed once. Only wrappers and directive joins change.
+  // Count only required messages and eligible post-checkpoint candidates.
+  // Covered history remains available for scene, turn and provenance calculations.
   const indices=new Map(raw.map((m,i)=>[m.id,i])), plainCosts=new Map();
-  for(const m of raw) plainCosts.set(m.id,await count(contentFor(m))+FRAME);
+  for(const m of raw) if(required.has(m.id) || m.order>checkpoint) plainCosts.set(m.id,await count(contentFor(m))+FRAME);
   let selectionState={total:0,size:0,omittedAfter:raw.filter(m=>m.order>checkpoint).length,first:Infinity};
   const addSelection=m=>{
     selectionState.total+=plainCosts.get(m.id);selectionState.size++;

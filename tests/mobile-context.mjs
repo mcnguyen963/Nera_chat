@@ -53,3 +53,15 @@ test('History selection token-count operations grow linearly for newest-first an
     assert.ok(reads[1]<reads[0]*4.3,JSON.stringify(reads));
   }
 });
+
+test('summary-covered history remains available without tokenizing messages that cannot enter the request',async()=>{
+ const seen=[],use=appHarness({stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected cloud read');}},'tokenizer.js':{countTokens:async text=>{seen.push(text);return Math.ceil(text.length/4);},tokenizerReady:()=>true}}});
+ const {buildContextForRequest}=await use('context-builder.js');
+ const messages=Array.from({length:10000},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',narratorTurn:Math.floor(i/2)+1,content:'HISTORY_MESSAGE_'+i}));
+ messages[5000].content='OLD_ONLY_MESSAGE_5000';messages.push({id:'summary',order:10001,role:'summary',content:'Earlier events remain summarized.',coveredRange:{toOrder:9980}});
+ const before=JSON.stringify(messages),session={id:'s',activeSummaryMessageId:'summary',breakpointOrder:9980,memory:{lorebooks:true}};
+ const built=await buildContextForRequest(session,{narratorSystemPrompt:'Narrate.',maxContextTokens:30000,maxResponseTokens:1000,keepRecentMessagesAfterSummary:10},{messages,loreEntries:[],draftText:'Next action',includeInspection:true});
+ assert.ok(!seen.some(t=>t.includes('OLD_ONLY_MESSAGE_5000')));assert.ok(seen.length<200,'count work follows the eligible window');
+ const wire=JSON.stringify(built.apiMessages);assert.match(wire,/HISTORY_MESSAGE_0\b/);assert.match(wire,/HISTORY_MESSAGE_1\b/);assert.match(wire,/HISTORY_MESSAGE_9999\b/);assert.match(wire,/Earlier events remain summarized/);assert.match(wire,/Next action/);
+ assert.equal(JSON.stringify(messages),before);assert.ok(built.inspection.messages.length<30);
+});

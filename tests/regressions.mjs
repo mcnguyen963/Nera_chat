@@ -949,7 +949,7 @@ test('chat turn ledger gives a due or running update priority over auto-summary,
 test('Memory panel reloads for another story and prompt defaults hydrate and reset globally',async () => {
   const h=await harness(); h.calls.sessionDocs={ one:{ title:'One',memory:{ protagonist:'Nera',scene:true } },two:{ title:'Two',memory:{ protagonist:'Mira',scene:false } } }; h.state.sessionId='one'; const view=await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup(null,{ panel:'memory' }); await new Promise(resolve => setTimeout(resolve,0)); assert.equal(h.el('mem-protagonist').value,'Nera');
   h.state.sessionId='two'; await h.document.dispatchEvent({ type:'session-changed',detail:{ sessionId:'two',session:h.calls.sessionDocs.two } }); assert.equal(h.el('mem-protagonist').value,'Mira'); assert.equal(h.el('mem-scene').checked,false);
-  await h.fire('nav-prompts'); h.el('set-memory-update-prompt').value='custom'; await h.fire('btn-reset-settings'); assert.match(h.el('set-memory-update-prompt').value,/one note per line/); assert.match(h.el('set-memory-reorganize-prompt').value,/author's own text/);
+  await h.fire('nav-prompts'); h.el('set-memory-update-prompt').value='custom'; await h.fire('btn-reset-settings'); assert.equal(h.el('set-memory-update-prompt').value,h.settings.DEFAULT_SETTINGS.memoryExtractionPrompt); assert.match(h.el('set-memory-reorganize-prompt').value,/author's own text/);
 });
 test('lorebook editor stages canon text and saves only on Save; closing dirty editor asks to discard',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'), { makeEntry }=await h.use('lore-lines.js'), lore=await h.use('ui/lorebook-view.js');
