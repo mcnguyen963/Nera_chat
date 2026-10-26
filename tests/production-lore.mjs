@@ -29,6 +29,8 @@ async function setup(history, entry, { failHistory = false } = {}) {
   };
   const stubs = {
     [URL_FIRESTORE]:firestore,'db.js':{db:{}},'auth.js':{currentUid:()=> controls.uid},
+    // This fixture exercises lore transactions without IndexedDB or a journal.
+    'local-story.js':{applyAcknowledgedOperations(){throw new Error('Unexpected journal replay in the lore-only fixture.');}},
     'continuity.js':{assertSource(){},noteNeedsReview(){return false;},sectionMeta(){return {};},assertExtractionSource(){}},
     'lore-lines.js':{SECTION_KEYS:{characters:['personality','appearance','status','bond','relations','notes'],locations:['description','state','notes'],facts:['text'],events:['text']},newLoreId:()=> 'id'+ ++id, normalizeName:value=>String(value).toLowerCase()},
     'messages.js':{getMessages:async sid=>{assert.equal(sid,'s');counts.history++;if(failHistory)throw new Error('offline');return structuredClone(history);}},

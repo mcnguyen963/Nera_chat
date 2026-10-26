@@ -53,12 +53,66 @@ test('Device recovery still offers complete copies when a damaged pending journa
 });
 
 test('Device recovery offers the visible unsaved reply and keeps it in downloads even when it cannot be applied',async()=>{
- const {api,device}=await setup(),view={session:device.session,messages:device.messages,turns:{}};
- const reply={id:'unsaved',sid:'story',owner:'owner',message:{role:'assistant',content:'Recovered unsaved narration'}};
+ const {api,device}=await setup(),view={session:device.session,messages:device.messages.slice(0,1),turns:{}};
+ const reply={id:'unsaved',sid:'story',owner:'owner',sourceRevision:device.session.historyRevision,message:{role:'assistant',content:'Recovered unsaved narration'}};
  const options={sid:'story',current:view,storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,unsavedReply:reply};
  const copies=api.deviceStoryCopies(options);assert.equal(copies.length,2);assert.equal(copies[1].snapshot.messages.at(-1).content,reply.message.content);
  assert.equal(copies[0].snapshot.unsavedReply.message.content,reply.message.content);
  reply.overwriteId='missing-reply';const failed=api.deviceStoryCopies(options);assert.equal(failed.length,1);assert.equal(failed.warnings.length,1);assert.equal(failed[0].snapshot.unsavedReply.overwriteId,'missing-reply');
+});
+
+for(const [name,mutate] of [
+ ['copy-only',r=>Object.assign(r,{recoveryCopyOnly:true,recoveryReason:'Original history was changed.'})],
+ ['stale source',r=>r.sourceRevision--],['missing source',r=>delete r.sourceRevision],
+ ['missing message ID',r=>delete r.id],
+ ['changed author input',r=>r.expectedSource={longTermPlan:'An older plan'}],
+ ['another account',r=>r.owner='other'],['another story',r=>r.sid='other'],
+ ['missing replacement',r=>Object.assign(r,{overwriteId:'deleted',order:2})],
+ ['changed replacement order',r=>Object.assign(r,{overwriteId:'a',order:99})],
+ ['missing continuation',r=>r.continuation=true],
+ ['Director dependent',r=>r.message.directorTurnId='pending'],
+ ['truncated replacement',r=>Object.assign(r,{replanReplacement:true,message:{...r.message,truncated:true}})],
+])for(const saved of [false,true])test(`Device ${saved?'saved-backup':'open-story'} recovery keeps ${name} replies downloadable outside canonical history`,async()=>{
+ const {api,device,calls,active}=await setup(),reply={id:'unsaved',sid:'story',owner:'owner',sourceRevision:device.session.historyRevision,message:{role:'assistant',content:'Paid unsaved reply',thinking:'Keep private thinking'}};
+ mutate(reply);const source={...device,messages:device.messages.slice(0,1),unsavedReply:reply},before=JSON.stringify(source),cloudBefore=active();
+ const options={sid:'story',storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,...(saved?{aux:{deviceRecoveryBackups:[{at:'yesterday',snapshot:source}]}}:{current:{session:source.session,messages:source.messages,turns:{}},unsavedReply:reply})};
+ const copies=api.deviceStoryCopies(options);assert.equal(copies.length,1);assert.equal(copies.warnings.length,1);if(name==='copy-only')assert.match(copies.warnings[0],/Original history was changed/);
+ const download=JSON.parse(JSON.stringify(copies[0].snapshot));assert.equal(download.unsavedReply.message.content,'Paid unsaved reply');assert.equal(download.unsavedReply.message.thinking,'Keep private thinking');assert.equal(download.messages.length,1);
+ assert.equal(JSON.stringify(source),before);assert.deepEqual(active(),cloudBefore);assert.equal(calls.reads,0);assert.equal(calls.activeWrites,0);
+});
+
+test('Device recovery refuses a second assistant append and preserves safe same-source replacements',async()=>{
+ const {api,device,calls}=await setup(),view={session:device.session,messages:device.messages,turns:{}},reply={id:'new',sid:'story',owner:'owner',sourceRevision:4,message:{role:'assistant',content:'Recovered alternative'}};
+ const options={sid:'story',current:view,storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,unsavedReply:reply};
+ const invalid=api.deviceStoryCopies(options);assert.equal(invalid.length,1);assert.match(invalid.warnings[0],/no longer ends/);
+ Object.assign(reply,{overwriteId:'a',order:2,continuation:true});const valid=api.deviceStoryCopies(options);
+ assert.equal(valid.length,2);assert.equal(valid.warnings.length,0);assert.equal(valid[1].snapshot.messages.length,2);assert.equal(valid[1].snapshot.messages[1].id,'a');assert.equal(valid[1].snapshot.messages[1].content,'Recovered alternative');assert.equal(calls.reads,0);
+});
+
+test('Device recovery leaves an unsafe Director reply outside history even when its contract is present',async()=>{
+ const {api,device}=await setup(),state={version:2,scene:{date:'21/10/738',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]};
+ device.session.directorState=state;device.session.directorPending='pending';device.storySettings.values.narrationMode='director';
+ const turn={id:'pending',version:1,status:'pending',before:state,after:state,source:{historyRevision:4}},reply={id:'new',sid:'story',owner:'owner',sourceRevision:4,message:{role:'assistant',content:'Unsaved Director narration',directorTurnId:'pending'}};
+ const copies=api.deviceStoryCopies({sid:'story',current:{session:device.session,messages:device.messages.slice(0,1),turns:{pending:turn}},storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,unsavedReply:reply});
+ assert.equal(copies.length,1);assert.match(copies.warnings[0],/Director contract/);assert.equal(copies[0].snapshot.session.directorPending,'pending');assert.equal(copies[0].snapshot.directorTurns[0].status,'pending');assert.equal(copies[0].snapshot.messages.length,1);assert.equal(copies[0].snapshot.unsavedReply.message.content,reply.message.content);
+});
+
+test('Device recovery cannot confirm unsaved provenance when the local source revision is missing',async()=>{
+ const {api,device}=await setup();delete device.session.historyRevision;
+ const reply={id:'new',sid:'story',owner:'owner',sourceRevision:0,message:{role:'assistant',content:'Unknown source reply'}};
+ const copies=api.deviceStoryCopies({sid:'story',current:{session:device.session,messages:device.messages.slice(0,1),turns:{}},storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,unsavedReply:reply});
+ assert.equal(copies.length,1);assert.match(copies.warnings[0],/cannot be confirmed/);assert.equal(copies[0].snapshot.unsavedReply.message.content,reply.message.content);
+});
+
+test('Imported copy-only narration stays in recovery metadata through a real device upload',async()=>{
+ const {api,device,use,documents,root}=await setup(),{recoveredReplyForImport}=await use('import-recovery.js');
+ const reply=recoveredReplyForImport({id:'paid',sourceRevision:1,recoveryCopyOnly:true,recoveryReason:'The original history was changed.',message:{role:'assistant',content:'Paid stale narration',thinking:'Preserve private thinking'}},{messages:device.messages,source:{historyRevision:1},destination:device.session,owner:'owner',sid:'story',newId:()=> 'recovered'});
+ const copies=api.deviceStoryCopies({sid:'story',current:{session:device.session,messages:device.messages,turns:{}},storySettings:device.storySettings,loreSnapshot:device.loreSnapshot,unsavedReply:reply});
+ assert.equal(copies.length,1);assert.match(copies.warnings[0],/original history was changed/);
+ const result=await api.uploadDeviceStory(copies[0].snapshot),saved=[...documents].filter(([path])=>path.startsWith(root+'/messageChunks/')).flatMap(([,data])=>data.messages);
+ assert.deepEqual(plain(saved),device.messages);assert.equal(saved.some(m=>m.content==='Paid stale narration'),false);
+ const retained=[...documents].filter(([path])=>path.startsWith(root+'/storyRecovery/'+result.backupId+'/parts/')).map(([,part])=>part).find(part=>part.side==='device'&&part.tree==='unsavedReply');
+ assert.equal(retained.data.recoveryCopyOnly,true);assert.equal(retained.data.message.content,'Paid stale narration');assert.equal(retained.data.message.thinking,'Preserve private thinking');
 });
 
 test('Device upload refuses partial recent history, missing dependencies and duplicate IDs before server reads',async()=>{

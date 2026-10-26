@@ -1,3 +1,4 @@
+import {applyAcknowledgedOperations} from './local-story.js';
 // Device-local chat cache. Firestore remains the source for a session that has
 // never been opened here; the three most recently used sessions stay in IDB.
 const DATABASE = "roleplay-chat-cache";
@@ -6,21 +7,30 @@ let opening;
 
 function database() {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
-  if (!opening) opening = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 4);
-    let blocked=false;
-    request.onupgradeneeded = () => {
-      for(const name of [STORE,'outbox','storyData','operations','loreCache','recoveryBackups','tokenUsage'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
-    };
-    request.onblocked=()=>{blocked=true;resolve(null);};
-    request.onsuccess = () => {
-      if(blocked){request.result.close?.();return;}
-      request.result.onversionchange=()=>{request.result.close?.();opening=undefined;};
-      resolve(request.result);
-    };
-    request.onerror = () => reject(request.error);
-  }).catch(() => null);
-  return opening;
+  if (!opening) {
+    // A blocked request remains pending in the browser. Share that one request
+    // until it finishes; a later call may retry after the blocker/error clears.
+    const attempt={promise:null};opening=attempt;
+    attempt.promise=new Promise(resolve=>{
+      const release=()=>{if(opening===attempt)opening=undefined;};
+      let request;
+      try{request=indexedDB.open(DATABASE,4);}catch{release();resolve(null);return;}
+      let blocked=false;
+      request.onupgradeneeded=()=>{
+        for(const name of [STORE,'outbox','storyData','operations','loreCache','recoveryBackups','tokenUsage'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'key'});
+      };
+      request.onblocked=()=>{blocked=true;resolve(null);};
+      request.onsuccess=()=>{
+        const db=request.result;
+        if(blocked){db.close?.();release();return;}
+        db.onversionchange=()=>{db.close?.();release();};
+        resolve(db);
+      };
+      request.onerror=()=>{release();resolve(null);};
+    });
+    return attempt.promise;
+  }
+  return opening.promise;
 }
 
 export async function loadChatCache(uid, sessionId) {
@@ -141,29 +151,62 @@ export const saveLoreCache=(uid,sid,value)=>writeRecords(['loreCache'],tx=>tx.ob
 export const deleteLoreCache=(uid,sid)=>writeRecords(['loreCache'],tx=>tx.objectStore('loreCache').delete(`${uid}:${sid}`));
 export const storyQueueStorage={
   async load(uid,sid){
-    const key=`${uid}:${sid}`,header=await readRecord('outbox',key);if(!header)return null;
-    const aux=await loadStoryData(uid,sid),records=await Promise.all(header.ids.map(id=>readRecord('operations',key+':'+id)));
-    if(!aux?.queueBase || records.some(r=>!r))throw new Error('The local save journal is incomplete. Keep this page open and export your story.');
-    return {base:aux.queueBase,records};
+    const db=await database();if(!db)return null;
+    return new Promise((resolve,reject)=>{
+      // Header, base and records must belong to one snapshot. Another tab may
+      // append or acknowledge immediately after this readonly transaction ends.
+      const key=`${uid}:${sid}`,tx=db.transaction(['outbox','storyData','operations'],'readonly');
+      const header=tx.objectStore('outbox').get(key),aux=tx.objectStore('storyData').get(key),records=[];
+      header.onsuccess=()=>{for(const [index,id]of (header.result?.value?.ids ?? []).entries()){
+        const request=tx.objectStore('operations').get(key+':'+id);request.onsuccess=()=>{records[index]=request.result?.value;};
+      }};
+      tx.oncomplete=()=>{
+        const ids=header.result?.value?.ids;if(!ids){resolve(null);return;}
+        if(!aux.result?.value?.queueBase || records.length!==ids.length || records.some(r=>!r)){
+          reject(new Error('The local save journal is incomplete. Keep this page open and export your story.'));return;
+        }
+        resolve({base:aux.result.value.queueBase,records});
+      };
+      tx.onerror=tx.onabort=()=>reject(tx.error ?? new Error('Could not read the local save journal. Keep this page open and export your story.'));
+    });
   },
   async put(uid,sid,op,base){return writeRecords(['outbox','storyData','operations'],tx=>{
     const key=`${uid}:${sid}`,headers=tx.objectStore('outbox'),r=headers.get(key);
     r.onsuccess=()=>{
       const header=r.result?.value;
+      // Retrying the same durable operation must not unacknowledge or append it.
+      if(header?.ids.includes(op.id))return;
       if(!header){const aux=tx.objectStore('storyData'),a=aux.get(key);a.onsuccess=()=>aux.put({key,value:{...a.result?.value,queueBase:base}});}
       tx.objectStore('operations').put({key:key+':'+op.id,value:{op,acknowledged:false}});
       headers.put({key,value:{ids:[...(header?.ids ?? []),op.id]}});
     };
   });},
-  async ack(uid,sid,id,base){return writeRecords(['outbox','storyData','operations'],tx=>{
+  async ack(uid,sid,id,base,receipt){return writeRecords(['outbox','storyData','operations'],tx=>{
     const key=`${uid}:${sid}`,headers=tx.objectStore('outbox'),r=headers.get(key);
     r.onsuccess=()=>{
-      const ids=r.result?.value?.ids ?? [],ops=tx.objectStore('operations');
-      if(ids.at(-1)===id){
-        const aux=tx.objectStore('storyData'),a=aux.get(key);a.onsuccess=()=>{const value={...a.result?.value,confirmed:base};delete value.queueBase;aux.put({key,value});};
-        for(const prior of ids)ops.delete(key+':'+prior);headers.delete(key);
-      }else{
-        const record=ops.get(key+':'+id);record.onsuccess=()=>{const old=record.result?.value;if(!old)return;const message=base.messages.find(m=>m.id===old.op.payload.id);ops.put({key:key+':'+id,value:{...old,acknowledged:true,result:{session:base.session,...(message?{message}:{})}}});};
+      const ids=r.result?.value?.ids ?? [];if(!ids.includes(id))return;
+      const ops=tx.objectStore('operations'),aux=tx.objectStore('storyData'),a=aux.get(key),records=[];
+      let remaining=ids.length+1;
+      const compact=()=>{
+        if(--remaining)return;
+        // Missing data must never turn an acknowledgement into deletion.
+        if(!a.result?.value?.queueBase || records.some(record=>!record)){tx.abort();return;}
+        const index=ids.indexOf(id),record=records[index],message=base.messages.find(m=>m.id===record.op.payload.id);
+        records[index]={...record,acknowledged:true,result:receipt ?? {session:base.session,message:message ?? null,turns:base.turns ?? {}}};
+        ops.put({key:key+':'+id,value:records[index]});
+        let prefix=0;while(records[prefix]?.acknowledged)prefix++;
+        // Keep the original base and every receipt until the entire prefix is
+        // confirmed. A later journal id can have an older server receipt: moving
+        // the base early loses deletion/order evidence needed to replay it safely.
+        if(prefix!==ids.length)return;
+        const confirmed=applyAcknowledgedOperations(a.result.value.queueBase,records.slice(0,prefix));
+        const value={...a.result.value,confirmed};delete value.queueBase;headers.delete(key);
+        for(const prior of ids.slice(0,prefix))ops.delete(key+':'+prior);
+        aux.put({key,value});
+      };
+      a.onsuccess=compact;
+      for(const [index,prior]of ids.entries()){
+        const request=ops.get(key+':'+prior);request.onsuccess=()=>{records[index]=request.result?.value;compact();};
       }
     };
   });},

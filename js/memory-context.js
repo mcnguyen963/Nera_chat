@@ -10,7 +10,7 @@ import { fitCharacters } from './character-select.js';
 import { minOf, maxOf } from './math-utils.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { normalizeMemory, memoryActive } from './memory-settings.js';
-import { SCENE_RULE, latestScene, sceneTimeline, readSceneOutput } from './scene.js';
+import { SCENE_RULE, sceneTimeline, readSceneOutput } from './scene.js';
 import { modernSceneReminder } from './story-calendar.js';
 import { replyContract } from './reply-contract.js';
 import { computeTurns } from './turns.js';
@@ -41,7 +41,14 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const raw=[...rawById.values()].sort((a,b)=>a.order-b.order);
   if (opts.draftText?.trim() || opts.placeholderLatest || opts.draftPlanJump) raw.push({ id:'__memory_draft',order:(raw.at(-1)?.order ?? 0)+1,role:'user',content:opts.draftText ?? '',...(opts.draftPlanJump ? {planJump:opts.draftPlanJump} : {}) });
   const byId=new Map(raw.map(m=>[m.id,m]));
-  const turns = computeTurns(raw), current = director && (turn?.after || session.directorState) ? {scene:parseScene(directorScene(turn?.after ?? session.directorState)),missingStreak:0} : mem.scene ? latestScene(raw,Infinity,mem.startingScene) : {scene:null,missingStreak:0};
+  // The same captured timeline supplies the current scene and retained reply tags.
+  const timeline=mem.scene ? sceneTimeline(raw,{startingScene:mem.startingScene}) : new Map();
+  let lastScene;
+  for(const value of timeline.values())lastScene=value;
+  const currentScene=lastScene
+    ? {scene:lastScene.effective ? parseScene(lastScene.effective) : null,fromOrder:lastScene.fromOrder,fromId:lastScene.fromId,kind:lastScene.kind,missingStreak:lastScene.missingStreak}
+    : {scene:mem.startingScene ? parseScene(mem.startingScene) : null,fromOrder:mem.startingScene ? 0 : null,fromId:null,kind:mem.startingScene ? 'seed' : null,missingStreak:0};
+  const turns = computeTurns(raw), current = director && (turn?.after || session.directorState) ? {scene:parseScene(directorScene(turn?.after ?? session.directorState)),missingStreak:0} : mem.scene ? currentScene : {scene:null,missingStreak:0};
   const firstUser = raw.find(m => m.role === 'user'), firstAssistant = firstUser && raw.find(m => m.role === 'assistant' && m.order > firstUser.order), latestUser = raw.findLast(m => m.role === 'user');
   const latest=opts.continuationId ? {id:'__continuation',role:'user',content:prompts.continue} : latestUser;
   if(opts.continuationId) {
@@ -75,7 +82,6 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const content = renderPrompt(prompts.historicalSummary, { SUMMARY: narratorSummary });
     summaryText=content; blocks.push({ key:'summary',label:'Summary through message '+checkpoint,tokens:await count(content) });
   }
-  const timeline=mem.scene ? sceneTimeline(raw,{startingScene:mem.startingScene}) : new Map();
   const contentCache=new Map();
   const contentFor = (m,{gap=false}={}) => {
     const gapPrefix=gap && gapUser()?.id===m.id ? gapInfo()+'\n\n' : '';
@@ -132,10 +138,14 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     }] : []);
     return [{role:'system',content:[system,summaryText,...books].filter(Boolean).join('\n\n')},...history].map(({role,content})=>({role,content}));
   };
-  // Count only required messages and eligible post-checkpoint candidates.
-  // Covered history remains available for scene, turn and provenance calculations.
+  // Count required messages first, then candidates as they enter the window.
+  // Aligned block trials need every eligible suffix cost up front.
+  // All history remains available for scene, turn and provenance calculations.
   const indices=new Map(raw.map((m,i)=>[m.id,i])), plainCosts=new Map();
-  for(const m of raw) if(required.has(m.id) || m.order>checkpoint) plainCosts.set(m.id,await count(contentFor(m))+FRAME);
+  const ensurePlainCost=async m=>{
+    if(!plainCosts.has(m.id))plainCosts.set(m.id,await count(contentFor(m))+FRAME);
+  };
+  for(const m of raw) if(required.has(m.id) || mem.blockWindow && m.order>checkpoint) await ensurePlainCost(m);
   let selectionState={total:0,size:0,omittedAfter:raw.filter(m=>m.order>checkpoint).length,first:Infinity};
   const addSelection=m=>{
     selectionState.total+=plainCosts.get(m.id);selectionState.size++;
@@ -175,6 +185,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   while (targetStart > 0 && turns.turnById.get(recentRaw[targetStart-1].id) === targetTurn) targetStart--;
   const targetIds = new Set(recentRaw.slice(targetStart).map(m => m.id));
   for (const m of [...candidates].reverse().filter(m => targetIds.has(m.id))) {
+    await ensurePlainCost(m);
     const before={...selectionState};selected.add(m.id);addSelection(m);
     if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
   }
@@ -293,6 +304,7 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   // Only after lore may additional older conversation use the remaining budget.
   if (!opts.onlyRequiredWindow && windowMode !== 'block') for (const m of [...candidates].reverse()) {
     if (selected.has(m.id)) continue;
+    await ensurePlainCost(m);
     const before={...selectionState};selected.add(m.id);addSelection(m);if (await cost() > limit) { selected.delete(m.id);selectionState=before;break; }
   }
   const apiMessages=render(!!inspection),actual=FRAME+(await Promise.all(apiMessages.map(async m=>FRAME+await count(m.content)))).reduce((a,b)=>a+b,0);

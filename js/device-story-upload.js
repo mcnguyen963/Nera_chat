@@ -10,6 +10,7 @@ import {validateDirectorState} from './director-state.js';
 import {loreData} from './lore-cache.js';
 import {toRecordDocument,fromRecordDocument,fingerprint} from './lore-records.js';
 import {pickStorySettings,STORY_SETTINGS_VERSION} from './story-settings.js';
+import {recoveredReplyIssue,validateRecoveredReply} from './import-recovery.js';
 
 const bytes=value=>new TextEncoder().encode(JSON.stringify(value)).length;
 const clean=value=>value===undefined?null:JSON.parse(JSON.stringify(loreData(value)));
@@ -19,6 +20,7 @@ const MAX_REPLACEMENT_BYTES=7*1024*1024,MAX_REPLACEMENT_WRITES=400;
 // Read device copies only. In particular, never flush a conflicted queue or Sync
 // before giving the user a chance to rescue its working copy.
 export function deviceStoryCopies({sid,current,cached,aux,outbox,storySettings,loreSnapshot,unsavedReply}) {
+  const owner=currentUid();
   const copies=[],seen=new Set();copies.warnings=[];
   const add=(label,view,backupSnapshot=null)=>{
     if(!view?.session || view.session.id!==sid || !Array.isArray(view.messages))return;
@@ -30,6 +32,11 @@ export function deviceStoryCopies({sid,current,cached,aux,outbox,storySettings,l
   const addUnsaved=(label,view,reply,backupSnapshot=null)=>{
   if(view && reply?.message && !view.messages.some(m=>m.id===reply.id && m.content===reply.message.content)){
     try{
+      validateRecoveredReply(reply);
+      let reason=recoveredReplyIssue(reply,{messages:view.messages,source:view.session,directorMode:(backupSnapshot?.storySettings ?? storySettings)?.values?.narrationMode==='director'});
+      if(!reason && (reply.owner!==owner || reply.sid!==sid))reason='The unsaved reply belongs to another account or story.';
+      if(!reason && !validId(reply.overwriteId ?? reply.id))reason='The unsaved reply’s original message ID is missing.';
+      if(reason){copies.warnings.push(reason+' The unsaved reply is included in the download for Copy or Discard.');return;}
       const overwrite=!!reply.overwriteId;
       const recovered=applyStoryOperation(view,{id:'recover-unsaved',createdAt:Date.now(),kind:overwrite?'overwrite':'add',payload:{id:overwrite?reply.overwriteId:reply.id,message:reply.message}});
       add(label+(overwrite?' + unsaved replacement':' + unsaved reply'),recovered,backupSnapshot?{...backupSnapshot,session:recovered.session,messages:recovered.messages}:null);

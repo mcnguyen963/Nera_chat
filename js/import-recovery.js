@@ -71,13 +71,9 @@ export function validateRecoveredReply(reply) {
   packMessages([reply.message]);
 }
 
-export function recoveredReplyForImport(reply,{messages,source,destination,owner,sid,newId,directorMode=false}) {
-  if(!reply)return null;
-  const targetId=reply.overwriteId ?? reply.id;
-  const allocated=new Set(['id','order','revision','narratorTurn','tokenCount','createdAt','editedAt','historyRevision']);
-  const semanticKeys=Object.keys(reply.message).filter(k=>!allocated.has(k));
-  const sameReply=m=>fingerprint(Object.fromEntries(semanticKeys.map(k=>[k,m[k] ?? null])))===fingerprint(Object.fromEntries(semanticKeys.map(k=>[k,reply.message[k] ?? null])));
-  if(targetId && messages.some(m=>m.id===targetId && m.role==='assistant' && sameReply(m)))return null;
+// Recovery surfaces share the same provenance decision. Moving paid text into
+// another local backup must not turn a copy-only reply into accepted history.
+export function recoveredReplyIssue(reply,{messages,source,directorMode=false}) {
   const last=messages.filter(m=>['user','assistant'].includes(m.role)).at(-1);
   let reason='';
   if(reply.recoveryCopyOnly)reason=typeof reply.recoveryReason==='string' && reply.recoveryReason || 'The original story state for this recovered reply could not be confirmed.';
@@ -87,12 +83,22 @@ export function recoveredReplyForImport(reply,{messages,source,destination,owner
   else if(!reply.overwriteId && last?.role!=='user')reason='The saved history no longer ends at this reply’s original action.';
   else {
     try {
-      if(!Number.isSafeInteger(reply.sourceRevision))throw new Error('Missing original revision.');
+      if(!Number.isSafeInteger(reply.sourceRevision) || !Number.isSafeInteger(source?.historyRevision))throw new Error('Missing original revision.');
       assertSource(source,{historyRevision:reply.sourceRevision});assertSource(source,reply.expectedSource);
-      if(!destination || !Number.isSafeInteger(destination.historyRevision))throw new Error('Missing destination revision.');
       if(reply.id && messages.some(m=>m.id===reply.id && m.id!==reply.overwriteId))throw new Error('Conflicting reply ID.');
     }catch{reason='The reply’s original story state cannot be confirmed.';}
   }
+  return reason;
+}
+
+export function recoveredReplyForImport(reply,{messages,source,destination,owner,sid,newId,directorMode=false}) {
+  if(!reply)return null;
+  const targetId=reply.overwriteId ?? reply.id;
+  const allocated=new Set(['id','order','revision','narratorTurn','tokenCount','createdAt','editedAt','historyRevision']);
+  const semanticKeys=Object.keys(reply.message).filter(k=>!allocated.has(k));
+  const sameReply=m=>fingerprint(Object.fromEntries(semanticKeys.map(k=>[k,m[k] ?? null])))===fingerprint(Object.fromEntries(semanticKeys.map(k=>[k,reply.message[k] ?? null])));
+  if(targetId && messages.some(m=>m.id===targetId && m.role==='assistant' && sameReply(m)))return null;
+  const reason=recoveredReplyIssue(reply,{messages,source,directorMode}) || (!destination || !Number.isSafeInteger(destination.historyRevision) ? 'The reply’s original story state cannot be confirmed.' : '');
   return {...structuredClone(reply),id:reply.overwriteId ?? newId(),sid,owner,recoveredFromBackup:true,
     recoveryCopyOnly:!!reason,recoveryReason:reason,conflict:false,
     sourceRevision:destination?.historyRevision ?? 0,expectedSource:destination?requestSource(destination):null,

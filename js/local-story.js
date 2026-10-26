@@ -63,3 +63,48 @@ function completeDirector(view,m,advance=1) {
   if(!m.truncated && !rewrite)Object.assign(s,{directorState:copy(turn.after),directorRevision:(s.directorRevision ?? 0)+1,directorCheckpoint:turn.id,directorPending:null,directorNeedsReview:false,directorStateHistoryOrder:m.order});
   view.turns[turn.id]={...turn,status:m.truncated?'pending':'completed',assistantId:m.id,order:m.order,source:requestSource({...s,historyRevision:(s.historyRevision ?? 0)+advance})};
 }
+
+// Receipts can arrive from independent tabs in a different order from journal
+// insertion. Replay only confirmed effects, retaining the newest server metadata.
+export function applyAcknowledgedOperations(base,records) {
+  const compare=(a,b)=>{for(const field of ['historyRevision','directorRevision','storySettingsRevision','loreRevision']){const delta=(a?.[field] ?? 0)-(b?.[field] ?? 0);if(delta)return delta;}return 0;};
+  const sequence=record=>record.result?.session ?? {...record.op.source,directorRevision:(record.op.source?.directorRevision ?? 0)+(record.op.kind==='discardDirector'?1:0)};
+  for(const record of [...records].sort((a,b)=>compare(sequence(a),sequence(b)) || Number(!a.result?.session)-Number(!b.result?.session))){
+    const {op,result={}}=record,prior=base;
+    try{base=applyStoryOperation(base,{...op,source:null,payload:{...op.payload,expectedRevision:null}});}catch{
+      // A confirmed older edit/delete may already be superseded in queueBase.
+      // Its authoritative receipt still supplies the message and session below.
+      base={...base,session:{...base.session},turns:{...base.turns}};
+    }
+    if(compare(result.session,prior.session)>=0 && result.session)base.session=result.session;
+    else if(result.session)base.session=prior.session;
+    if(Object.hasOwn(result,'message')){
+      const message=result.message,current=prior.messages.find(m=>m.id===op.payload.id);
+      if(message){
+        const chosen=current && (current.revision ?? 0)>(message.revision ?? 0)?current:message;
+        let replaced=false;
+        base.messages=base.messages.flatMap(message=>{if(message.id!==chosen.id)return [message];if(replaced)return [];replaced=true;return [chosen];});
+        if(!replaced)base.messages=[...base.messages,chosen].sort((a,b)=>a.order-b.order);
+      }else if(['edit','delete','overwrite','add'].includes(op.kind))base.messages=base.messages.filter(m=>m.id!==op.payload.id);
+    }
+    // Only turn records affected by this operation may replace existing state.
+    for(const [id,turn]of Object.entries(base.turns))if(turn!==prior.turns[id] && result.turns?.[id])base.turns[id]=result.turns[id];
+  }
+  return base;
+}
+
+// A recovered conflict keeps its local text visible/exportable while transport
+// retains the original provenance checks. This preview never authorizes a save.
+export function previewRecoveredOperation(base,op,original) {
+  const preview={...op,source:null,payload:{...op.payload,expectedRevision:null}};
+  try{return applyStoryOperation(base,preview);}catch{
+    const p=op.payload;
+    if(['edit','overwrite'].includes(op.kind)){
+      const previous=base.messages.find(m=>m.id===p.id) ?? original.messages.find(m=>m.id===p.id);
+      if(previous){const message={...previous,...p.message,...(op.kind==='edit'?{content:p.content}:{})};return {...base,messages:[...base.messages.filter(m=>m.id!==p.id),message].sort((a,b)=>a.order-b.order)};}
+    }
+    if(op.kind==='delete')return {...base,messages:base.messages.filter(m=>m.id!==p.id)};
+    if(op.kind==='add')return {...base,messages:[...base.messages,{...p.message,id:p.id,order:(base.session.nextOrder ?? 0)+1}]};
+    return base;
+  }
+}

@@ -12,9 +12,20 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 // Firebase Authentication owns credentials; Firestore access is scoped by UID.
+let authEpoch=0,lastAuthUid;
+function observeAccount(uid) {if(uid!==lastAuthUid){lastAuthUid=uid;++authEpoch;}}
+// A returned UID can be the same after signing out and back in. Async work must
+// also belong to this particular account session before publishing local state.
+export function accountEpoch() {
+  observeAccount(getAuth().currentUser?.uid ?? null);
+  return authEpoch;
+}
 
 export function initAuth(callback) {
-  return onAuthStateChanged(getAuth(), callback);
+  return onAuthStateChanged(getAuth(), user=>{
+    observeAccount(user?.uid ?? null);
+    return callback(user);
+  });
 }
 
 // Current signed-in user's uid — used to scope every session/message path so each
@@ -52,6 +63,7 @@ export async function changePassword(currentPassword, newPassword) {
 }
 
 export async function logout() {
+  ++authEpoch;
   await clearAccountCaches(currentUid());
   await signOut(getAuth());
 }

@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 test('Device recovery backups retain three complete copies and survive Sync for their own account and story',async()=>{
@@ -72,9 +71,9 @@ test('Clearing device chat caches removes only the current account entries', asy
     queueMicrotask(() => request.onsuccess());
     return request;
   } } });
-  const module = new vm.SourceTextModule(await readFile(new URL('../js/chat-cache.js', import.meta.url), 'utf8'), { context });
-  await module.link(() => {}); await module.evaluate();
-  await module.namespace.clearChatCache('u');
+  const {appHarness}=await import('./app-harness.mjs');
+  const cache=await appHarness({globals:{indexedDB:context.indexedDB}})('chat-cache.js');
+  await cache.clearChatCache('u');
   assert.deepEqual([...entries.keys()], ['other:A']);
 });
 

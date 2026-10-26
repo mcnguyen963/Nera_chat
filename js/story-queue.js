@@ -1,11 +1,12 @@
 // Ordered, durable, per-story outbox. Persistence and transport are injected.
-import { applyStoryOperation } from './local-story.js';
+import { applyStoryOperation,applyAcknowledgedOperations,previewRecoveredOperation } from './local-story.js';
 const transient=e=>['unavailable','deadline-exceeded','aborted','resource-exhausted','internal','network-request-failed'].includes(String(e.code ?? '').replace('firestore/','')) || e instanceof TypeError;
-export function createStoryQueue({owner,sid,base,operations=[],storage,commit,currentOwner,onChange=()=>{},schedule=setTimeout,cancel=clearTimeout}) {
-  let confirmed=base, pending=operations,working=base,error=null,running=null,timer=null,closed=false,attempt=0,durable=true,paused=false,synced=false;
+export function createStoryQueue({owner,sid,base,operations=[],recoveryError=null,recoveryBase=base,acknowledgedRecords=[],storage,commit,currentOwner,onChange=()=>{},schedule=setTimeout,cancel=clearTimeout}) {
+  let confirmed=base, pending=operations,working=base,error=recoveryError,running=null,timer=null,closed=false,attempt=0,durable=true,paused=false,synced=false;
+  let receiptBase=recoveryBase,receipts=acknowledgedRecords;
   const checkpoints=new Set();
   let journal=Promise.resolve();
-  const rebuild=()=>{working=pending.reduce(applyStoryOperation,confirmed);};rebuild();
+  const rebuild=()=>{working=pending.reduce((view,op)=>{try{return applyStoryOperation(view,op);}catch(error){if(!recoveryError)throw error;return previewRecoveredOperation(view,op,recoveryBase);}},confirmed);};rebuild();
   const status=()=>({pending:pending.length,error,durable,running:!!running,paused,synced:!pending.length && synced});
   const emit=()=>{
     for(const checkpoint of checkpoints){
@@ -29,12 +30,15 @@ export function createStoryQueue({owner,sid,base,operations=[],storage,commit,cu
         const op=pending[0];
         try {
           const next=await commit(op,confirmed);
-          // Apply the semantic mutation, then authoritative metadata from its receipt.
-          confirmed=applyStoryOperation(confirmed,op);
-          if(next.session)confirmed={...confirmed,session:next.session};
-          if(next.message || next.replacement){const m=next.message ?? next.replacement;confirmed={...confirmed,messages:confirmed.messages.map(x=>x.id===m.id?m:x)};}
+          // A successful transport may return an older, already committed receipt.
+          // Replay its authoritative effect with known receipts, never revalidate
+          // its captured source against a newer confirmed view after server success.
+          const result={...next,...(Object.hasOwn(next,'replacement')?{message:next.replacement}:{})};
+          receipts=[...receipts,{op,acknowledged:true,result}];
+          confirmed=applyAcknowledgedOperations(receiptBase,receipts);
           pending=pending.slice(1);attempt=0;synced=true;
-          await write(()=>storage.ack(owner,sid,op.id,confirmed));
+          await write(()=>storage.ack(owner,sid,op.id,confirmed,result));
+          if(!pending.length){receiptBase=confirmed;receipts=[];recoveryError=null;recoveryBase=confirmed;}
           rebuild();emit();
         }catch(e){
           if(transient(e) && attempt<5 && !paused){const delay=Math.min(30000,1000*2**attempt++);timer=schedule(()=>{timer=null;void drain();},delay);break;}
@@ -68,7 +72,7 @@ export function createStoryQueue({owner,sid,base,operations=[],storage,commit,cu
     async settled(){await journal;},
     start(){emit();void drain();},
     close(){closed=true;if(timer!==null)cancel(timer);emit();},
-    cacheTurn(turn){confirmed={...confirmed,turns:{...confirmed.turns,[turn.id]:turn}};rebuild();emit();},
-    adopt(base,{discardPending=false,serverConfirmed=false,notify=true}={}){if(discardPending && !paused)throw new Error('Pause saves before replacing local work.');if(pending.length && !discardPending)throw new Error('Sync pending changes first.');confirmed=base;working=base;if(discardPending){pending=[];error=null;attempt=0;durable=true;}if(serverConfirmed)synced=true;if(notify)emit();},
+    cacheTurn(turn){receiptBase={...receiptBase,turns:{...receiptBase.turns,[turn.id]:turn}};confirmed={...confirmed,turns:{...confirmed.turns,[turn.id]:turn}};rebuild();emit();},
+    adopt(base,{discardPending=false,serverConfirmed=false,notify=true}={}){if(discardPending && !paused)throw new Error('Pause saves before replacing local work.');if(pending.length && !discardPending)throw new Error('Sync pending changes first.');confirmed=base;working=base;receiptBase=base;receipts=[];if(discardPending){pending=[];error=null;recoveryError=null;attempt=0;durable=true;}if(serverConfirmed)synced=true;if(notify)emit();},
   };
 }

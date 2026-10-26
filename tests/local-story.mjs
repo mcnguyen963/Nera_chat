@@ -69,3 +69,33 @@ test('A stale local receipt allows admissions and does not restore a persisted r
  const reopened=await api.openStoryStore('s',base(),()=>{});assert.equal(reopened.requiresReconciliation,false);
  assert.ok(writes.every(value=>!Object.hasOwn(value,'requiresReconciliation')));
 });
+
+
+test('Adopting a refreshed idle base resets receipt reconstruction before the next save',async()=>{
+ const {q}=await setup(async()=>({}));q.enqueue(op('one','edit',{id:'a',content:'first'}));await q.flush();
+ const fresh=base();fresh.session={...fresh.session,historyRevision:5,nextOrder:3};fresh.messages=[...fresh.messages,{id:'foreign',role:'user',order:3,revision:0,content:'Saved on another device'}];
+ q.adopt(fresh);q.enqueue(op('two','add',{id:'next',message:{role:'assistant',content:'Next saved reply'}}));await q.flush();
+ assert.equal(q.confirmed.session.historyRevision,6);assert.deepEqual(Array.from(q.confirmed.messages,m=>m.id),['u','a','foreign','next']);assert.equal(q.confirmed.messages[2].content,'Saved on another device');
+});
+
+test('Fetched Director checkpoints survive receipt reconstruction on the next save',async()=>{
+ const {q}=await setup(async()=>({}));const turn={id:'fetched',status:'completed',before:{scene:{location:'Inn'}},after:{scene:{location:'Hall'}}};q.cacheTurn(turn);
+ q.enqueue(op('edit','edit',{id:'u',content:'Edited action'}));await q.flush();assert.deepEqual(q.confirmed.turns.fetched,turn);
+});
+
+test('Director receipts without a session replay after their captured history and before narration',async()=>{
+ const load=appHarness(),pure=await load('local-story.js'),source=(await load('continuity.js')).requestSource;
+ const initial=base(),user={...op('user','add',{id:'next-user',message:{role:'user',content:'Enter the hall'}}),source:source(initial.session)},afterUser=pure.applyStoryOperation(initial,user);
+ const turn={id:'director',before:{scene:{location:'Inn'}},after:{scene:{location:'Hall'}},previousCheckpoint:null},director={...op('director','director',{turn}),source:source(afterUser.session)},afterDirector=pure.applyStoryOperation(afterUser,director);
+ const reply={...op('reply','add',{id:'next-reply',message:{role:'assistant',content:'The hall opens',directorTurnId:'director'}}),source:source(afterDirector.session)},afterReply=pure.applyStoryOperation(afterDirector,reply);
+ const records=[{op:director,result:{turns:{director:afterDirector.turns.director}}},{op:reply,result:{session:afterReply.session,message:afterReply.messages.at(-1)}},{op:user,result:{session:afterUser.session,message:afterUser.messages.at(-1)}}];
+ const replayed=pure.applyAcknowledgedOperations(initial,records);
+ assert.equal(replayed.session.historyRevision,2);assert.equal(replayed.session.directorPending,null);assert.equal(replayed.turns.director.status,'completed');assert.equal(replayed.messages.at(-1).content,'The hall opens');
+});
+
+
+test('An acknowledged add already represented in the base does not duplicate its message',async()=>{
+ const load=appHarness(),pure=await load('local-story.js'),initial=base(),add=op('add','add',{id:'added',message:{role:'user',content:'Already saved'}}),confirmed=pure.applyStoryOperation(initial,add);
+ const replayed=pure.applyAcknowledgedOperations(confirmed,[{op:add,result:{session:confirmed.session,message:confirmed.messages.at(-1)}}]);
+ assert.equal(replayed.messages.filter(m=>m.id==='added').length,1);assert.equal(replayed.session.historyRevision,1);
+});

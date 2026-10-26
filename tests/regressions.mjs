@@ -1139,6 +1139,38 @@ async function openImprovementChat(h, metadata = {}, messages = []) {
   return chat;
 }
 
+for(const total of [101,300,1000,10000])test(`Loaded ${total}-message stories retain bounded local paging after edits`,async()=>{
+ const messages=Array.from({length:total},(_,i)=>({id:'paged-'+i,order:i+1,revision:0,role:i%2?'assistant':'user',content:'Page message '+i}));
+ const h=await harness(),chat=await openImprovementChat(h,{nextOrder:total,historyRevision:0},messages);
+ await new Promise(resolve=>setImmediate(resolve));
+ const list=h.el('message-list'),rows=()=>list.children.filter(n=>n.dataset.messageId),earlier=()=>list.querySelector('.earlier-messages');
+ assert.equal(rows().length,100);assert.ok(earlier());
+ const store=(await h.use('local-story-store.js')).storyStore('improvement');
+ store.enqueue('edit',{id:'paged-'+(total-1),order:total,expectedRevision:0,content:'Edited final message'});await store.flush();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(chat.memorySnapshot().messages.length,total);assert.equal(rows().length,100);assert.ok(earlier());
+ const reads=h.calls.historyReads ?? 0,queries=h.calls.queries.length;
+ await earlier().click();
+ assert.equal(rows().length,Math.min(200,total));assert.equal(rows()[0].dataset.messageId,'paged-'+Math.max(0,total-200));
+ if(total<=1000)while(earlier())await earlier().click();
+ if(total<=1000){assert.equal(rows().length,total);assert.equal(rows()[0].dataset.messageId,'paged-0');}
+ assert.equal(h.calls.historyReads ?? 0,reads);assert.equal(h.calls.queries.length,queries);
+});
+
+test('Loading an older cached page preserves its message anchor and does not expand the window twice',async()=>{
+ const messages=Array.from({length:300},(_,i)=>({id:'anchor-'+i,order:i+1,role:i%2?'assistant':'user',content:'Message '+i}));
+ const h=await harness();await openImprovementChat(h,{nextOrder:300},messages);
+ const list=h.el('message-list');list.scrollHeight=3000;list.clientHeight=500;list.scrollTop=0;
+ const first=list.children.find(n=>n.dataset.messageId),beforeTop=100;
+ first.getBoundingClientRect=()=>({top:list.children.filter(n=>n.dataset.messageId).length===100?beforeTop:beforeTop+600-list.scrollTop,height:40,width:320,bottom:beforeTop+40});
+ await list.querySelector('.earlier-messages').click();
+ assert.equal(list.children.filter(n=>n.dataset.messageId).length,200);
+ assert.equal(list.scrollTop,600);
+ await list.querySelector('.earlier-messages').click();
+ assert.equal(list.children.filter(n=>n.dataset.messageId).length,300);
+ assert.equal(list.querySelector('.earlier-messages'),null);
+});
+
 const waitForParallel = async predicate => {
   for(let i=0;i<150 && !predicate();i++)await new Promise(resolve=>setImmediate(resolve));
   assert.ok(predicate(),'Parallel requests did not reach the expected stage');

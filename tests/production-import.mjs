@@ -61,3 +61,27 @@ test('full V3 backup import explicitly creates a selective destination before wr
  assert.deepEqual(h.calls.slice(0,5).map(c=>c[0]),['create','chunks','migrate','lore','publish']);assert.equal(h.lore[0].schemaVersion,3);assert.equal(h.lore[0].sections.personality.text,entry.sections.personality.text);
  const patch=h.calls.find(c=>c[0]==='publish')[2];assert.equal(JSON.stringify(patch.memory.calendar),JSON.stringify(calendar));assert.equal(patch.memoryState.extractedThroughOrder,2);
 });
+
+for(const schema of [2,3])for(const format of ['json','jsonl'])for(const sameBook of [true,false])test(`full ${format} lore v${schema} rejects duplicate IDs across ${sameBook?'the same book':'different books'} before any writes`,async()=>{
+ const h=await setup(),{makeEntry}=await h.use('lore-lines.js'),records=await h.use('lore-records.js');
+ let entries=[makeEntry('characters','Mira'),makeEntry(sameBook?'characters':'locations','Different card')];
+ for(const entry of entries){entry.id='duplicate';Object.values(entry.sections)[0].text='Keep '+entry.name;}
+ if(schema===3)entries=entries.map(entry=>records.toRecordDocument(entry));
+ const metadata={session:{title:'Story'},lore:entries},messages=[{id:'u',order:1,role:'user',content:'Begin.'}];
+ const value=format==='json'?JSON.stringify({format:'nera-chat-backup',version:1,...metadata,messages}):JSON.stringify({character_name:'Story',nera:{version:2,...metadata}})+'\n'+JSON.stringify({mes:'Begin.',is_user:true,nera:{message:messages[0]}});
+ const before=JSON.stringify(entries);
+ await assert.rejects(h.api.importSillyTavern({name:'backup.'+format,size:value.length,text:async()=>value}),/Duplicate lore card ID "duplicate"/);
+ assert.deepEqual(h.calls,[]);assert.equal(h.lore.length,0);assert.equal(JSON.stringify(entries),before);
+});
+
+for(const schema of [2,3])test(`full lore v${schema} preserves duplicate names with distinct IDs and card dependencies`,async()=>{
+ const h=await setup(),{makeEntry}=await h.use('lore-lines.js'),records=await h.use('lore-records.js');
+ let entries=[makeEntry('characters','Mira'),makeEntry('characters','Mira')];entries[0].id='mira-a';entries[1].id='mira-b';
+ entries[0].sections.personality.text='Reserved.';entries[1].sections.personality.text='Another character with the same name.';
+ if(schema===3){entries=entries.map(entry=>records.reconcileRecords(entry));entries[0].recordLayout.records[0].relatedEntryIds=['mira-b'];entries=entries.map(entry=>records.toRecordDocument(entry));}
+ const backup={format:'nera-chat-backup',version:1,session:{title:'Story'},messages:[{id:'u',order:1,role:'user',content:'Begin.'}],lore:entries},before=JSON.stringify(backup);
+ await h.api.importSillyTavern({name:'backup.json',size:1000,text:async()=>JSON.stringify(backup)});
+ assert.deepEqual(h.lore.map(entry=>entry.id),['mira-a','mira-b']);assert.equal(h.lore[0].sections.personality.text,'Reserved.');assert.equal(h.lore[1].sections.personality.text,'Another character with the same name.');
+ if(schema===3)assert.deepEqual(Array.from(h.lore[0].recordLayout.records[0].relatedEntryIds),['mira-b']);
+ assert.equal(JSON.stringify(backup),before);assert.equal(h.calls.at(-1)[1].droppedLore,0);
+});

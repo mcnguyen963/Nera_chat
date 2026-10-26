@@ -1,7 +1,7 @@
 import {configureStorySync} from './story-sync.js';
 import {createStoryQueue} from './story-queue.js';
-import {operationId,applyStoryOperation} from './local-story.js';
-import {requestSource} from './continuity.js';
+import {operationId,applyStoryOperation,applyAcknowledgedOperations} from './local-story.js';
+import {requestSource,StoryConflict} from './continuity.js';
 import {storyQueueStorage,loadStoryData,saveStoryData} from './chat-cache.js';
 import * as messages from './messages.js';
 import {savePendingDirectorTurn,discardPendingDirector,getDirectorTurn} from './director-store.js';
@@ -23,7 +23,14 @@ async function openStoryStoreImpl(sid,base,onChange) {
   if(currentUid()!==owner)throw new Error('Account changed.');
   let recovered=outbox?.base ?? aux?.confirmed;
   let operations=outbox?.operations ?? [];
-  if(outbox?.records){let unacknowledged=false;for(const record of outbox.records){if(!record.acknowledged)unacknowledged=true;if(unacknowledged){operations.push(record.op);continue;}recovered=applyStoryOperation(recovered,record.op);if(record.result?.session)recovered.session=record.result.session;if(record.result?.message)recovered.messages=recovered.messages.map(m=>m.id===record.result.message.id?record.result.message:m);}}
+  let recoveryError=null;
+  if(outbox?.records){
+    recovered=applyAcknowledgedOperations(recovered,outbox.records.filter(record=>record.acknowledged));
+    operations=outbox.records.filter(record=>!record.acknowledged).map(record=>record.op);
+    try{operations.reduce(applyStoryOperation,recovered);}catch{
+      recoveryError=new StoryConflict('Another tab changed this story. Your unsynced edits are kept on this device. Use Sync data to preserve a recovery copy and load the latest story.');
+    }
+  }
 
   if(recovered && (outbox || !base || (recovered.session.historyRevision ?? 0)>(base.session.historyRevision ?? 0)))base=recovered;
   if(!base)throw new Error('Story history has not loaded.');
@@ -33,7 +40,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
   // Disabled persisted refresh locks. A stale receipt is only an in-memory recovery hint.
   // let entry,requiresReconciliation=!!aux?.requiresReconciliation;
   let entry,requiresReconciliation=false;
-  const queue=createStoryQueue({owner,sid,base,operations,storage:storyQueueStorage,currentOwner:ownerNow,onChange:(view,status)=>entry?.observe?.(view,status),commit:async(op,confirmed)=>{
+  const queue=createStoryQueue({owner,sid,base,operations,recoveryError,recoveryBase:outbox?.base,acknowledgedRecords:outbox?.records?.filter(record=>record.acknowledged),storage:storyQueueStorage,currentOwner:ownerNow,onChange:(view,status)=>entry?.observe?.(view,status),commit:async(op,confirmed)=>{
     if(currentUid()!==owner)throw new Error('Account changed.');
     const p=op.payload,options={operationId:op.id,session:confirmed.session,expectedSource:op.source};
     switch(op.kind){
@@ -41,7 +48,7 @@ async function openStoryStoreImpl(sid,base,onChange) {
       case 'edit':return messages.editMessage(sid,p.id,p.content,p.order,{...options,expectedRevision:p.expectedRevision});
       case 'delete':return messages.deleteMessage(sid,p.id,p.order,options);
       case 'overwrite':return messages.overwriteMessage(sid,p.id,p.message,p.order,{},op.source,options);
-      case 'director':await savePendingDirectorTurn(sid,p.turn,op.source,options);return {};
+      case 'director':{const turn=await savePendingDirectorTurn(sid,p.turn,op.source,options);return turn?{turns:{[turn.id]:turn}}:{};}
       case 'discardDirector':await discardPendingDirector(sid,op.source,options);return {};
       default:throw new Error('Unsupported local story operation.');
     }

@@ -86,6 +86,11 @@ export async function importSillyTavern(file) {
   }
   const normalizedLore=[];let droppedLore=0;
   for(const e of Array.isArray(metadata?.lore) ? metadata.lore : []){try{normalizedLore.push(normalizeLoreEntry(e));}catch{droppedLore++;}}
+  const loreIds=new Set();
+  for(const entry of normalizedLore){
+    if(loreIds.has(entry.id))throw new Error(`Duplicate lore card ID "${entry.id}" in the backup. Each card must have a unique ID. No story was imported.`);
+    loreIds.add(entry.id);
+  }
   const source=metadata?.session ?? {},lore=rebaseImportedLore(normalizedLore,messages,source);
   const importedSettings=metadata?.storySettings?.values ?? metadata?.storySettings;
   const preparedSettings=importedSettings ? await migrateStorySettings(importedSettings) : null;

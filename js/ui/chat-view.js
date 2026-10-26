@@ -157,7 +157,7 @@ function applyWorkingStory(view,status) {
   const changed=!sameHistoryRendering(historyMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
   syncStatus=status;latestReady=true;hasEarlier=false;
-  if(changed)renderMessages(historyMessages.slice(-Math.max(visibleCount,PAGE_SIZE)));
+  if(changed)renderMessages(historyMessages);
   updateSyncStatus();queueCacheSave();void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();
 }
 function updateSyncStatus(){
@@ -910,7 +910,7 @@ export function setSession(sessionId) {
 function chatSnapshot() {
   const local=storyStore(state.sessionId);
   if(local?.status.pending){const base=local.confirmed;return structuredClone({tokenUsage:tokenUsageCache.serialize(currentUid(),state.sessionId),session:base.session,recent:base.messages.slice(-Math.max(visibleCount,PAGE_SIZE)),hasEarlier:false,history:base.messages,historyRevision:base.session.historyRevision ?? 0});}
-  return structuredClone({ tokenUsage:tokenUsageCache.serialize(currentUid(),state.sessionId),session, recent: lastMessages, hasEarlier, history: historyMessages,historyRevision });
+  return structuredClone({ tokenUsage:tokenUsageCache.serialize(currentUid(),state.sessionId),session, recent: lastMessages.slice(-Math.max(visibleCount,PAGE_SIZE)), hasEarlier, history: historyMessages,historyRevision });
 }
 
 function saveLocalCache(owner, sid, snapshot) {
@@ -957,7 +957,7 @@ function restoreCachedChat(sessionId, saved) {
   historyRevision = Object.hasOwn(saved,'historyRevision') ? saved.historyRevision : saved.session.historyRevision ?? 0;
   hasEarlier = saved.hasEarlier;
   latestReady = true;
-  renderMessages(saved.recent);
+  renderMessages(saved.history ?? saved.recent);
   document.dispatchEvent(new CustomEvent("session-changed", { detail: { sessionId, session } }));
   updateIndicator();
   queueCacheSave(); // refresh recency for the three-entry device cache
@@ -1034,7 +1034,7 @@ async function ensureHistory(forceServer = false) {
       }
       historyMessages = messages;
       historyRevision = revision;
-      renderMessages(messages.slice(-Math.max(visibleCount,PAGE_SIZE)));
+      renderMessages(messages);
       historyStartOrder = 0;
       const snapshot = chatSnapshot();
       historyCache.delete(owner+':'+sessionId);
@@ -1091,8 +1091,9 @@ function renderMessages(msgs) {
   const latestAssistant=renderHistory.filter(m => m.role==='assistant').at(-1)?.id;
   const latestStory = msgs.filter(m => m.role !== 'summary').at(-1);
   const turnLabels=anyMemory(normalizeMemory(session?.memory)) ? turnsFor(renderHistory).turnById : null;
-  if (!isNearBottom() && msgs.length > lastMessages.length) {
-    visibleCount += msgs.length - lastMessages.length;
+  if (!isNearBottom() && lastMessages.length && msgs.length > lastMessages.length) {
+    const previousEnd=lastMessages.at(-1).order;
+    visibleCount += msgs.filter(m=>m.order>previousEnd).length;
   }
   lastMessages = msgs;
   if (editingState) {
@@ -1766,7 +1767,7 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       loreEntries=entries;verifiedLoreRevision=latest.loreRevision ?? 0;loreSessionId=sid;loreStatus='ok';
       loreReady=Promise.resolve();loreReloading=Promise.resolve();latestReady=true;hasEarlier=false;
       historyCache.set(owner+':'+sid,snapshot);memoryStories.delete(sid);
-      renderMessages(snapshot.recent);rememberMemoryStory();
+      renderMessages(messages);rememberMemoryStory();
       document.dispatchEvent(new CustomEvent('settings-changed'));
       document.dispatchEvent(new CustomEvent('story-settings-changed'));
       document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));
@@ -1855,7 +1856,7 @@ export async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFing
       session=result.session;historyMessages=result.messages;historyRevision=result.session.historyRevision;historyStartOrder=0;hasEarlier=false;latestReady=true;
       loreEntries=result.loreSnapshot.entries;loreSessionId=sid;verifiedLoreRevision=session.loreRevision;loreStatus='ok';loreReady=Promise.resolve();loreReloading=Promise.resolve();
       applyStorySettingsRefresh(sid,result.storySettings);messagesApi.applyMessageSnapshot(sid,result.messageSnapshot);
-      historyCache.set(owner+':'+sid,saved);rememberMemoryStory();renderMessages(saved.recent);updateMemoryChip();void updateIndicator();
+      historyCache.set(owner+':'+sid,saved);rememberMemoryStory();renderMessages(result.messages);updateMemoryChip();void updateIndicator();
       document.dispatchEvent(new CustomEvent('story-settings-changed'));
       document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries:loreEntries}}));
       document.dispatchEvent(new CustomEvent('memory-refresh',{detail:{sessionId:sid}}));
@@ -2434,10 +2435,12 @@ function clampListScroll() {
 
 function captureListPosition() {
   const edge = el.list.getBoundingClientRect().top;
-  const node = [...el.list.children].find((child) => {
+  const children=[...el.list.children];
+  const visible=child=>{
     const rect = child.getBoundingClientRect();
     return rect.top + rect.height > edge;
-  });
+  };
+  const node = children.find(child=>child.dataset.messageId && visible(child)) ?? children.find(visible);
   return { sticky: isNearBottom(), node, id: node?.dataset.messageId,
     top: node?.getBoundingClientRect().top };
 }

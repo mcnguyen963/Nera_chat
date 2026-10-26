@@ -65,3 +65,67 @@ test('summary-covered history remains available without tokenizing messages that
  const wire=JSON.stringify(built.apiMessages);assert.match(wire,/HISTORY_MESSAGE_0\b/);assert.match(wire,/HISTORY_MESSAGE_1\b/);assert.match(wire,/HISTORY_MESSAGE_9999\b/);assert.match(wire,/Earlier events remain summarized/);assert.match(wire,/Next action/);
  assert.equal(JSON.stringify(messages),before);assert.ok(built.inspection.messages.length<30);
 });
+
+test('a bounded unsummarized request skips old text that cannot enter its newest-first window',async()=>{
+ const seen=[],use=appHarness({stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected cloud read');}},'tokenizer.js':{countTokens:async text=>{seen.push(text);return Math.ceil(text.length/4);},tokenizerReady:()=>true}}});
+ const {buildContextForRequest}=await use('context-builder.js');
+ const messages=Array.from({length:10000},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',narratorTurn:Math.floor(i/2)+1,content:'HISTORY_MESSAGE_'+i+' '+('A remembered passage. '.repeat(40))}));
+ const session={id:'s',memory:{memoryBlock:true,blockWindow:false}},before=JSON.stringify({messages,session});
+ const built=await buildContextForRequest(session,{...settings,maxContextTokens:6000,maxResponseTokens:1000},{messages,loreEntries:[],draftText:'Next action',includeInspection:true});
+ assert.ok(!seen.some(text=>text.includes('HISTORY_MESSAGE_5000 ')),'unused old messages should not reach the tokenizer');
+ assert.ok(seen.length<300,'token work should follow the fitted window');
+ const wire=JSON.stringify(built.apiMessages);
+ for(const marker of ['HISTORY_MESSAGE_0 ','HISTORY_MESSAGE_1 ','HISTORY_MESSAGE_9999 ','Next action'])assert.ok(wire.includes(marker),marker);
+ assert.equal(built.report.blocks.find(b=>b.key==='window').mode,'newest-first');
+ assert.ok(built.droppedCount>9900);assert.ok(built.usedTokens<=6000);
+ assert.equal(JSON.stringify({messages,session}),before);
+});
+
+test('scene rendering and reports preserve seed, missing, invalid, carried, pending, OOC and cutoff semantics',async()=>{
+ const b=await builders(),seed='date: Day 1 · time: morning · place: Inn · present: Mira',next='date: Day 2 · time: evening · place: Road · present: Mira';
+ const base=[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene:seed,sceneMeta:{kind:'declared'}}];
+ const cases=[
+   {name:'seed without replies',messages:base.slice(0,1)},
+   {name:'missing metadata',messages:[base[0],{...base[1],scene:undefined,sceneMeta:undefined}]},
+   {name:'invalid scene',messages:[base[0],{...base[1],scene:'date: ???'}]},
+   {name:'carried scene',messages:[...base,{id:'carried',order:3,role:'assistant',content:'A pause.',scene:next,sceneMeta:{kind:'carried'}}]},
+   {name:'pending scene',messages:[...base,{id:'pending',order:3,role:'assistant',content:'Mira travels.',acceptance:'pending',sceneCandidate:next}]},
+   {name:'OOC scene',messages:[...base,{id:'ooc',order:3,role:'assistant',content:'<OOC>A question.</OOC>',ooc:true,scene:next}]},
+   {name:'duplicate reply identity',messages:[...base,{...base[1],content:'The corrected reply.',scene:next}]},
+   {name:'cutoff excludes the later scene',messages:[...base,{id:'later',order:4,role:'assistant',content:'Mira travels.',scene:next}],upToOrder:4},
+ ];
+ for(const fixture of cases)for(const continuation of [false,true]){
+   if(continuation&&!fixture.messages.some(m=>m.id==='a'))continue;
+   const session={id:'s',memory:{scene:true,memoryBlock:true,startingScene:seed}},opts={messages:fixture.messages,includeInspection:true,...(continuation?{continuationId:'a'}:{draftText:'Proceed.'}),...(fixture.upToOrder?{upToOrder:fixture.upToOrder}:{})},before=JSON.stringify({session,opts}),s={...settings,maxContextTokens:100000};
+   assert.deepEqual(await outcome(b.optimized,session,s,opts,deps),await outcome(b.frozen,session,s,opts,deps),fixture.name+' / '+continuation);
+   assert.equal(JSON.stringify({session,opts}),before);
+ }
+});
+
+test('delayed candidate counting respects cancellation and source changes before assembly continues',async()=>{
+ for(const abort of [false,true]){
+   const use=appHarness(),{buildMemoryContext}=await use('memory-context.js'),controller=new AbortController();
+   let signalStarted,release,stale=false;
+   const started=new Promise(resolve=>{signalStarted=resolve;}),delay=new Promise(resolve=>{release=resolve;});
+   const messages=history(80);messages[79].content='DELAYED_CANDIDATE';
+   const before=JSON.stringify(messages),running=buildMemoryContext({memory:{memoryBlock:true,blockWindow:false}},{...settings,maxContextTokens:6000},{messages,draftText:'Proceed.',signal:controller.signal,check:()=>{if(stale)throw Error('Story changed');}},{...deps,count:async text=>{if(text==='DELAYED_CANDIDATE'){signalStarted();await delay;}return count(text);}});
+   await started;
+   if(abort)controller.abort();else stale=true;
+   release();
+   await assert.rejects(running,abort?{name:'AbortError'}:/Story changed/);
+   assert.equal(JSON.stringify(messages),before);
+ }
+});
+
+test('tokenizer recovery during candidate admission rebuilds a tight request with consistent accounting',async()=>{
+ const use=appHarness(),{buildMemoryContext}=await use('memory-context.js');
+ const messages=history(200);messages[199].content='RECOVER_AT_NEWEST '+messages[199].content;
+ const session={memory:{memoryBlock:true,blockWindow:false}},opts={messages,draftText:'Proceed.',includeInspection:true},s={...settings,maxContextTokens:2500};
+ let recovered=false;
+ const recovering=await buildMemoryContext(session,s,opts,{...deps,count:async text=>{if(text.startsWith('RECOVER_AT_NEWEST '))recovered=true;return recovered?count(text):Math.ceil(text.length/8);}});
+ const stable=await buildMemoryContext(session,s,opts,deps),warning='Token counts changed during context assembly; the request was rebuilt once.';
+ assert.equal(recovering.report.warnings[0],warning);
+ recovering.report.warnings.shift();
+ assert.deepEqual(JSON.parse(JSON.stringify(recovering)),JSON.parse(JSON.stringify(stable)));
+ assert.ok(recovering.usedTokens<=2500);assert.ok(recovering.droppedCount>0);
+});

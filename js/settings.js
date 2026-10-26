@@ -10,7 +10,8 @@ import {
   setDoc,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
-import { currentUid } from "./auth.js";
+import * as auth from "./auth.js";
+const currentUid=auth.currentUid;
 import { state } from "./state.js";
 
 export const PROMPT_KEYS = ['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt'];
@@ -23,9 +24,9 @@ export function storedSettings(settings) {
   delete out.providerCooldownAccount;
   return out;
 }
-const localKey=() => 'nera.settings.local.'+currentUid();
-export function withLocal(settings) {
-  const out=structuredClone(settings);out.providerCooldownAccount=currentUid();out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
+const localKey=owner => 'nera.settings.local.'+owner;
+export function withLocal(settings,owner=currentUid()) {
+  const out=structuredClone(settings);out.providerCooldownAccount=owner;out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
   return out;
 }
 
@@ -177,82 +178,95 @@ export function hydrateProfiles(settings) {
 // Per-account settings: each signed-in user has their own doc at
 // users/{uid}/settings/current — covered by the per-user Firestore rules,
 // so no account can read another account's API key or config.
-function userSettingsRef() {
-  return doc(db, "users", currentUid(), "settings", "current");
+function userSettingsRef(owner=currentUid()) {
+  return doc(db, "users", owner, "settings", "current");
 }
 
-const cacheKey = () => `roleplay-settings:${currentUid()}`;
+const cacheKey = owner => `roleplay-settings:${owner}`;
 
-function readCachedSettings() {
+function readCachedSettings(owner) {
   try {
-    const data = JSON.parse(localStorage.getItem(cacheKey()));
+    const data = JSON.parse(localStorage.getItem(cacheKey(owner)));
     return data && typeof data === "object" && !Array.isArray(data) ? data : null;
   } catch {
     return null;
   }
 }
 
-function cacheSettings(settings) {
+function cacheSettings(settings,owner) {
   try {
-    localStorage.setItem(cacheKey(), JSON.stringify(settings));
+    localStorage.setItem(cacheKey(owner), JSON.stringify(settings));
   } catch {
     // Private browsing or a full storage quota must not prevent using settings.
   }
 }
 
 let settingsEpoch=0;
+const accountEpoch=()=>auth.accountEpoch?.() ?? 0;
+function settingsScope() {
+  const owner=currentUid(),epoch=accountEpoch(),run=++settingsEpoch;
+  const current=()=>{try{return owner===currentUid() && epoch===accountEpoch();}catch{return false;}};
+  return {owner,current,check(){if(!current() || run!==settingsEpoch)throw new Error('Settings changed while loading or saving. Try again.');}};
+}
 export async function readSettingsRefresh() {
-  const owner=currentUid(),run=++settingsEpoch;
-  const snap=await getDocFromServer(userSettingsRef());
+  const scope=settingsScope(),{owner}=scope;
+  const snap=await getDocFromServer(userSettingsRef(owner));scope.check();
   if(!snap.exists())throw new Error('Settings did not load from the server.');
-  const settings=withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
-  if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');
-  return {settings,check(){if(owner!==currentUid() || run!==settingsEpoch)throw new Error('Settings changed while refreshing. Try Sync again.');},apply(){this.check();++settingsEpoch;state.settings=settings;setTokenCountingMode(settings.tokenCountingMode);state.settingsSource='server';cacheSettings(settings);}};
+  const settings=withLocal(hydrateProfiles(await mergeDefaults(snap.data())),owner);scope.check();
+  return {settings,check:scope.check,apply(){this.check();++settingsEpoch;state.settings=settings;setTokenCountingMode(settings.tokenCountingMode);state.settingsSource='server';cacheSettings(settings,owner);}};
 }
 function activateTokenCounting(settings) {setTokenCountingMode(settings.tokenCountingMode);return settings;}
 export async function loadSettings({ requireServer = false } = {}) {
-  const cached = readCachedSettings();
-  const ref = userSettingsRef();
+  return loadScopedSettings(settingsScope(),{requireServer});
+}
+async function loadScopedSettings(scope,{requireServer=false}={}) {
+  const {owner}=scope,cached = readCachedSettings(owner);
+  const ref = userSettingsRef(owner);
   let snap;
   try {
     snap = await getDocFromServer(ref);
   } catch (error) {
+    scope.check();
+    if (cached && !requireServer) {
+      const settings=withLocal(hydrateProfiles(await mergeDefaults(cached)),owner);scope.check();
+      state.settingsSource='cache';return activateTokenCounting(settings);
+    }
     state.settingsSource=cached ? 'cache' : 'defaults';
-    if (cached && !requireServer) return activateTokenCounting(withLocal(hydrateProfiles(await mergeDefaults(cached))));
     throw error;
   }
+  scope.check();
   if (requireServer && !snap.exists()) throw new Error('Settings did not load from the server; reload before saving.');
-  state.settingsSource='server';
   if (snap.exists()) {
-    const settings = hydrateProfiles(await mergeDefaults(snap.data()));
-    await preserveLegacyStorySeed(settings);
-    cacheSettings(settings);
-    return activateTokenCounting(withLocal(settings));
+    const settings = hydrateProfiles(await mergeDefaults(snap.data()));scope.check();
+    await preserveLegacyStorySeed(settings,{owner,check:scope.check});scope.check();
+    cacheSettings(settings,owner);state.settingsSource='server';
+    return activateTokenCounting(withLocal(settings,owner));
   }
 
   // New accounts start with their own clean settings. Shared legacy settings
   // may contain credentials and must never be copied into a new account.
   const seed = structuredClone(DEFAULT_SETTINGS);
   hydrateProfiles(seed);
-  await setDoc(ref, storedSettings(seed));
-  await preserveLegacyStorySeed(seed);
-  cacheSettings(seed);
-  return activateTokenCounting(withLocal(seed));
+  await setDoc(ref, storedSettings(seed));scope.check();
+  await preserveLegacyStorySeed(seed,{owner,check:scope.check});scope.check();
+  cacheSettings(seed,owner);state.settingsSource='server';
+  return activateTokenCounting(withLocal(seed,owner));
 }
 
 // Keep an open device current when settings are saved on another device.
 // Ignore local Firestore snapshots so stale/offline data cannot replace a
 // newer server value loaded at startup.
 export function watchSettings() {
-  const owner=currentUid();let update = 0;
-  return onSnapshot(userSettingsRef(), async (snap) => {
-    if (owner!==currentUid() || !snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
+  const owner=currentUid(),epoch=accountEpoch();let update = 0;
+  const current=()=>{try{return owner===currentUid() && epoch===accountEpoch();}catch{return false;}};
+  return onSnapshot(userSettingsRef(owner), async (snap) => {
+    if (!current() || !snap.exists() || snap.metadata.fromCache || snap.metadata.hasPendingWrites || state.settingsSaving) return;
     const sequence = ++update,run=settingsEpoch;
     try {
-      const settings = withLocal(hydrateProfiles(await mergeDefaults(snap.data())));
-      if (owner!==currentUid() || run!==settingsEpoch || sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
+      const settings = withLocal(hydrateProfiles(await mergeDefaults(snap.data())),owner);
+      if (!current() || run!==settingsEpoch || sequence !== update || state.settingsSaving || JSON.stringify(settings) === JSON.stringify(state.settings)) return;
       state.settingsSource='server';state.settings = settings;setTokenCountingMode(settings.tokenCountingMode);
-      cacheSettings(settings);
+      cacheSettings(settings,owner);
       document.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (error) {
       console.error("Failed to sync settings:", error);
@@ -260,30 +274,33 @@ export function watchSettings() {
   }, (error) => console.error("Failed to sync settings:", error));
 }
 
+let activeSave=null;
 export async function saveSettings(settings) {
-  if (state.settingsSaving) throw new Error("A settings save is already in progress. Please try again.");
+  if (state.settingsSaving && (!activeSave || activeSave.current())) throw new Error("A settings save is already in progress. Please try again.");
+  const scope=settingsScope(),{owner}=scope;activeSave=scope;
   state.settingsSaving = true;
   try {
     if (state.settingsSource!=='server') {
       let recovered;
-      try { recovered=await loadSettings({requireServer:true}); }
-      catch { throw new Error('Settings did not load from the server; reload before saving.'); }
+      try { recovered=await loadScopedSettings(scope,{requireServer:true}); }
+      catch { scope.check();throw new Error('Settings did not load from the server; reload before saving.'); }
+      scope.check();
       state.settings=recovered;
       document.dispatchEvent(new CustomEvent('settings-changed'));
       throw Object.assign(new Error('Your saved settings were loaded from the server. Review them and save again.'),{code:'settings-reloaded'});
     }
     const snapshot = structuredClone(settings);
-    snapshot.providerCooldownAccount=currentUid();
+    snapshot.providerCooldownAccount=owner;
     normalizeProfiles(snapshot);
     mirrorToActiveProfile(snapshot);
-    await setDoc(userSettingsRef(), storedSettings(snapshot));
+    await setDoc(userSettingsRef(owner), storedSettings(snapshot));scope.check();
     setPref('nera.streamVibrationMode',snapshot.streamVibrationMode);
-    try {localStorage.removeItem(localKey());} catch {}
+    try {localStorage.removeItem(localKey(owner));} catch {}
     setTokenCountingMode(snapshot.tokenCountingMode);
     ++settingsEpoch;state.settings = snapshot;
-    cacheSettings(snapshot);
+    cacheSettings(snapshot,owner);
     document.dispatchEvent(new CustomEvent("settings-changed"));
   } finally {
-    state.settingsSaving = false;
+    if(activeSave===scope){activeSave=null;state.settingsSaving = false;}
   }
 }

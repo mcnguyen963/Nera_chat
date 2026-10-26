@@ -12,12 +12,12 @@ const target=(sid,uid=currentUid())=>doc(db,'users',uid,'sessions',sid,'storySet
 const seedRef=(uid=currentUid())=>doc(db,'users',uid,'settings','storyMigration');
 const cache=new Map();let epoch=0;
 async function readDocument(data){if(![1,2,3,4,5,STORY_SETTINGS_VERSION].includes(data?.version) || !Number.isSafeInteger(data.revision) || data.revision<1)throw new Error('Unsupported story settings. Reload and review this story.');return {...data,values:await migrateStorySettings(data.values)};}
-export async function preserveLegacyStorySeed(accountSettings) {
-  const uid=currentUid(),ref=seedRef(uid);
+export async function preserveLegacyStorySeed(accountSettings,{owner=currentUid(),check=()=>{if(owner!==currentUid())throw new Error('Account changed; story prompt migration cancelled.');}}={}) {
+  const ref=seedRef(owner);check();
   return runTransaction(db,async tx=>{
-    const saved=await tx.get(ref);
+    check();const saved=await tx.get(ref);check();
     if(saved.exists())return saved.data().values;
-    const values=await migrateStorySettings(accountSettings);
+    const values=await migrateStorySettings(accountSettings);check();
     tx.set(ref,{version:STORY_SETTINGS_VERSION,values,createdAt:serverTimestamp()});
     return values;
   });
