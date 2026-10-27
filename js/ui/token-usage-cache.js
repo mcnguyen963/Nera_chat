@@ -51,9 +51,13 @@ export function createTokenUsageCache({limit=3}={}) {
       await Promise.resolve();check();
       const display=await compute(check);check();
       return remember(owner,sid,{...display,kind:'estimate',contextKey:key});
-    })();
-    // Retain failed work for this revision too; reopening must not retry a
-    // failing calculation. A context change replaces the job.
+    })().catch(error=>{
+      // Pausing background preparation for an edit/Send is cancellation, not
+      // a cached calculation failure. A later idle request may use this key.
+      if(item.fallback===job && !isCurrent())item.fallback=null;
+      throw error;
+    });
+    // Retain genuine failures for this revision; reopening must not retry them.
     return job.promise;
   }
   async function preview(owner,sid,key,compute,isCurrent=()=>true) {

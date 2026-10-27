@@ -33,7 +33,7 @@ export async function prepareDirectorTurn(session,settings,messages,entries,opts
   const importedClock=directorClockNeedsReview(session,messages,before,opts.upToOrder ?? Infinity);
   if(importedClock)throw new Error('Story clock is '+importedClock+'. Review and save its modern date and HH:mm time in live state settings before creating a new Director turn. Historical checkpoints remain unchanged.');
   if(opts.continuationId && !finishing && before.decisions.some(i=>!['closed','cancelled'].includes(i.status)))return {contract:{action:'wait',objective:'Respond to the pending player decision before continuing.'}};
-  const contextStarted=(globalThis.performance?.now?.() ?? Date.now()),source=requestSource(session),built=await buildDirectorContext(session,settings,messages.filter(m=>m.order<(opts.upToOrder ?? Infinity)),entries,before,{continuation:!!opts.continuationId});
+  const contextStarted=(globalThis.performance?.now?.() ?? Date.now()),source=requestSource(session),built=await buildDirectorContext(session,settings,messages.filter(m=>m.order<(opts.upToOrder ?? Infinity)),entries,before,{continuation:!!opts.continuationId,signal:hooks.signal,check});
   const timings={contextPreparationMs:(globalThis.performance?.now?.() ?? Date.now())-contextStarted};
   check();hooks.onContext?.(built);
   const started=Date.now();

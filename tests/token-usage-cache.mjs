@@ -43,6 +43,16 @@ test('failed estimates remain cached until their context changes',async()=>{
  for(let i=0;i<3;i++)await assert.rejects(cache.estimate('u','s','v1',compute),/No room/);
  assert.equal(calls,1);await assert.rejects(cache.estimate('u','s','v2',compute),/No room/);assert.equal(calls,2);
 });
+test('cancelled background estimates can resume at the same key without clearing a newer job',async()=>{
+ const cache=await factory(),gate=deferred();let current=true,calls=0;
+ const pending=cache.estimate('u','s','v1',async check=>{calls++;await gate.promise;check();return sent();},()=>current);
+ await Promise.resolve();current=false;gate.resolve();await assert.rejects(pending,/changed/);
+ current=true;await cache.estimate('u','s','v1',async()=>{calls++;return sent();},()=>current);assert.equal(calls,2);
+ const oldGate=deferred(),newGate=deferred();
+ const older=cache.estimate('u','s','v2',async check=>{await oldGate.promise;check();return sent();},()=>current);await Promise.resolve();
+ const newer=cache.estimate('u','s','v3',async()=>{await newGate.promise;return sent({tokens:123});});await Promise.resolve();
+ current=false;oldGate.resolve();await assert.rejects(older,/changed/);newGate.resolve();assert.equal((await newer).tokens,123);
+});
 test('cache keys isolate account and story, clear cancels work, and old restores cannot overwrite new results',async()=>{
  const cache=await factory();cache.remember('u','s',sent());assert.equal(cache.read('other','s'),null);assert.equal(cache.read('u','other'),null);
  cache.restore('u','s',sent({tokens:1,at:1,version:1}));assert.equal(cache.read('u','s').tokens,75000);

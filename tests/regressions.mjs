@@ -1139,6 +1139,49 @@ async function openImprovementChat(h, metadata = {}, messages = []) {
   return chat;
 }
 
+test('large lore lists bound initial work and cancel rows from obsolete searches',async()=>{
+ const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'),counts={snapshots:0};
+ const h=await harness({globals:{renderCounts:counts},sources:{'ui/chat-view.js':source.replace('export function memorySnapshot(','function renderSnapshotOriginal(')+'\nexport function memorySnapshot(...args){renderCounts.snapshots++;return renderSnapshotOriginal(...args);}'}});
+ const {makeEntry}=await h.use('lore-lines.js');h.calls.loreEntries=Array.from({length:240},(_,i)=>makeEntry('characters','Character'+i,{id:'c'+i}));
+ await openImprovementChat(h,{memory:{lorebooks:true}});await new Promise(r=>setImmediate(r));
+ const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();counts.snapshots=0;lore.openLorebooks({screen:'list',book:'characters'});
+ const root=h.el('lorebook-overlay'),initial=root.querySelectorAll('.lore-list-item');assert.ok(initial.length>0&&initial.length<=100);
+ assert.ok(counts.snapshots<20,'snapshots must not scale with card count');
+ const input=root.querySelector('.lore-list').querySelector('input');input.value='Character239';await input.dispatchEvent({type:'input'});
+ for(let i=0;i<20;i++)await new Promise(r=>setTimeout(r,2));
+ const rows=root.querySelectorAll('.lore-list-item');assert.equal(rows.length,1);assert.equal(rows[0].dataset.loreId,'c239');
+ const stale=root.querySelector('.lore-rows');lore.openLorebooks({screen:'list',book:'locations'});
+ for(let i=0;i<10;i++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(root.querySelectorAll('.lore-list-item').length,0);assert.equal(stale.querySelectorAll('.lore-list-item').length,1);
+});
+
+test('lore keyboard navigation crosses batches and token-size completion preserves focused rows',async()=>{
+ const h=await harness(),{makeEntry}=await h.use('lore-lines.js');h.calls.loreEntries=Array.from({length:240},(_,i)=>makeEntry('characters','Character'+i,{id:'c'+i}));
+ await openImprovementChat(h,{memory:{lorebooks:true}});await new Promise(r=>setImmediate(r));
+ const tokens=[];h.calls.onTokenCount=()=>new Promise(resolve=>tokens.push(resolve));
+ const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({screen:'list',book:'characters'});
+ const root=h.el('lorebook-overlay'),initial=root.querySelectorAll('.lore-list-item'),last=initial.at(-1),index=Number(last.dataset.loreId.slice(1));
+ last.focus();last.listeners.keydown[0]({key:'ArrowDown',preventDefault(){}});
+ for(let i=0;i<30;i++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(h.document.activeElement.dataset.loreId,'c'+(index+1));
+ const focused=h.document.activeElement;h.calls.onTokenCount=null;for(const resolve of tokens)resolve(120);
+ for(let i=0;i<40;i++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(root.querySelectorAll('.lore-list-item').length,240);assert.equal(h.document.activeElement,focused);
+ assert.ok(countsForSize());
+ function countsForSize(){return root.querySelectorAll('.lore-size').every(label=>label.textContent!=='…');}
+});
+
+test('fallback lore sizes stay visible without becoming cached exact counts',async()=>{
+ let counts=0;
+ const h=await harness({extraStubs:{'tokenizer.js':{tokenizerReady:()=>false,tokenizerStatus:()=> 'fallback',setTokenCountingMode(){},estimateTokens:text=>text.length,countTokens:async text=>{if(text.includes('Fallback character'))counts++;return 100;}}}});
+ const {makeEntry}=await h.use('lore-lines.js');h.calls.loreEntries=[makeEntry('characters','Fallback character')];await openImprovementChat(h,{memory:{lorebooks:true}});await new Promise(r=>setImmediate(r));
+ const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({screen:'list',book:'characters'});
+ for(let i=0;i<15;i++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(h.el('lorebook-overlay').querySelector('.lore-size').textContent,'0.1k');const first=counts;
+ lore.openLorebooks({screen:'list',book:'characters'});for(let i=0;i<15;i++)await new Promise(r=>setTimeout(r,2));
+ assert.ok(counts>first,'fallback counts should be recomputed on a new render');
+});
+
 for(const total of [101,300,1000,10000])test(`Loaded ${total}-message stories retain bounded local paging after edits`,async()=>{
  const messages=Array.from({length:total},(_,i)=>({id:'paged-'+i,order:i+1,revision:0,role:i%2?'assistant':'user',content:'Page message '+i}));
  const h=await harness(),chat=await openImprovementChat(h,{nextOrder:total,historyRevision:0},messages);

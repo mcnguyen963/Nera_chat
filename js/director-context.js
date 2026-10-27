@@ -7,7 +7,7 @@ import { resolveModelProfile } from './model-profiles.js';
 import { activeDirectorState, directorScene, playerStopBoundary } from './director-state.js';
 import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
-import { selectEntries, renderEntry, findMentions } from './lore-select.js';
+import { selectEntriesAsync, renderEntry, findMentions } from './lore-select.js';
 import { recordUnits } from './lore-record-select.js';
 import { capLoreNotes, noteOmissions } from './lore-note-window.js';
 import * as tokenizer from './tokenizer.js';
@@ -45,7 +45,7 @@ export function directorTaskSettings(settings) {
   // A different connection must not inherit the narrator model's window size.
   return {...task,streaming:false,maxResponseTokens:settings.directorMaxOutputTokens,maxContextTokens:settings.directorMaxInputTokens,modelContextTokens:null};
 }
-export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens}={}) {
+export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens,signal,check}={}) {
   count=cachedCount(count);
   const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session,Infinity,before.scene).entries;
   const capCompanions=[];
@@ -67,7 +67,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const index=entityIndex(capped);
   const controlMem={...mem,scene:true,lorebooks:true};
   const text=latest.content,recentText=window.map(m=>m.content).join('\n');
-  const selection=selectEntries(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3});
+  const selection=await selectEntriesAsync(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3},{signal,check});
   const anchors=new Set([...selection.selected.characters,...selection.selected.locations].map(i=>i.entry.id));
   const directIds=new Set([...findMentions(text,selection.index,'characters'),...findMentions(text,selection.index,'locations')]);
   const requested=available.filter(e=>directIds.has(e.id)).map(entry=>({entry}));

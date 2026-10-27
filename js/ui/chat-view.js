@@ -486,14 +486,22 @@ function validateSavedStorySettings() {
   }
 }
 
+let memoryChipMemo=null;
 function updateMemoryChip() {
   const active = !!session && session.id === state.sessionId && !cacheWritesPaused;
   const running = active && memoryUpdater.isRunning(session.id);
   const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
   const completeHistory = historyRevision === (session?.historyRevision ?? 0)
     && (historyMessages ? historyStartOrder === 0 : latestReady && !hasEarlier);
+  const messages=historyMessages ?? lastMessages;
+  const key=[tokenOwner(),state.sessionId,historyEpoch,session?.historyRevision,pointer,mem.lagTurns,mem.batchTurns,mem.scene];
+  if(!memoryChipMemo || memoryChipMemo.messages!==messages || key.some((value,i)=>value!==memoryChipMemo.key[i]))
+    memoryChipMemo={messages,key,status:dueRangeStatus(messages,session?.memoryState,mem),timing:undefined};
+  const status=memoryChipMemo.status;
+  if(active && !running && mem.autoUpdate && !effectivelyPaused(session.memoryState) && completeHistory && memoryChipMemo.timing===undefined)
+    memoryChipMemo.timing=memoryUpdateTiming(messages,session.memoryState,mem,{status});
   const timing = active && !running && mem.autoUpdate && !effectivelyPaused(session.memoryState) && completeHistory
-    ? memoryUpdateTiming(historyMessages ?? lastMessages,session.memoryState,mem) : null;
+    ? memoryChipMemo.timing : null;
   const composerStatus = document.getElementById('composer-memory-status');
   if (composerStatus) {
     const text = running ? 'Updating memory · Keep open' : timing === 'due' ? 'Memory update pending.' : timing === 'with-next-turn' ? 'Memory update with next reply.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
@@ -506,7 +514,6 @@ function updateMemoryChip() {
   const turn = turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
   chip.classList.toggle('running', running); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
-  const status=dueRangeStatus(historyMessages ?? lastMessages,session?.memoryState,mem);
   chip.title=session?.memoryState?.needsRebuild ? 'History edited. Re-extract from the Memory settings.' : loreStatus==='error' ? 'Lorebooks unavailable. Use Sync data to retry.' : status.reason==='pointer-unset' ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : 'Memory ready to update.';
   chip.textContent = running ? 'Updating memory…' : effectivelyPaused(session?.memoryState) ? 'Memory paused' : loreStatus==='error' ? 'Lorebooks offline' : mem.autoUpdate && pointer==null ? 'Choose start' : mem.autoUpdate && turn ? 'Memory · T'+turn : 'Memory';
 }
@@ -1531,14 +1538,14 @@ const indicatorHint = 'Last completed request input; unsent input is excluded. C
 const indicatorRefresh = createIndicatorRefresh({
   focused: () => busy || !!editingState,
   key: () => JSON.stringify([tokenOwner(),state.sessionId,tokenContextKey()]),
-  compute: async () => {
+  compute: async ({isCurrent}) => {
     if(cacheWritesPaused || !session || !state.settings || !latestReady || !state.storySettings)return null;
     const owner=currentUid(),sid=state.sessionId,key=tokenContextKey(),epoch=historyEpoch,settings=effectiveActiveSettings();
     const record=await tokenUsageCache.estimate(owner,sid,key,async check=>{
       const usage=await computeContextUsage(session,settings,historyMessages ?? lastMessages,{loreEntries,draftText:'',tokenCountMode:'estimate',check});
       return {tokens:usage.usedTokens,max:usage.max,reserved:settings.maxResponseTokens,modelId:settings.modelId,
         at:Date.now(),report:usage.report,droppedCount:usage.droppedCount,recentOnly:!historyMessages && hasEarlier};
-    },()=>currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
+    },()=>isCurrent() && currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
     tokenUsageError=null;return record;
   },
   apply: record => {if(record){applyIndicator(record);persistTokenUsage();tokenUsageChanged();}},

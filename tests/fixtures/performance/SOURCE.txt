@@ -1,0 +1,6 @@
+Frozen baselines from commit 237458918878b4dd9fc896edbd8eb06c780100bd:
+  turns.js      = js/turns.js
+  lore-select.js = js/lore-select.js
+
+Tests load these through appHarness under their original module identifiers.
+They are reference implementations for differential performance refactors.

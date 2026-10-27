@@ -21,18 +21,26 @@ export function computeTurns(messages) {
 }
 export function turnStartOrder(turns, t) { return turns.assistants.find(a => a.turn === t)?.startOrder ?? (t === turns.lastTurn+1 ? turns.trailingStartOrder : null); }
 export function assistantOrderOfTurn(turns, t) { return turns.assistants.find(a => a.turn === t)?.order ?? null; }
-export function dueRange(messages, memoryState, mem, { manual = false } = {}) {
-  const pointer = memoryState?.extractedThroughOrder;
-  if (pointer == null) return null;
-  const turns = computeTurns(messages);
-  let eligible = turns.assistants.slice(0, Math.max(0, turns.assistants.length-mem.lagTurns)).filter(a => a.order > pointer);
+function prepareEligibility(messages, memoryState, mem) {
+  const turns=computeTurns(messages),byId=new Map();
+  // Preserve Array.find's first-ID behavior, including damaged duplicate input.
+  for(const message of messages)if(!byId.has(message.id))byId.set(message.id,message);
+  const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a=>a.order>memoryState.extractedThroughOrder);
   const lastUserOrder=lastUserOrderOf(messages);
-  const blocked = eligible.findIndex(a => !isAcceptedTurn(messages.find(m => m.id === a.id),{lastUserOrder,sceneOn:mem.scene}));
-  if (blocked >= 0) eligible = eligible.slice(0,blocked);
+  const blocked=eligible.findIndex(a=>!isAcceptedTurn(byId.get(a.id),{lastUserOrder,sceneOn:mem.scene}));
+  return {turns,eligible,blocked};
+}
+function rangeFromEligibility(messages,mem,{turns,eligible,blocked},{manual=false}={}) {
+  if(blocked>=0)eligible=eligible.slice(0,blocked);
   if (eligible.length < (manual ? 1 : mem.batchTurns)) return null;
   const chosen = eligible.slice(0, mem.batchTurns), end = chosen.at(-1);
   const chosenTurns = new Set(chosen.map(a => a.turn));
   return { messages:messages.filter(m => m.role !== 'summary' && chosenTurns.has(turns.turnById.get(m.id))), fromTurn: chosen[0].turn, toTurn: end.turn, endOrder: end.order, assistants: chosen, turns };
+}
+export function dueRange(messages, memoryState, mem, opts = {}) {
+  const pointer = memoryState?.extractedThroughOrder;
+  if (pointer == null) return null;
+  return rangeFromEligibility(messages,mem,prepareEligibility(messages,memoryState,mem),opts);
 }
 // The upcoming reply counts toward scheduling, but only existing completed
 // turns can enter the batch. Its success is not required to save that batch.
@@ -43,9 +51,9 @@ export function alongsideTurnRange(messages, memoryState, mem) {
   return range ? {...range,messages:range.messages.filter(m=>m.order<=range.endOrder)} : null;
 }
 // Eligibility only: callers handle automatic-update settings and paused/running state.
-export function memoryUpdateTiming(messages, memoryState, mem) {
+export function memoryUpdateTiming(messages, memoryState, mem, {status}={}) {
   if (memoryState?.extractedThroughOrder == null) return null;
-  if (dueRange(messages,memoryState,mem)) return 'due';
+  if ((status ?? dueRangeStatus(messages,memoryState,mem)).range) return 'due';
   const order = messages.reduce((max,m) => Math.max(max,m.order),0);
   const turn = computeTurns(messages).lastTurn+1;
   // A later user input also accepts earlier reviewable replies, just as Send does.
@@ -78,9 +86,9 @@ export function formatTurnsTranscript(messages, turns = computeTurns(messages), 
 
 export function dueRangeStatus(messages,ms,mem,opts={}) {
   if(ms?.extractedThroughOrder==null)return {reason:'pointer-unset'};
-  const turns=computeTurns(messages),eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)).filter(a=>a.order>ms.extractedThroughOrder);
-  const pending=eligible.find(a=>!isAcceptedTurn(messages.find(m=>m.id===a.id),{lastUserOrder:lastUserOrderOf(messages),sceneOn:mem.scene}));
-  const range=dueRange(messages,ms,mem,opts);
+  const prepared=prepareEligibility(messages,ms,mem),{eligible,blocked}=prepared;
+  const pending=blocked<0 ? null : eligible[blocked];
+  const range=rangeFromEligibility(messages,mem,prepared,opts);
   if(range)return {range};
   return pending ? {reason:'pending',turn:pending.turn} : {reason:'waiting',have:eligible.length,need:opts.manual?1:mem.batchTurns,lag:mem.lagTurns};
 }

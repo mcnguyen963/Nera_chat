@@ -27,17 +27,23 @@ import { LOREBOOK_TEMPLATE_MD, LOREBOOK_TEMPLATE_JSON, fillProtagonist } from '.
 import { formatTurnsTranscript, computeTurns } from '../turns.js';
 import { latestScene } from '../scene.js';
 import { planReorganize, runReorganizeBatch } from '../memory-reorganize.js';
-import { countTokens } from '../tokenizer.js';
+import * as tokenizer from '../tokenizer.js';
+import { createWorkBudget, afterUiPaint } from '../ui-work.js';
 import { node, button, field, sheet, subSheet, toast, copy, download } from './memory-ui.js';
 import { rebaseSavedDraft } from './save-draft.js';
 let opened = false, sid = null, book = 'characters', screen = 'books', filter = 'all', selected = null, base = null, staged = null, editor = null, list = null, rail = null, view = null, search = '', threadFilter = 'open', newPrefill = null;
 let focusRestore = null, editorVersion = 0, deletedHistoryReady = false, historyLoadToken = 0;
 const reorganizing = new Set(), sizes = new Map();
+const countTokens=tokenizer.countTokens;
+const countingMode=()=>tokenizer.tokenizerMode?.() ?? state.settings?.tokenCountingMode ?? 'estimate';
+const renderOwner=()=>{try{return currentUid();}catch{return null;}};
 let pendingEntryId = null, navigationId = null, navigationDepth = 0, navigationKey = null, fromHistory = false;
+let listVersion=0,rowsVersion=0;
+let rowNavigation=null;
 const live = () => memorySnapshot(sid);
 let threadViewMemo={};
-const entries=()=>{
-  const snapshot=live(),raw=snapshot?.entries ?? [],messages=snapshot?.messages ?? [],session=snapshot?.session ?? {};
+const entries=(snapshot=live())=>{
+  const raw=snapshot?.entries ?? [],messages=snapshot?.messages ?? [],session=snapshot?.session ?? {};
   const sameMessages=threadViewMemo.messages?.length===messages.length && messages.every((m,i)=>m===threadViewMemo.messages[i]);
   if(threadViewMemo.raw===raw && sameMessages && threadViewMemo.revision===session.historyRevision && threadViewMemo.invalidations===session.memoryInvalidations && threadViewMemo.startingScene===session.memory?.startingScene)return threadViewMemo.value;
   const projected=new Map(usableLore(raw,messages,session).entries.map(e=>[e.id,e]));
@@ -53,8 +59,8 @@ const canLeave = () => !dirty() || confirm('Discard changes?');
 const seenKey = () => 'nera.lore.seen.'+sid;
 function seen() { try { return JSON.parse(getPref(seenKey()) ?? '{}'); } catch { return {}; } }
 let lineMemo={src:null,value:null};
-function lineContext() {
-  const all=live()?.messages ?? [];
+function lineContext(snapshot=live()) {
+  const all=snapshot?.messages ?? [];
   if (lineMemo.src===all) return lineMemo.value;
   const turns=computeTurns(all),orders=new Set(all.map(m=>Number(m.order)).filter(Number.isFinite)),maxOrder=Math.max(0,maxOf(orders)),turnByOrder=new Map(),editedAtByTurn=new Map();
   for (const a of turns.assistants) { turnByOrder.set(a.order,a.turn); }
@@ -65,9 +71,24 @@ function lineContext() {
   lineMemo={src:all,value:{orders,maxOrder,turnByOrder,editedAtByTurn}};return lineMemo.value;
 }
 function deletedOrders() {return lineContext().orders;}
-function deletedLine(l) {const ctx=lineContext();return deletedHistoryReady && live()?.historyComplete === true && l.src!=null && Number(l.src)<=ctx.maxOrder && !ctx.orders.has(Number(l.src));}
+function deletedLine(l,render) {const ctx=render?.lineContext ?? lineContext();return deletedHistoryReady && (render?.snapshot ?? live())?.historyComplete === true && l.src!=null && Number(l.src)<=ctx.maxOrder && !ctx.orders.has(Number(l.src));}
 function editedSource(l) {const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
 const newCount = e => linesOf(e).filter(l => l.at > (seen()[e.id] ?? 0)).length;
+function captureRender() {
+  const snapshot=live(),cards=entries(snapshot),read=seen(),mem=normalizeMemory(snapshot?.session.memory);
+  const stats=new Map(cards.map(e=>{const lines=linesOf(e);return [e.id,{newCount:lines.filter(l=>l.at>(read[e.id] ?? 0)).length,newest:Math.max(0,maxOf(lines.map(l=>l.at))),search:normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' '))}];}));
+  return {snapshot,cards,mem,stats,duplicates:duplicateCards(cards),byId:new Map(cards.map(e=>[e.id,e])),flags:new Map(),localSizes:new Map(),lineContext:lineContext(snapshot),mode:countingMode(),owner:renderOwner(),sid};
+}
+function cardText(entry,render) {const stats=render.stats.get(entry.id);return stats.text ??= renderEntry(entry);}
+function sizeFor(entry,render) {const saved=sizes.get(entry.id);return saved?.owner===render.owner && saved.sid===render.sid && saved.mode===render.mode && saved.text===cardText(entry,render) ? saved.tokens : render.localSizes.get(entry.id) ?? null;}
+function readingAnchor(rows,scroller) {
+  const previous=rows?.loreView;
+  if(!scroller.scrollTop || !previous || previous.book!==book || previous.filter!==filter || previous.search!==search || previous.threadFilter!==threadFilter)return null;
+  const top=scroller.getBoundingClientRect().top;
+  for(const row of rows.children){const rect=row.getBoundingClientRect();if(row.dataset.loreId && rect.bottom>top)return {id:row.dataset.loreId,offset:rect.top-top};}
+  return null;
+}
+function renderCurrentList() {const render=captureRender();renderRail(render);renderList(render);}
 export function initLorebookView() {
   window.addEventListener('popstate',event => {
     if (!opened || !navigationId) return;
@@ -95,13 +116,14 @@ export function initLorebookView() {
       }
     }
     if (!staged && pendingEntryId) { const e = entries().find(e => e.id === pendingEntryId); if (e) { pendingEntryId = null; openCard(e); } }
-    renderRail(); renderList();
+    renderCurrentList();
   });
   document.addEventListener('session-changed',e => { if (opened && e.detail.sessionId !== sid) closeManager(true); });
   document.addEventListener('memory-refresh',e => {
     if (!opened || sid !== state.sessionId || e.detail?.sessionId !== sid) return;
-    renderRail(); renderList();
+    renderCurrentList();
   });
+  document.addEventListener('settings-changed',()=>{if(opened)renderCurrentList();});
   document.addEventListener('memory-toast',e => toast(e.detail.text,e.detail.action,() => document.dispatchEvent(new CustomEvent(e.detail.event,{ detail:e.detail.options }))));
   document.addEventListener('keydown',e => { if (!opened) return; if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if(staged)void saveCard().catch(error=>toast(error)); } if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); list?.querySelector('input')?.focus(); } });
 }
@@ -110,7 +132,7 @@ function prepareDeletedHistory() {
   const token = ++historyLoadToken, sourceSid = sid;
   void prepareMemorySnapshot().then(() => {
     if (!opened || sid !== sourceSid || sid !== state.sessionId || token !== historyLoadToken) return;
-    deletedHistoryReady = live()?.historyComplete === true; renderRail(); renderList();
+    const render=captureRender();deletedHistoryReady = render.snapshot?.historyComplete === true;renderRail(render);renderList(render);
   }).catch(e => { if (opened && sid === sourceSid && token === historyLoadToken) toast(e.message); });
 }
 export function openLorebooks(options = {}) {
@@ -127,7 +149,7 @@ export function openLorebooks(options = {}) {
     view.hide();
   }
   opened = true; navigationId = newLoreId('nav'); navigationDepth = 0; navigationKey = null; sid = state.sessionId; book = options.book ?? 'characters'; filter = options.filter ?? 'all'; selected = null; staged = base = null; search = ''; screen = options.screen ?? 'books'; newPrefill = options.newName; pendingEntryId = options.entryId ?? null;
-  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go && window.history.state?.neraLore?.id===navigationId) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'book-transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
+  view = sheet(document.getElementById('lorebook-overlay'),'LOREBOOKS · '+(live()?.session.title ?? ''),{ className:'lore-sheet',close:() => { if (!canLeave()) return false; opened = false;listVersion++;rowsVersion++; staged = base = null; if (!fromHistory && navigationDepth && window.history?.go && window.history.state?.neraLore?.id===navigationId) window.history.go(-navigationDepth); navigationDepth = 0; document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:false } })); return true; },back:hide => { if (!canLeave()) return; staged = base = null; if (navigationDepth > 1 && window.history?.back) { window.history.back(); return; } if (screen === 'editor') { screen = 'list'; selected = null; renderShell(); } else if (screen === 'list' || screen === 'transfer' || screen === 'book-transfer' || screen === 'backups') { screen = 'books'; renderShell(); } else hide(); } });
   document.dispatchEvent(new CustomEvent('lorebook-visibility',{ detail:{ open:true } }));
   prepareDeletedHistory(); renderShell();
   if (options.entryId) { const e = entries().find(e => e.id === options.entryId); if (e) { book = e.book; openCard(e); } }
@@ -135,32 +157,50 @@ export function openLorebooks(options = {}) {
 }
 function closeManager(force = false) { if (force) staged = base = null; return view?.hide(); }
 function renderShell() {
+  listVersion++;rowsVersion++;
+  const render=captureRender();
   const key = [screen,book,selected].join(':');
   if (!fromHistory && key !== navigationKey) pushNavigation(key);
   view.dialog.querySelector('.memory-content')?.remove();
   const body = node('div',null,'memory-content lore-body'); body.dataset.screen = screen; view.dialog.append(body);
   if (!sid) { body.append(node('p','Open a story to see its lorebooks.','muted')); return; }
-  if (!live()?.session.memory?.lorebooks) { const banner = node('div',null,'lore-banner'); banner.append(node('span',"Lorebooks aren't used in replies for this story yet."),button('Turn on in Memory settings',() => { if (closeManager()) document.dispatchEvent(new CustomEvent('memory-settings')); },'btn small')); body.append(banner); }
+  if (!render.snapshot?.session.memory?.lorebooks) { const banner = node('div',null,'lore-banner'); banner.append(node('span',"Lorebooks aren't used in replies for this story yet."),button('Turn on in Memory settings',() => { if (closeManager()) document.dispatchEvent(new CustomEvent('memory-settings')); },'btn small')); body.append(banner); }
   rail = node('nav',null,'lore-rail'); rail.setAttribute('aria-label','Lorebooks');
   const columns = node('div',null,'lore-columns');columns.id='lorebook-columns'; list = node('div',null,'lore-list'); editor = node('div',null,'lore-editor');
-  columns.append(rail,list,editor); body.append(columns); renderRail();
-  if (screen === 'transfer' || screen === 'book-transfer') renderTransfer(screen === 'book-transfer' ? book : null); else if (screen === 'backups') void renderBackups().catch(error=>toast(error)); else { renderList(); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
+  columns.append(rail,list,editor); body.append(columns); renderRail(render);
+  if (screen === 'transfer' || screen === 'book-transfer') renderTransfer(screen === 'book-transfer' ? book : null); else if (screen === 'backups') void renderBackups().catch(error=>toast(error)); else { renderList(render); if (staged) renderEditor(); else editor.append(node('p','Choose a card to read or edit.','muted')); }
 }
-function renderRail() {
+function renderRail(render=captureRender()) {
   if (!rail) return; rail.replaceChildren();
   for (const [key,label] of Object.entries(BOOK_LABELS)) {
-    const cards = entries().filter(e => e.book === key), drafts = cards.filter(e => e.draft).length, openThreads = cards.filter(e => e.kind === 'thread' && threadView(e).status !== 'closed').length;
+    const cards = render.cards.filter(e => e.book === key), drafts = cards.filter(e => e.draft).length, openThreads = cards.filter(e => e.kind === 'thread' && threadView(e).status !== 'closed').length;
     const b = button(label+' · '+cards.length,() => { if (!canLeave()) return; book = key; screen = 'list'; selected = null; staged = base = null; search = ''; renderShell(); },'btn lore-book'+(key === book ? ' selected' : ''));
     b.setAttribute('aria-controls','lorebook-columns');b.setAttribute('aria-expanded',String(key===book && screen==='list'));
-    b.append(node('small',key === 'events' ? openThreads+' open threads' : drafts ? drafts+' to review' : live()?.session.memory?.books?.[key]?.on === false ? 'Not used' : '')); rail.append(b);
+    b.append(node('small',key === 'events' ? openThreads+' open threads' : drafts ? drafts+' to review' : render.snapshot?.session.memory?.books?.[key]?.on === false ? 'Not used' : '')); rail.append(b);
   }
   rail.append(button('Import & export',() => { if (!canLeave()) return; staged = base = null; screen = 'transfer'; renderShell(); }),button('Backups',() => { if (!canLeave()) return; staged = base = null; screen = 'backups'; renderShell(); }));
 }
 function needsReview(l) { return noteNeedsReview(l,live()?.messages ?? [],live()?.session ?? {}); }
-function passes(e,f) { return f==='duplicates' && duplicateCards(entries()).has(e.id) || f === 'needs-review' && ((e.recordLayout?.records ?? []).some(r=>!resolveRecord(e,r).valid || r.coreCandidate&&!r.approval)||linesOf(e).some(needsReview) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages:live()?.messages ?? [],session:live()?.session}).valid) || Object.values(e.sections).some(s => snapshotNeedsReview(s,e,live()?.session))) || f === 'all' || f === 'review' && e.draft || f === 'new' && newCount(e)>0 || f === 'always' && e.alwaysLoad || f === 'big' && (sizes.get(e.id) ?? 0)>normalizeMemory(live()?.session.memory).books[e.book].budget || f === 'deleted' && linesOf(e).some(deletedLine); }
+function passes(e,f,render=captureRender()) {
+  if(f==='all')return true;
+  let flags=render.flags.get(e.id);if(!flags){flags=new Map();render.flags.set(e.id,flags);}
+  if(flags.has(f))return flags.get(f);
+  const snapshot=render.snapshot,messages=snapshot?.messages ?? [],session=snapshot?.session ?? {};
+  const value=!!(f==='duplicates' && render.duplicates.has(e.id) || f==='needs-review' && ((e.recordLayout?.records ?? []).some(r=>!resolveRecord(e,r).valid || r.coreCandidate&&!r.approval) || linesOf(e).some(l=>noteNeedsReview(l,messages,session)) || (e.coreReferences ?? []).some(b=>!resolveCore(e,b,{messages,session}).valid) || Object.values(e.sections).some(s=>snapshotNeedsReview(s,e,session))) || f==='review' && e.draft || f==='new' && render.stats.get(e.id)?.newCount>0 || f==='always' && e.alwaysLoad || f==='big' && (sizeFor(e,render) ?? 0)>render.mem.books[e.book].budget || f==='deleted' && linesOf(e).some(l=>deletedLine(l,render)));
+  flags.set(f,value);return value;
+}
 function badge(text,kind = '') { return node('span',text,'badge '+kind); }
-function renderList() {
+function renderList(render=captureRender()) {
+  const version=++listVersion;rowsVersion++;
   if (!list || ['transfer','book-transfer','backups'].includes(screen)) return;
+  const sourceList=list,sourceBook=book,sourceScreen=screen;
+  render.isCurrent=()=>opened && listVersion===version && list===sourceList && sid===render.sid && state.sessionId===render.sid && book===sourceBook && screen===sourceScreen && renderOwner()===render.owner;
+  render.list=sourceList;
+  render.restoreTop=sourceList.scrollTop;
+  render.restoreAnchor=readingAnchor(sourceList.querySelector('.lore-rows'),sourceList);
+  if(document.activeElement?.parentNode?.parentNode===sourceList)render.restoreFocus=document.activeElement;
+  render.restoreNavigation=rowNavigation && rowNavigation.from===document.activeElement && rowNavigation.owner===render.owner && rowNavigation.sid===render.sid ? rowNavigation : null;
+  rowNavigation=null;
   list.replaceChildren(); list.append(button('‹ Books',() => { if (!canLeave()) return; staged = base = null; screen = 'books'; renderShell(); },'btn small mobile-back'));
   list.append(node('h3',BOOK_LABELS[book]),button('Import card…',()=>cardTransfer()),button('Import book…',()=>{if(!canLeave())return;staged=base=null;selected=null;screen='book-transfer';renderShell();}),button('Export book…',exportBook));
   if (book === 'events') {
@@ -168,34 +208,107 @@ function renderList() {
     tabs.append(button('Timeline',() => { const timeline = entries().find(e => e.kind === 'timeline'); if (timeline) openCard(timeline); else void newCard('Timeline','timeline'); }),button('Threads',() => { selected = null; staged = base = null; renderList(); })); list.append(tabs);
     const status = node('select'); for (const value of ['open','closed','all','archived']) { const o = node('option',value==='archived'?'Archived threads':value[0].toUpperCase()+value.slice(1)); o.value = value; status.append(o); } status.value = threadFilter; status.addEventListener('change',() => { threadFilter = status.value; renderList(); }); list.append(status);
   }
-  const searchField = field('Search names…',search); searchField.input.addEventListener('input',() => { search = searchField.input.value; renderRows(rows); }); list.append(searchField.wrap);
-  const books = entries().filter(e => e.book === book);
+  const searchField = field('Search names…',search); searchField.input.addEventListener('input',() => { search = searchField.input.value; renderRows(rows,render); }); list.append(searchField.wrap);
+  const books = render.cards.filter(e => e.book === book);
   const filters = node('div',null,'lore-filters');
-  const renderFilters = () => { filters.replaceChildren();
-  for (const [value,label] of [['all','All'],['duplicates','Duplicate review'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) { const count = books.filter(e => passes(e,value)).length; if (!count && value !== 'all') continue; filters.append(button(label+' '+count,() => { filter = value; renderList(); },'btn small'+(filter === value ? ' selected' : ''))); } }; renderFilters(); list.append(filters);
-  const rows = node('div',null,'lore-rows'); rows.setAttribute('role','listbox'); rows.setAttribute('aria-label',BOOK_LABELS[book]); list.append(rows); renderRows(rows);
-  const edited=live()?.session.memoryState?.rebuildFromOrder;
-  if(live()?.session.memoryState?.needsRebuild && edited!=null){
-    const snapshot=live();
+  const filterButtons=new Map();
+  const renderFilters = () => {
+    let index=0;
+    for (const [value,label] of [['all','All'],['duplicates','Duplicate review'],['review','Draft cards'],['needs-review','Needs review'],['new','New'],['always','Always'],['big','Too big'],['deleted','From deleted turns']]) {
+      const count=books.filter(e=>passes(e,value,render)).length;
+      let control=filterButtons.get(value);
+      if(!count && value!=='all'){control?.remove();continue;}
+      if(!control){control=button('',()=>{filter=value;renderList();},'btn small'+(filter===value?' selected':''));filterButtons.set(value,control);}
+      control.textContent=label+' '+count;
+      if(filters.children[index]!==control)filters.insertBefore(control,filters.children[index] ?? null);
+      index++;
+    }
+  };renderFilters();list.append(filters);
+  const rows = node('div',null,'lore-rows'); rows.setAttribute('role','listbox'); rows.setAttribute('aria-label',BOOK_LABELS[book]); list.append(rows); renderRows(rows,render);
+  const edited=render.snapshot?.session.memoryState?.rebuildFromOrder;
+  if(render.snapshot?.session.memoryState?.needsRebuild && edited!=null){
+    const snapshot=render.snapshot;
     list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissMemoryRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);}catch(e){toast(e.message);}}));
   }
   list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
   list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),...(book==='plan' ? [] : [button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small')]));
-  if (filter === 'deleted' && deletedHistoryReady && live()?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted')), count = affected.reduce((n,e) => n+linesOf(e).filter(deletedLine).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
-  const missing = books.filter(e => !sizes.has(e.id));
-  if (missing.length) void Promise.all(missing.map(async e => { const text = renderEntry(e), tokens = await countTokens(text); if (renderEntry(entries().find(x => x.id === e.id) ?? e) === text) sizes.set(e.id,tokens); })).then(() => { if (list?.querySelector('.lore-rows') === rows) { renderFilters(); renderRows(rows); } });
+  if (filter === 'deleted' && deletedHistoryReady && render.snapshot?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted',render)), count = affected.reduce((n,e) => n+linesOf(e).filter(l=>deletedLine(l,render)).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
+  const missing = books.filter(e => sizeFor(e,render)==null);
+  if (missing.length) void (async()=>{
+    const work=createWorkBudget(),results=[];
+    for(const e of missing){
+      await work();if(!render.isCurrent() || countingMode()!==render.mode)return;
+      const text=cardText(e,render),tokens=await countTokens(text);
+      results.push({id:e.id,text,tokens,ready:tokenizer.tokenizerReady?.()!==false});
+    }
+    if(!render.isCurrent() || countingMode()!==render.mode)return;
+    // Revalidate once for the whole batch, never once per card.
+    const fresh=live();if(!fresh || fresh.storyEpoch!==render.snapshot?.storyEpoch || fresh.session.historyRevision!==render.snapshot?.session.historyRevision || fresh.session.loreRevision!==render.snapshot?.session.loreRevision)return;
+    const byId=new Map(fresh.entries.map(e=>[e.id,e]));
+    for(const result of results){
+      await work();if(!render.isCurrent() || countingMode()!==render.mode)return;
+      if(byId.has(result.id) && renderEntry(byId.get(result.id))===result.text){
+        if(result.ready)sizes.set(result.id,{...result,owner:render.owner,sid:render.sid,mode:render.mode});
+        else render.localSizes.set(result.id,result.tokens);
+      }
+    }
+    const latest=live();if(!render.isCurrent() || !latest || latest.storyEpoch!==fresh.storyEpoch || latest.session.historyRevision!==fresh.session.historyRevision || latest.session.loreRevision!==fresh.session.loreRevision)return;
+    for(const flags of render.flags.values())flags.delete('big');
+    renderFilters();
+    if(filter==='big')renderRows(rows,render);
+    else for(const row of rows.children){
+      const entry=render.byId.get(row.dataset.loreId);if(!entry)continue;
+      const size=sizeFor(entry,render),label=row.querySelector('.lore-size');if(label)label.textContent=size==null?'…':(size/1000).toFixed(1)+'k';
+      const warning=row.querySelector('.lore-size-warning');
+      if(passes(entry,'big',render)){if(!warning)row.querySelector('.lore-badges')?.append(badge('Too big to send in full','warn lore-size-warning'));}else warning?.remove();
+    }
+  })().catch(error=>{if(render.isCurrent())toast(error);});
 }
-function renderRows(rows) {
-  rows.replaceChildren(); const cards = entries().filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || threadMatchesFilter(threadView(e),threadFilter)) && passes(e,filter) && normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' ')).includes(normSearch(search))).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||Math.max(0,maxOf(linesOf(b).map(l => l.at)))-Math.max(0,maxOf(linesOf(a).map(l => l.at))));
+function renderRows(rows,render) {
+  const version=++rowsVersion,active=render.restoreFocus ?? document.activeElement,focusId=active?.dataset?.loreId,top=render.restoreTop ?? render.list.scrollTop;
+  let anchor=render.restoreAnchor ?? readingAnchor(rows,render.list),lastScroll=render.list.scrollTop;
+  render.restoreAnchor=null;
+  render.restoreFocus=null;render.restoreTop=null;
+  const valid=()=>version===rowsVersion && render.isCurrent();
+  const needle=normSearch(search);
+  const cards = render.cards.filter(e => e.book === book && (book !== 'events' || filter==='duplicates' || threadMatchesFilter(threadView(e),threadFilter)) && passes(e,filter,render) && render.stats.get(e.id).search.includes(needle)).sort((a,b) => Number(b.alwaysLoad)-Number(a.alwaysLoad)||Number(b.draft)-Number(a.draft)||render.stats.get(b.id).newest-render.stats.get(a.id).newest);
+  rows.replaceChildren();rows.loreView={book,filter,search,threadFilter};rows.setAttribute('aria-busy',String(!!cards.length));
   if (!cards.length) {
     const messages = { characters:"No characters yet. They'll appear here as your story introduces them (with Automatic memory updates on), or add one yourself.",locations:'No places yet. The current place from the scene line is loaded each turn once it has a card.',facts:"No world facts yet. Add the rules of your world — magic, calendar, politics. They're sent every turn.",events:'No open threads. Unresolved goals, promises and mysteries appear here.',plan:'No scheduled plans yet. Add an event with dates and optional phases.' };
-    rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : book==='events' && threadFilter!=='open' ? 'No '+(threadFilter==='all'?'active':threadFilter)+' threads.' : messages[book],'muted')); return;
+    rows.append(node('p',search || filter !== 'all' ? 'No matching cards.' : book==='events' && threadFilter!=='open' ? 'No '+(threadFilter==='all'?'active':threadFilter)+' threads.' : messages[book],'muted'));rows.setAttribute('aria-busy','false');return;
   }
-  for (const e of cards) {
-    const row = button('',() => openCard(e),'lore-list-item'); row.setAttribute('role','option'); row.setAttribute('aria-selected',String(selected === e.id)); row.append(node('strong',e.name),node('small',e.aliases.join(', '),'muted'),node('span',sizes.has(e.id) ? (sizes.get(e.id)/1000).toFixed(1)+'k' : '…','muted'));
-    const badges = node('div',null,'lore-badges'); if(e.book==='characters')badges.append(badge(CHARACTER_IMPORTANCE.find(option=>option.value===characterImportance(e)).label)); if(e.book==='plan')badges.append(badge(scheduleRange(e.schedule)),badge(e.schedule.status)); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newCount(e)) badges.append(badge('+'+newCount(e)+' new','new')); if (passes(e,'big')) badges.append(badge('Too big to send in full','warn')); if (passes(e,'deleted')) badges.append(badge('From deleted turns','warn')); row.append(badges); rows.append(row);
-    row.addEventListener('keydown',ev => { if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); const options = [...rows.children]; options[Math.max(0,Math.min(options.length-1,options.indexOf(row)+(ev.key === 'ArrowDown' ? 1 : -1)))].focus(); } });
+  let offset=0,firstBatch=true,pendingFocus=render.restoreNavigation ?? (focusId?{id:focusId,from:active}:null);
+  render.restoreNavigation=null;
+  const rendered=new Map(),now=()=>globalThis.performance?.now?.() ?? Date.now();
+  function appendBatch(){
+    if(!valid())return;
+    // A user's scroll takes precedence over finishing an older restoration.
+    if(!firstBatch && anchor && render.list.scrollTop!==lastScroll)anchor=null;
+    const start=now(),batch=[],fragment=document.createDocumentFragment?.();
+    do{
+      const index=offset++,e=cards[index],size=sizeFor(e,render),newNotes=render.stats.get(e.id).newCount;
+      const row = button('',() => openCard(e),'lore-list-item');row.dataset.loreId=e.id;row.setAttribute('role','option');row.setAttribute('aria-selected',String(selected === e.id));row.append(node('strong',e.name),node('small',e.aliases.join(', '),'muted'),node('span',size==null?'…':(size/1000).toFixed(1)+'k','muted lore-size'));
+      const badges = node('div',null,'lore-badges'); if(e.book==='characters')badges.append(badge(CHARACTER_IMPORTANCE.find(option=>option.value===characterImportance(e)).label)); if(e.book==='plan')badges.append(badge(scheduleRange(e.schedule)),badge(e.schedule.status)); if (e.alwaysLoad) badges.append(badge('Always','always')); if (e.draft) badges.append(badge('Draft','draft')); if (newNotes) badges.append(badge('+'+newNotes+' new','new')); if (passes(e,'big',render)) badges.append(badge('Too big to send in full','warn lore-size-warning')); if (passes(e,'deleted',render)) badges.append(badge('From deleted turns','warn')); row.append(badges);batch.push(row);rendered.set(e.id,row);
+      row.addEventListener('keydown',ev=>{if(ev.key==='ArrowDown' || ev.key==='ArrowUp'){ev.preventDefault();const target=cards[Math.max(0,Math.min(cards.length-1,index+(ev.key==='ArrowDown'?1:-1)))],next=rendered.get(target.id);if(next){rowNavigation=pendingFocus=null;next.focus();}else rowNavigation=pendingFocus={id:target.id,from:row,scroll:true,owner:render.owner,sid:render.sid};}});
+    }while(offset<cards.length && batch.length<100 && now()-start<8);
+    if(fragment){fragment.append(...batch);rows.append(fragment);}else rows.append(...batch);
+    if(anchor){
+      const target=rendered.get(anchor.id);
+      if(target){render.list.scrollTop+=target.getBoundingClientRect().top-render.list.getBoundingClientRect().top-anchor.offset;anchor=null;}
+      else render.list.scrollTop=top;
+    }else if(firstBatch && top>0)render.list.scrollTop=top;
+    // Reading scrollTop after every insertion forces synchronous layout even
+    // for a newly opened list at the top. Only restoration needs that read.
+    if(anchor)lastScroll=render.list.scrollTop;
+    firstBatch=false;
+    if(pendingFocus && rendered.has(pendingFocus.id)){
+      if(document.activeElement===pendingFocus.from || document.activeElement===document.body)rendered.get(pendingFocus.id).focus({preventScroll:!pendingFocus.scroll});
+      if(rowNavigation===pendingFocus)rowNavigation=null;
+      pendingFocus=null;
+    }
+    if(offset<cards.length)void afterUiPaint().then(appendBatch);else rows.setAttribute('aria-busy','false');
   }
+  appendBatch();
 }
 async function newCard(prefill = '',kind = 'card') {
   if (!canLeave()) return;
@@ -557,9 +670,9 @@ async function reorganize(cards) {
   const locked = cards.map(e => e.id), s = subSheet(cards.length === 1 ? 'Reorganize '+cards[0].name : 'Reorganize book',{ close:() => { controller.abort();holdingPreview=false;releaseLocked();return true; } });
   const body = node('div',null,'memory-content'); s.dialog.append(body);
   body.append(node('p',`The model will merge ${cards.length === 1 ? cards[0].name+"'s" : 'these cards’'} update lines into fewer, up-to-date lines. Your own text is never changed. Lower lines win when notes disagree. You'll see a preview before anything is saved.`,'muted'));
-  const selectedCards = {}, selectedSections = {};
+  const selectedCards = {}, selectedSections = {},render=captureRender();
   for (const e of cards) {
-    const f = field(e.name,'',{ type:'checkbox' }); f.input.checked = cards.length === 1 || linesOf(e).length>15 || passes(e,'big'); selectedCards[e.id] = f.input; body.append(f.wrap);
+    const f = field(e.name,'',{ type:'checkbox' }); f.input.checked = cards.length === 1 || linesOf(e).length>15 || passes(e,'big',render); selectedCards[e.id] = f.input; body.append(f.wrap);
     selectedSections[e.id] = {};
     for (const [key,section] of Object.entries(e.sections)) if (section.lines.some(l => l.by !== 'user')) { const check = field(sectionLabel(key,mem.protagonist) || 'Notes','',{ type:'checkbox' }); check.input.checked = true; selectedSections[e.id][key] = check.input; body.append(check.wrap); }
   }

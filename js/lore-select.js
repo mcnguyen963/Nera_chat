@@ -9,13 +9,16 @@ import { normalizeName, STOPLIST, COMMON_ALIAS_WORDS, SECTION_KEYS, sortLines } 
 import { stripTurnStamps } from './story-text.js';
 import {threadSummary} from './thread-lifecycle.js';
 import { capLoreNotes, noteOmissions, fittedNoteStats } from './lore-note-window.js';
+import { createWorkBudget } from './ui-work.js';
 export { sortLines } from './lore-lines.js';
 export const MEMORY_RULE = CONTINUITY_RULE;
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-export function buildLoreIndex(entries) {
+function finish(work) { let step;do{step=work.next();}while(!step.done);return step.value; }
+export function buildLoreIndex(entries) {return finish(loreIndexWork(entries));}
+function* loreIndexWork(entries) {
   const index = { entries, characters:[], locations:[], facts:[], events:[] };
   const firstCounts=new Map(),titles=new Set('lord lady sir dame king queen prince princess master mistress captain father mother brother sister mr. mrs. ms. dr.'.split(' '));
-  for(const e of entries)if(e.book==='characters'){const first=normalizeName(e.name).split(' ')[0];firstCounts.set(first,(firstCounts.get(first) ?? 0)+1);}
+  for(const e of entries){if(e.book==='characters'){const first=normalizeName(e.name).split(' ')[0];firstCounts.set(first,(firstCounts.get(first) ?? 0)+1);}yield;}
   for (const e of entries) {
     const terms = [e.name,...(e.aliases ?? [])];
     if (e.book === 'characters') {const first=normalizeName(e.name).split(' ')[0];if(first.length>=3 && !titles.has(first) && firstCounts.get(first)===1)terms.push(e.name.split(' ')[0]);}
@@ -26,30 +29,49 @@ export function buildLoreIndex(entries) {
       if (i>0 && i<= (e.aliases?.length ?? 0) && normTerm.startsWith('the ') && normTerm.slice(4).split(' ').every(word=>STOPLIST.has(word) || COMMON_ALIAS_WORDS.has(word))) continue;
       seen.add(normTerm);
       index[e.book]?.push({ entryId:e.id, term, normTerm, isMain:i === 0,firstName:e.book==='characters' && i>=(1+(e.aliases?.length ?? 0)) });
+      yield;
     }
   }
   return index;
 }
-function mentionMatchers(index,book) {
-  return (index[book] ?? []).map(term=>{
+// Patterns contain no story text or entry identity. Term membership is rebuilt
+// for every call, so mutable indexes and renamed aliases remain observable.
+const matcherCache=new Map(),MATCHER_LIMIT=4096;
+function* mentionMatchers(index,book) {
+  const matchers=[];
+  for(const term of index[book] ?? []){
     // All matches share offsets in the same string; allow names across whitespace.
-    const phrase = escapeRegex(term.firstName ? term.term.replace(/[‘’]/g,"'") : term.normTerm).replace(/\s+/g, '\\s+');
-    const re = new RegExp('(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',term.firstName ? 'gu' : 'giu');
-    return {entryId:term.entryId,re};
-  });
+    const literal=term.firstName ? term.term.replace(/[‘’]/g,"'") : term.normTerm;
+    const phrase = escapeRegex(literal).replace(/\s+/g, '\\s+');
+    const pattern='(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',flags=term.firstName ? 'gu' : 'giu',key=JSON.stringify([pattern,flags]);
+    let re=matcherCache.get(key);
+    if(re)matcherCache.delete(key);
+    else re=new RegExp(pattern,flags);
+    matcherCache.set(key,re);
+    if(matcherCache.size>MATCHER_LIMIT)matcherCache.delete(matcherCache.keys().next().value);
+    matchers.push({entryId:term.entryId,re,asciiPrefix:/^[\x00-\x7f]*$/.test(literal)?literal.split(/\s+/)[0].toLowerCase():null});yield;
+  }
+  return matchers;
 }
 export function findMentionOccurrences(text, index, book) {
-  return matchOccurrences(text,mentionMatchers(index,book));
+  return finish(matchOccurrences(text,finish(mentionMatchers(index,book))));
 }
-function matchOccurrences(text,matchers) {
+function* matchOccurrences(text,matchers) {
   const matches = [], nfc = String(text).normalize('NFC').replace(/[‘’]/g,"'");
-  for (const {entryId,re} of matchers) {
+  // ASCII letters with punctuation/whitespace have ordinary ASCII case folds.
+  // Other Unicode inputs retain the exact /iu/ path, including long s/Kelvin.
+  const ascii=/^[\x00-\x7f\p{P}\s]*$/u.test(nfc)?nfc.toLowerCase():null;
+  for (const {entryId,re,asciiPrefix} of matchers) {
+    if(ascii!==null && asciiPrefix!==null && !ascii.includes(asciiPrefix)){yield;continue;}
     re.lastIndex=0;
-    for (const m of nfc.matchAll(re)) matches.push({ id:entryId, start:m.index, end:m.index+m[0].length });
+    // matchAll clones the regex before this generator yields. Concurrent async
+    // requests never share an occurrence iterator or its lastIndex.
+    for (const m of nfc.matchAll(re))matches.push({ id:entryId, start:m.index, end:m.index+m[0].length });
+    yield;
   }
   matches.sort((a,b) => (b.end-b.start)-(a.end-a.start)||a.start-b.start||stableId(a.id,b.id));
   const chosen = [];
-  for (const m of matches) if (!chosen.some(c => m.start < c.end && c.start < m.end)) chosen.push(m);
+  for (const m of matches){if (!chosen.some(c => m.start < c.end && c.start < m.end)) chosen.push(m);yield;}
   chosen.sort((a,b) => a.start-b.start);
   return chosen;
 }
@@ -77,8 +99,19 @@ const newestNote = entry => Math.max(0,maxOf(Object.values(entry.sections).flatM
 const compareMention = (a,b) => !a ? (b ? 1 : 0) : !b ? -1 : b.order-a.order || b.offset-a.offset;
 // Structured sources preserve message boundaries. Legacy text is one synthetic message.
 export function selectEntries(entries, mem, text, scene, recentText = '', sources = {}) {
+  return finish(selectionWork(entries,mem,text,scene,recentText,sources));
+}
+export async function selectEntriesAsync(entries,mem,text,scene,recentText='',sources={},work={}) {
+  const budget=createWorkBudget(work),iterator=selectionWork(entries,mem,text,scene,recentText,sources);
+  // Check a small group at a time: awaiting a promise for every term needlessly
+  // repeats source fingerprints and extends microtask chains on large indexes.
+  try{for(;;){await budget();for(let i=0;i<8;i++){const step=iterator.next();if(step.done){await budget();return step.value;}}}}
+  finally{iterator.return();}
+}
+function* selectionWork(entries, mem, text, scene, recentText, sources) {
   entries=entries.filter(e=>!archivedThread(e));
-  const index = buildLoreIndex(entries), resolved = resolveScene(scene,index), selected = {}, skipped = [];
+  const index = yield* loreIndexWork(entries);
+  const resolved = resolveScene(scene,index), selected = {}, skipped = [];
   const start=sources.startingScene ? resolveScene(sources.startingScene,index) : null, transition=!!start;
   const required=new Set(sources.directorRequiredIds ?? []),directorIds=new Set(sources.directorMemoryIds ?? []);
   const asList = value => value == null ? [] : Array.isArray(value) ? value : [value];
@@ -89,17 +122,19 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     const list = [...new Map(entries.filter(e => e.book === book).map(e => [e.id,e])).values()];
     if (!mem.lorebooks || !mem.books[book].on) { for (const e of list) skipped.push({ entryId:e.id, book, name:e.name, reason:'book off' }); continue; }
     // Compile once for this selection; exported lookups still see mutable indexes.
-    const matchers=mentionMatchers(index,book);
-    const evidence = messages => {
+    const matchers=yield* mentionMatchers(index,book);
+    const evidence = function*(messages) {
       const hits = new Map();
-      for (const m of messages) for (const hit of matchOccurrences(m.content ?? '',matchers)) {
+      for (const m of messages) for (const hit of yield* matchOccurrences(m.content ?? '',matchers)) {
         const mention = {messageId:m.id ?? null,order:m.order ?? 0,role:m.role ?? null,offset:hit.start};
         if (!hits.has(hit.id) || compareMention(mention,hits.get(hit.id)) < 0) hits.set(hit.id,mention);
       }
       return hits;
     };
-    const currentHits = evidence(current), recentHits = evidence(recent), latestHits = evidence([...recent,...current]);
-    const sceneHits = new Set(matchOccurrences(scene?.raw ?? '',matchers).map(hit=>hit.id));
+    const currentHits = yield* evidence(current), recentHits = yield* evidence(recent), latestHits = new Map(recentHits);
+    // The old combined pass visited recent sources first: retain them on ties.
+    for(const [id,mention]of currentHits)if(!latestHits.has(id) || compareMention(mention,latestHits.get(id))<0)latestHits.set(id,mention);
+    const sceneHits = new Set((yield* matchOccurrences(scene?.raw ?? '',matchers)).map(hit=>hit.id));
     const candidates = new Map();
     const add = (entry,priority,reason) => {
       if(transition)priority=['always','protagonist','pinned record'].includes(reason) ? 0 : required.has(entry.id) ? 1 : ['in scene','current place'].includes(reason) ? 2 : ['starting character','starting place'].includes(reason) ? 3 : directorIds.has(entry.id) ? 4 : 5+priority;
@@ -108,6 +143,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     };
     const pc = book==='characters' && list.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(mem.protagonist)));
     for (const e of list) {
+      yield;
       if(book==='characters' && sources.directorBackgroundIds?.includes(e.id) && !required.has(e.id) && !e.alwaysLoad && !(sources.records && (e.recordLayout?.records ?? []).some(r=>r.pinned))) {skipped.push({entryId:e.id,book,name:e.name,reason:'present in background; not in focus'});continue;}
       if(directorIds.has(e.id))add(e,4,'Director selection');
       if(start?.characters.includes(e.id) && book==='characters')add(e,3,'starting character');
@@ -145,6 +181,7 @@ export function selectEntries(entries, mem, text, scene, recentText = '', source
     const characterSlots=book==='characters' ? characterCardSlots(ranked.filter(item=>!isReserved(item.entry)),mem.books[book].maxCards,{protagonist:mem.protagonist,requiredIds:[...required]}) : null;
     let optional = 0;
     for (const [i,item] of ranked.entries()) {
+      yield;
       const {entry,reason,mention} = item;
       const priorityReason = book==='facts' && item.priority===1 ? 'scene mention'
         : book==='facts' && item.priority===4 ? 'other facts' : reason;
