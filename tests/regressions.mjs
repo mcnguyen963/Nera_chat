@@ -1215,9 +1215,23 @@ test('Loading an older cached page preserves its message anchor and does not exp
 });
 
 const waitForParallel = async predicate => {
-  for(let i=0;i<150 && !predicate();i++)await new Promise(resolve=>setImmediate(resolve));
+  // Iteration counts can expire before a timer-backed task gets a turn on CI.
+  const deadline=Date.now()+2000;
+  while(!predicate() && Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,2));
   assert.ok(predicate(),'Parallel requests did not reach the expected stage');
 };
+test('parallel stage waits allow timer-driven context preparation before narration',async()=>{
+  const h=await harness();await openImprovementChat(h);
+  let delayed=false;
+  h.calls.onTokenCount=async text=>{
+    if(text.includes('Slow action') && !delayed){delayed=true;await new Promise(resolve=>setTimeout(resolve,25));}
+    return text.length;
+  };
+  h.calls.response='Completed reply.';h.el('chat-input').value='Slow action';
+  const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+  await waitForParallel(()=>h.calls.requests.length===1);await send;
+  assert.equal(delayed,true);assert.equal(h.calls.requests.length,1);
+});
 async function parallelChat({scene=false,retry=false,director=false}={}) {
   let pendingDirector;
   const h=await harness({extraStubs:{'memory-updater.js':null,...(director ? {'director-store.js':{getDirectorTurn:async()=>pendingDirector,savePendingDirectorTurn:async(_sid,turn)=>{pendingDirector=turn;},discardPendingDirector:async()=>{pendingDirector=null;}}} : {})}});
