@@ -2112,6 +2112,7 @@ async function runIdleMaintenance({sid,settings,opts,maintenanceUsed,petTurn}){
     if(pick==='memory'){memoryUpdater.maybeStartAfterTurn(sid);memoryDeferrals.set(sid,0);}
     else if(pick==='summary') {
       const summaryController=new AbortController();token.abort=()=>summaryController.abort('user');
+      el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
       const ui=streamSummaryUI('Context near limit — summarizing…');
       try {const summaryResult=await runSummarization(structuredClone(session),settings,{signal:summaryController.signal,maxChunks:1,messages:structuredClone(hist),loreEntries:structuredClone(loreEntries),onDelta:ui.onDelta});assertActive(token);applySummaryResult(summaryResult);}
       catch(error){if(error instanceof StaleTurn)throw error;assertActive(token);if(summaryController.signal.reason==='user')showTransientInfo('Summary stopped.');else{summaryBackoff.set(sid,3);showTransientInfo('Summary skipped: '+error.message);}}

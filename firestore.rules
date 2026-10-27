@@ -1,7 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function isOwner() { return request.auth != null && request.auth.uid == 'OWNER_UID_HERE'; }
+    function owner(uid) { return isOwner() && request.auth.uid == uid; }
     function story(uid, sid) { return get(/databases/$(database)/documents/users/$(uid)/sessions/$(sid)).data; }
     function nextStory(uid, sid) { return getAfter(/databases/$(database)/documents/users/$(uid)/sessions/$(sid)).data; }
     function locked(s) { return s.get('loreMigration', {}).get('active', false) && s.loreMigration.expiresAt > request.time.toMillis(); }

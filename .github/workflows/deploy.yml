@@ -71,7 +71,7 @@ jobs:
           for f in $(grep -o '"[A-Za-z0-9-]*\.md"' js/system-prompts.js | tr -d '"'); do
             test -s "_site/system prompts/$f"
           done
-          for p in lorebooks play-history investigate data docs starting production-reports production-backups tests scripts private .private .secret memory.md opencode.json REVIEW_FINDINGS.md improvePlan.md; do
+          for p in lorebooks play-history investigate data docs starting production-reports production-backups tests scripts private .private .secret memory.md opencode.json REVIEW_FINDINGS.md improvePlan.md firebase.json firestore.rules RELEASE.md register.html; do
             test ! -e "_site/$p"
           done
 

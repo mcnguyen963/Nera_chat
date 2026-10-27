@@ -1,0 +1,6 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "predeploy": ["node scripts/check-owner-rules.mjs"]
+  }
+}

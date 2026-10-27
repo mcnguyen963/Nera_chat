@@ -4,14 +4,13 @@ import {
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
-  createUserWithEmailAndPassword,
   sendPasswordResetEmail,
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
-// Firebase Authentication owns credentials; Firestore access is scoped by UID.
+// Firebase Authentication owns credentials; rules restrict access to approved owners.
 let authEpoch=0,lastAuthUid;
 function observeAccount(uid) {if(uid!==lastAuthUid){lastAuthUid=uid;++authEpoch;}}
 // A returned UID can be the same after signing out and back in. Async work must
@@ -44,10 +43,6 @@ export function currentUserInfo() {
 
 export async function login(email, password) {
   await signInWithEmailAndPassword(getAuth(), email.trim(), password);
-}
-
-export async function register(email, password) {
-  await createUserWithEmailAndPassword(getAuth(), email.trim(), password);
 }
 
 export async function resetPassword(email) {

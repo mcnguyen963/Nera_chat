@@ -8,7 +8,7 @@ import { initViewport } from "./viewport.js";
 import { initLorebookView } from './ui/lorebook-view.js';
 import { initContextViewer } from './ui/context-viewer.js';
 import { stopAll } from './memory-updater.js';
-import { initAuth, login, register, resetPassword, changePassword, currentUserInfo } from "./auth.js";
+import { initAuth, login, resetPassword, changePassword, currentUserInfo } from "./auth.js";
 import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
@@ -139,10 +139,10 @@ initAuth(async(user)=>{
 function showBootError(error){console.error(error);el.app.classList.add("hidden");el.loginScreen.classList.remove("hidden");setMessage("login-error","Could not start the app: "+friendlyError(error)+" Reload to try again.",true);}
 
 function showAuthView(view) {
-  for (const name of ["login", "register", "reset"]) {
+  for (const name of ["login", "reset"]) {
     document.getElementById(`auth-${name}`).hidden = name !== view;
   }
-  for (const id of ["login-error", "register-error", "reset-message"]) {
+  for (const id of ["login-error", "reset-message"]) {
     setMessage(id, "");
   }
   if (view === "reset") {
@@ -178,7 +178,7 @@ for (const button of document.querySelectorAll("[data-auth-view]")) {
   button.addEventListener("click", () => showAuthView(button.dataset.authView));
 }
 
-for (const [id, label] of [["login-form", "Sign in →"], ["register-form", "Create account →"], ["reset-form", "Send reset link →"], ["change-password-form", "Change password"]]) {
+for (const [id, label] of [["login-form", "Sign in →"], ["reset-form", "Send reset link →"], ["change-password-form", "Change password"]]) {
   document.getElementById(id).dataset.submitLabel = label;
 }
 
@@ -188,19 +188,6 @@ el.loginForm.addEventListener("submit", (e) => {
     document.getElementById("login-username").value,
     document.getElementById("login-password").value
   ), "login-error");
-});
-
-document.getElementById("register-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const form = e.currentTarget;
-  const password = document.getElementById("register-password").value;
-  if (password !== document.getElementById("register-confirm").value) {
-    setMessage("register-error", "Passwords do not match.", true);
-    return;
-  }
-  submitAuth(form, "Creating account…", () => register(
-    document.getElementById("register-email").value, password
-  ), "register-error");
 });
 
 document.getElementById("reset-form").addEventListener("submit", (e) => {

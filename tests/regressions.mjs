@@ -3563,3 +3563,83 @@ for(const replacement of [false,true])test('Imported safe '+(replacement?'replac
  assert.equal(chat.memorySnapshot().messages.at(-1).thinking,'Retained reasoning.');assert.equal(h.calls.requests.length,0);
  assert.equal(chat.memorySnapshot().messages.length,2);
 });
+
+// These cases exercise the recovery UI, including the discovery-success branch,
+// rather than only the Firestore chunk query tested in message-chunks.mjs.
+for(const mode of ['append','append-old-copy','append-as-new','overwrite'])test('F8 ambiguous committed '+mode+' clears recovery without another write or ID',async()=>{
+ const overwrite=mode==='overwrite',asNew=mode==='append-as-new';
+ const found={id:'paid',order:2,role:'assistant',content:'Paid narration.',thinking:'Preserved reasoning.'};
+ let stored={id:'paid',sid:'improvement',owner:'test-user',sourceRevision:0,conflict:asNew,
+  ...(mode==='append-old-copy'?{}:{minOrder:2}),...(overwrite?{overwriteId:'paid',order:2}:{}),
+  message:{role:'assistant',content:found.content,thinking:found.thinking}};
+ const sources=process.env.POST_RELEASE_CHAT_SOURCE ? {'ui/chat-view.js':await readFile(process.env.POST_RELEASE_CHAT_SOURCE,'utf8')} : {};
+ const h=await harness({sources,extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async()=>stored,storeUnsavedReply:async(_owner,_sid,value)=>{stored=value;return true;}}}});
+ const opening={id:'u',order:1,role:'user',content:'Begin.'};
+ const chat=await openImprovementChat(h,{historyRevision:0,nextOrder:overwrite?2:1},[opening,...(overwrite?[{...found,content:'Original narration.'}]:[])]);await settle();
+ // The first save reached the server, but the device retained its unsaved copy.
+ // An unrelated later message also makes a stale-revision retry unsafe.
+ h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:2,nextOrder:201,activeChunkId:'rolled-over'};
+ h.calls.findSavedMessage=async()=>found;
+ h.calls.addMessage=async()=>assert.fail('Already committed narration must not append again');
+ h.calls.overwriteMessage=async()=>assert.fail('Already committed narration must not overwrite again');
+ const sequence=h.calls.localSequence,reads=h.calls.sessionReads ?? 0;
+ await namedButton(h.el('message-list').querySelector('.unsaved'),asNew?'Save as new reply at the end':'Save again').click();await settle();
+ assert.equal(stored,null);assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+ assert.equal(h.calls.localSequence,sequence);assert.equal(h.calls.requests.length,0);
+ assert.equal((h.calls.sessionReads ?? 0)-reads,1);
+ assert.deepEqual(h.calls.saveLookups.map(a=>Array.from(a).slice(0,3)),[['improvement','paid',overwrite?2:mode==='append-old-copy'?undefined:2]]);
+ assert.equal(chat.memorySnapshot().messages.filter(m=>m.id==='paid').length,1);
+ assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='paid').content,found.content);
+ assert.equal(chat.memorySnapshot().session.historyRevision,2);
+});
+
+async function autoSummaryFixture({lateNarratorAbort=false}={}) {
+ const attempts=[],sources=process.env.POST_RELEASE_CHAT_SOURCE ? {'ui/chat-view.js':await readFile(process.env.POST_RELEASE_CHAT_SOURCE,'utf8')} : {};
+ if(lateNarratorAbort) {
+  const source=sources['ui/chat-view.js'] ?? await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
+  // Inject the old F9 timing: narration returned normally, then its controller
+  // was stopped before persistence and idle summarization began.
+  const marker="const truncated = finishReason === 'length';";assert.ok(source.includes(marker));
+  sources['ui/chat-view.js']=source.replace(marker,"controller.abort('user');\n    "+marker);
+ }
+ const h=await harness({sources,extraStubs:{'summarizer.js':{
+  planSummary:()=>({chunks:[[]]}),shouldAutoSummarize:async()=>true,
+  runSummarization:async(_session,_settings,opts)=>{
+   attempts.push(opts.signal);
+   if(h.calls.summaryFailure)throw Error('Summary network failed');
+   if(h.calls.onAutoSummary)return h.calls.onAutoSummary(opts);
+   return {skipped:true};
+  }
+ }}});
+ Object.assign(h.state.settings,{narratorSystemPrompt:'Narrate.',summarizerSystemPrompt:'Summarize events.',autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,maxContextTokens:10000,maxResponseTokens:1000,keepRecentMessagesAfterSummary:0});
+ const chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Opening reply'}]);
+ h.calls.response='A complete reply.';
+ const send=async()=>{h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});};
+ const wait=async predicate=>{for(let n=0;n<100&&!predicate();n++)await new Promise(resolve=>setTimeout(resolve,2));assert.ok(predicate(),'Automatic maintenance did not settle');};
+ return {h,chat,attempts,send,wait};
+}
+
+test('F9 auto-summary has a fresh signal after the completed narrator request aborts',async()=>{
+ const {h,attempts,send,wait}=await autoSummaryFixture({lateNarratorAbort:true});
+ await send();await wait(()=>attempts.length===1&&!h.state.busy);
+ assert.equal(attempts[0].aborted,false);
+});
+
+test('F9 auto-summary exposes Stop and a user stop does not back off the next turn',async()=>{
+ const {h,attempts,send,wait}=await autoSummaryFixture();
+ h.calls.onAutoSummary=({signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('Stopped')),{once:true}));
+ await send();await wait(()=>attempts.length===1);
+ assert.equal(h.el('btn-stop').classList.contains('hidden'),false);
+ assert.equal(h.el('btn-send').hidden,true);
+ await h.stopAfterGuard();await wait(()=>!h.state.busy);
+ assert.equal(attempts[0].reason,'user');
+ h.calls.onAutoSummary=null;await send();await wait(()=>attempts.length===2&&!h.state.busy);
+});
+
+test('F9 a network summary failure backs off exactly three subsequent turns',async()=>{
+ const {h,attempts,send,wait}=await autoSummaryFixture();
+ h.calls.summaryFailure=true;await send();await wait(()=>attempts.length===1&&!h.state.busy);
+ h.calls.summaryFailure=false;
+ for(let n=0;n<3;n++){await send();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(attempts.length,1);}
+ await send();await wait(()=>attempts.length===2&&!h.state.busy);
+});
