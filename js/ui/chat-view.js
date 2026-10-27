@@ -66,7 +66,7 @@ import {
 
 const unsavedReplies=new Map(),unsavedRevisions=new Map();
 const unsavedKey=(owner,sid)=>owner+':'+sid;
-let unsavedNode=null;
+let unsavedNode=null,unsavedLoad=null;
 let chatRetry=0,chatRetryTimer=null,chatStatus='ok';
 function clearChatRetry(){clearTimeout(chatRetryTimer);chatRetryTimer=null;}
 let msgUnsub = null;
@@ -96,6 +96,11 @@ const acquireBusy=kind=>{
 class StaleTurn extends Error {}
 function assertActive(token){if(cacheWritesPaused || !session || !busyGate.stillActive(token))throw new StaleTurn('Story changed; this action was cancelled.');}
 async function waitForPendingChanges(token) {
+  const recovery=unsavedLoad;
+  if(recovery)await recovery.ready;
+  assertActive(token);
+  if(recovery?.error)throw recovery.error;
+  if(['send','reply','continue','regenerate'].includes(token.kind) && unsavedReplies.has(unsavedKey(token.owner,token.sid)))throw new Error('Save or discard the unsaved reply before generating another reply.');
   if(hasPendingSettings(currentUid(),token.sid)){showTransientInfo('Waiting for settings to save…');token.waitingSettings=true;try{await waitForPendingSettings(currentUid(),token.sid);assertActive(token);}finally{token.waitingSettings=false;}}
   await token.loreHold?.ready;assertActive(token);await loreReloading;assertActive(token);
 }
@@ -873,7 +878,7 @@ export function setSession(sessionId) {
     historyCache.delete(historyCache.keys().next().value);
   }
   historyLoading = null;
-  historyEpoch++;
+  historyEpoch++;unsavedLoad=null;
   renderedMessages.clear();
   expandedSummaries.clear();
   indicatorRefresh.invalidate();
@@ -889,7 +894,17 @@ export function setSession(sessionId) {
   updateMemoryChip();
   if (!sessionId) return true;
   const unsavedVersion=unsavedRevisions.get(unsavedKey(owner,sessionId)) ?? 0;
-  void loadUnsavedReply(owner,sessionId).then(reply=>{if(reply && (unsavedRevisions.get(unsavedKey(owner,sessionId)) ?? 0)===unsavedVersion && !unsavedReplies.has(unsavedKey(owner,sessionId)))unsavedReplies.set(unsavedKey(owner,sessionId),reply);if(state.sessionId===sessionId && currentUid()===owner)renderUnsavedReply();});
+  const recovery=unsavedLoad={pending:true,ready:null,error:null},recoveryEpoch=historyEpoch;
+  const recoveryActive=()=>unsavedLoad===recovery && historyEpoch===recoveryEpoch && state.sessionId===sessionId && currentUid()===owner && !cacheWritesPaused;
+  recovery.ready=loadUnsavedReply(owner,sessionId).then(reply=>{
+    if(recoveryActive() && reply && (unsavedRevisions.get(unsavedKey(owner,sessionId)) ?? 0)===unsavedVersion && !unsavedReplies.has(unsavedKey(owner,sessionId)))unsavedReplies.set(unsavedKey(owner,sessionId),reply);
+  }).catch(()=>{
+    if(recoveryActive())recovery.error=new Error('Recovered replies could not be checked. Reopen this story before generating another reply.');
+  }).finally(()=>{
+    recovery.pending=false;
+    if(recoveryActive()){renderUnsavedReply();updateWelcome();applyBusyUi(busy);}
+  });
+  applyBusyUi(busy);
   el.contextLabel.textContent = "Loading chat…";
   document.getElementById('context-indicator').setAttribute('aria-label', 'View context: Loading chat');
   if (cachedHistory) {
@@ -1213,7 +1228,7 @@ function updateWelcome() {
   el.input.placeholder = state.sessionId ? "Write your next turn…" : "Create a new story to begin…";
 
   el.input.disabled = !state.sessionId;
-  el.sendBtn.disabled = busy || !state.sessionId;
+  el.sendBtn.disabled = busy || !!unsavedLoad?.pending || !state.sessionId;
   document.querySelectorAll("[data-starter]").forEach((button) => { button.disabled = !state.sessionId; });
   updateMessageControls();
   refreshPetPlacement();
@@ -1625,7 +1640,7 @@ function updateRewriteControls() {
   const write=(node,key,value)=>{if(node[key]!==value)node[key]=value;};
   const presentation = rewritePresentation({rewriting:!!rewriteController, empty});
   setIcon(el.rewriteBtn, presentation.icon, presentation.label);
-  write(el.rewriteBtn,'disabled', !rewriteController && (busy || state.busy || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))))));
+  write(el.rewriteBtn,'disabled', !rewriteController && (busy || state.busy || unsavedLoad?.pending || !session || !!editingState || (empty && !!historyLoading) || (empty && (!eligible || unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))))));
   write(el.restoreDraftBtn,'disabled',busy);
   write(el.input,'readOnly',!!rewriteController);
   write(el.restoreDraftBtn,'hidden',originalDraft === null);
@@ -1926,8 +1941,10 @@ async function handleSend(e) {
   }
 }
 
-async function runAssistantTurn(opts = {},suppliedToken=null) {
-  if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply first.');return;}
+async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null) {
+  const pendingRecovery=unsavedReplies.get(unsavedKey(currentUid(),state.sessionId));
+  const continuingRecovery=pendingRecovery && pendingRecovery===recoveryReply && recoveryReply.replanReplacement && recoveryReply.message.truncated && opts.replanReplacement && opts.continuationId===recoveryReply.overwriteId;
+  if(pendingRecovery && !continuingRecovery){showTransientInfo('Save or discard the unsaved reply first.');return;}
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
   let settings;
@@ -1942,6 +1959,10 @@ async function runAssistantTurn(opts = {},suppliedToken=null) {
     await waitForPreparation(chatLoading,controller);assertActive(token);
     await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);settings=effectiveActiveSettings();
     if(!opts.reconciled)await waitForPreparation(reconcileStory(token),controller);assertActive(token);
+    if(recoveryReply){
+      if(unsavedReplies.get(unsavedKey(token.owner,sid))!==recoveryReply)throw new StaleTurn();
+      assertSource(session,recoveryReply.expectedSource ?? {historyRevision:recoveryReply.sourceRevision});
+    }
     if (opts.expectLatestUserId) {
       const latest = (historyMessages ?? []).filter(m => m.role !== 'summary').at(-1);
       if (latest?.role !== 'user' || latest.id !== opts.expectLatestUserId) throw new Error('The latest story turn changed. Review it before retrying.');
@@ -2173,7 +2194,7 @@ function renderUnsavedReply() {
       clearUnsaved(reply.owner,reply.sid);renderMessages(mergeMessages(lastMessages,[result.message]));queueCacheSave();void updateIndicator();showTransientInfo('Reply saved.');
     }catch(error){if(error.name==='HistoryConflict'){reply.conflict=true;void storeUnsavedReply(reply.owner,reply.sid,reply);renderUnsavedReply();}throw error;}
   });
-  if(reply.replanReplacement && reply.message.truncated)controls.append(actionBtn('Continue replacement',()=>historyAction('continue-replacement',async token=>{await reconcileStory(token);assertActive(token);const all=await ensureHistory();assertActive(token);const target=all.find(m=>m.id===reply.overwriteId);if(!target)throw new Error('The original reply was deleted. Copy the replacement text.');clearUnsaved(reply.owner,reply.sid);await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:{...target,...reply.message},overwriteId:target.id,directorReuseId:reply.message.directorTurnId,replanReplacement:true},token);})));
+  if(reply.replanReplacement && reply.message.truncated)controls.append(actionBtn('Continue replacement',()=>historyAction('continue-replacement',async token=>{await reconcileStory(token);assertActive(token);const all=await ensureHistory();assertActive(token);const target=all.find(m=>m.id===reply.overwriteId);if(!target)throw new Error('The original reply was deleted. Copy the replacement text.');assertSource(session,reply.expectedSource ?? {historyRevision:reply.sourceRevision});await runAssistantTurn({reconciled:true,continuationId:target.id,continuationPrefix:{...target,...reply.message},overwriteId:target.id,directorReuseId:reply.message.directorTurnId,replanReplacement:true},token,reply);})));
   if(!(reply.replanReplacement && reply.message.truncated))controls.append(actionBtn('Save again',()=>retry(false)));
   controls.append(actionBtn('Copy',()=>copyClipboard(reply.message.content)),actionBtn('Discard',()=>{if(!confirm('Discard this unsaved reply?'))return;if(reply.replanReplacement)return historyAction('discard-replacement',async token=>{const local=await ensureLocalStory();assertActive(token);local.enqueue('discardDirector',{});await local.flush();assertActive(token);clearUnsaved(reply.owner,reply.sid);await reconcileStory(token);updateWelcome();});clearUnsaved(reply.owner,reply.sid);updateWelcome();}));
   if(reply.conflict && !reply.continuation && !reply.message.directorTurnId)controls.append(actionBtn('Save as new reply at the end',()=>retry(true)));
@@ -2404,7 +2425,7 @@ function updateMessageControls() {
     if(editingState?.id===id)continue;
     for(const button of node.querySelectorAll('button')){
     if(button.className?.includes('message-copy'))continue;
-    button.disabled=busy;
+    button.disabled=busy || !!unsavedLoad?.pending;
     if(button.className==='retry')button.hidden=busy;
     }
   }
@@ -2413,7 +2434,7 @@ let busyUiQueued=false;
 function applyBusyUi(b) {
   busy = state.busy = b;
   if(!b)setPreparing(false);
-  if(el.sendBtn)el.sendBtn.disabled=b;
+  if(el.sendBtn)el.sendBtn.disabled=b || !!unsavedLoad?.pending;
   if(!b){if(el.sendBtn)el.sendBtn.hidden=false;el.stopBtn?.classList.add('hidden');if(el.stopBtn)el.stopBtn.disabled=false;}
   if(el.quickProfile)el.quickProfile.disabled=b;
   if(el.quickDirector)el.quickDirector.disabled=b;

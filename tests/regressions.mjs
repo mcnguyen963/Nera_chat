@@ -824,6 +824,8 @@ test('Empty chat enables writing only after a story is selected', async () => {
   assert.equal(chat.setSession('story'), true);
   assert.equal(h.el('btn-welcome-new').hidden, true);
   assert.equal(h.el('chat-input').disabled, false);
+  assert.equal(h.el('btn-send').disabled, true);
+  await settle();
   assert.equal(h.el('btn-send').disabled, false);
   assert.equal(chat.setSession(null), true);
   assert.equal(h.el('btn-welcome-new').hidden, false);
@@ -2624,6 +2626,49 @@ test('A late dialog completion cannot close a replacement dialog or steal its fo
  assert.equal(h.document.activeElement,next.dialog);old.hide();assert.equal(root.classList.contains('hidden'),false);assert.equal(h.document.activeElement,next.dialog);
 });
 
+test('Only the topmost sheet handles Escape above Settings, including a vetoed close',async()=>{
+ const h=await harness(),settings=await h.use('ui/settings-view.js'),ui=await h.use('ui/memory-ui.js');settings.initSettingsView();settings.openSettingsPopup();
+ const root=h.el('parent-sheet'),parent=ui.sheet(root,'Parent');let allowClose=false;
+ const child=ui.subSheet('Child',{close:()=>allowClose});
+ const escape=()=>h.document.dispatchEvent({type:'keydown',key:'Escape',preventDefault(){this.defaultPrevented=true;}});
+ await escape();assert.equal(root.classList.contains('hidden'),false);assert.equal(h.el('settings-tab').classList.contains('hidden'),false);assert.equal(h.document.activeElement,child.dialog);
+ allowClose=true;await escape();assert.equal(root.classList.contains('hidden'),false);assert.equal(h.el('settings-tab').classList.contains('hidden'),false);assert.equal(h.document.activeElement,parent.dialog);
+ await escape();assert.equal(root.classList.contains('hidden'),true);assert.equal(h.el('settings-tab').classList.contains('hidden'),false);
+ await escape();assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
+});
+
+test('Hiding or replacing an underlying sheet preserves the active child focus and keyboard ownership',async()=>{
+ const h=await harness(),ui=await h.use('ui/memory-ui.js'),root=h.el('parent-sheet');
+ const first=ui.sheet(root,'Parent'),child=ui.subSheet('Child');
+ const replacement=ui.sheet(root,'Updated parent');assert.equal(h.document.activeElement,child.dialog);
+ await h.document.dispatchEvent({type:'keydown',key:'Escape',preventDefault(){this.defaultPrevented=true;}});
+ assert.equal(root.classList.contains('hidden'),false);assert.equal(h.document.activeElement,replacement.dialog);
+ const next=ui.subSheet('Another child');
+ first.hide();assert.equal(h.document.activeElement,next.dialog);assert.equal(root.classList.contains('hidden'),false);
+ replacement.hide();assert.equal(h.document.activeElement,next.dialog);
+ await h.document.dispatchEvent({type:'keydown',key:'Escape',preventDefault(){this.defaultPrevented=true;}});
+ assert.notEqual(h.document.activeElement,next.dialog);
+});
+
+test('Sheet Tab wraps within the top layer and native dialogs keep their keyboard handling',async()=>{
+ const h=await harness(),settings=await h.use('ui/settings-view.js'),ui=await h.use('ui/memory-ui.js');settings.initSettingsView();settings.openSettingsPopup();
+ const parent=ui.sheet(h.el('parent-sheet'),'Parent'),child=ui.subSheet('Child'),action=ui.button('Action',()=>{});child.dialog.append(action);
+ const key=key=>h.document.dispatchEvent({type:'keydown',key,preventDefault(){this.defaultPrevented=true;}});
+ action.focus();await key('Tab');assert.equal(h.document.activeElement,child.header.children[1]);
+ const query=h.document.querySelector;h.document.querySelector=selector=>selector==='dialog[open]'?{}:query(selector);
+ action.focus();await key('Tab');assert.equal(h.document.activeElement,action);
+ await key('Escape');assert.equal(h.document.activeElement,action);assert.equal(h.el('settings-tab').classList.contains('hidden'),false);assert.equal(h.el('parent-sheet').classList.contains('hidden'),false);
+ h.document.querySelector=query;await key('Escape');assert.equal(h.document.activeElement,parent.dialog);
+});
+
+test('Closing a child after its parent was hidden restores focus to the visible Settings controls',async()=>{
+ const h=await harness(),ui=await h.use('ui/memory-ui.js'),overlay=h.el('settings-tab'),dialog=h.document.createElement('div'),close=h.el('btn-close-settings');
+ overlay.classList.remove('hidden');dialog.className='settings-dialog';dialog.focus=()=>{};close.className='settings-close';overlay.append(dialog,close);overlay.contains=element=>element===dialog||element===close;
+ const query=h.document.querySelector;h.document.querySelector=selector=>selector==='.settings-overlay:not(.hidden)'?overlay:query(selector);
+ const parent=ui.sheet(h.el('parent-sheet'),'Parent'),child=ui.subSheet('Child');parent.hide();parent.dialog.isConnected=false;
+ child.hide();assert.equal(h.document.activeElement,close);
+});
+
 test('Finishing story creation does not interrupt navigation made while it was pending',async()=>{
  const h=await harness();(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/sidebar.js')).initSidebar();
  h.calls.prompt='New story';let finish;h.calls.onCreate=()=>new Promise(resolve=>finish=resolve);
@@ -3656,4 +3701,110 @@ test('F9 a network summary failure backs off exactly three subsequent turns',asy
  h.calls.summaryFailure=false;
  for(let n=0;n<3;n++){await send();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(attempts.length,1);}
  await send();await wait(()=>attempts.length===2&&!h.state.busy);
+});
+
+
+for(const action of ['send','continue','regenerate','retry'])test('recovered reply read gates '+action+' before another narration can clear it',async()=>{
+ const recovery=deferred(),writes=[];
+ const reply={id:'paid-recovery',sid:'improvement',owner:'test-user',sourceRevision:0,message:{role:'assistant',content:'Recovered paid narration.'}};
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:()=>recovery.promise,storeUnsavedReply:async(_owner,_sid,value)=>{writes.push(value);return true;}}}});
+ const messages=[{id:'u',order:1,role:'user',content:'Begin.'},...(action==='retry'?[]:[{id:'a',order:2,role:'assistant',content:'A cut off reply',truncated:true}])];
+ await openImprovementChat(h,{},messages);await settle();
+ let pending;
+ if(action==='send'){h.el('chat-input').value='Another action';pending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});}
+ else if(action==='continue')pending=h.el('btn-rewrite').click();
+ else pending=namedButton(h.el('message-list'),action==='retry'?'Retry reply':'Regenerate').click();
+ await settle();await settle();
+ assert.equal(h.calls.requests.length,0,'No provider request may start before recovery has loaded');
+ assert.equal(h.calls.messages.length,0,'No user message may be queued before recovery has loaded');
+ recovery.resolve(reply);await pending;await settle();await settle();
+ assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);assert.equal(writes.length,0);
+ assert.ok(h.el('message-list').querySelector('.unsaved'));assert.equal(h.state.busy,false);
+ if(action==='send')assert.equal(h.el('chat-input').value,'Another action');
+});
+
+test('recovered reply reads ignore stale navigation callbacks and retain the selected story gate',async()=>{
+ const old=deferred(),current=deferred(),reads=[];
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async(_owner,sid)=>{reads.push(sid);return sid==='improvement'?old.promise:current.promise;},storeUnsavedReply:async()=>true}}});
+ const chat=await openImprovementChat(h,{},[{id:'a',order:1,role:'assistant',content:'Opening'}]);await settle();
+ chat.setSession('other');await settle();
+ h.calls.sessionCallbacks.at(-1)({id:'other',exists:()=>true,data:()=>({title:'Other'})});
+ await h.calls.latestCallbacks.at(-1)({messages:[{id:'o',order:1,role:'assistant',content:'Other opening'}],hasEarlier:false});await settle();
+ old.resolve({id:'old-recovery',sid:'improvement',owner:'test-user',message:{role:'assistant',content:'Old recovered reply'}});await settle();
+ assert.equal(h.el('message-list').querySelector('.unsaved'),null);assert.equal(h.el('btn-send').disabled,true);
+ h.el('chat-input').value='Other action';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
+ assert.equal(h.calls.requests.length,0);current.resolve(null);await sending;await settle();
+ assert.equal(h.calls.requests.length,1);assert.equal(h.calls.messages[0][0],'other');assert.equal(reads.length,2);
+});
+
+test('an unavailable recovered reply read settles before a narration starts',async()=>{
+ const recovery=deferred();
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:()=>recovery.promise,storeUnsavedReply:async()=>true}}});
+ await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);await settle();
+ h.el('chat-input').value='Another action';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
+ assert.equal(h.calls.requests.length,0);recovery.resolve(null);await sending;await settle();
+ assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);
+});
+
+async function cutOffReplacementRecovery() {
+ let stored=null,pending,h;const clears=[];
+ const old={id:'old-director',version:1,status:'completed',before:saveSeed,after:saveSeed,contract:{version:1,action:'narrate',transition:'unchanged',objective:'Dinner',stopCondition:'Stop',memoryIds:[],requiredMemoryIds:[],updates:{}},assistantId:'a',previousCheckpoint:null};
+ h=await harness({extraStubs:{
+  'unsaved-replies.js':{loadUnsavedReply:async()=>stored,storeUnsavedReply:async(_owner,_sid,value)=>{if(value===null)clears.push(chat.memorySnapshot().messages.find(m=>m.id==='a')?.content);stored=structuredClone(value);return true;}},
+  'director-store.js':{getDirectorTurn:async(_sid,id)=>id===old.id?old:pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};h.calls.sessionDocs.improvement.directorPending=t.id;return pending;},discardPendingDirector:async()=>{}},
+ }});
+ Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'large',profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
+ const chat=await openImprovementChat(h,{directorState:saveSeed,directorCheckpoint:old.id,memory:{scene:true}},[{id:'u',order:1,role:'user',content:'Dinner'},{id:'a',order:2,role:'assistant',content:'Original dinner reply',directorTurnId:old.id,narratorTurn:1}]);
+ h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({...old.contract,updates:{scene:{time:'21:00'}}}):'Incomplete replacement',reasoning:body.model==='director'?'':'Paid retained reasoning.'},finish_reason:body.model==='director'?'stop':'length'}]};};
+ await namedButton(h.el('message-list'),'Re-plan').click();
+ for(let n=0;n<100&&h.state.busy;n++)await settle();
+ assert.ok(stored?.replanReplacement);assert.equal(stored.message.content,'Incomplete replacement');assert.equal(stored.message.thinking,'Paid retained reasoning.');
+ return {h,chat,clears,get stored(){return stored;}};
+}
+
+for(const failure of ['network','preparation','stop'])test('Continue replacement retains paid recovery after '+failure,async()=>{
+ const fixture=await cutOffReplacementRecovery(),{h,chat,clears}=fixture,before=structuredClone(fixture.stored),requests=h.calls.requests.length;
+ let requestStarted=false;
+ if(failure==='preparation')h.calls.onTokenCount=async()=>{throw Error('Tokenizer unavailable');};
+ else h.calls.onRequest=()=>{requestStarted=true;if(failure==='network')throw Error('Provider offline');return new Promise(()=>{});};
+ const continuation=namedButton(h.el('message-list'),'Continue replacement').click();
+ if(failure==='stop'){for(let n=0;n<100&&!requestStarted;n++)await settle();assert.equal(requestStarted,true);await h.stopAfterGuard();}
+ await continuation;await settle();
+ assert.deepEqual(fixture.stored,before);assert.equal(clears.length,0);
+ const recovery=h.el('message-list').querySelector('.unsaved');assert.ok(recovery);assert.ok(recovery.querySelectorAll('div').some(n=>n.textContent==='Incomplete replacement'));
+ assert.ok(recovery.querySelectorAll('button').some(b=>b.textContent==='Continue replacement'));assert.equal(h.state.busy,false);
+ assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='a').content,'Original dinner reply');
+ assert.equal(h.calls.requests.length,requests+(failure==='preparation'?0:1));
+});
+
+for(const truncated of [false,true])test('Continue replacement '+(truncated?'replaces recovery with the longer incomplete text':'clears recovery after saving the completed replacement'),async()=>{
+ const fixture=await cutOffReplacementRecovery(),{h,chat,clears}=fixture;
+ h.calls.onRequest=()=>{h.calls.responseData={choices:[{message:{content:'The replacement continues.',reasoning:'Continued reasoning.'},finish_reason:truncated?'length':'stop'}]};};
+ await namedButton(h.el('message-list'),'Continue replacement').click();await settle();
+ if(truncated){
+  assert.ok(fixture.stored);assert.equal(fixture.stored.message.content,'Incomplete replacement\n\nThe replacement continues.');assert.match(fixture.stored.message.thinking,/Paid retained reasoning/);assert.match(fixture.stored.message.thinking,/Continued reasoning/);
+  assert.equal(clears.length,0);assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='a').content,'Original dinner reply');
+  assert.ok(h.el('message-list').querySelector('.unsaved'));
+ }else{
+  assert.equal(fixture.stored,null);assert.deepEqual(clears,['Incomplete replacement\n\nThe replacement continues.']);
+  assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='a').content,'Incomplete replacement\n\nThe replacement continues.');assert.equal(h.el('message-list').querySelector('.unsaved'),null);
+ }
+});
+
+test('a rejected recovered reply read preserves the draft and blocks narration',async()=>{
+ const recovery=deferred();
+ const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:()=>recovery.promise,storeUnsavedReply:async()=>true}}});
+ await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);await settle();
+ h.el('chat-input').value='Keep this draft';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
+ recovery.reject(Error('Device read failed'));await sending;await settle();
+ assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);assert.equal(h.el('chat-input').value,'Keep this draft');assert.equal(h.state.busy,false);
+ assert.match(h.el('message-list').querySelector('.error').textContent,/Recovered replies could not be checked/);
+});
+
+test('Continue replacement keeps recovery and refuses a changed history source',async()=>{
+ const fixture=await cutOffReplacementRecovery(),{h,chat,clears}=fixture,before=structuredClone(fixture.stored),requests=h.calls.requests.length;
+ chat.seedSessionFixture({...chat.memorySnapshot().session,historyRevision:1});
+ await namedButton(h.el('message-list'),'Continue replacement').click();await settle();
+ assert.deepEqual(fixture.stored,before);assert.equal(clears.length,0);assert.equal(h.calls.requests.length,requests);
+ assert.ok(h.el('message-list').querySelector('.unsaved'));assert.equal(h.state.busy,false);
 });

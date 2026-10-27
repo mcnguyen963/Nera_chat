@@ -1,4 +1,5 @@
 import { openDirectorState } from './director-view.js';
+import { activeSheet } from './memory-ui.js';
 import { currentUid } from '../auth.js';
 import { beginSettingsSave } from './pending-settings.js';
 import {setIcon} from './icons.js';
@@ -85,7 +86,7 @@ export function initSettingsView() {
   input("btn-close-settings").addEventListener("click", closeSettingsPopup);
   input("settings-backdrop").addEventListener("click", closeSettingsPopup);
   document.addEventListener("keydown", (event) => {
-    if (el.overlay.classList.contains("hidden")) return;
+    if (event.defaultPrevented || el.overlay.classList.contains("hidden") || activeSheet() || document.querySelector('dialog[open]')) return;
     if (event.key === "Escape") { event.preventDefault(); closeSettingsPopup(); }
     if (event.key !== "Tab") return;
     const focusables = [...el.overlay.querySelectorAll("button, input, select, textarea")]

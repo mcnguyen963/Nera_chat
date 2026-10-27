@@ -2,7 +2,7 @@ import {routeTopMenu} from './ui/menu-routing.js';
 import {initIcons} from './ui/icons.js';
 import {initVersion} from './version.js';
 import {installErrorHandlers,friendlyError} from './errors.js';
-import {toast} from './ui/memory-ui.js';
+import {toast,activeSheet} from './ui/memory-ui.js';
 import {clearAccountCaches} from './device-caches.js';
 import { initViewport } from "./viewport.js";
 import { initLorebookView } from './ui/lorebook-view.js';
@@ -66,6 +66,7 @@ el.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false));
 document.addEventListener("sidebar:close", () => setSidebarOpen(false));
 
 document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || activeSheet() || document.querySelector('dialog[open]')) return;
   if (event.key === "Escape") {
     setSidebarOpen(false);
     setTopMenuOpen(false);
@@ -98,6 +99,7 @@ el.topMenu?.addEventListener("click", (e) => {
 
 // Keep keyboard navigation inside an open drawer or actions sheet.
 document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || activeSheet() || document.querySelector('dialog[open]')) return;
   if (event.key !== 'Tab') return;
   const root = document.body.classList.contains('sidebar-open') ? document.getElementById('sidebar') : !el.topMenu.hidden ? el.topMenu : null;
   if (!root) return;

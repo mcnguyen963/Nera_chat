@@ -38,17 +38,24 @@ export function parseScene(raw) {
 }
 export function formatSceneForDisplay(raw) { return String(raw ?? '').replace(/present\s*:\s*/i, ''); }
 export function sceneTimeline(messages, { startingScene = null, upToOrder = Infinity, lastUserOrder = lastUserOrderOf(messages,upToOrder) } = {}) {
-  const timeline=new Map();
-  let effective=canonicalScene(startingScene),fromId=null,fromOrder=effective ? 0 : null,missingStreak=0,kind=effective ? 'seed' : null;
+  const timeline=new Map(),canonicalScenes=new Map();
+  // Retained scene tags often repeat across many replies. Share their parsing
+  // within this calculation; edits and later calculations always read afresh.
+  const canonical=raw=>{
+    if(typeof raw!=='string')return canonicalScene(raw);
+    if(!canonicalScenes.has(raw))canonicalScenes.set(raw,canonicalScene(raw));
+    return canonicalScenes.get(raw);
+  };
+  let effective=canonical(startingScene),fromId=null,fromOrder=effective ? 0 : null,missingStreak=0,kind=effective ? 'seed' : null;
   let ownSeen=false;
   for (const m of [...messages].filter(m => m.order < upToOrder).sort((a,b) => a.order-b.order)) {
     if (m.role!=='assistant') continue;
     let own=null;
     if (!m.ooc && isAcceptedTurn(m,{lastUserOrder})) {
       const candidate=m.sceneCandidate?.scene ?? (typeof m.sceneCandidate==='string' ? m.sceneCandidate : null);
-      if (m.acceptance==='pending' && candidate) own=canonicalScene(candidate);
+      if (m.acceptance==='pending' && candidate) own=canonical(candidate);
       else if (m.acceptance!=='pending' && m.sceneMeta?.kind!=='carried' && m.scene) {
-        own=canonicalScene(m.scene) ?? m.scene;
+        own=canonical(m.scene) ?? m.scene;
         const provenance=m.sceneMeta?.provenance;
         if (provenance?.time==='kept' || provenance?.date==='kept') {
           const fields=parseScene(own);

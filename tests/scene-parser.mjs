@@ -81,6 +81,38 @@ test('S4 timeline uses accepted candidates and carried references; legacy replie
  assert.equal(api.latestScene([{id:'legacy',role:'assistant',order:2,content:'Old story.'}],Infinity,B).scene,null);
 });
 
+test('timeline parses repeated scene strings once per calculation and observes later edits',async()=>{
+ const parser=await appHarness()('scene-parser.js'),calls=[];
+ const scene=await appHarness({stubs:{'scene-parser.js':{...parser,canonicalScene:raw=>{calls.push(raw);return parser.canonicalScene(raw);}}}})('scene.js');
+ const messages=Array.from({length:10000},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',...(i%2?{scene:B}:{})}));
+ const before=JSON.stringify(messages),timeline=scene.sceneTimeline(messages,{startingScene:B});
+ assert.equal(timeline.size,5000);assert.equal(timeline.get('m9999').effective,B);
+ assert.deepEqual(calls,[B]);assert.equal(JSON.stringify(messages),before);
+ messages.at(-1).scene=B.replace('Inn','Hall');calls.length=0;
+ assert.equal(scene.sceneTimeline(messages,{startingScene:B}).get('m9999').effective,B.replace('Inn','Hall'));
+ assert.deepEqual(calls,[B,B.replace('Inn','Hall')]);
+});
+
+test('repeated scene parsing preserves per-message provenance, candidate acceptance and cutoff',()=>{
+ const messages=[
+  {id:'first',role:'assistant',order:2,scene:B,sceneMeta:{kind:'declared',provenance:{time:'kept'}}},
+  {id:'declared',role:'assistant',order:4,scene:B},
+  {id:'pending',role:'assistant',order:6,acceptance:'pending',sceneCandidate:{scene:B}},
+  {id:'user',role:'user',order:7},
+  {id:'carried',role:'assistant',order:8,scene:B,sceneMeta:{kind:'carried'}},
+  {id:'incomplete',role:'assistant',order:10,scene:B,directorIncomplete:true},
+  {id:'ooc',role:'assistant',order:12,scene:B,ooc:true},
+  {id:'excluded',role:'assistant',order:14,scene:B.replace('Inn','Hall')},
+ ];
+ const before=JSON.stringify(messages),timeline=api.sceneTimeline([...messages].reverse(),{startingScene:B,upToOrder:14});
+ assert.deepEqual([...timeline.keys()],['first','declared','pending','carried','incomplete','ooc']);
+ assert.equal(timeline.get('first').effective,B.replace('night','unknown'));
+ assert.equal(timeline.get('declared').effective,B);assert.equal(timeline.get('pending').own,B);
+ for(const id of ['carried','incomplete','ooc'])assert.equal(timeline.get(id).own,null);
+ assert.equal(timeline.get('ooc').missingStreak,2);assert.equal(JSON.stringify(messages),before);
+ assert.equal(api.sceneTimeline(messages,{upToOrder:7}).get('pending').own,null);
+});
+
 test('S6 lint warns on speech/decisions and ignores ordinary actions and NPC quotations',async () => {
  const {lintPlayerAgency,stripDialogue}=await use('turn-review.js');
  for(const text of ['You take the letter.','You nod once.','Krail watches you turn.','You reach the door.','Nera nods once.','Krail says, “You agree.”']) assert.equal(lintPlayerAgency(text,'Mira').length,0,text);
