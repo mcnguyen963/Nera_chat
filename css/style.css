@@ -382,11 +382,11 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .pet-choice input { width: 18px; height: 18px; flex: none; margin: 0; }
 .pet-choice-preview { display: block; width: 88px; aspect-ratio: 192 / 208; flex: none; background-repeat: no-repeat; background-size: 800% auto; }
 /* Pet branding remains visible before account settings load. */
-.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/Lilith_11_Animations_8_Frames.png")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
+.brand-pet { display: inline-block; flex: none; width: 56px; aspect-ratio: 192 / 208; background-image: var(--pet-sheet, url("../resources/pets/luna-spritesheet.png")); background-repeat: no-repeat; background-size: 800% auto; background-position: 0 0; }
 .login-card .brand-pet { width: 112px; }
 .welcome-pet { width: 192px; }
 .has-pet .welcome-pet { display: none; }
-.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/Lilith_11_Animations_8_Frames.png")); background-repeat: no-repeat; background-size: 800% auto; }
+.msg.assistant .msg-meta > span:first-child::before { content: ""; display: inline-block; width: 56px; height: 61px; background-image: var(--pet-sheet, url("../resources/pets/luna-spritesheet.png")); background-repeat: no-repeat; background-size: 800% auto; }
 @media (max-width: 720px) {
   .pet-home-slot.pet-welcome-slot { width: 156px; height: 156px; }
   .pet-choice { min-width: min(160px, 100%); flex: 1 1 42%; }

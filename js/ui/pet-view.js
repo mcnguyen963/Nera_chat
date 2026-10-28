@@ -289,7 +289,7 @@ function tap() {
   if (Date.now() - lastTap < 1000) return;
   lastTap = lastInput = Date.now();
   closeMenu();
-  const choices = /^(?:lilith|lillith-v2|cinderella|Lilith_11_Animations_8_Frames)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
+  const choices = /^(?:lilith|lillith-v2|cinderella|luna-spritesheet|Lilith_11_Animations_8_Frames)\.(webp|png)$/i.test(character?.id ?? "") ? ["wave", "jump"] : ["wave", "jump", "writing"];
   react(choices[Math.floor(Math.random() * choices.length)]);
 }
 

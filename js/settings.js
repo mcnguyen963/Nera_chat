@@ -33,7 +33,7 @@ export function withLocal(settings,owner=currentUid()) {
 export const DEFAULT_SETTINGS = {
   memoryExtractionPrompt: DEFAULT_MEMORY_EXTRACTION_PROMPT,
   memoryReorganizePrompt: DEFAULT_MEMORY_REORGANIZE_PROMPT,
-  petCharacterIds: ["Lilith_11_Animations_8_Frames.png"],
+  petCharacterIds: ["luna-spritesheet.png"],
   petMovement: "roam",
   endpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
