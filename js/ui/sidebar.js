@@ -7,6 +7,7 @@ import { state } from "../state.js";
 import { subscribeSessions, createSession, renameSession, deleteSession, duplicateSession } from "../sessions.js";
 import { logout, currentUserInfo } from "../auth.js";
 import { setSession, forgetChatSession, prepareChatLogout } from "./chat-view.js";
+import { openStoryModePicker } from './story-mode-picker.js';
 
 export function initSidebar() {
   const listEl = document.getElementById("session-list");
@@ -18,15 +19,15 @@ export function initSidebar() {
   const me = currentUserInfo();
   if (me) userEl.textContent = me.email ?? "Signed in";
 
-  newBtn.addEventListener("click", async () => {
-    if(state.busy || newBtn.disabled)return;
-    const title = prompt("Session title:", "Untitled story");
-    if (title === null) return;
-    const selectedId=state.sessionId,owner=currentUserInfo()?.uid,restore=pendingButton(newBtn,'Creating…');try {
-    const id = await createSession(title.trim() || "Untitled story");
-    if(state.sessionId===selectedId && currentUserInfo()?.uid===owner && !state.busy){setSession(id);document.dispatchEvent(new CustomEvent("sidebar:close"));}
-    else toast('Story created.');
-    }catch(error){toast(error);}finally{restore();}
+  let storyPickerOpen=false;
+  newBtn.addEventListener("click", () => {
+    if(state.busy || newBtn.disabled || storyPickerOpen)return;
+    const selectedId=state.sessionId,owner=currentUserInfo()?.uid;
+    storyPickerOpen=true;
+    openStoryModePicker({isCurrent:()=>currentUserInfo()?.uid===owner && !state.busy,onClose:()=>{storyPickerOpen=false;},createBlank:title=>createSession(title),onCreated:id=>{
+      if(state.sessionId===selectedId && currentUserInfo()?.uid===owner && !state.busy){setSession(id);document.dispatchEvent(new CustomEvent("sidebar:close"));}
+      else toast('Story created.');
+    }});
   });
 
   logoutBtn.addEventListener("click",async()=>{if(logoutBtn.disabled || state.busy)return;logoutBtn.disabled=true;try{await prepareChatLogout();await logout();}catch(error){toast('Sign out failed: '+friendlyError(error)+' Reload to continue.','Reload',()=>window.location.reload());}finally{logoutBtn.disabled=false;}});

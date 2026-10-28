@@ -505,3 +505,11 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 .provider-row span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .provider-row .btn { min-height: 44px; }
 #provider-list { max-height: 260px; overflow-y: auto; }
+
+.story-mode-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.story-mode-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-2); }
+.story-mode-card h3, .story-mode-card p { margin: 0; }
+.story-mode-card details { font-size: 14px; }
+.story-mode-card summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.story-mode-card .story-mode-opening { white-space: pre-wrap; margin: 8px 0; }
+.story-mode-card .btn { margin: auto 0 0; }

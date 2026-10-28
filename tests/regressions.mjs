@@ -157,6 +157,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
     'import-export.js': {exportAllStories:async()=>{}, importSillyTavern: async (file) => { calls.imports.push(file); return 'imported'; }, exportSillyTavern: async (id) => { calls.exports.push(id); } },
     'messages.js': {
+      addMessagesBulk:async()=>{},
       getMessageForEdit:async (...args) => {
         (calls.editReads ??= []).push(args);
         if (calls.getMessageForEdit) return calls.getMessageForEdit(...args);
@@ -1629,10 +1630,23 @@ test('initial estimates receive lore and disabled auto-summary avoids a post-tur
 
 test('R2 sidebar guards duplicate creation and catches failed create, rename and logout',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
- const pending=h.fire('btn-new-session');await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(h.el('btn-new-session').disabled,false);
- h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
+ await h.fire('btn-new-session');const blank=()=>h.document.body.querySelectorAll('button').find(b=>b.textContent==='Blank story');
+ const pending=blank().click();await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(!!h.el('btn-new-session').disabled,false);
+ h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');await blank().click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
  h.calls.sidebarCallback([{id:'s',title:'Story'}]);h.calls.failRename=true;await h.el('session-list').querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
  h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.ok(h.document.body.querySelector('.toast').textContent.includes('Logout failed'));assert.equal(h.el('btn-logout').disabled,false);
+});
+
+test('new story picker shows three openings and blocks duplicate selection while creating',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();
+ let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
+ await h.fire('btn-new-session');await h.fire('btn-new-session');
+ assert.equal(h.document.body.querySelectorAll('.story-mode-card').length,3);
+ assert.deepEqual(h.document.body.querySelectorAll('.story-mode-card').map(card=>card.querySelector('h3').textContent),['The Household Hearing','The Duke’s Summons','A Bond and a Secret']);
+ assert.equal(h.document.body.querySelectorAll('summary').filter(el=>el.textContent==='Read the opening').length,3);
+ const cards=h.document.body.querySelectorAll('.story-mode-card'),pending=cards[0].querySelector('button').click();await ready;
+ await cards[1].querySelector('button').click();assert.equal(h.calls.creates,1);
+ finish('new-story');await pending;assert.equal(h.calls.creates,1);
 });
 
 test('R2 a delayed backup listing cannot populate a different lorebook screen',async()=>{
@@ -2672,9 +2686,9 @@ test('Closing a child after its parent was hidden restores focus to the visible 
 test('Finishing story creation does not interrupt navigation made while it was pending',async()=>{
  const h=await harness();(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/sidebar.js')).initSidebar();
  h.calls.prompt='New story';let finish;h.calls.onCreate=()=>new Promise(resolve=>finish=resolve);
- const pending=h.fire('btn-new-session');assert.equal(h.el('btn-new-session').textContent,'Creating…');
+ await h.fire('btn-new-session');const pending=h.document.body.querySelectorAll('button').find(b=>b.textContent==='Blank story').click();
  h.state.sessionId='another-story';finish('created-story');await pending;
- assert.equal(h.state.sessionId,'another-story');assert.equal(h.el('btn-new-session').disabled,false);
+ assert.equal(h.state.sessionId,'another-story');assert.equal(!!h.el('btn-new-session').disabled,false);
 });
 
 for(const type of ['director','catch-up'])test(type+' preparation opens a dismissible dialog before a delayed snapshot',async()=>{
