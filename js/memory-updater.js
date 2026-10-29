@@ -123,7 +123,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
     source = captured ? live.messages : structuredClone(live.messages); entries = captured ? live.entries : structuredClone(live.entries);
     if (!captured) range = dueRange(source,live.session.memoryState,mem,{ manual });
     if (!range) return false;
-    const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session,Infinity,null,{includeArchived:true}).entries,messages:source,range,count:countTokens }); range = built.range;
+    const built = await buildExtractionMessages({ settings,mem,entries:usableLore(entries,source,live.session,Infinity,null,{includeArchived:true}).entries,messages:source,range,count:countTokens,sid,owner,signal:controller.signal,check:()=>{if(!stillCurrent())throw new SupersededError('Story or account changed.');} }); range = built.range;
     if(!stillCurrent())return false;
     const snapshot = stamp(range.messages);
     const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
@@ -151,7 +151,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
     // Real commits publish their canonical entries once through local-lore-saved.
     runtime.patch(sid,{extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false,lastSkipped},committed?.cacheApplied ? undefined : nextEntries,committed?.loreRevision);
     const notes = committed?.notes ?? changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
-    emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
+    emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,semanticStatus:built.semanticStatus,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
   } catch (error) {
     if(!stillCurrent())return false;
     if(error instanceof StaleSourceError || error instanceof SupersededError){emit({sessionId:sid,status:'info',message:error.message,manual});return false;}

@@ -618,8 +618,8 @@ export function initChatView() {
     if(d.status==='rebuild-review')document.dispatchEvent(new CustomEvent('memory-rebuild-review',{detail:d}));
     if (d.status === 'running') {
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: 'Extracting memory… Keep this page open.' } }));
-    } else if (d.status === 'success' && (d.notes || d.manual || managerOpen)) {
-      const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.');
+    } else if (d.status === 'success' && (d.notes || d.manual || managerOpen || d.semanticStatus && !['ready','off'].includes(d.semanticStatus))) {
+      const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.')+(d.semanticStatus && !['ready','off'].includes(d.semanticStatus) ? ' Semantic search: '+d.semanticStatus+'; some matches may be missing.' : '');
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text, action: d.notes ? 'Review' : null, event: 'lorebooks', options: { filter: 'review' } } }));
     } else if ((d.status==='idle' || d.status==='info') && d.manual && d.message) showTransientInfo(d.message);
     else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: (d.failureStreak >= 3 ? 'Memory updates paused after 3 failures. ' : 'Memory update failed. ')+(d.lastError ?? ''), action: 'Open settings', event: 'memory-settings' } }));

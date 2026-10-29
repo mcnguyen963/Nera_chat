@@ -19,6 +19,7 @@ import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
 import { CONTINUITY_RULE, usableLore, revisionOf, effectivelyPaused } from './continuity.js';
 import {MESSAGE_FRAME_TOKENS as FRAME,requestInputLimit} from './request-budget.js';
 import { stripTurnStamps } from './story-text.js';
+import { loreSemantic } from './lore-semantic.js';
 function stripOcc(content) {
   const cleaned=content.replace(/<\s*(?:OOC|OCC)\b[^>]*>[\s\S]*?<\/\s*(?:OOC|OCC)\s*>/gi,'').replace(/<\s*(?:OOC|OCC)\b[^>]*>[^\n]*|<\/\s*(?:OOC|OCC)\s*>/gi,'');
   return cleaned.trim() ? cleaned : content;
@@ -197,7 +198,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     ? raw.filter(m => !m.ooc && m.id!==latest?.id && m.order < (latest?.order ?? Infinity)).slice(-mem.loreLookbackMessages).reverse() : [];
   const cleanedLoreMessages = recentLoreMessages.map(m => ({id:m.id,order:m.order,role:m.role,content:stripOcc(m.role==='assistant' ? readSceneOutput(m.content,{sceneEnabled:mem.scene}).clean : m.content)}));
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
-  const selection = await selectEntriesAsync(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds,directorBackgroundIds:turn.cast.backgroundCharacterIds} : {})},{signal:opts.signal,check:opts.check});
+  const semantic=opts.onlyRequiredWindow || opts.continuationId ? {ids:[],status:'off'} : await loreSemantic.search({owner:settings.providerCooldownAccount,sid:session.id,mem,entries:filtered.entries,query:latest?.content,signal:opts.signal,check:opts.check});
+  if(mem.semanticLore && !['ready','off'].includes(semantic.status))warnings.push('Semantic lore search: '+semantic.status+'. Existing selection remains active.');
+  const selection = await selectEntriesAsync(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,semanticIds:semantic.ids,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds,directorBackgroundIds:turn.cast.backgroundCharacterIds} : {})},{signal:opts.signal,check:opts.check});
   if(turn)for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);}}
   const scheduled = mem.lorebooks && mem.books.plan.on
     ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)

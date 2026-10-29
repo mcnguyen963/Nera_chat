@@ -16,7 +16,7 @@ export function relevantSubjects(index,selection,currentText,recentText) {
   for(const book of ['characters','locations','facts','events']) {
     for(const id of findMentions(currentText,index,book))ids.add(id);
     for(const id of findMentions(recentText,index,book))ids.add(id);
-    for(const item of selection.selected[book])if(['always','protagonist','in scene','current place','pinned record'].includes(item.reason))ids.add(item.entry.id);
+    for(const item of selection.selected[book])if(['always','protagonist','in scene','current place','pinned record','semantic match'].includes(item.reason))ids.add(item.entry.id);
   }
   return ids;
 }

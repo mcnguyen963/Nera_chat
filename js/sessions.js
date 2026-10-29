@@ -6,6 +6,7 @@ import {assertSnapshotRevisions} from './story-settings.js';
 import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { deleteChatCache } from './chat-cache.js';
+import { deleteLoreSemanticStory } from './lore-semantic.js';
 import { loadUnsavedReply, storeUnsavedReply } from './unsaved-replies.js';
 import { copyLore, waitForStoryWrites } from './lore-store.js';
 import {
@@ -107,6 +108,7 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     if(snap.exists() && !snap.data().deleting)throw new Error('This story is not marked for deletion.');
     // Drop local persisted state before any server subtree disappears.
     await deleteChatCache(owner,sessionId);
+    await deleteLoreSemanticStory(owner,sessionId);
     await loreStore.forgetLoreCache(owner,sessionId);
     await storeUnsavedReply(owner,sessionId,null);
     checkOwner(owner);

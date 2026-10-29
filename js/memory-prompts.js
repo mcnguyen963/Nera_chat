@@ -6,13 +6,14 @@ import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
 import { computeTurns, formatTurnsTranscript, prepareTranscriptContext } from './turns.js';
 import { buildLoreIndex, findMentions, resolveScene, fitBook, renderEntry } from './lore-select.js';
 import { parseScene } from './scene.js';
+import { loreSemantic } from './lore-semantic.js';
 import { capLoreNotes } from './lore-note-window.js';
 export const DEFAULT_MEMORY_EXTRACTION_PROMPT = prompts.memoryExtraction;
 export const DEFAULT_MEMORY_REORGANIZE_PROMPT = prompts.memoryReorganize;
 export function fillProtagonist(text, protagonist) { return String(text).replaceAll('{{PROTAGONIST}}', () => protagonist || renderLoreLabel('mainCharacter')); }
 export const LOREBOOK_TEMPLATE_MD = prompts.lorebookMarkdown;
 export const LOREBOOK_TEMPLATE_JSON = prompts.lorebookJson;
-export async function buildExtractionMessages({ settings, mem, entries, messages, range, count }) {
+export async function buildExtractionMessages({ settings, mem, entries, messages, range, count, sid, owner, signal, check }) {
   const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+prompts.memoryNaming+"\n\n"+prompts.threadPolicy+"\n\n"+prompts.threadExtraction+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens}) - await count(prompt) - 500;
   const turns = computeTurns(messages);
@@ -29,11 +30,17 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   entries=entries.filter(e=>!archivedThread(e));
   const index = buildLoreIndex(entries), ids = new Set();
   for (const book of ['characters', 'locations','facts','events']) for (const id of findMentions(transcript, index, book)) ids.add(id);
+  const literalIds=new Set(ids);
+  const semantic=await loreSemantic.search({owner,sid,mem,entries,query:transcript,signal,check});
+  const semanticIds=new Set(semantic.ids.filter(id=>entries.some(e=>e.id===id && mem.books[e.book]?.on)));
+  for(const id of semanticIds)ids.add(id);
   const timeline=context.timeline;
   for (const m of fitted.messages.filter(m => timeline.get(m.id)?.own)) {
     const resolved = resolveScene(parseScene(timeline.get(m.id).own), index);
     for (const id of resolved.characters) ids.add(id);
     if (resolved.place) ids.add(resolved.place);
+    for (const id of resolved.characters) literalIds.add(id);
+    if (resolved.place) literalIds.add(resolved.place);
   }
   const known = [prompts.knownNamesHeader];
   let archiveText='';
@@ -60,10 +67,12 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   const frame={PROTAGONIST_LINE:renderLoreLabel('protagonistLine',{PROTAGONIST:mem.protagonist || renderLoreLabel('mainCharacter')}),KNOWN_NAMES:known.join('\n'),NOTES:'',FROM_TURN:fitted.fromTurn,TO_TURN:fitted.toTurn,TRANSCRIPT:transcript};
   const fixed = renderPrompt(prompts.memoryExtractionFrame,frame);
   if (await count(fixed) > inputBudget) throw new Error('Known names and turns exceed the memory update input budget.');
-  const notes = await fitBook(entries.filter(e => ids.has(e.id) || e.book === 'facts' || e.book === 'events' && e.kind === 'thread').map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { loreNotesPerSection:mem.loreNotesPerSection,protagonist: mem.protagonist, provenance:true });
+  const noteCandidates=entries.filter(e => ids.has(e.id) || e.book === 'facts' || e.book === 'events' && e.kind === 'thread');
+  if(semanticIds.size)noteCandidates.sort((a,b)=>(literalIds.has(b.id)?2:semanticIds.has(b.id)?1:0)-(literalIds.has(a.id)?2:semanticIds.has(a.id)?1:0));
+  const notes = await fitBook(noteCandidates.map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { loreNotesPerSection:mem.loreNotesPerSection,protagonist: mem.protagonist, provenance:true });
   const content = renderPrompt(prompts.memoryExtractionFrame,{...frame,NOTES:'\n'+notes.included.map(e => renderEntry(e.entry,e.lineIds,mem.protagonist,{provenance:true})).join('\n')});
   if (await count(content)+await count(prompt)+24 > requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens})) throw new Error('Memory update input exceeds the context budget.');
-  return { messages: [{ role:'system', content:prompt }, { role:'user', content }], range: fitted,noteOmissions:notes.noteOmissions };
+  return { messages: [{ role:'system', content:prompt }, { role:'user', content }], range: fitted,noteOmissions:notes.noteOmissions,semanticStatus:semantic.status };
 }
 export function buildReorganizeMessages({ settings, mem, entries, sections, instruction = '' }) {
   const lines = [renderLoreLabel('protagonistLine',{PROTAGONIST:mem.protagonist || renderLoreLabel('mainCharacter')})];

@@ -120,6 +120,7 @@ function* selectionWork(entries, mem, text, scene, recentText, sources) {
   const resolved = resolveScene(scene,index), selected = {}, skipped = [];
   const start=sources.startingScene ? resolveScene(sources.startingScene,index) : null, transition=!!start;
   const required=new Set(sources.directorRequiredIds ?? []),directorIds=new Set(sources.directorMemoryIds ?? []);
+  const semanticIds=new Set(sources.semanticIds ?? []);
   const asList = value => value == null ? [] : Array.isArray(value) ? value : [value];
   const recent = sources.recent == null ? [{id:'__lore_recent',order:0,role:null,content:recentText}] : asList(sources.recent);
   const current = sources.current == null ? [{id:'__lore_current',order:recent.reduce((order,m)=>Math.max(order,m.order ?? 0),0)+1,role:'user',content:text}] : asList(sources.current);
@@ -164,6 +165,7 @@ function* selectionWork(entries, mem, text, scene, recentText, sources) {
         continue;
       }
       if (e.alwaysLoad) add(e,0,'always');
+      if (semanticIds.has(e.id)) add(e,book==='facts' ? 3.5 : 5,'semantic match');
       if (book === 'characters') {
         if (e.id === pc?.id) add(e,1,'protagonist');
         if (resolved.characters.includes(e.id)) add(e,2,'in scene');

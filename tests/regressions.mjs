@@ -929,6 +929,16 @@ test('Memory panel-only save does not rewrite title or plan and invalid values s
   h.el('mem-lorebooks').checked=true; await h.fire('btn-save-session'); assert.deepEqual(Object.keys(h.calls.sessionWrites[0][1]),['memory.lorebooks']);
   h.el('mem-batchTurns').value='not a number'; h.calls.confirm=false; await h.fire('btn-close-settings'); assert.equal(h.el('settings-tab').classList.contains('hidden'),false); await h.fire('btn-save-session'); assert.match(h.el('settings-saved-msg').textContent,/whole number/); assert.equal(h.calls.sessionWrites.length,1);
 });
+test('Semantic lore settings are opt-in, story-scoped, and reject remote embedding endpoints',async()=>{
+  const h=await harness();h.state.sessionId='story-id';const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();
+  assert.equal(h.el('mem-semanticLore').checked,false);
+  assert.equal(h.el('mem-semanticModel').value,'qwen3-embedding:0.6b');
+  h.el('mem-semanticLore').checked=true;h.el('mem-semanticEndpoint').value='http://192.168.1.2:11434/v1/embeddings';
+  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.length,0);assert.match(h.el('settings-saved-msg').textContent,/local Ollama/);
+  h.el('mem-semanticEndpoint').value='http://127.0.0.1:11434/v1/embeddings';await h.fire('nav-story');await h.fire('nav-memory');
+  assert.equal(h.el('mem-semanticLore').checked,true);await h.fire('btn-save-session');
+  assert.equal(h.calls.sessionWrites.length,1);assert.equal(h.calls.sessionWrites[0][1]['memory.semanticLore'],true);assert.equal(h.calls.writes.length,0);
+});
 test('Memory model selector shares saved profiles and saves per story without switching the narrator',async()=>{
   const h=await harness();h.state.sessionId='story-id';h.state.settings.profiles.push({id:'scribe',name:'Memory scribe',modelId:'z-ai/glm-5.3-flash:floor'});
   const active=h.state.settings.activeProfileId,view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();

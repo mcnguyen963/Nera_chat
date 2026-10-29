@@ -7,6 +7,7 @@ import { resolveModelProfile } from './model-profiles.js';
 import { activeDirectorState, directorScene, playerStopBoundary } from './director-state.js';
 import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
+import { loreSemantic } from './lore-semantic.js';
 import { selectEntriesAsync, renderEntry, findMentions } from './lore-select.js';
 import { recordUnits } from './lore-record-select.js';
 import { capLoreNotes, noteOmissions } from './lore-note-window.js';
@@ -67,7 +68,8 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const index=entityIndex(capped);
   const controlMem={...mem,scene:true,lorebooks:true};
   const text=latest.content,recentText=window.map(m=>m.content).join('\n');
-  const selection=await selectEntriesAsync(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3},{signal,check});
+  const semantic=continuation ? {ids:[]} : await loreSemantic.search({owner:settings.providerCooldownAccount,sid:session.id,mem,entries:available,query:text,signal,check});
+  const selection=await selectEntriesAsync(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3,semanticIds:semantic.ids},{signal,check});
   const anchors=new Set([...selection.selected.characters,...selection.selected.locations].map(i=>i.entry.id));
   const directIds=new Set([...findMentions(text,selection.index,'characters'),...findMentions(text,selection.index,'locations')]);
   const requested=available.filter(e=>directIds.has(e.id)).map(entry=>({entry}));

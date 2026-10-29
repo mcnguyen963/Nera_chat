@@ -3,7 +3,9 @@ import {rebuildLabel} from '../memory-rebuild.js';
 import { skippedNotesText } from '../memory-skipped.js';
 import {getPref,setPref} from '../local-pref.js';
 import {requestInputLimit} from '../request-budget.js';
-import {effectivelyPaused} from '../continuity.js';
+import {effectivelyPaused,usableLore} from '../continuity.js';
+import {currentUid} from '../auth.js';
+import {loreSemantic,semanticConnection} from '../lore-semantic.js';
 import {updateSession} from '../sessions.js';
 import { normalizeMemory, memoryValidationRanges } from '../memory-settings.js';
 import { parseScene, sceneLine } from '../scene.js';
@@ -14,13 +16,14 @@ import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-upda
 import { copyText } from './clipboard.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
-const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow'];
-const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId'];
+const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow','semanticLore'];
+const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId','semanticEndpoint','semanticModel'];
 const seedKeys = ['date','time','place','present'];
 const numbers = ['loreNotesPerSection','loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
 let filled = null, rebuildNotice = null;
 export function fillMemory(raw) {
   filled = normalizeMemory(raw);
+  if(get('semantic-status'))get('semantic-status').textContent='';
   for (const key of booleans) get(key).checked = filled[key];
   for (const key of [...strings,...numbers]) get(key).value = filled[key];
   if(get('calendar-mode'))get('calendar-mode').value=filled.calendar.mode;
@@ -36,6 +39,7 @@ export function readMemory(validate = false, integerField) {
   const out = normalizeMemory();
   for (const key of booleans) out[key] = get(key).checked;
   for (const key of strings) out[key] = get(key).value;
+  if(validate && out.semanticLore)semanticConnection(out);
   out.calendar=normalizeCalendar({mode:get('calendar-mode')?.value,anchor:get('calendar-anchor')?.value});
   if(validate && out.calendar.mode==='modern'&&!out.calendar.anchor)throw new Error('Enter a weekday/date anchor, such as Friday 21/10/738.');
   const seed = Object.fromEntries(seedKeys.map(key => [key,get('starting-'+key).value.trim()]));
@@ -70,6 +74,23 @@ export function initMemorySettings(openLore) {
   get('calendar-copy')?.addEventListener('click',async()=>{try{const text=calendarInstruction(readMemory().calendar);if(!text)throw new Error('Choose modern time and enter an anchor first.');await copyText(text);toast('Copied. Review these instructions before adding them to your story prompt.');}catch(e){toast(e);}});
   get('showScene').addEventListener('change',() => { setPref('nera.memory.showScene',get('showScene').checked ? '1' : '0'); document.dispatchEvent(new CustomEvent('scene-preference')); });
   get('open-lore').addEventListener('click',openLore);
+  get('semantic-index')?.addEventListener('click',async()=>{
+    const button=get('semantic-index'),status=get('semantic-status');
+    if(state.busy){toast('Finish the current turn first');return;}
+    button.disabled=true;
+    try{
+      const live=await prepareMemorySnapshot(),owner=currentUid(),sid=live.session.id,epoch=live.storyEpoch;
+      if(!live.historyComplete)throw new Error('Full story history is not available. Open the story and try again.');
+      const mem=readMemory();
+      const captured=structuredClone({session:live.session,messages:live.messages,entries:live.entries});
+      const check=()=>{const now=memorySnapshot();if(currentUid()!==owner || !now || now.session.id!==sid || now.storyEpoch!==epoch || now.session.historyRevision!==captured.session.historyRevision || now.session.loreRevision!==captured.session.loreRevision)throw new Error('Story or lore changed; build the index again.');};
+      const entries=usableLore(captured.entries,captured.messages,captured.session).entries;
+      status.textContent='Building the device index…';
+      const result=await loreSemantic.index({owner,sid,mem,entries,check,progress:({done,total})=>{status.textContent=`Indexed ${done} of ${total} cards…`;}});
+      status.textContent=`Indexed ${result.count} cards on this device. Save story settings to enable semantic search.`;
+    }catch(error){status.textContent='Indexing failed: '+error.message;}
+    finally{button.disabled=false;}
+  });
   get('update-now').addEventListener('click',() => void manualUpdate());
   get('reextract')?.addEventListener('click',async()=>{try{const live=memorySnapshot(),order=live?.session.memoryState?.rebuildFromOrder;if(order==null)return;if(!confirm('Re-extract edited history from this turn? Generated notes will be marked for review and backed up.'))return;const finished=await rebuildFrom(live.session.id,order);toast(finished ? 'Re-extraction finished; review prior notes in Lorebooks.' : 'Re-extraction stopped. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);}});
   get('dismiss-rebuild')?.addEventListener('click',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}if(!rebuildNotice)return;await dismissMemoryRebuild(rebuildNotice.sessionId,rebuildNotice.seenRevision);}catch(e){toast(e.message);}});
