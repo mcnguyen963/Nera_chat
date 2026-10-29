@@ -384,21 +384,28 @@ export function tokenUsageSnapshot() {
   return {owner,sid,record,max:meta?.max ?? record?.max ?? 0,contextKey:key,busy,loading:!!sid && (!session || !latestReady || !state.storySettings),error:tokenUsageError,
     contextChanged:!!record && key!==null && record.contextKey!==key,
     previewCached:!!key && tokenUsageCache.hasPreview(owner,sid,key),
-    sentContext:record && lastSentContext?.sentAt===record.at ? lastSentContext : null};
+    sentContext:lastSentContext};
 }
 export async function calculateCurrentTokenPreview() {
   if(busy || editingState)throw new Error('Finish the current reply or edit before calculating a preview.');
   const live=memorySnapshot();if(!live)throw new Error('Open a story first.');
   refreshTokenDisplayMeta();
   const owner=currentUid(),sid=state.sessionId,key=tokenContextKey(),epoch=historyEpoch;
-  return tokenUsageCache.preview(owner,sid,key,async check=>{
+  const result=await tokenUsageCache.preview(owner,sid,key,async check=>{
     const built=await buildContextForRequest(live.session,live.settings,{
       messages:live.messages,loreEntries:live.entries,draftText:'',includeInspection:true,check,
     });
     let director=null,directorError=null;
     if(live.settings.narrationMode==='director'){try{director=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));}catch(error){check();directorError=error.message;}}
     check();return {built,live,director,directorError,countingMethod:tokenizer.tokenizerStatus?.()==='ok' ? 'tokenizer' : 'estimate'};
-  },()=>currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
+  },()=>currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && !busy && !editingState && tokenContextKey()===key);
+  if(currentUid()!==owner || state.sessionId!==sid || historyEpoch!==epoch || busy || editingState || tokenContextKey()!==key)throw new Error('Context preview changed.');
+  const {built,countingMethod}=result;
+  const record=tokenUsageCache.remember(owner,sid,{kind:'manual',tokens:built.usedTokens,max:built.report.totals.max,
+    reserved:live.settings.maxResponseTokens,at:Math.max(Date.now(),(tokenUsageCache.read(owner,sid)?.at ?? 0)+1),modelId:live.settings.modelId,contextKey:key,
+    report:built.report,droppedCount:built.droppedCount ?? 0,countingMethod});
+  tokenUsageError=null;applyIndicator(record);persistTokenUsage();tokenUsageChanged();
+  return result;
 }
 export async function prepareMemorySnapshot() {
   if (!session) throw new Error('Open a story first.');
@@ -1549,7 +1556,7 @@ function showToast(text, ok) {
 
 // ---------- context indicator ----------
 
-const indicatorHint = 'Last completed request input; unsent input is excluded. Current context may differ.';
+const indicatorHint = 'Last sent request input; unsent input is excluded. Current context may differ.';
 const indicatorRefresh = createIndicatorRefresh({
   focused: () => busy || !!editingState,
   key: () => JSON.stringify([tokenOwner(),state.sessionId,tokenContextKey()]),
@@ -1563,7 +1570,7 @@ const indicatorRefresh = createIndicatorRefresh({
     },()=>isCurrent() && currentUid()===owner && state.sessionId===sid && historyEpoch===epoch && tokenContextKey()===key);
     tokenUsageError=null;return record;
   },
-  apply: record => {if(record){applyIndicator(record);persistTokenUsage();tokenUsageChanged();}},
+  apply: record => {if(record && tokenUsageCache.read(tokenOwner(),state.sessionId)===record){applyIndicator(record);persistTokenUsage();tokenUsageChanged();}},
   onError: error => {const owner=tokenOwner();if(!owner)return;const record=tokenUsageCache.read(owner,state.sessionId);if(record?.kind && record.kind!=='estimate'){applyIndicator(record);return;}tokenUsageError=error.message;if(el.contextLabel)el.contextLabel.textContent=error.message;tokenUsageChanged();},
 });
 export function scheduledPlanDraftJump() {return null;}
@@ -1577,15 +1584,15 @@ export async function updateIndicator() {
 function applyIndicator(record) {
   refreshTokenDisplayMeta();
   const view=tokenUsageSnapshot(),max=view.max,settings=effectiveActiveSettings();
-  const lastSent=record.kind!=='estimate',estimated=record.kind!=='provider';
-  el.contextLabel.title=(lastSent ? indicatorHint : 'Cached context estimate, excluding unsent input.')+(view.contextChanged ? ' Context changed since last send.' : '')+
+  const lastSent=record.kind==='provider' || record.kind==='sent-estimate',estimated=record.kind!=='provider';
+  el.contextLabel.title=(lastSent ? indicatorHint : record.kind==='manual' ? 'Manual current-context calculation, excluding unsent input.' : 'Cached context estimate, excluding unsent input.')+(view.contextChanged ? ' Context changed since this count.' : '')+
     (record.droppedCount>0 && !settings.autoSummarizationEnabled ? ' Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
   const ring=contextRingPresentation({used:record.tokens,max});
   el.contextFill.style.strokeDasharray=ring.dash;el.contextFill.style.stroke=ring.color;
   el.contextFill.classList.toggle('over',record.tokens>=max*settings.autoSummaryThresholdPercent/100);
   el.contextThreshold.style.left=settings.autoSummaryThresholdPercent+'%';
   el.contextLabel.textContent=`${record.tokens.toLocaleString()} input / ${max.toLocaleString()} tokens`+
-    (lastSent ? ' · last sent' : '')+(estimated ? ' · estimate' : ' · provider')+
+    (lastSent ? ' · last sent' : record.kind==='manual' ? ' · manual' : '')+(estimated ? ' · estimate' : ' · provider')+
     (record.droppedCount>0 ? ` · ${record.droppedCount} ${settings.autoSummarizationEnabled ? 'out of window' : 'turns not sent'}` : '')+
     (view.contextChanged ? ' · context changed' : '')+(record.recentOnly ? ' · recent history only' : '');
   const indicator=document.getElementById('context-indicator');
@@ -1998,11 +2005,24 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
       //   throw new Error('Story or settings changed while building context. Your message was saved. Refresh and use Retry reply.');
     }
     startStreamUI(prefix);turnStream=streamState;
-    let result,stopReason=null;const narratorStarted=Date.now();
+    let result,stopReason=null,dispatchedUsage=null;const narratorStarted=Date.now();
+    const publishNarratorUsage=usage=>{
+      const promptTokens=usage?.prompt_tokens ?? usage?.input_tokens;
+      if(!busyGate.stillActive(token) || !dispatchedUsage || tokenUsageCache.read(tokenOwner(),sid)!==dispatchedUsage ||
+         !Number.isSafeInteger(promptTokens) || promptTokens<0 || (dispatchedUsage.kind==='provider' && dispatchedUsage.tokens===promptTokens))return;
+      lastProviderUsage={sessionId:sid,promptTokens,estimate:built.usedTokens};
+      dispatchedUsage=tokenUsageCache.remember(currentUid(),sid,{...dispatchedUsage,kind:'provider',tokens:promptTokens});
+      tokenUsageError=null;applyIndicator(dispatchedUsage);persistTokenUsage();tokenUsageChanged();
+    };
     try {
-      const narration=chatCompletion({ settings,messages:built.apiMessages,onRequest:serialized => {
+      const narration=chatCompletion({ settings,messages:built.apiMessages,onUsage:publishNarratorUsage,onRequest:serialized => {
         if(!busyGate.stillActive(token))return;const requestBody=JSON.parse(serialized);
         lastSentContext=structuredClone({report:built.report,apiMessages:requestBody.messages,requestBody,sentAt:Date.now(),...(directorTurn ? {director:{...lastDirectorRequest,report:directorTurn.report,usage:directorTurn.usage,elapsedMs:directorTurn.elapsedMs,timings:directorTurn.timings,reused:!lastDirectorRequest,contract:directorTurn.contract}} : {})});
+        lastProviderUsage=null;
+        dispatchedUsage=tokenUsageCache.remember(currentUid(),sid,{kind:'sent-estimate',tokens:built.usedTokens,
+          max:built.report.totals.max,reserved:settings.maxResponseTokens,at:Math.max(lastSentContext.sentAt,(tokenUsageCache.read(currentUid(),sid)?.at ?? 0)+1),modelId:settings.modelId,
+          contextKey:tokenContextKey(),report:built.report,droppedCount:built.droppedCount ?? 0});
+        tokenUsageError=null;applyIndicator(dispatchedUsage);persistTokenUsage();tokenUsageChanged();
       },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
       if (!opts.overwriteId && !opts.continuationId && !opts.upToOrder && (opts.savedUserId || opts.expectLatestUserId)) {
         try { earlyMemoryStarted=memoryUpdater.maybeStartAlongsideTurn(sid,{session:sourceSession,settings,messages:sourceMessages,entries:loreEntries,storyEpoch:historyEpoch}); }
@@ -2018,6 +2038,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
     vibration.stop();
     const {content,thinking,finishReason,usage}=result;
     assertActive(token);
+    publishNarratorUsage(usage);
     if(directorMode && lastSentContext){lastSentContext.narratorElapsedMs=Date.now()-narratorStarted;lastSentContext.narratorUsage=usage ?? null;}
     const truncated = finishReason === 'length';
     const fresh=session;
@@ -2094,13 +2115,6 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
     historyMessages = historyChanged ? null : mergeMessages(sourceMessages,[saved]);
     historyRevision = historyChanged ? null : session.historyRevision;
     if (streamState) { streamState.savedId = saved.id; streamState.saveCompleted = true; }
-    const promptTokens=usage?.prompt_tokens ?? usage?.input_tokens;
-    const providerCount=Number.isSafeInteger(promptTokens) && promptTokens>=0;
-    lastProviderUsage=providerCount ? {sessionId:sid,promptTokens,estimate:built.usedTokens} : null;
-    const usageRecord=tokenUsageCache.remember(currentUid(),sid,{kind:providerCount ? 'provider' : 'sent-estimate',
-      tokens:providerCount ? promptTokens : built.usedTokens,max:built.report.totals.max,reserved:settings.maxResponseTokens,
-      at:lastSentContext?.sentAt ?? Date.now(),modelId:settings.modelId,contextKey:tokenContextKey(),report:built.report,droppedCount:built.droppedCount ?? 0});
-    tokenUsageError=null;applyIndicator(usageRecord);persistTokenUsage();tokenUsageChanged();
     renderMessages(mergeMessages(lastMessages,[saved])); queueCacheSave(); rememberMemoryStory();
     if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');

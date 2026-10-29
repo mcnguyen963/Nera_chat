@@ -89,14 +89,18 @@ export function initSettingsView() {
     if (event.defaultPrevented || el.overlay.classList.contains("hidden") || activeSheet() || document.querySelector('dialog[open]')) return;
     if (event.key === "Escape") { event.preventDefault(); closeSettingsPopup(); }
     if (event.key !== "Tab") return;
-    const focusables = [...el.overlay.querySelectorAll("button, input, select, textarea")]
+    const focusables = [...el.overlay.querySelectorAll("button, input, select, textarea, summary")]
       .filter((node) => !node.disabled && !node.closest(".hidden") && node.getClientRects().length);
     const first = focusables[0], last = focusables.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   });
   document.querySelectorAll("[data-settings-panel]").forEach((button) =>
-    button.addEventListener("click", () => showPanel(button.dataset.settingsPanel)));
+    button.addEventListener("click", () => {showPanel(button.dataset.settingsPanel);if(globalThis.matchMedia?.('(max-width: 720px)').matches)input('settings-back').focus();}));
+  input('settings-back').addEventListener('click',()=>{
+    capture();el.overlay.classList.remove('settings-detail-open');
+    document.querySelectorAll('[data-settings-panel]').forEach(button=>{if(button.dataset.settingsPanel===panel)button.focus();});
+  });
   document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);if(button.dataset.resetPrompt==='directorNarratorSystemPrompt'){draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();}clearMessage();}));
   for(const id of ['set-reasoning-maxtokens','set-max-resp'])input(id).addEventListener('input',syncOptionalControls);
   el.profiles.addEventListener("change", () => {
@@ -165,7 +169,8 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
   el.overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
   if(retainedDraft && draftOwner===currentUid() && promptStoryId===state.sessionId){retainedDraft=false;if(options.panel)showPanel(options.panel);}
-  else {retainedDraft=false;reloadGlobalSettings();showPanel(["pets", "memory", "story", "context", "transfer"].includes(options.panel) ? options.panel : "model");}
+  else {retainedDraft=false;reloadGlobalSettings();showPanel(["model", "pets", "memory", "story", "context", "transfer", "prompts", "account"].includes(options.panel) ? options.panel : "model");}
+  if(!options.panel)el.overlay.classList.remove('settings-detail-open');
   input("btn-close-settings").focus();
 }
 
@@ -230,6 +235,7 @@ function accountDirty() {
 function showPanel(name) {
   capture();
   panel = name;
+  el.overlay.classList.add('settings-detail-open');
   petChoicesReady = false;
   const petRequest = ++petLoadRequest;
   document.querySelectorAll("[data-settings-panel]").forEach((button) => {
@@ -253,6 +259,8 @@ function showPanel(name) {
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
   setIcon(el.save, 'save', name==='prompts' ? 'Save story prompts' : 'Save shared settings');
+  setIcon(el.saveSession, 'save', 'Save story and memory settings');
+  input('settings-scope').textContent=({model:'Shared across your stories. Save shared settings to apply changes.',context:'Shared across your stories. Save shared settings to apply changes.',pets:'Shared across your stories. Save shared settings to apply changes.',prompts:'Saved separately for the current story. Save story prompts to apply changes.',story:'Settings for the current story. Save story and memory settings to apply changes.',memory:'Settings for the current story. Save story and memory settings to apply changes. Show scene is a device-only preference and applies immediately.',transfer:'Import and export actions apply when selected.',account:'Account changes apply when submitted.'})[name] ?? '';
   const promptHeading=document.querySelector('[data-panel="prompts"] h2');if(promptHeading)promptHeading.textContent='Prompts · '+(sessionOriginal.title || 'current story');
   if(name==='prompts' && state.sessionId)void getSession(state.sessionId).then(s=>{if(panel==='prompts' && promptHeading)promptHeading.textContent='Prompts · '+(s?.title ?? 'Select a story');}).catch(error=>feedback(error.message,true));
   el.footer.classList.toggle("hidden", !global && !["story", "memory"].includes(name));

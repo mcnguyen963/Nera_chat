@@ -111,10 +111,10 @@ function renderCached() {
   const record=view.record;
   if(record){
     overview.append(node('p',`${record.tokens.toLocaleString()} input / ${view.max.toLocaleString()} tokens`,'context-total'));
-    const source=record.kind==='provider' ? 'Last sent · provider input count' : record.kind==='sent-estimate' ? 'Last sent · local estimate' : 'Cached context estimate';
+    const source=record.kind==='provider' ? 'Last sent · provider input count' : record.kind==='sent-estimate' ? 'Last sent · local estimate' : record.kind==='manual' ? 'Manual current preview · '+(record.countingMethod==='tokenizer' ? 'tokenizer count' : 'local estimate') : 'Cached context estimate';
     overview.append(node('p',source+' · excludes unsent input','muted context-count-status'));
     overview.append(node('p',new Date(record.at).toLocaleString()+(record.modelId ? ' · '+record.modelId : ''),'muted'));
-    if(view.contextChanged)overview.append(node('p',record.kind==='estimate' ? 'Context changed. The cached estimate is being updated.' : 'Context changed since last send. This remains the last request’s input count.','muted'));
+    if(view.contextChanged)overview.append(node('p',record.kind==='estimate' ? 'Context changed. The cached estimate is being updated.' : record.kind==='manual' ? 'Context changed since this manual calculation. The indicator keeps the calculated value until the next calculation or send.' : 'Context changed since last send. This remains the last request’s input count.','muted'));
     if(record.recentOnly)overview.append(node('p','Estimate covers the history available on this device.','muted'));
     if(record.report?.blocks?.length){
       const breakdown=group('tokens','Local token breakdown');
@@ -136,7 +136,7 @@ function renderCached() {
       noteLimitDetails(d,sent.report?.noteLimits?.omitted ?? [],'sent-note-limits');
       d.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
     });body.append(section);
-  }else if(record?.kind!=='estimate' && record)body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
+  }else if(record && (record.kind==='provider' || record.kind==='sent-estimate'))body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
   replaceBody(dialog,body);
   if(focusKey)[...body.querySelectorAll('summary,pre,button')].find(e=>e.dataset.focusKey===focusKey)?.focus({preventScroll:true});
 }
@@ -157,7 +157,7 @@ async function render({current=false}={}) {
     const mem = normalizeMemory(live.session.memory);
     const overview = node('section', null, 'context-overview');
     const heading = node('div', null, 'context-overview-heading');
-    const refresh = button('Last sent', () => render());
+    const refresh = button('Overview', () => render());
     refresh.dataset.focusKey = 'refresh';
     heading.append(node('h3', 'Overview'), refresh);
     overview.append(heading, node('p', `${r.totals.input.toLocaleString()} input / ${r.totals.max.toLocaleString()} tokens`, 'context-total'));

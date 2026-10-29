@@ -196,17 +196,17 @@ async function completionAttempt(options) {
   } finally {globalThis.clearTimeout?.(timer);options.signal?.removeEventListener('abort',cancel);controller.signal.removeEventListener('abort',rejectAbort);}
 }
 
-async function unboundedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated = false, kick }) {
+async function unboundedCompletion({ settings, messages, onDelta, onReasoning, onUsage, signal, responseFormat, provider, onRequest, allowTruncated = false, kick }) {
   if (!settings.modelId) throw classified("No model ID set — configure it in Settings.",'configuration');
   if (!settings.endpoint) throw classified("No endpoint set — configure it in Settings.",'configuration');
 
   if (!settings.streaming) {
-    return nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, onRequest, allowTruncated, kick });
+    return nonStreamedCompletion({ settings, messages, onUsage, signal, responseFormat, provider, onRequest, allowTruncated, kick });
   }
-  return streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated, kick });
+  return streamedCompletion({ settings, messages, onDelta, onReasoning, onUsage, signal, responseFormat, provider, onRequest, allowTruncated, kick });
 }
 
-async function nonStreamedCompletion({ settings, messages, signal, responseFormat, provider, onRequest, allowTruncated }) {
+async function nonStreamedCompletion({ settings, messages, onUsage, signal, responseFormat, provider, onRequest, allowTruncated }) {
   const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
@@ -215,6 +215,7 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
   });
   if (!res.ok) throw await httpResponseError(res);
   let data;try {data=await res.json();}catch(error){if(error.name!=='SyntaxError'){error.classification='transport_loss';throw error;}throw classified("The model returned malformed JSON.","malformed_response",{cause:error});}
+  if(data.usage)onUsage?.(data.usage);
   if (data.error || !data.choices?.[0]?.message) throw responseError(data);
   const msg = data.choices[0].message;
   if (typeof msg.content !== "string" || !msg.content.trim()) {
@@ -230,7 +231,7 @@ async function nonStreamedCompletion({ settings, messages, signal, responseForma
   };
 }
 
-async function streamedCompletion({ settings, messages, onDelta, onReasoning, signal, responseFormat, provider, onRequest, allowTruncated, kick }) {
+async function streamedCompletion({ settings, messages, onDelta, onReasoning, onUsage, signal, responseFormat, provider, onRequest, allowTruncated, kick }) {
   const res = await requestFetch(settings.endpoint, {
     method: "POST",
     headers: headers(settings),
@@ -266,6 +267,8 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
     } catch {
       throw classified("The model returned a malformed response event.","malformed_response");
     }
+    // Final content chunk or a trailing usage-only chunk carries usage.
+    if (json.usage) {usage=json.usage;onUsage?.(usage);}
     if (json.error) throw responseError(json);
     if (!Array.isArray(json.choices) && !json.usage) throw responseError(json);
     const delta = json.choices?.[0]?.delta ?? {};
@@ -282,8 +285,6 @@ async function streamedCompletion({ settings, messages, onDelta, onReasoning, si
       thinking += delta.reasoning;
       onReasoning?.(delta.reasoning);
     }
-    // Final content chunk or a trailing usage-only chunk carries usage.
-    if (json.usage) usage = json.usage;
   };
 
   const cancelReader=()=>{Promise.resolve(reader.cancel?.()).catch(()=>{});};

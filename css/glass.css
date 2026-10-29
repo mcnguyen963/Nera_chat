@@ -142,6 +142,12 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .lore-list-item { border-bottom-color: var(--glass-line); }
 .segmented, .context-overview, .context-section, .lore-banner { background: #212630; border-color: var(--glass-line); }
 .settings-panel h3, .lore-section, .lore-list { border-color: var(--glass-line); }
+.settings-rail button strong { display: block; font-weight: 600; }
+.settings-rail button small { display: none; }
+.settings-back { display: none; }
+.settings-scope { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); font-size: 12px; }
+.settings-advanced { margin-top: 18px; }
+.settings-advanced summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
 .memory-content, .settings-content { line-height: 1.65; }
 .memory-content > *, .settings-panel > * { max-width: 100%; }
 .memory-content input, .memory-content textarea, .memory-content select { border-radius: var(--radius-control); }
@@ -191,6 +197,15 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
   .settings-header #settings-footer { flex: 0 1 auto; }
   #settings-saved-msg:not(:empty) { display: block; position: absolute; top: 100%; left: 0; right: 0; padding: 8px 12px; background: var(--panel); z-index: 3; }
   .settings-content, .memory-content { padding-bottom: calc(20px + var(--composer-safe-bottom)); }
+  #settings-tab .settings-dialog { background: var(--panel); }
+  #settings-tab .settings-body { display: flex; flex-direction: column; }
+  #settings-tab .settings-rail { flex: 1; flex-direction: column; gap: 8px; padding: 16px 14px calc(20px + var(--composer-safe-bottom)); overflow: auto; border: 0; }
+  #settings-tab .settings-rail button { position: relative; width: 100%; min-height: 68px; padding: 12px 38px 12px 14px; white-space: normal; background: var(--panel-2); box-shadow: none; font-size: 15px; }
+  #settings-tab .settings-rail button::after { content: '›'; position: absolute; right: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 24px; }
+  #settings-tab .settings-rail button small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+  #settings-tab:not(.settings-detail-open) .settings-content, #settings-tab:not(.settings-detail-open) #settings-footer { display: none; }
+  #settings-tab.settings-detail-open .settings-rail { display: none; }
+  #settings-tab .settings-back { position: sticky; top: 8px; z-index: 2; display: inline-flex; align-items: center; min-height: 44px; margin-top: 8px; }
   .memory-actions { padding-bottom: var(--composer-safe-bottom); }
   .login-screen { padding-inline: 12px; }
   .login-card { padding: 24px 20px; }

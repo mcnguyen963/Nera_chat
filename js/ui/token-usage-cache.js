@@ -6,6 +6,7 @@ export function compactTokenReport(report) {
     warnings:[...(report.warnings ?? [])]};
 }
 const validTokens=value=>Number.isSafeInteger(value) && value>=0;
+const kindIsSent=kind=>kind==='provider' || kind==='sent-estimate';
 export function tokenContextFingerprint(values) {
   const text=JSON.stringify(values);
   let a=2166136261,b=5381;
@@ -28,12 +29,13 @@ export function createTokenUsageCache({limit=3}={}) {
     if(!validTokens(display.tokens))throw new Error('Invalid input token count.');
     const item=entry(owner,sid);
     item.fallback=null;
-    const {kind,tokens,max,reserved,at,modelId,contextKey,droppedCount=0,recentOnly=false}=display;
-    item.display={version:1,kind,tokens,max,reserved,at,modelId,contextKey,droppedCount,recentOnly,report:compactTokenReport(display.report)};
+    if(kindIsSent(display.kind))item.preview=null;
+    const {kind,tokens,max,reserved,at,modelId,contextKey,droppedCount=0,recentOnly=false,countingMethod}=display;
+    item.display={version:1,kind,tokens,max,reserved,at,modelId,contextKey,droppedCount,recentOnly,countingMethod,report:compactTokenReport(display.report)};
     return item.display;
   }
   function restore(owner,sid,saved) {
-    if(saved?.version!==1 || !['provider','sent-estimate','estimate'].includes(saved.kind) ||
+    if(saved?.version!==1 || !['provider','sent-estimate','manual','estimate'].includes(saved.kind) ||
        !validTokens(saved.tokens) || !Number.isFinite(saved.at) || typeof saved.contextKey!=='string')return read(owner,sid);
     const current=read(owner,sid);
     if(current && (current.kind!=='estimate' && saved.kind==='estimate' ||

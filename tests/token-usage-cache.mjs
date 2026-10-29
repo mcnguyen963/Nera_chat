@@ -15,6 +15,20 @@ test('local last-send estimate also avoids a new calculation',async()=>{
  const cache=await factory();cache.remember('u','s',sent({kind:'sent-estimate',tokens:98000}));
  assert.equal((await cache.estimate('u','s','edited',()=>{throw Error('No recount');})).tokens,98000);
 });
+test('manual counts survive restoration and stay visible until a new send',async()=>{
+ const cache=await factory();cache.remember('u','s',sent());
+ cache.remember('u','s',sent({kind:'manual',tokens:1234,at:200,countingMethod:'tokenizer'}));
+ const restored=await factory();restored.restore('u','s',cache.serialize('u','s'));
+ assert.equal(restored.read('u','s').kind,'manual');assert.equal(restored.read('u','s').tokens,1234);
+ await restored.estimate('u','s','changed',()=>{throw Error('Manual result must not be replaced');});
+ restored.remember('u','s',sent({kind:'sent-estimate',tokens:2400,at:300}));assert.equal(restored.read('u','s').kind,'sent-estimate');
+});
+test('dispatch cancels an in-flight manual preview without overwriting its result',async()=>{
+ const cache=await factory(),gate=deferred();
+ const pending=cache.preview('u','s','v1',async()=>{await gate.promise;return {};});
+ await Promise.resolve();cache.remember('u','s',sent({kind:'sent-estimate'}));gate.resolve();
+ await assert.rejects(pending,/changed/);assert.equal(cache.read('u','s').kind,'sent-estimate');
+});
 test('initial estimates coalesce and cache once per context revision',async()=>{
  const cache=await factory(),gate=deferred();let calls=0;
  const compute=async check=>{calls++;await gate.promise;check();return sent({tokens:4000});};

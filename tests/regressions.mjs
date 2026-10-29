@@ -323,6 +323,20 @@ test('Settings drafts survive tabs and profiles, reset locally, and reach reques
   assert.equal(h.settings.activeProfile(h.state.settings).reasoning.effort, 'high');
 });
 
+test('Settings category navigation preserves drafts and exposes the right save scope',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js'),view=await h.use('ui/settings-view.js');
+ chat.initChatView();view.initSettingsView();view.openSettingsPopup(h.el('opener'));
+ assert.equal(h.el('settings-tab').classList.contains('settings-detail-open'),false);
+ await h.fire('nav-model');assert.equal(h.el('settings-tab').classList.contains('settings-detail-open'),true);
+ h.el('set-model').value='unsaved-model';await h.fire('settings-back');
+ assert.equal(h.el('settings-tab').classList.contains('settings-detail-open'),false);
+ await h.fire('nav-context');assert.equal(h.el('set-model').value,'unsaved-model');
+ assert.match(h.el('settings-scope').textContent,/Shared across your stories/);
+ await h.fire('nav-prompts');assert.match(h.el('settings-scope').textContent,/current story/);
+ await h.fire('nav-memory');assert.match(h.el('settings-scope').textContent,/device-only/);
+ assert.equal(h.calls.writes.length,0);
+});
+
 test('Inline model and thinking selectors restore per-profile choices and recover after failed saves', async () => {
   const h = await harness();
   h.calls.settingsDoc = {
@@ -988,7 +1002,7 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   root.querySelector('.memory-content').scrollTop=120;
   root.querySelectorAll('.context-turn-list').find(d=>d.dataset.scrollKey==='opening').scrollTop=35;
   draft.querySelector('summary').focus();
-  await root.querySelectorAll('button').find(b=>b.textContent==='Last sent').click();await root.querySelectorAll('button').find(b=>b.textContent==='View cached current preview').click();await new Promise(resolve=>setTimeout(resolve,0));
+  await root.querySelectorAll('button').find(b=>b.textContent==='Overview').click();await root.querySelectorAll('button').find(b=>b.textContent==='View cached current preview').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(get('conversation').open,true);
   assert.equal(get(draft.dataset.contextKey).open,true);
   assert.equal(h.document.activeElement.dataset.focusKey,draft.dataset.contextKey);
@@ -3325,7 +3339,7 @@ test('provider input usage is shared by indicator and cached window; context cha
  h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'A short reply.'}}],usage:{prompt_tokens:75000,completion_tokens:1200,total_tokens:76200}};
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
  const before=chat.tokenUsageSnapshot();assert.equal(before.record.kind,'provider');assert.equal(before.record.tokens,75000);
- assert.equal(before.contextChanged,false);assert.match(h.el('context-label').textContent,/75,000.*last sent.*provider/);
+ assert.equal(before.contextChanged,true,'The saved reply changes the current context after the request was sent');assert.match(h.el('context-label').textContent,/75,000.*last sent.*provider/);
  const localInput=chat.memorySnapshot().sentContext.report.totals.input;assert.equal(before.record.report.totals.input,localInput);assert.notEqual(localInput,75000);
  const estimates=h.calls.estimateCalls,reads=h.calls.historyReads ?? 0,requests=h.calls.requests.length;
  h.calls.onTokenCount=()=>{throw Error('Cached usage must never invoke tokenizer');};
@@ -3337,7 +3351,7 @@ test('provider input usage is shared by indicator and cached window; context cha
  assert.ok(h.calls.messages.every(([,message])=>!Object.hasOwn(message,'tokenUsage') && !Object.hasOwn(message,'prompt_tokens')));
 });
 
-test('missing provider usage reuses sent-context estimate; a failed following request preserves that count',async()=>{
+test('missing provider usage reuses the sent estimate; a failed dispatched request replaces it',async()=>{
  const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
  h.calls.response='Completed reply.';await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
  const expected=chat.memorySnapshot().sentContext.report.totals.input;
@@ -3345,7 +3359,42 @@ test('missing provider usage reuses sent-context estimate; a failed following re
  const before=JSON.stringify(chat.tokenUsageSnapshot().record);
  h.calls.responseData={error:{message:'Provider unavailable'}};h.el('chat-input').value='Another action';
  await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
- assert.equal(JSON.stringify(chat.tokenUsageSnapshot().record),before);
+ assert.notEqual(JSON.stringify(chat.tokenUsageSnapshot().record),before);
+ assert.equal(chat.tokenUsageSnapshot().record.kind,'sent-estimate');
+ assert.equal(chat.tokenUsageSnapshot().record.tokens,chat.memorySnapshot().sentContext.report.totals.input);
+});
+
+test('manual calculation replaces the indicator until dispatch, which shows the sent estimate before provider usage',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'First reply.'}}],usage:{prompt_tokens:75000}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ const sent=chat.memorySnapshot().sentContext;
+ h.el('chat-input').value='Draft excluded from the preview';
+ const preview=await chat.calculateCurrentTokenPreview(),manual=chat.tokenUsageSnapshot().record;
+ assert.equal(manual.kind,'manual');assert.equal(manual.tokens,preview.built.usedTokens);
+ assert.match(h.el('context-label').textContent,/manual.*estimate/);
+ assert.equal(chat.tokenUsageSnapshot().sentContext.sentAt,sent.sentAt);
+ assert.ok(!JSON.stringify(preview.built.apiMessages).includes('Draft excluded from the preview'));
+ await chat.updateIndicator();await new Promise(resolve=>setTimeout(resolve,15));assert.equal(chat.tokenUsageSnapshot().record.kind,'manual');
+ let observed;h.calls.onRequest=()=>{observed=chat.tokenUsageSnapshot().record;};
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:'Next reply.'}}],usage:{input_tokens:76000}};
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(observed.kind,'sent-estimate');assert.equal(chat.tokenUsageSnapshot().record.kind,'provider');assert.equal(chat.tokenUsageSnapshot().record.tokens,76000);
+});
+
+test('a failure before dispatch preserves the manual indicator',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ await chat.calculateCurrentTokenPreview();const before=chat.tokenUsageSnapshot().record;
+ h.state.settings.endpoint='';h.el('chat-input').value='Test configuration failure';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.calls.requests.length,0);assert.equal(chat.tokenUsageSnapshot().record,before);
+});
+
+test('provider input usage replaces the sent estimate even if the response has no reply',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Start.'}]);
+ h.calls.responseData={choices:[{finish_reason:'stop',message:{content:''}}],usage:{prompt_tokens:54321}};
+ await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
+ assert.equal(chat.tokenUsageSnapshot().record.kind,'provider');assert.equal(chat.tokenUsageSnapshot().record.tokens,54321);
 });
 
 test('provider count survives reload through device cache without being added to story messages',async()=>{

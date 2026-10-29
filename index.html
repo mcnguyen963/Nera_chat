@@ -159,16 +159,18 @@
           </header>
           <div class="settings-body">
             <nav class="settings-rail" aria-label="Settings categories">
-              <button type="button" data-settings-panel="model" class="selected">Model connection</button>
-              <button type="button" data-settings-panel="context">Context &amp; summaries</button>
-              <button type="button" data-settings-panel="pets">Pets</button>
-              <button type="button" data-settings-panel="prompts">Prompts</button>
-              <button type="button" data-settings-panel="story">This story</button>
-              <button type="button" data-settings-panel="memory">Memory</button>
-              <button type="button" data-settings-panel="transfer">Import &amp; export</button>
-              <button type="button" data-settings-panel="account">Account</button>
+              <button type="button" data-settings-panel="model" class="selected"><strong>Model connection</strong><small>Profiles, models and response options</small></button>
+              <button type="button" data-settings-panel="context"><strong>Context &amp; summaries</strong><small>Token limits and automatic summaries</small></button>
+              <button type="button" data-settings-panel="pets"><strong>Pets</strong><small>Companions and movement</small></button>
+              <button type="button" data-settings-panel="prompts"><strong>Story prompts</strong><small>Instructions and narration mode</small></button>
+              <button type="button" data-settings-panel="story"><strong>This story</strong><small>Story name and plan</small></button>
+              <button type="button" data-settings-panel="memory"><strong>Memory</strong><small>Lorebooks and memory updates</small></button>
+              <button type="button" data-settings-panel="transfer"><strong>Import &amp; export</strong><small>Stories, backups and lorebooks</small></button>
+              <button type="button" data-settings-panel="account"><strong>Account</strong><small>Account and diagnostics</small></button>
             </nav>
             <div id="settings-content" class="settings-content">
+              <button type="button" id="settings-back" class="settings-back btn">← All settings</button>
+              <p id="settings-scope" class="settings-scope muted" role="note"></p>
               <section data-panel="model" class="settings-panel">
                 <h2>Model connection</h2>
                 <div class="settings-grid">
@@ -233,11 +235,15 @@
                   <label class="checkbox-label"><input type="checkbox" id="set-auto-summary-enabled" /> Automatically summarize when context fills</label>
                   <label>Auto-summary threshold (%)<input type="text" id="set-auto-threshold" inputmode="numeric" data-min="1" data-max="100" required /></label>
                   <label>Keep recent messages (user + reply) after summary<input type="text" id="set-keep-n" inputmode="numeric" data-min="0" required /></label>
-                  <label>Summary total output tokens (including thinking)<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" required /></label>
-                  <label>Summary thinking tokens<input type="text" id="set-summarizer-thinking" inputmode="numeric" data-min="0" required /></label>
-                  <label>Summarizer input chunk (tokens per call)<input type="text" id="set-summarizer-chunk" inputmode="numeric" data-min="2000" required /></label>
                 </div>
-                <p class="muted">Thinking is part of the total output allowance. Defaults: 50,000 total, up to 20,000 thinking, leaving 30,000 for the summary. Use 0 to disable summary thinking. Thinking budgets require model/provider support; summaries use this setting separately from chat reasoning.</p>
+                <details class="settings-advanced"><summary>Advanced summary options</summary>
+                  <div class="settings-grid">
+                    <label>Summary total output tokens (including thinking)<input type="text" id="set-summarizer-maxtokens" inputmode="numeric" data-min="256" required /></label>
+                    <label>Summary thinking tokens<input type="text" id="set-summarizer-thinking" inputmode="numeric" data-min="0" required /></label>
+                    <label>Summarizer input chunk (tokens per call)<input type="text" id="set-summarizer-chunk" inputmode="numeric" data-min="2000" required /></label>
+                  </div>
+                  <p class="muted">Thinking is part of the total output allowance. Defaults: 50,000 total, up to 20,000 thinking, leaving 30,000 for the summary. Use 0 to disable summary thinking. Thinking budgets require model/provider support; summaries use this setting separately from chat reasoning.</p>
+                </details>
               </section>
               <section data-panel="pets" class="settings-panel hidden">
                 <h2>Pets</h2>
