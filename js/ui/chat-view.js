@@ -692,7 +692,7 @@ export function initChatView() {
   // Auto-grow composer: starts at one row, grows with content, capped by CSS
   // (max-height: min(35% of the visual viewport, 240px)) — beyond the cap the textarea scrolls.
   const measureComposer = observeComposerInset({
-    shell:document.getElementById('composer-shell'), style:document.getElementById('chat-tab').style,
+    shell:document.getElementById('composer-shell'), style:document.documentElement.style,
     onResize:() => { if (wasNearBottom) scrollToEnd(); else clampListScroll(); },
   });
   const autoGrow = () => { sizeComposer(); measureComposer(); };

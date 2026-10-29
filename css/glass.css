@@ -188,7 +188,7 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 }
 .msg-editor:focus-visible { outline: 2px solid #dce5f5; outline-offset: 3px; border-radius: 4px; }
 .settings-overlay { top: var(--app-offset-top, 0px); bottom: auto; }
-.toast { bottom: auto; top: calc(var(--app-offset-top, 0px) + var(--app-height, 100dvh) - 104px - var(--composer-safe-bottom)); }
+.toast { bottom: auto; top: calc(var(--app-offset-top, 0px) + var(--app-height, 100dvh) - var(--composer-height, 110px) - 8px); transform: translate(-50%, -100%); }
 .story-starters button, .session-item, .thinking > summary { min-height: 44px; }
 
 .director-ledger-row { padding: 12px 0; border-bottom: 1px solid var(--border, #555); display: grid; gap: 8px; }

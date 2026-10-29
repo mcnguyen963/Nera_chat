@@ -47,6 +47,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     reportValidity() { return this.id === 'set-endpoint' || (Number.isInteger(Number(this.value)) && Number(this.value) >= 0); }
   }
   const document = new Element();
+  document.documentElement = new Element();
   document.getElementById = (id) => {
     if (!elements.has(id)) {
       const element = new Element();
