@@ -65,14 +65,22 @@ export function memoryUpdateTiming(messages, memoryState, mem, {status}={}) {
   ];
   return dueRange(projected,memoryState,mem) ? 'next-turn' : null;
 }
-export function formatTurnsTranscript(messages, turns = computeTurns(messages), { range, protagonist = '', title } = {}) {
+// Scoped to one operation: subsequent calls must observe edits to messages.
+export function prepareTranscriptContext(messages, turns) {
+  const firstAssistantByTurn=new Map(),firstMessageById=new Map();
+  // Array.find uses strict equality, for which NaN never matches.
+  for (const a of turns.assistants) if (a.turn===a.turn && !firstAssistantByTurn.has(a.turn)) firstAssistantByTurn.set(a.turn,a);
+  for (const m of messages) if (m.id===m.id && !firstMessageById.has(m.id)) firstMessageById.set(m.id,m);
+  return {firstAssistantByTurn,firstMessageById,timeline:sceneTimeline(messages)};
+}
+export function formatTurnsTranscript(messages, turns = computeTurns(messages), { range, protagonist = '', title, context } = {}) {
   const lines = title ? [`# ${title} — transcript for lorebook generation`, `# Protagonist: ${protagonist || 'the main character'}`, '# Turn N = stable narrator turn; deleted turns keep their numbers. User messages belong to the following reply.', ''] : [];
-  const timeline=sceneTimeline(messages);
+  const {firstAssistantByTurn,firstMessageById,timeline}=context ?? prepareTranscriptContext(messages,turns);
   let previous = null;
   for (const m of [...(range?.messages ?? messages)].filter(m => m.role !== 'summary').sort((a,b) => a.order-b.order)) {
     const t = turns.turnById.get(m.id);
     if (t !== previous) {
-      const assistant = messages.find(x => x.id === turns.assistants.find(a => a.turn === t)?.id);
+      const assistant = firstMessageById.get(firstAssistantByTurn.get(t)?.id);
       lines.push(`=== Turn ${t}${timeline.get(assistant?.id)?.own ? ' · '+timeline.get(assistant.id).own : ''} ===`); previous = t;
     }
     let content = m.role === 'assistant' ? readSceneOutput(m.content).clean : String(m.content ?? '');

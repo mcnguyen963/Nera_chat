@@ -42,16 +42,20 @@ function* mentionMatchers(index,book) {
   for(const term of index[book] ?? []){
     // All matches share offsets in the same string; allow names across whitespace.
     const literal=term.firstName ? term.term.replace(/[‘’]/g,"'") : term.normTerm;
-    const phrase = escapeRegex(literal).replace(/\s+/g, '\\s+');
-    const pattern='(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',flags=term.firstName ? 'gu' : 'giu',key=JSON.stringify([pattern,flags]);
-    let re=matcherCache.get(key);
-    if(re)matcherCache.delete(key);
-    else re=new RegExp(pattern,flags);
-    matcherCache.set(key,re);
-    if(matcherCache.size>MATCHER_LIMIT)matcherCache.delete(matcherCache.keys().next().value);
-    matchers.push({entryId:term.entryId,re,asciiPrefix:/^[\x00-\x7f]*$/.test(literal)?literal.split(/\s+/)[0].toLowerCase():null});yield;
+    matchers.push({entryId:term.entryId,literal,flags:term.firstName ? 'gu' : 'giu',asciiPrefix:/^[\x00-\x7f]*$/.test(literal)?literal.split(/\s+/)[0].toLowerCase():null});yield;
   }
   return matchers;
+}
+function matcherRegex(matcher) {
+  if(matcher.re)return matcher.re;
+  const phrase=escapeRegex(matcher.literal).replace(/\s+/g, '\\s+');
+  const pattern='(?<![\\p{L}\\p{N}])'+phrase+'(?![\\p{L}\\p{N}])',key=JSON.stringify([pattern,matcher.flags]);
+  let re=matcherCache.get(key);
+  if(re)matcherCache.delete(key);
+  else re=new RegExp(pattern,matcher.flags);
+  matcherCache.set(key,re);
+  if(matcherCache.size>MATCHER_LIMIT)matcherCache.delete(matcherCache.keys().next().value);
+  return matcher.re=re;
 }
 export function findMentionOccurrences(text, index, book) {
   return finish(matchOccurrences(text,finish(mentionMatchers(index,book))));
@@ -61,8 +65,10 @@ function* matchOccurrences(text,matchers) {
   // ASCII letters with punctuation/whitespace have ordinary ASCII case folds.
   // Other Unicode inputs retain the exact /iu/ path, including long s/Kelvin.
   const ascii=/^[\x00-\x7f\p{P}\s]*$/u.test(nfc)?nfc.toLowerCase():null;
-  for (const {entryId,re,asciiPrefix} of matchers) {
-    if(ascii!==null && asciiPrefix!==null && !ascii.includes(asciiPrefix)){yield;continue;}
+  for (const matcher of matchers) {
+    const {entryId,asciiPrefix}=matcher;
+    if((!nfc && matcher.literal) || (ascii!==null && asciiPrefix!==null && !ascii.includes(asciiPrefix))){yield;continue;}
+    const re=matcherRegex(matcher);
     re.lastIndex=0;
     // matchAll clones the regex before this generator yields. Concurrent async
     // requests never share an occurrence iterator or its lastIndex.

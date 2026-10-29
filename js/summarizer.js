@@ -66,7 +66,7 @@ export function planSummary(session,settings,messages,{maxChunks=Infinity,force=
   const cutoff=raw[recentStart-1]?.order ?? 0,prior=!full && all.some(m=>m.id===session.activeSummaryMessageId),fromOrder=prior ? session.breakpointOrder ?? 0 : 0;
   const firstUser=raw.find(m=>m.role==='user'),firstAssistant=firstUser && raw.find(m=>m.role==='assistant' && m.order>firstUser.order),opening=new Set([firstUser?.id,firstAssistant?.id]);
   let toFold=raw.filter(m=>m.order>fromOrder && m.order<=cutoff && !opening.has(m.id));
-  if(session.memory?.scene || toFold.some(m=>m.directorIncomplete)){const pending=toFold.find(m=>m.role==='assistant' && !isAcceptedTurn(m,{lastUserOrder:lastUserOrderOf(raw)}));if(pending){toFold=toFold.filter(m=>turns.turnById.get(m.id)<turns.turnById.get(pending.id));if(!toFold.length)return {skip:'pending-reply'};}}
+  if(session.memory?.scene || toFold.some(m=>m.directorIncomplete)){const lastUserOrder=lastUserOrderOf(raw),pending=toFold.find(m=>m.role==='assistant' && !isAcceptedTurn(m,{lastUserOrder}));if(pending){toFold=toFold.filter(m=>turns.turnById.get(m.id)<turns.turnById.get(pending.id));if(!toFold.length)return {skip:'pending-reply'};}}
   while(toFold.length && toFold.at(-1).role!=='assistant')toFold.pop();
   if(!toFold.length)return {skip:'nothing-to-fold'};
   const groups=[];for(const m of toFold){const turn=turns.turnById.get(m.id);if(groups.at(-1)?.turn!==turn)groups.push({turn,messages:[]});groups.at(-1).messages.push(m);}

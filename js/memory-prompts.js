@@ -3,9 +3,9 @@ import { maxOf } from './math-utils.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts, renderPrompt, renderLoreLabel } from './system-prompts.js';
 import { CONTINUITY_RULE, sectionMeta, cutoffLabel } from './continuity.js';
-import { computeTurns, formatTurnsTranscript } from './turns.js';
+import { computeTurns, formatTurnsTranscript, prepareTranscriptContext } from './turns.js';
 import { buildLoreIndex, findMentions, resolveScene, fitBook, renderEntry } from './lore-select.js';
-import { parseScene, sceneTimeline } from './scene.js';
+import { parseScene } from './scene.js';
 import { capLoreNotes } from './lore-note-window.js';
 export const DEFAULT_MEMORY_EXTRACTION_PROMPT = prompts.memoryExtraction;
 export const DEFAULT_MEMORY_REORGANIZE_PROMPT = prompts.memoryReorganize;
@@ -16,19 +16,20 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   const prompt = fillProtagonist(settings.memoryExtractionPrompt || DEFAULT_MEMORY_EXTRACTION_PROMPT, mem.protagonist)+"\n\n"+prompts.memoryNaming+"\n\n"+prompts.threadPolicy+"\n\n"+prompts.threadExtraction+"\n\n"+CONTINUITY_RULE+"\n"+prompts.memoryExtractionOutput;
   const inputBudget = requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens}) - await count(prompt) - 500;
   const turns = computeTurns(messages);
+  const context = prepareTranscriptContext(messages,turns);
   let fitted = null;
   for (const assistant of range.assistants) {
     const candidate = { ...range, endOrder: assistant.order, toTurn: assistant.turn, assistants: range.assistants.filter(a => a.order <= assistant.order), messages: range.messages.filter(m => m.order <= assistant.order) };
-    if (await count(formatTurnsTranscript(messages, turns, { range: candidate })) > inputBudget * .7) break;
+    if (await count(formatTurnsTranscript(messages, turns, { range: candidate, context })) > inputBudget * .7) break;
     fitted = candidate;
   }
   if (!fitted) throw new Error('One turn is too long for a memory update. Raise Max context tokens.');
-  const transcript = formatTurnsTranscript(messages, turns, { range: fitted });
+  const transcript = formatTurnsTranscript(messages, turns, { range: fitted, context });
   const archived=entries.filter(archivedThread);
   entries=entries.filter(e=>!archivedThread(e));
   const index = buildLoreIndex(entries), ids = new Set();
   for (const book of ['characters', 'locations','facts','events']) for (const id of findMentions(transcript, index, book)) ids.add(id);
-  const timeline=sceneTimeline(messages);
+  const timeline=context.timeline;
   for (const m of fitted.messages.filter(m => timeline.get(m.id)?.own)) {
     const resolved = resolveScene(parseScene(timeline.get(m.id).own), index);
     for (const id of resolved.characters) ids.add(id);

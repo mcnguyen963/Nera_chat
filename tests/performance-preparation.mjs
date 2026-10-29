@@ -79,8 +79,25 @@ test('compiled matcher reuse is bounded and ignores stale term membership',async
   select.findMentions('first',index,'characters');const first=compilations;
   select.findMentions('first',index,'characters');assert.equal(compilations,first);
   index.characters=Array.from({length:4100},(_,i)=>term('unused'+i));select.findMentions('',index,'characters');
+  assert.equal(compilations,first,'empty text does not compile unused terms');
+  for(const item of index.characters)select.findMentions(item.term,{characters:[item]},'characters');
   const full=compilations;index.characters=[term('first')];
   assert.deepEqual(plain(select.findMentions('first',index,'characters')),['first']);assert.equal(compilations,full+1,'old patterns are evicted');
+});
+
+test('cold matching compiles only possible ASCII terms and retains Unicode fallback',async()=>{
+  let compilations=0;
+  function CountedRegExp(...args){compilations++;return new RegExp(...args);}
+  const select=await appHarness({globals:{RegExp:CountedRegExp}})('lore-select.js');
+  compilations=0;
+  const terms=['silver hall','kael sol','mira vale','雪の姫'].map((name,i)=>({entryId:String(i),term:name,normTerm:name,firstName:false}));
+  const index={characters:terms};
+  assert.deepEqual(plain(select.findMentions('Silver Hall',index,'characters')),['0']);
+  assert.equal(compilations,2,'the ASCII match and non-ASCII term need regex matching');
+  assert.deepEqual(plain(select.findMentions('ſilver hall',index,'characters')),['0']);
+  assert.equal(compilations,4,'Unicode case folding uses the full matcher path');
+  const empty={characters:[{entryId:'empty',term:'',normTerm:'',firstName:false}]};
+  assert.deepEqual(plain(select.findMentionOccurrences('',empty,'characters')),[{id:'empty',start:0,end:0}]);
 });
 
 test('negative-match shortcuts preserve Unicode case folds, punctuation and whitespace',async()=>{
