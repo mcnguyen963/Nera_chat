@@ -33,7 +33,8 @@ test('F15 abandons imports older than one day once across repeated sidebar snaps
   h.snapshot();h.snapshot();await h.api.listSessions();await settle();
   assert.deepEqual(h.marked,['users/owner/sessions/abandoned']);
   assert.deepEqual(h.removed,['users/owner/sessions/abandoned']);
-  assert.equal(h.reads.length,9);
+  assert.equal(h.reads.length,10);
+  assert.equal(h.reads.filter(path=>path.endsWith('/vectorIndexes')).length,1);
   assert.equal(h.reads.filter(path=>path.endsWith('/storyRecovery')).length,1);
 });
 test('F15 preserves recent, pending timestamps and exact 24-hour imports while hiding them',async()=>{

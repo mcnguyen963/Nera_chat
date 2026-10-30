@@ -160,6 +160,7 @@ function* selectionWork(entries, mem, text, scene, recentText, sources) {
         if (e.kind === 'thread') {
           if (currentHits.has(e.id)) add(e,0,'mentioned');
           if (recentHits.has(e.id)) add(e,1,'recent mention');
+          if (e.status !== 'closed' && semanticIds.has(e.id)) add(e,1.5,'semantic match');
           if (e.status !== 'closed') add(e,2,'open thread');
         } else if (e.kind === 'timeline') add(e,3,'timeline');
         continue;

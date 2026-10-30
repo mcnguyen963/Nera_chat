@@ -3,10 +3,10 @@ import { resolveModelProfile } from './model-profiles.js';
 import { canonicalScene } from './scene.js';
 export const memoryValidationRanges = {
   loreNotesPerSection: [0, Number.MAX_SAFE_INTEGER], loreLookbackMessages: [0, Number.MAX_SAFE_INTEGER], batchTurns: [2, 100], lagTurns: [0, 50], updateMaxTokens: [256, 32000],
-  reorganizeMaxTokens: [256, 32000], blockDepth: [1, 20], budget: [0, 100000], maxCards: [1, 50],
+  reorganizeMaxTokens: [256, 32000], blockDepth: [1, 20], budget: [0, 100000], maxCards: [1, 50], historyRecallBudget: [0, 15000], historyRecallPassages: [1, 20],
 };
 export const DEFAULT_MEMORY = {
-  v: 1, calendar: {mode:'legacy',anchor:null}, characterSelection: false, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false, semanticLore:false, semanticEndpoint:'http://127.0.0.1:11434/v1/embeddings', semanticModel:'qwen3-embedding:0.6b',
+  v: 1, calendar: {mode:'legacy',anchor:null}, characterSelection: false, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false, semanticLore:false, historyRecall:false, semanticRecall:false, vectorCloudSync:false, historyRecallBudget:1200, historyRecallPassages:4, semanticEndpoint:'http://127.0.0.1:11434/v1/embeddings', semanticModel:'qwen3-embedding:0.6b',
   books: { characters: { on: true, budget: 4000, maxCards: 6 }, locations: { on: true, budget: 4000, maxCards: 2 }, facts: { on: true, budget: 1000 }, events: { on: true, budget: 3000 }, plan: { on: true, budget: 1500 } },
   loreNotesPerSection: 3, loreLookbackMessages: 4, batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'user',
 };
@@ -16,7 +16,7 @@ export function normalizeMemory(raw) {
   if (!raw || typeof raw !== 'object') return out;
   out.calendar = normalizeCalendar(raw.calendar);
   out.protagonist = String(raw.protagonist ?? '').trim().slice(0, 60);
-  for (const k of ['characterSelection', 'scene', 'sceneFallback', 'lorebooks', 'autoUpdate', 'memoryBlock', 'blockWindow','semanticLore']) out[k] = raw[k] === true;
+  for (const k of ['characterSelection', 'scene', 'sceneFallback', 'lorebooks', 'autoUpdate', 'memoryBlock', 'blockWindow','semanticLore','historyRecall','semanticRecall','vectorCloudSync']) out[k] = raw[k] === true;
   for (const k of ['semanticEndpoint','semanticModel']) if(typeof raw[k]==='string')out[k]=raw[k].trim().slice(0,500);
   out.startingScene = typeof raw.startingScene === 'string' ? canonicalScene(raw.startingScene) : null;
   if (!out.startingScene && (raw.startingScene || raw.startingSceneRaw)) out.startingSceneRaw=String(raw.startingScene || raw.startingSceneRaw);
@@ -27,7 +27,7 @@ export function normalizeMemory(raw) {
     const [min, max] = memoryValidationRanges[k];
     return Number.isFinite(Number(value)) && value != null && value !== '' ? Math.max(min, Math.min(max, Math.round(Number(value)))) : fallback;
   };
-  for (const k of ['loreNotesPerSection', 'loreLookbackMessages', 'batchTurns', 'lagTurns', 'updateMaxTokens', 'reorganizeMaxTokens', 'blockDepth']) out[k] = clamp(k, raw[k], out[k]);
+  for (const k of ['loreNotesPerSection', 'loreLookbackMessages', 'batchTurns', 'lagTurns', 'updateMaxTokens', 'reorganizeMaxTokens', 'blockDepth','historyRecallBudget','historyRecallPassages']) out[k] = clamp(k, raw[k], out[k]);
   out.blockRole = raw.blockRole === 'system' ? 'system' : 'user';
   for (const [book, defaults] of Object.entries(out.books)) {
     const b = raw.books?.[book];

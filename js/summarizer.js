@@ -56,14 +56,14 @@ export function lintSummary(content) {
 }
 
 const summaryRunning=new Set();
-export function planSummary(session,settings,messages,{maxChunks=Infinity,force=true,full=false,running=false,urgent=false}={}) {
+export function planSummary(session,settings,messages,{maxChunks=Infinity,force=true,full=false,running=false,urgent=false,throughOrder=Infinity}={}) {
   if(running)return {skip:'running'};
   if(!force)return {skip:'not-needed'};
   const all=messages.filter(m=>!(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order),raw=all.filter(m=>m.role!=='summary'),turns=computeTurns(raw),N=Math.max(0,settings.keepRecentMessagesAfterSummary ?? 10);
   if(raw.length<=N)return {skip:'nothing-to-fold'};
   let recentStart=raw.length-N,firstRecentTurn=turns.turnById.get(raw[recentStart]?.id);
   while(recentStart>0 && turns.turnById.get(raw[recentStart-1].id)===firstRecentTurn)recentStart--;
-  const cutoff=raw[recentStart-1]?.order ?? 0,prior=!full && all.some(m=>m.id===session.activeSummaryMessageId),fromOrder=prior ? session.breakpointOrder ?? 0 : 0;
+  const cutoff=Math.min(raw[recentStart-1]?.order ?? 0,throughOrder),prior=!full && all.some(m=>m.id===session.activeSummaryMessageId),fromOrder=prior ? session.breakpointOrder ?? 0 : 0;
   const firstUser=raw.find(m=>m.role==='user'),firstAssistant=firstUser && raw.find(m=>m.role==='assistant' && m.order>firstUser.order),opening=new Set([firstUser?.id,firstAssistant?.id]);
   let toFold=raw.filter(m=>m.order>fromOrder && m.order<=cutoff && !opening.has(m.id));
   if(session.memory?.scene || toFold.some(m=>m.directorIncomplete)){const lastUserOrder=lastUserOrderOf(raw),pending=toFold.find(m=>m.role==='assistant' && !isAcceptedTurn(m,{lastUserOrder}));if(pending){toFold=toFold.filter(m=>turns.turnById.get(m.id)<turns.turnById.get(pending.id));if(!toFold.length)return {skip:'pending-reply'};}}
@@ -85,7 +85,7 @@ async function runSummary(session,settings,opts) {
   if(settings._storySettingsRevision!=null)session.storySettingsRevision=settings._storySettingsRevision;
   const expectedSource=summarySource(session),all=structuredClone(opts.messages ?? (opts.full ? await getMessages(session.id) : await getCheckpointMessages(session)));
   // The running gate belongs to this call; planning is pure over the captured history.
-  const plan=planSummary(session,settings,all,{full:opts.full});
+  const plan=planSummary(session,settings,all,{full:opts.full,throughOrder:opts.throughOrder ?? Infinity});
   if(plan.skip)return {skipped:true,reason:plan.skip==='pending-reply' ? 'Review flagged replies before summarizing their turns.' : 'Nothing new to fold in since the last breakpoint.'};
   const {toFold,turns}=plan;let newBreakpointOrder=plan.newBreakpointOrder;
   // Prior summary is already in `all` — no extra getMessage() read.
@@ -169,6 +169,7 @@ async function runSummary(session,settings,opts) {
     newBreakpointOrder,
     foldedCount: offset,
     summaryMessage:{ ...summaryMessage,...(newMsg.message ?? Object.fromEntries(Object.entries(newMsg).filter(([key])=>key!=='session'))) },
+    session:newMsg.session ?? null,
     historyRevision:newMsg.historyRevision,
     lintWarnings:lintSummary(content),
   };

@@ -7,6 +7,8 @@ import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { deleteChatCache } from './chat-cache.js';
 import { deleteLoreSemanticStory } from './lore-semantic.js';
+import { deleteRecallStory } from './history-recall-storage.js';
+import { deleteVectorCloudStory } from './vector-cloud-cache.js';
 import { loadUnsavedReply, storeUnsavedReply } from './unsaved-replies.js';
 import { copyLore, waitForStoryWrites } from './lore-store.js';
 import {
@@ -109,6 +111,8 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     // Drop local persisted state before any server subtree disappears.
     await deleteChatCache(owner,sessionId);
     await deleteLoreSemanticStory(owner,sessionId);
+    try { await deleteRecallStory(owner,sessionId); } catch (error) { console.error('Could not clear historical index:',error); }
+    try { await deleteVectorCloudStory(owner,sessionId); } catch (error) { console.error('Could not clear vector sync cache:',error); }
     await loreStore.forgetLoreCache(owner,sessionId);
     await storeUnsavedReply(owner,sessionId,null);
     checkOwner(owner);
@@ -117,7 +121,7 @@ export function resumeSessionDeletion(sessionId, owner = currentUid()) {
     checkOwner(owner);
     // An already-committed write may have acknowledged while deletion drained.
     await loreStore.forgetLoreCache(owner,sessionId);
-    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns','operationReceipts']) {
+    for(const name of ['messageChunks','messages','lore','loreBackups','loreMeta','storySettings','directorTurns','operationReceipts','vectorIndexes']) {
       const snap=await getDocsFromServer(collection(db,'users',owner,'sessions',sessionId,name));
       checkOwner(owner);
       for(let i=0;i<snap.docs.length;i+=450) {

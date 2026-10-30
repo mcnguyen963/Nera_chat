@@ -46,3 +46,9 @@ test('summary review work grows linearly with story history', async () => {
   }
   assert.ok(counts[1] < counts[0] * 12, `role reads: ${counts.join(', ')}`);
 });
+
+test('a coordinated summary never passes the completed batch boundary',async()=>{
+  const {planSummary}=await summarizer(),messages=history(12);
+  assert.deepEqual(orders(planSummary({id:'s'},settings,messages,{throughOrder:7})),[3,4,5,6]);
+  assert.equal(planSummary({id:'s'},settings,messages,{throughOrder:6}).newBreakpointOrder,6);
+});

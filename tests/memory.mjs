@@ -176,7 +176,7 @@ test('extraction input bounds whole turns and excludes thinking and hidden plans
   const entry = l.makeEntry('characters','Mira'); entry.sections.appearance.text = 'canon'; entry.sections.appearance.lines = [line('a','scar',2)]; const input = p.buildReorganizeMessages({ settings,mem,entries:[entry] }); assert.match(input[1].content,/canon, unknown cutoff/); assert.equal(entry.sections.appearance.text,'canon');
 });
 
-async function updaterHarness(complete, { countTokens=count,commitExtraction,prepare } = {}) {
+async function updaterHarness(complete, { countTokens=count,commitExtraction,prepare,indexHistoryBatch } = {}) {
   const events = [], commits = [], writes = [];
   let live,owner='owner';
   const use = await setup({
@@ -191,7 +191,7 @@ async function updaterHarness(complete, { countTokens=count,commitExtraction,pre
   const updater = await use('memory-updater.js'), { normalizeMemory } = await use('memory-settings.js');
   live = { session:{ id:'s',memory:normalizeMemory({ autoUpdate:true,batchTurns:2,lagTurns:0,updateMaxTokens:256 }),memoryState:{ extractedThroughOrder:0,failureStreak:0 } },settings:structuredClone(settings),messages:structuredClone(messages),entries:[] };
   let busy = false, unlock;
-  updater.configureMemoryUpdater({ get:() => live,busy:() => busy,prepare,waitIdle:() => busy ? new Promise(resolve => unlock=resolve) : Promise.resolve(),patch:(sid,patch,entries) => { Object.assign(live.session.memoryState,patch); if (entries) live.entries=entries; } });
+  updater.configureMemoryUpdater({ get:() => live,busy:() => busy,prepare,indexHistoryBatch,waitIdle:() => busy ? new Promise(resolve => unlock=resolve) : Promise.resolve(),patch:(sid,patch,entries) => { Object.assign(live.session.memoryState,patch); if (entries) live.entries=entries; } });
   return { updater,live,events,commits,writes,setBusy(value) { busy=value; },setOwner(value) { owner=value; },unlock:() => unlock?.() };
 }
 test('updater waits for narration before commit, advances only on success and targets original story',async () => {
@@ -223,6 +223,15 @@ const waitForMemory = async predicate => {
   for(let i=0;i<100 && !predicate();i++)await new Promise(resolve=>setImmediate(resolve));
   assert.ok(predicate(),'Memory work did not reach the expected stage');
 };
+test('scheduled memory and message embedding use the same captured range',async()=>{
+  let finish,embedded;
+  const h=await updaterHarness(()=>new Promise(resolve=>finish=resolve),{indexHistoryBatch:async(snapshot,range)=>{embedded={snapshot,range};return {indexedMessages:range.messages.length,persisted:true};}});
+  h.live.session.memory={...h.live.session.memory,historyRecall:true,semanticRecall:true};h.live.settings.narrationMode='classic';h.live.historyComplete=true;
+  assert.equal(h.updater.maybeStartAfterTurn('s'),true);await waitForMemory(()=>!!finish && !!embedded);
+  assert.equal(embedded.snapshot.historyComplete,true);assert.deepEqual(Array.from(embedded.range.messages,m=>m.order),[1,2,3,4]);
+  finish({content:'NONE'});await waitForMemory(()=>!h.updater.isRunning('s'));
+  assert.equal(h.live.session.memoryState.extractedThroughOrder,4);
+});
 function readyParallelHistory(h) {
   h.live.session.memory={...h.live.session.memory,batchTurns:10,lagTurns:4};
   h.live.messages=[...parallelHistory(13),{id:'new-user',role:'user',order:27,narratorTurn:14,content:'NEW INPUT MUST NOT BE EXTRACTED'}];

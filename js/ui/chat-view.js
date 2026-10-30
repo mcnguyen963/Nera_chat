@@ -75,6 +75,8 @@ let session = null;      // latest snapshot of the active session doc
 let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
+let waitingForMemoryBatch = false;
+const batchSummaryDue=new Map();
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
 const releaseBusy=token=>{
   if(busyGate.active!==token)return false;
@@ -208,6 +210,7 @@ function cancelGeneration(token,controller,vibration,petTurn){
   restoreStreamUI();finishPetTurn('ready',petTurn);checkpointTurn(token);releaseBusy(token);
 }
 async function historyAction(kind,run) {
+  if(kind==='continue-replacement' && scheduledBatchEnabled() && !await finishScheduledBatch())return false;
   const token=acquireBusy(kind);if(!token){showTransientInfo('Wait for the current reply to finish.');return false;}
   try{await run(token);return true;}catch(error){if(!(error instanceof StaleTurn))showTransientError(error);return false;}finally{releaseBusy(token);}
 }
@@ -392,9 +395,13 @@ export async function calculateCurrentTokenPreview() {
   refreshTokenDisplayMeta();
   const owner=currentUid(),sid=state.sessionId,key=tokenContextKey(),epoch=historyEpoch;
   const result=await tokenUsageCache.preview(owner,sid,key,async check=>{
-    const built=await buildContextForRequest(live.session,live.settings,{
+    let built=await buildContextForRequest(live.session,live.settings,{
       messages:live.messages,loreEntries:live.entries,draftText:'',includeInspection:true,check,
     });
+    if(live.settings.narrationMode!=='director' && live.session.memory?.historyRecall===true){
+      const {recallForRequest}=await import('../history-recall.js');
+      built=await recallForRequest(live,built,{draftText:''},{check:()=>{check();return true;}});
+    }
     let director=null,directorError=null;
     if(live.settings.narrationMode==='director'){try{director=await buildDirectorContext(live.session,live.settings,live.messages,live.entries,live.session.directorState ?? seedDirectorState(live.session,live.messages,live.entries));}catch(error){check();directorError=error.message;}}
     check();return {built,live,director,directorError,countingMethod:tokenizer.tokenizerStatus?.()==='ok' ? 'tokenizer' : 'estimate'};
@@ -407,12 +414,16 @@ export async function calculateCurrentTokenPreview() {
   tokenUsageError=null;applyIndicator(record);persistTokenUsage();tokenUsageChanged();
   return result;
 }
-export async function prepareMemorySnapshot() {
+export async function prepareMemorySnapshot({history=false}={}) {
   if (!session) throw new Error('Open a story first.');
-  const sid = state.sessionId;
+  const sid = state.sessionId,owner=currentUid(),epoch=historyEpoch;
   await flushStory(sid);await reconcileStory();
   if (sid !== state.sessionId) throw new Error('Story changed while loading history.');
-  return memorySnapshot();
+  if(history && !memorySnapshot()?.historyComplete)await ensureHistory();
+  if(currentUid()!==owner || state.sessionId!==sid || historyEpoch!==epoch)throw new Error('Story changed while loading history.');
+  const ready=memorySnapshot();
+  if(history && !ready?.historyComplete)throw new Error('The complete history could not be verified. Try again after sync.');
+  return ready;
 }
 function rememberMemoryStory() {
   if (session && anyMemory(normalizeMemory(session.memory))) memoryStories.set(session.id,{ ...memorySnapshot(),owner:currentUid() });
@@ -615,13 +626,16 @@ export function initChatView() {
     if (e.detail.sessionId !== state.sessionId) return;
     updateMemoryChip(); document.dispatchEvent(new CustomEvent('memory-refresh'));
     const d = e.detail;
+    if(d.status==='success' && !d.manual && d.range?.endOrder!=null && session?.memory?.historyRecall && session?.memory?.semanticRecall && state.settings?.autoSummarizationEnabled===true){
+      const key=unsavedKey(currentUid(),d.sessionId);batchSummaryDue.set(key,Math.max(batchSummaryDue.get(key) ?? 0,d.range.endOrder));
+    }
     if(d.status==='rebuild-review')document.dispatchEvent(new CustomEvent('memory-rebuild-review',{detail:d}));
     if (d.status === 'running') {
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: 'Extracting memory… Keep this page open.' } }));
     } else if (d.status === 'success' && (d.notes || d.manual || managerOpen || d.semanticStatus && !['ready','off'].includes(d.semanticStatus))) {
       const text = `Memory updated (turns ${d.range.fromTurn}–${d.range.toTurn}): `+(d.notes ? `${d.notes} notes · ${d.drafts} new characters.` : 'nothing new.')+(d.semanticStatus && !['ready','off'].includes(d.semanticStatus) ? ' Semantic search: '+d.semanticStatus+'; some matches may be missing.' : '');
       document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text, action: d.notes ? 'Review' : null, event: 'lorebooks', options: { filter: 'review' } } }));
-    } else if ((d.status==='idle' || d.status==='info') && d.manual && d.message) showTransientInfo(d.message);
+    } else if ((d.status==='idle' && d.manual || d.status==='info') && d.message) showTransientInfo(d.message);
     else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: (d.failureStreak >= 3 ? 'Memory updates paused after 3 failures. ' : 'Memory update failed. ')+(d.lastError ?? ''), action: 'Open settings', event: 'memory-settings' } }));
   });
   el.list = document.getElementById("message-list");
@@ -1087,12 +1101,14 @@ function applySummaryResult(result) {
   if (result.skipped) return;
   session = {
     ...session,
+    ...(result.session ?? {}),
     activeSummaryMessageId: result.summaryId,
     breakpointOrder: result.newBreakpointOrder,
     historyRevision:result.historyRevision ?? session.historyRevision,
   };
   historyMessages = mergeMessages(historyMessages ?? [], [result.summaryMessage]);
   historyRevision = session.historyRevision ?? 0;
+  const store=storyStore(state.sessionId);if(store && !store.status.pending && !store.status.paused)store.adopt({session,messages:historyMessages,turns:store.view.turns},{serverConfirmed:true});
   renderMessages(mergeMessages(lastMessages, [result.summaryMessage]));
   updateIndicator();
   queueCacheSave();
@@ -1610,7 +1626,7 @@ function clearLocalSummary() {
 }
 
 async function regenerateMessage(message, replan = false) {
-  if(busy)return;
+  if(busy || (scheduledBatchEnabled() && !await finishScheduledBatch()))return;
   const token=acquireBusy('regenerate');if(!token)return;
   try {
     await waitForPendingChanges(token);assertActive(token);
@@ -1656,7 +1672,7 @@ function updateRewriteControls() {
 async function handleContinue() {
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId)))return;
   const sid=state.sessionId;
-  if(busy || editingState || sid!==state.sessionId)return;
+  if(busy || editingState || sid!==state.sessionId || (scheduledBatchEnabled() && !await finishScheduledBatch()))return;
   const token=acquireBusy('continue');if(!token)return;
   try {
     await waitForPendingChanges(token);assertActive(token);
@@ -1908,13 +1924,13 @@ async function retryReply(message) {
 
 async function handleSend(e) {
   e.preventDefault();
-  if (busy || !session || editingState) return;
+  if (busy || !session || editingState || waitingForMemoryBatch) return;
   if(unsavedReplies.has(unsavedKey(currentUid(),state.sessionId))){showTransientInfo('Save or discard the unsaved reply before sending another turn.');return;}
   const requestedSessionId = state.sessionId, requestedOwner = currentUid();
-  const draft = el.input.value;
-  let saved = false;
-  const text = draft.trim();
+  const draft = el.input.value, text = draft.trim();
   if (!text) return;
+  if(scheduledBatchEnabled() && !await finishScheduledBatch())return;
+  let saved = false;
   if (busy || !session || requestedSessionId !== state.sessionId || requestedOwner !== currentUid()) return;
   pendingMaintenance=null;const token=acquireBusy('send');if(!token)return;
   try {
@@ -1948,10 +1964,43 @@ async function handleSend(e) {
   }
 }
 
+function scheduledBatchEnabled(){
+  return !!session?.memory?.historyRecall && !!session.memory.semanticRecall && !!session.memory.autoUpdate && effectiveActiveSettings().narrationMode!=='director';
+}
+
+async function finishScheduledBatch(){
+  if(waitingForMemoryBatch || busy || !session || editingState)return false;
+  const sid=state.sessionId,owner=currentUid(),valid=()=>!busy && !!session && !editingState && sid===state.sessionId && owner===currentUid();
+  if(!scheduledBatchEnabled())return true;
+  waitingForMemoryBatch=true;
+  try{
+    if(!memoryUpdater.isRunning(sid) && memoryUpdater.dueRangeFor(sid))memoryUpdater.maybeStartAfterTurn(sid);
+    if(memoryUpdater.isRunning(sid)){showTransientInfo('Finishing the scheduled memory and search update…');await memoryUpdater.waitForIdle(sid);if(!valid())return false;}
+    const key=unsavedKey(owner,sid),throughOrder=Math.max(batchSummaryDue.get(key) ?? 0,session.memoryState?.extractedThroughOrder ?? 0);
+    if(throughOrder>(session.breakpointOrder ?? 0) && !(summaryBackoff.get(sid) ?? 0) && effectiveActiveSettings().autoSummarizationEnabled===true)await runBatchSummary(sid,throughOrder);
+    return valid();
+  }finally{waitingForMemoryBatch=false;}
+}
+
+async function runBatchSummary(sid,throughOrder){
+  const owner=currentUid(),key=unsavedKey(owner,sid),token=acquireBusy('maintenance');if(!token)return;
+  batchSummaryDue.delete(key);
+  try{
+    showTransientInfo('Finishing the scheduled story summary…');
+    await flushStory(sid);assertActive(token);
+    const settings=effectiveActiveSettings(),hist=historyMessages ?? await ensureHistory();assertActive(token);
+    const planned=planSummary(session,settings,hist,{maxChunks:1,throughOrder});if(planned.skip)return;
+    const controller=new AbortController();token.abort=()=>controller.abort('user');
+    const result=await runSummarization(structuredClone(session),settings,{signal:controller.signal,maxChunks:1,throughOrder,messages:structuredClone(hist),loreEntries:structuredClone(loreEntries)});assertActive(token);applySummaryResult(result);
+  }catch(error){if(!(error instanceof StaleTurn)){summaryBackoff.set(sid,3);showTransientInfo('Scheduled summary was not saved: '+error.message);}}
+  finally{releaseBusy(token);}
+}
+
 async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null) {
   const pendingRecovery=unsavedReplies.get(unsavedKey(currentUid(),state.sessionId));
   const continuingRecovery=pendingRecovery && pendingRecovery===recoveryReply && recoveryReply.replanReplacement && recoveryReply.message.truncated && opts.replanReplacement && opts.continuationId===recoveryReply.overwriteId;
   if(pendingRecovery && !continuingRecovery){showTransientInfo('Save or discard the unsaved reply first.');return;}
+  if(!suppliedToken && scheduledBatchEnabled() && !await finishScheduledBatch())return;
   const token=suppliedToken ?? acquireBusy('reply');if(!token)return;
   const ownsToken=!suppliedToken;
   let settings;
@@ -1996,8 +2045,16 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
       opts={...opts,directorTurn};
       showTransientInfo('Narrating…');
     }
-    let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries),signal:controller.signal,check:()=>assertActive(token) }),controller);
+    const withRecall=!directorMode && sourceSession.memory?.historyRecall===true;
+    let built = await waitForPreparation(buildContextForRequest(sourceSession,settings,{ ...opts,...(withRecall ? {includeInspection:true} : {}),messages:sourceMessages,requireLatestUser:true,loreEntries:structuredClone(loreEntries),signal:controller.signal,check:()=>assertActive(token) }),controller);
     assertActive(token);
+    if(withRecall) {
+      const {recallForRequest}=await import('../history-recall.js');
+      const revision=sourceSession.historyRevision,epoch=historyEpoch;
+      const stillCurrent=()=>busyGate.stillActive(token) && historyEpoch===epoch && session?.historyRevision===revision;
+      built=await waitForPreparation(recallForRequest({session:sourceSession,settings,messages:sourceMessages,storyEpoch:epoch},built,opts,{signal:controller.signal,check:stillCurrent}),controller);
+      assertActive(token);
+    }
     if(opts.savedUserId){
       validateSavedStorySettings();
       // Disabled: build from the captured context without cancelling for background changes.
@@ -2025,7 +2082,7 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
         tokenUsageError=null;applyIndicator(dispatchedUsage);persistTokenUsage();tokenUsageChanged();
       },allowTruncated:true,signal:controller.signal,onDelta:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('writing',petTurn); if (streamState) appendStream('content',t); },onReasoning:t => { if(controller.signal.aborted || !busyGate.stillActive(token))return;vibration.feed(t); updatePetPhase('thinking',petTurn); if (streamState) appendStream('thinking',t); } });
       if (!opts.overwriteId && !opts.continuationId && !opts.upToOrder && (opts.savedUserId || opts.expectLatestUserId)) {
-        try { earlyMemoryStarted=memoryUpdater.maybeStartAlongsideTurn(sid,{session:sourceSession,settings,messages:sourceMessages,entries:loreEntries,storyEpoch:historyEpoch}); }
+        try { earlyMemoryStarted=memoryUpdater.maybeStartAlongsideTurn(sid,{session:sourceSession,settings,messages:sourceMessages,entries:loreEntries,storyEpoch:historyEpoch,historyComplete:!!historyMessages && historyRevision===(sourceSession.historyRevision ?? 0)}); }
         catch(error) { console.error('Background memory start:',error); }
       }
       result=await narration;

@@ -11,9 +11,9 @@ export const noteOmissions = entry => entry[WINDOW]?.omitted ?? [];
 export const cappedRecordReason = (entry,id) => entry[WINDOW]?.recordReasons.get(id);
 export const supersededBeforeCap = entry => entry[WINDOW]?.replaced ?? new Set();
 
-export function capLoreNotes(entry,limit=3) {
+export function capLoreNotes(entry,limit=3,semanticRecordIds=[]) {
   if(!Number.isSafeInteger(limit) || limit<0)limit=3;
-  if(entry.book==='plan' || entry[WINDOW]?.limit===limit)return entry;
+  if(entry.book==='plan' || entry[WINDOW]?.limit===limit && !semanticRecordIds.length)return entry;
   if(limit===0)return entry;
   const protectedIds=new Set(),pinnedIds=new Set(),records=entry.recordLayout?.records ?? [];
   const replaced=new Set(records.filter(r=>validSupersession(entry,r)).flatMap(r=>r.supersedes));
@@ -22,6 +22,9 @@ export function capLoreNotes(entry,limit=3) {
     if(core.valid)for(const s of core.sources)if(s.lineId!=null)protectedIds.add(keyOf(s.section,s.lineId));
   }
   const resolved=records.map(record=>({record,result:resolveRecord(entry,record)}));
+  const semanticIds=new Set(semanticRecordIds);
+  for(const {record,result} of resolved)if(semanticIds.has(record.id) && result.valid && !replaced.has(record.id))
+    for(const source of result.sources)if(source.lineId!=null)protectedIds.add(keyOf(source.section,source.lineId));
   for(const {record,result} of resolved) {
     if(!result.valid || replaced.has(record.id))continue;
     const core=entry.book==='characters' && approvedRecord(entry,record);

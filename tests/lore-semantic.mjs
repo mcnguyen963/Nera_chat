@@ -9,18 +9,19 @@ async function fixture(){
   entries[0].sections.notes.text='Heals poisoned travellers with herbs.';
   entries[1].sections.notes.text='Bakes bread and cakes.';
   const mem=normalizeMemory({lorebooks:true,semanticLore:true});
-  const records=new Map(),storage={load:async key=>records.get(key) ?? null,save:async(value,check)=>{check();records.set(value.key,value);return true;}};
+  const records=new Map(),storage={load:async key=>records.get(key) ?? null,findStory:async(owner,sid)=>[...records.values()].find(v=>v.owner===owner && v.sid===sid) ?? null,save:async(value,check)=>{check();records.set(value.key,value);return true;}};
   const embedding=async(connection,texts)=>texts.map(t=>Float32Array.from(/poison|herbs|antidote/i.test(t)?[1,0]:/bread|bakes/i.test(t)?[0,1]:[0,0.2]));
   const semantic=(await use('lore-semantic.js')).createLoreSemantic({storage,embedder:embedding});
   return {use,entries,mem,semantic,records};
 }
-test('semantic index is scoped by account, story, model and exact usable source content',async()=>{
+test('semantic index is scoped by account and story, and warns when its model differs',async()=>{
   const h=await fixture(),base={owner:'one',sid:'story',mem:h.mem,entries:h.entries},query='antidote for poison';
   await h.semantic.index(base);
   assert.deepEqual(plain((await h.semantic.search({...base,query})).ids),['mara']);
   assert.equal((await h.semantic.search({...base,owner:'two',query})).status,'index missing');
   assert.equal((await h.semantic.search({...base,sid:'other',query})).status,'index missing');
-  assert.equal((await h.semantic.search({...base,mem:{...h.mem,semanticModel:'other'},query})).status,'index missing');
+  const mismatched=await h.semantic.search({...base,mem:{...h.mem,semanticModel:'other'},query});
+  assert.equal(mismatched.modelMismatch,true);assert.deepEqual(plain(mismatched.ids),['mara']);
   const edited=structuredClone(h.entries);edited[0].sections.notes.text='Changed since indexing.';
   const stale=await h.semantic.search({...base,entries:edited,query});
   assert.equal(stale.status,'partial index');assert.ok(!stale.ids.includes('mara'));
@@ -90,4 +91,56 @@ test('a model dimension change requires rebuilding instead of claiming search is
   const changed=(await h.use('lore-semantic.js')).createLoreSemantic({storage:{load:async key=>h.records.get(key)},embedder:async()=>[Float32Array.from([1,0,0])]});
   const result=await changed.search({owner:'a',sid:'s',mem:h.mem,entries:h.entries,query:'poison'});
   assert.equal(result.status,'index out of date');assert.deepEqual(plain(result.ids),[]);
+});
+
+test('incremental indexing reuses unchanged records and removes deleted cards',async()=>{
+  const h=await fixture(),calls=[],embedding=async(_connection,texts)=>{calls.push(...texts);return texts.map(()=>Float32Array.from([1,0]));};
+  const semantic=(await h.use('lore-semantic.js')).createLoreSemantic({storage:{load:async key=>h.records.get(key),save:async(value,check)=>{check();h.records.set(value.key,value);return true;}},embedder:embedding});
+  const base={owner:'a',sid:'s',mem:h.mem,entries:h.entries};
+  await semantic.index(base);assert.equal(calls.length,2);calls.length=0;
+  const changed=structuredClone(h.entries);changed[0].sections.notes.text='A new detail.';
+  await semantic.index({...base,entries:changed});assert.equal(calls.length,1);calls.length=0;
+  await semantic.index({...base,entries:changed.slice(0,1)});assert.equal(calls.length,0);
+  const result=await semantic.search({...base,entries:changed.slice(0,1),query:'detail'});
+  assert.deepEqual(plain(result.ids),['mara']);
+});
+
+test('semantic event matches rank between recent mentions and other open threads',async()=>{
+  const use=appHarness(),{makeEntry}=await use('lore-lines.js'),{normalizeMemory}=await use('memory-settings.js'),{selectEntries}=await use('lore-select.js');
+  const a=makeEntry('events','A',{id:'a'}),b=makeEntry('events','B',{id:'b'}),closed=makeEntry('events','C',{id:'c'});
+  for(const e of [a,b,closed]){e.kind='thread';e.status='open';}closed.status='closed';
+  const mem=normalizeMemory({lorebooks:true});
+  const result=selectEntries([a,b,closed],mem,'',null,'',{semanticIds:['b','c']});
+  assert.equal(result.selected.events[0].entry.id,'b');assert.equal(result.selected.events[0].reason,'semantic match');
+  assert.ok(!result.selected.events.some(x=>x.entry.id==='c'));
+});
+
+test('matched older record is included without opening the whole note window',async()=>{
+  const use=appHarness(),{makeEntry}=await use('lore-lines.js'),records=await use('lore-records.js'),{fitRecords}=await use('lore-record-select.js');
+  const e=makeEntry('facts','Secret',{id:'secret'});e.sections.text.lines=[1,2,3,4].map(n=>({id:'n'+n,text:'detail '+n,by:'auto',turn:n}));
+  const entry=records.reconcileRecords(e),old=entry.recordLayout.records.find(r=>records.resolveRecord(entry,r).sources.some(s=>s.lineId==='n1'));
+  const count=async t=>t.length,base=await fitRecords([{entry}],10000,count,{loreNotesPerSection:2});
+  assert.doesNotMatch(base.text,/detail 1/);
+  const matched=await fitRecords([{entry}],10000,count,{loreNotesPerSection:2,semanticRecords:{secret:[old.id]}});
+  assert.match(matched.text,/detail 1/);assert.doesNotMatch(matched.text,/detail 2/);assert.match(matched.text,/detail 4/);
+  const tooSmall=await fitRecords([{entry}],1,count,{loreNotesPerSection:2,semanticRecords:{secret:[old.id]}});assert.equal(tooSmall.text,'');
+});
+
+test('search does not automatically rebuild a missing or stale index',async()=>{
+  const h=await fixture(),base={owner:'a',sid:'s',mem:h.mem,entries:h.entries};
+  const result=await h.semantic.search({...base,query:'poison',check:()=>{}});assert.equal(result.status,'index missing');
+  await new Promise(resolve=>setTimeout(resolve,30));assert.equal(h.records.size,0);
+  await h.semantic.index(base);assert.equal(h.records.size,1);
+  const prior=h.records.values().next().value;await h.semantic.search({...base,entries:[],query:'poison',check:()=>{}});
+  await new Promise(resolve=>setTimeout(resolve,30));assert.equal(h.records.values().next().value,prior);
+});
+test('an interrupted lore rebuild keeps the active index and resumes completed batches',async()=>{
+  const h=await fixture(),{createLoreSemantic}=await h.use('lore-semantic.js');
+  const entries=Array.from({length:10},(_,i)=>{const e=structuredClone(h.entries[0]);e.id='entry-'+i;e.name='Character '+i;return e;});
+  const records=new Map(),stages=new Map();let calls=0;
+  const storage={load:async key=>records.get(key)??null,loadStage:async key=>stages.get(key)??null,save:async(value,check)=>{check();records.set(value.key,value);return true;},saveStage:async(value,check)=>{check();stages.set(value.key,structuredClone(value));return true;},removeStage:async key=>stages.delete(key)};
+  const embedder=async(_connection,texts)=>{calls++;if(calls===2)throw Error('Interrupted');return texts.map(()=>[1,0]);};
+  const semantic=createLoreSemantic({storage,embedder}),args={owner:'a',sid:'s',mem:h.mem,entries,force:true};
+  await assert.rejects(semantic.index(args),/Interrupted/);assert.equal(records.size,0);assert.equal(stages.size,1);
+  const result=await semantic.index(args);assert.equal(result.count,10);assert.equal(calls,3);assert.equal(stages.size,0);
 });

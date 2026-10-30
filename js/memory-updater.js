@@ -14,6 +14,15 @@ const inFlight = new Map(), rawAnswers = new Map();
 let runtime = null;
 export function configureMemoryUpdater(value) { runtime = value; }
 export function isRunning(sid) { return inFlight.has(sid); }
+export async function waitForIdle(sid) {
+  while(inFlight.has(sid)) {
+    await new Promise(resolve=>{
+      const done=event=>{if(event.detail?.sessionId===sid && event.detail.status==='idle'){document.removeEventListener('memory-status',done);resolve();}};
+      document.addEventListener('memory-status',done);
+      if(!inFlight.has(sid)){document.removeEventListener('memory-status',done);resolve();}
+    });
+  }
+}
 export function lastRawAnswer(sid) { return rawAnswers.get(sid) ?? ''; }
 export function stop(sid) { inFlight.get(sid)?.abort(); }
 export async function stopAndWait(sid) {
@@ -43,7 +52,7 @@ export function maybeStartAlongsideTurn(sid, snapshot) {
   if (!mem.autoUpdate || effectivelyPaused(snapshot.session.memoryState)) return false;
   const range = alongsideTurnRange(snapshot.messages,snapshot.session.memoryState,mem);
   if (!range) return false;
-  const captured = structuredClone({session:snapshot.session,settings:snapshot.settings,messages:snapshot.messages,entries:snapshot.entries,storyEpoch:snapshot.storyEpoch,range});
+  const captured = structuredClone({session:snapshot.session,settings:snapshot.settings,messages:snapshot.messages,entries:snapshot.entries,storyEpoch:snapshot.storyEpoch,historyComplete:snapshot.historyComplete,range});
   void start(sid,captured.range,false,captured).catch(e => console.error('Memory update:',e)); return true;
 }
 const sameOwner=owner=>{try{return currentUid()===owner;}catch{return false;}};
@@ -101,7 +110,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
   scope?.check();
   if (isRunning(sid)) return false;
   const controller = new AbortController(),owner = currentUid();
-  let live,mem,settings,source,entries,streamedAnswer='';
+  let live,mem,settings,source,entries,streamedAnswer='',embeddingJob=null;
   const stillCurrent = () => {
     if (controller.signal.aborted || !sameOwner(owner) || scope && !scope.current()) return false;
     if (!captured) return true;
@@ -127,6 +136,24 @@ async function start(sid,range,manual,captured=null,scope=null) {
     if(!stillCurrent())return false;
     const snapshot = stamp(range.messages);
     const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
+    if(!manual && mem.historyRecall && mem.semanticRecall && live.settings.narrationMode!=='director') {
+      const embeddingSnapshot=structuredClone({session:live.session,settings:live.settings,messages:source,storyEpoch:live.storyEpoch,historyComplete:live.historyComplete});
+      embeddingJob=Promise.resolve().then(async()=>{
+        const indexHistoryBatch=runtime.indexHistoryBatch ?? (await import('./history-recall.js')).indexHistoryBatch;
+        return indexHistoryBatch(embeddingSnapshot,range,{signal:controller.signal,check:()=>stillCurrent() && rangeUnchanged(range,runtime.get(sid)?.messages ?? [],snapshot)});
+      })
+        .then(async result=>{
+          if(!stillCurrent() || !result)return;
+          emit({sessionId:sid,status:'info',message:`Historical search updated: ${result.indexedMessages} messages indexed.`});
+          if(mem.vectorCloudSync && result.persisted){
+            await runtime.waitIdle(controller.signal);if(!stillCurrent())return;
+            const current=runtime.get(sid);if(!current)return;
+            try{const {uploadStoryVectors}=await import('./vector-cloud-sync.js');await uploadStoryVectors(current,'history',{getLive:()=>runtime.get(sid)});}
+            catch(error){if(stillCurrent())emit({sessionId:sid,status:'info',message:'Search vectors are saved locally; cloud sync is pending: '+String(error.message).slice(0,180)});}
+          }
+        })
+        .catch(error=>{if(stillCurrent())emit({sessionId:sid,status:'info',message:'Historical search update failed; it will retry in a later batch: '+String(error.message).slice(0,180)});});
+    }
     const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     if(!stillCurrent())return false;
     rawAnswers.set(sid,result.content);
@@ -167,7 +194,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
     const failure=await controller.committing;
     if(!stillCurrent())return false;
     runtime.patch(sid,failure); emit({ sessionId:sid,status:'failed',...failure,manual }); return false;
-  } finally { if(inFlight.get(sid)===controller){inFlight.delete(sid);emit({ sessionId:sid,status:'idle' });} }
+  } finally { await embeddingJob; if(inFlight.get(sid)===controller){inFlight.delete(sid);emit({ sessionId:sid,status:'idle' });} }
 }
 
 export function dueRangeFor(sid) {

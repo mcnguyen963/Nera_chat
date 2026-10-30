@@ -16,11 +16,11 @@ import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-upda
 import { copyText } from './clipboard.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
-const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow','semanticLore'];
+const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow','semanticLore','historyRecall','semanticRecall','vectorCloudSync'];
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId','semanticEndpoint','semanticModel'];
 const seedKeys = ['date','time','place','present'];
-const numbers = ['loreNotesPerSection','loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth'];
-let filled = null, rebuildNotice = null;
+const numbers = ['loreNotesPerSection','loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth','historyRecallBudget','historyRecallPassages'];
+let filled = null, rebuildNotice = null, historyIndexController = null, loreIndexController = null;
 export function fillMemory(raw) {
   filled = normalizeMemory(raw);
   if(get('semantic-status'))get('semantic-status').textContent='';
@@ -74,10 +74,10 @@ export function initMemorySettings(openLore) {
   get('calendar-copy')?.addEventListener('click',async()=>{try{const text=calendarInstruction(readMemory().calendar);if(!text)throw new Error('Choose modern time and enter an anchor first.');await copyText(text);toast('Copied. Review these instructions before adding them to your story prompt.');}catch(e){toast(e);}});
   get('showScene').addEventListener('change',() => { setPref('nera.memory.showScene',get('showScene').checked ? '1' : '0'); document.dispatchEvent(new CustomEvent('scene-preference')); });
   get('open-lore').addEventListener('click',openLore);
-  get('semantic-index')?.addEventListener('click',async()=>{
-    const button=get('semantic-index'),status=get('semantic-status');
-    if(state.busy){toast('Finish the current turn first');return;}
-    button.disabled=true;
+  for(const [key,force] of [['semantic-index',false],['semantic-rebuild',true]])get(key)?.addEventListener('click',async()=>{
+    const button=get(key),status=get('semantic-status');
+    if(state.busy || loreIndexController){toast('Finish the current operation first');return;}
+    button.disabled=true;loreIndexController=new AbortController();get('semantic-cancel').hidden=false;
     try{
       const live=await prepareMemorySnapshot(),owner=currentUid(),sid=live.session.id,epoch=live.storyEpoch;
       if(!live.historyComplete)throw new Error('Full story history is not available. Open the story and try again.');
@@ -86,10 +86,47 @@ export function initMemorySettings(openLore) {
       const check=()=>{const now=memorySnapshot();if(currentUid()!==owner || !now || now.session.id!==sid || now.storyEpoch!==epoch || now.session.historyRevision!==captured.session.historyRevision || now.session.loreRevision!==captured.session.loreRevision)throw new Error('Story or lore changed; build the index again.');};
       const entries=usableLore(captured.entries,captured.messages,captured.session).entries;
       status.textContent='Building the device index…';
-      const result=await loreSemantic.index({owner,sid,mem,entries,check,progress:({done,total})=>{status.textContent=`Indexed ${done} of ${total} cards…`;}});
+      const result=await loreSemantic.index({owner,sid,mem,entries,check,force,signal:loreIndexController.signal,progress:({done,total})=>{status.textContent=`Indexed ${done} of ${total} records…`;}});
       status.textContent=`Indexed ${result.count} cards on this device. Save story settings to enable semantic search.`;
+      if(live.session.memory?.vectorCloudSync && live.session.memory.semanticModel===mem.semanticModel && live.session.memory.semanticEndpoint===mem.semanticEndpoint){
+        try{const {uploadStoryVectors}=await import('../vector-cloud-sync.js');await uploadStoryVectors(live,'lore',{getLive:()=>memorySnapshot()});status.textContent+= ' Lore vectors synced to cloud.';}
+        catch(error){status.textContent+=' Cloud sync pending: '+error.message;}
+      }
     }catch(error){status.textContent='Indexing failed: '+error.message;}
-    finally{button.disabled=false;}
+    finally{button.disabled=false;loreIndexController=null;get('semantic-cancel').hidden=true;}
+  });
+  get('semantic-cancel')?.addEventListener('click',()=>loreIndexController?.abort());
+  for(const [key,force] of [['history-index',false],['history-rebuild',true]])get(key)?.addEventListener('click',async()=>{
+    const button=get(key),status=get('history-status');
+    if(state.busy || historyIndexController){toast('Finish the current operation first');return;}
+    button.disabled=true;historyIndexController=new AbortController();get('history-cancel').hidden=false;
+    try {
+      const live=await prepareMemorySnapshot({history:true}),owner=currentUid(),sid=live.session.id,epoch=live.storyEpoch;
+      const {indexOlderHistory}=await import('../history-recall.js');
+      status.textContent='Indexing older messages on this device…';
+      const result=await indexOlderHistory(live,{getLive:()=>memorySnapshot(),force,signal:historyIndexController.signal,onProgress:p=>{status.textContent=`Indexed ${p.messages} messages; embedded ${p.embedded} of ${p.total ?? p.passages} passages.`;}});
+      if(currentUid()!==owner || state.sessionId!==sid || memorySnapshot()?.storyEpoch!==epoch)return;
+      status.textContent=result.persisted ? `Indexed ${result.indexedMessages} messages and ${result.rows.length} passages on this device.` : 'Indexing finished in memory, but device storage is unavailable; it will not survive reload.';
+      if(result.persisted && live.session.memory?.vectorCloudSync){
+        try{const {uploadStoryVectors}=await import('../vector-cloud-sync.js');await uploadStoryVectors(live,'history',{getLive:()=>memorySnapshot()});status.textContent+=' Message vectors synced to cloud.';}
+        catch(error){status.textContent+=' Cloud sync pending: '+error.message;}
+      }
+    } catch(error) {status.textContent='Indexing failed: '+error.message;}
+    finally {button.disabled=false;historyIndexController=null;get('history-cancel').hidden=true;}
+  });
+  get('history-cancel')?.addEventListener('click',()=>historyIndexController?.abort());
+  for(const [key,direction] of [['vector-upload','upload'],['vector-repair','repair'],['vector-download','download']]) get(key)?.addEventListener('click',async()=>{
+    const control=get(key),status=get('vector-status');if(state.busy){toast('Finish the current turn first');return;}control.disabled=true;
+    try {
+      const live=await prepareMemorySnapshot({history:true}),{uploadStoryVectors,downloadStoryVectors}=await import('../vector-cloud-sync.js');
+      const operation=direction==='download' ? downloadStoryVectors : uploadStoryVectors,results=[];
+      for(const kind of ['history','lore']){
+        status.textContent=`${direction==='download'?'Downloading':'Uploading'} ${kind} vectors…`;
+        try{const result=await operation(live,kind,{getLive:()=>memorySnapshot(),force:direction==='repair'});results.push(direction==='download' ? `${kind}: ${result.restored} restored, ${result.skipped} outdated${result.modelIds?.length ? '; models: '+result.modelIds.join(', ') : ''}` : result.unchanged ? `${kind}: no local changes; cloud was not checked` : `${kind}: ${result.manifest.count} vectors synced`);}catch(error){results.push(`${kind}: ${error.message}`);}
+      }
+      status.textContent=results.join(' · ');
+    }catch(error){status.textContent='Vector sync failed: '+error.message;}
+    finally{control.disabled=false;}
   });
   get('update-now').addEventListener('click',() => void manualUpdate());
   get('reextract')?.addEventListener('click',async()=>{try{const live=memorySnapshot(),order=live?.session.memoryState?.rebuildFromOrder;if(order==null)return;if(!confirm('Re-extract edited history from this turn? Generated notes will be marked for review and backed up.'))return;const finished=await rebuildFrom(live.session.id,order);toast(finished ? 'Re-extraction finished; review prior notes in Lorebooks.' : 'Re-extraction stopped. '+(memorySnapshot(live.session.id)?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);}});
