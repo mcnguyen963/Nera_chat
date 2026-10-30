@@ -43,7 +43,11 @@ export function contextRingPresentation({used, max}) {
   return {dash: `${ratio * 100} 100`, color: `rgb(${color.join(', ')})`};
 }
 
-// The selected mode remains available through the picker's accessible label.
-export function thinkingIcon() {
-  return '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a9 9 0 1 1 16 0"/><path d="M12 13l4-4"/><circle cx="12" cy="13" r="1.5"/><path d="M7 17h10"/></svg>';
+// Token budgets have no comparable effort level, so use the neutral position.
+export function thinkingIcon(mode) {
+  const angles = {off:-60, none:-60, minimal:-45, low:-30, medium:0, high:30, xhigh:45, max:60, max_tokens:0};
+  const colors = {off:'#a1a5ae', none:'#a1a5ae', minimal:'#85d6b0', low:'#63d4a0', medium:'#e9c66e', high:'#f4a568', xhigh:'#f08478', max:'#f26975', max_tokens:'#9fb8e8'};
+  const angle = angles[mode] ?? 0;
+  const color = colors[mode] ?? colors.medium;
+  return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a9 9 0 1 1 16 0"/><path d="M12 13V7" transform="rotate(${angle} 12 13)"/><circle cx="12" cy="13" r="1.5"/><path d="M7 17h10"/></svg>`;
 }

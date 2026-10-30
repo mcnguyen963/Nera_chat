@@ -258,18 +258,23 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 
 /* Compact composer: native thinking picker over a visible mode icon. */
 .composer-row .composer-model { display: none; }
-.composer-row .composer-thinking { flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; padding: 0; margin-right: auto; border-radius: 50%; }
+.composer-row .composer-thinking { position: static; flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; padding: 0; margin-right: auto; border-radius: 50%; }
 .composer-thinking .thinking-mode-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; pointer-events: none; }
-.composer-thinking select { position: absolute; inset: 0; width: 44px; height: 44px; opacity: 0; cursor: pointer; }
-.composer-thinking .composer-select-arrow { display: none; }
-.composer-thinking:hover { background: #ffffff0d; }
-.composer-thinking:focus-within { outline: 2px solid var(--muted); outline-offset: 2px; }
+.thinking-button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text); cursor: pointer; }
+.thinking-button:hover { background: #ffffff0d; }
+.thinking-menu { position: absolute; z-index: 45; left: 8px; bottom: calc(100% + 8px); width: 190px; max-height: max(88px, min(400px, calc(var(--app-height, 100dvh) - 180px))); overflow-y: auto; padding: 6px; border: 1px solid var(--glass-line); border-radius: 18px; background: var(--glass); box-shadow: var(--glass-shadow), var(--glass-shine); }
+.thinking-menu button { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text); text-align: left; font-size: 14px; cursor: pointer; }
+.thinking-menu button:hover, .thinking-menu button:focus-visible { background: #ffffff18; }
+.thinking-menu button[aria-checked="true"]::after { content: '\2713'; margin-left: auto; }
+@supports ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
+  .thinking-menu { background: rgb(18 20 26 / 85%); backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%); }
+}
+@media (prefers-reduced-transparency: reduce) { .thinking-menu { background: var(--glass); backdrop-filter: none; -webkit-backdrop-filter: none; } }
 /* The idle bar leaves more of the conversation visible. Keep the picker
    available while its native menu has focus. */
-.composer-box:not(:focus-within) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding-block: 4px; }
-.composer-box:not(:focus-within) > textarea { grid-column: 1; grid-row: 1; min-width: 0; max-height: 44px; }
-.composer-box:not(:focus-within) > .composer-row { grid-column: 2; grid-row: 1; width: auto; }
-.composer-box:not(:focus-within) .composer-thinking { display: none; }
+.composer-box:not(:focus-within):not(.thinking-open) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding-block: 4px; }
+.composer-box:not(:focus-within):not(.thinking-open) > textarea { grid-column: 1; grid-row: 1; min-width: 0; max-height: 44px; }
+.composer-box:not(:focus-within):not(.thinking-open) > .composer-row { grid-column: 2; grid-row: 1; width: auto; }
 #jump-to-latest { display: none; }
 @media (max-width: 720px) {
   .chat-tab:not(.is-empty) #jump-to-latest { display: inline-flex; }

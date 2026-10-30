@@ -8,6 +8,36 @@ function control() {
 }
 const doc = {createElement:() => control()};
 
+test('Thinking gauge moves from left to right as effort increases', async () => {
+  const {thinkingIcon} = await appHarness()('ui/icons.js');
+  const modes = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  const angles = modes.map(mode => Number(thinkingIcon(mode).match(/rotate\((-?\d+) 12 13\)/)[1]));
+  assert.deepEqual(angles, [-60, -60, -45, -30, 0, 30, 45, 60]);
+  assert.match(thinkingIcon('max_tokens'), /rotate\(0 12 13\)/);
+  assert.match(thinkingIcon('off'), /stroke="#a1a5ae"/);
+  assert.match(thinkingIcon('low'), /stroke="#63d4a0"/);
+  assert.match(thinkingIcon('medium'), /stroke="#e9c66e"/);
+  assert.match(thinkingIcon('max'), /stroke="#f26975"/);
+});
+
+test('Thinking menu keeps the composer expanded, selects an effort, and closes on Escape', async () => {
+  const classes = new Set(), docEvents = {}, doc = {activeElement:null, addEventListener:(type, fn) => {docEvents[type] = fn;}};
+  const element = () => ({events:{}, attrs:{}, addEventListener(type,fn){this.events[type]=fn;}, setAttribute(k,v){this.attrs[k]=v;}, focus(){doc.activeElement=this;}, contains(target){return target===this;}});
+  const button=element(), menu=element(), off=element(), high=element();
+  off.dataset={thinking:'off'}; high.dataset={thinking:'high'};
+  menu.hidden=true; menu.querySelectorAll=()=>[off,high]; menu.contains=target=>[menu,off,high].includes(target);
+  button.closest=()=>({classList:{add:v=>classes.add(v),remove:v=>classes.delete(v)}});
+  let changed=0; const select={value:'off',dispatchEvent(){changed++;}};
+  const {initThinkingPicker}=await appHarness({globals:{document:doc,Event:class {constructor(type){this.type=type;}}}})('ui/thinking-picker.js');
+  const picker=initThinkingPicker({button,menu,select,doc}); picker.sync('off','Thinking: Off');
+  button.events.click(); assert.equal(menu.hidden,false); assert.equal(classes.has('thinking-open'),true); assert.equal(doc.activeElement,off);
+  high.events.click(); assert.equal(select.value,'high'); assert.equal(changed,1); assert.equal(menu.hidden,true); assert.equal(classes.has('thinking-open'),false);
+  picker.sync('high','Thinking: High'); assert.equal(high.attrs['aria-checked'],'true'); assert.equal(button.attrs['aria-label'],'Thinking: High');
+  button.events.click(); let prevented=false; menu.events.keydown({key:'Escape',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true); assert.equal(menu.hidden,true); assert.equal(doc.activeElement,button);
+  button.events.click(); docEvents.pointerdown({target:{}}); assert.equal(menu.hidden,true);
+});
+
 test('Composer icons and accessible labels follow Rewrite, Continue and Stop states', async () => {
   const ui = await appHarness({globals:{document:doc}})('ui/icons.js');
   const button = control();

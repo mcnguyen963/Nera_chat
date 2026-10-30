@@ -119,9 +119,9 @@
                 <select id="quick-director-profile" aria-label="Director profile"></select>
                 <span class="composer-select-arrow" aria-hidden="true">⌄</span>
               </label>
-              <label class="composer-select composer-thinking" title="Thinking: Off">
-                <span id="quick-thinking-icon" class="thinking-mode-icon" aria-hidden="true"></span>
-                <select id="quick-thinking" aria-label="Thinking">
+              <div class="composer-select composer-thinking">
+                <button id="quick-thinking-button" type="button" class="thinking-button" aria-label="Thinking: Off" aria-haspopup="menu" aria-expanded="false" aria-controls="quick-thinking-menu"><span id="quick-thinking-icon" class="thinking-mode-icon" aria-hidden="true"></span></button>
+                <select id="quick-thinking" aria-label="Thinking" hidden>
                   <option value="off">Off</option>
                   <option value="none">None</option>
                   <option value="minimal">Minimal</option>
@@ -132,8 +132,18 @@
                   <option value="max">Max</option>
                   <option value="max_tokens">Token budget</option>
                 </select>
-                <span class="composer-select-arrow" aria-hidden="true">⌄</span>
-              </label>
+                <div id="quick-thinking-menu" class="thinking-menu" role="menu" aria-label="Thinking effort" hidden>
+                  <button type="button" role="menuitemradio" data-thinking="off">Off</button>
+                  <button type="button" role="menuitemradio" data-thinking="none">None</button>
+                  <button type="button" role="menuitemradio" data-thinking="minimal">Minimal</button>
+                  <button type="button" role="menuitemradio" data-thinking="low">Low</button>
+                  <button type="button" role="menuitemradio" data-thinking="medium">Medium</button>
+                  <button type="button" role="menuitemradio" data-thinking="high">High</button>
+                  <button type="button" role="menuitemradio" data-thinking="xhigh">XHigh</button>
+                  <button type="button" role="menuitemradio" data-thinking="max">Max</button>
+                  <button type="button" role="menuitemradio" data-thinking="max_tokens">Token budget</button>
+                </div>
+              </div>
               <button type="button" id="btn-restore-draft" class="btn composer-action" data-icon="restore" aria-label="Restore original" hidden>Restore original</button>
               <button type="button" id="btn-rewrite" class="btn composer-action" data-icon="rewrite" aria-label="Rewrite" disabled>Rewrite</button>
               <button type="submit" form="composer" id="btn-send" class="composer-send" data-icon="send" aria-label="Send">Send</button>

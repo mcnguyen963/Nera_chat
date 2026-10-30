@@ -14,6 +14,7 @@ import { prepareDirectorTurn } from '../director-turn.js';
 import { directorScene, directorSceneWarnings } from '../director-state.js';
 import { requestSource } from '../continuity.js';
 import {setIcon, rewritePresentation, contextRingPresentation, thinkingIcon} from './icons.js';
+import {initThinkingPicker} from './thinking-picker.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {initJumpToLatest} from './jump-to-latest.js';
@@ -750,6 +751,7 @@ export function initChatView() {
 
 // Saved connections are shared; Director mode can select both roles per story.
 const storyRoleProfiles=()=>state.storySettings?.values?.narrationMode==='director' || !!state.storySettings?.values?.narratorProfileId;
+let thinkingPicker;
 async function saveQuickRoleProfile(key,value) {
   try{
     if(busy)throw new Error('Finish the current reply before changing profiles.');
@@ -764,6 +766,8 @@ function initQuickControls() {
   el.quickProfile = document.getElementById("quick-profile");
   el.quickDirector = document.getElementById('quick-director-profile');
   el.quickThinking = document.getElementById("quick-thinking");
+  el.quickThinkingButton = document.getElementById('quick-thinking-button');
+  thinkingPicker = initThinkingPicker({button:el.quickThinkingButton, menu:document.getElementById('quick-thinking-menu'), select:el.quickThinking});
   el.quickDirector.addEventListener('change',()=>saveQuickRoleProfile('directorProfileId',el.quickDirector.value));
 
   el.quickProfile.addEventListener("change", async () => {
@@ -783,6 +787,10 @@ function initQuickControls() {
     let connection;
     try{connection=resolveModelProfile(s,selected,{role:'Narrator'});}catch(error){showTransientError(error.message);refreshQuickControls();return;}
     const v = el.quickThinking.value;
+    const label = `Thinking: ${Array.from(el.quickThinking.options || []).find(option=>option.value===v)?.textContent || v}`;
+    thinkingPicker?.sync(v,label);
+    const glyph = document.getElementById('quick-thinking-icon');
+    if (glyph) glyph.innerHTML = thinkingIcon(v);
     if (v === "off") {
       connection.reasoning = { ...connection.reasoning, enabled: false };
     } else if (v === "max_tokens") {
@@ -841,6 +849,7 @@ function refreshQuickControls() {
   const thinkingLabel = `Thinking: ${Array.from(el.quickThinking.options || []).find(option=>option.value===thinkingMode)?.textContent || thinkingMode}`;
   el.quickThinking.title = thinkingLabel;
   el.quickThinking.setAttribute('aria-label', thinkingLabel);
+  thinkingPicker?.sync(thinkingMode,thinkingLabel);
   const thinkingGlyph = document.getElementById('quick-thinking-icon');
   if (thinkingGlyph) {
     thinkingGlyph.innerHTML = thinkingIcon(thinkingMode);
@@ -2510,6 +2519,8 @@ function applyBusyUi(b) {
   if(el.quickProfile)el.quickProfile.disabled=b;
   if(el.quickDirector)el.quickDirector.disabled=b;
   if(el.quickThinking)el.quickThinking.disabled=b;
+  if(el.quickThinkingButton)el.quickThinkingButton.disabled=b;
+  if(b)thinkingPicker?.close();
   if(el.summarizeBtn)el.summarizeBtn.disabled=b;
   if(busyUiQueued)return;
   busyUiQueued=true;
