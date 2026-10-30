@@ -199,7 +199,7 @@ input:focus, select:focus, textarea:focus { border-color: #a8a8a8; }
   #settings-saved-msg:not(:empty) { display: block; position: absolute; top: 100%; left: 0; right: 0; padding: 8px 12px; background: var(--panel); z-index: 3; }
   .settings-content, .memory-content { padding-bottom: calc(20px + var(--composer-safe-bottom)); }
   #settings-tab .settings-body { display: flex; flex-direction: column; }
-  #settings-tab .settings-rail { flex: 1; flex-direction: column; gap: 8px; padding: 16px 14px calc(20px + var(--composer-safe-bottom)); overflow: auto; border: 0; }
+  #settings-tab .settings-rail { flex: 1; flex-direction: column; gap: 8px; padding: 16px 14px calc(20px + var(--composer-safe-bottom)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none contain; border: 0; }
   #settings-tab .settings-rail button { position: relative; width: 100%; min-height: 68px; padding: 12px 38px 12px 14px; white-space: normal; background: var(--panel-2); box-shadow: none; font-size: 15px; }
   #settings-tab .settings-rail button::after { content: '›'; position: absolute; right: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 24px; }
   #settings-tab .settings-rail button small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }

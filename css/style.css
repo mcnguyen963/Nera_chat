@@ -291,17 +291,17 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 /* Settings popup: the rail and footer stay put while only content scrolls. */
 .settings-overlay { position: fixed; inset: 0; z-index: 60; height: var(--app-height, 100dvh); display: grid; place-items: center; padding: max(12px, var(--safe-top)) 14px max(12px, var(--safe-bottom)); }
 .settings-backdrop { position: absolute; inset: 0; background: #000b; }
-.settings-dialog { position: relative; display: flex; flex-direction: column; width: min(900px, 100%); max-height: 100%; height: min(720px, 100%); min-height: 0; overflow: hidden; background: #111; border: 1px solid #383838; border-radius: 18px; box-shadow: 0 24px 80px #000b; }
+.settings-dialog { position: relative; display: flex; flex-direction: column; width: min(900px, 100%); max-width: 100%; max-height: 100%; height: min(720px, 100%); min-height: 0; overflow: hidden; background: #111; border: 1px solid #383838; border-radius: 18px; box-shadow: 0 24px 80px #000b; }
 .settings-header { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid #292929; }
 .settings-header .eyebrow { margin: 0 0 5px; }
 .settings-header h1 { font-family: Georgia, serif; font-size: 27px; font-weight: 400; margin: 0; }
 .settings-close { flex: none; width: 44px; height: 44px; border: 0; border-radius: 9px; background: #222; color: #eee; font-size: 28px; line-height: 1; }
 .settings-body { display: grid; grid-template-columns: 182px minmax(0, 1fr); flex: 1; min-height: 0; }
-.settings-rail { display: flex; flex-direction: column; gap: 4px; padding: 14px 9px; overflow-y: auto; border-right: 1px solid #292929; }
+.settings-rail { display: flex; flex-direction: column; gap: 4px; padding: 14px 9px; overflow-x: hidden; overflow-y: auto; border-right: 1px solid #292929; }
 .settings-rail button { flex: none; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 9px; color: #aaa; background: transparent; text-align: left; font-size: 12px; line-height: 1.35; }
 .settings-rail button:hover, .settings-rail button.selected { background: #292929; color: #fff; }
 .settings-rail button.selected { box-shadow: inset 3px 0 #c5c5c2; }
-.settings-content { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 24px 30px; }
+.settings-content { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: none contain; padding: 8px 24px 30px; }
 .settings-panel h2 { font-family: Georgia, serif; font-size: 25px; font-weight: 400; margin: 15px 0 22px; }
 .settings-panel h3 { margin: 30px 0 17px; padding-top: 19px; border-top: 1px solid #292929; font-size: 14px; color: #ddd; }
 .settings-panel .settings-grid { gap: 16px; }
@@ -333,6 +333,20 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
 #settings-saved-msg:empty { display: none; }
 .settings-label-short { display: none; }
 .settings-dialog :is(button, input, select, textarea):focus-visible { outline: 2px solid #ddd; outline-offset: 2px; }
+
+/* Long fields and live status messages must fit at every viewport width. */
+#settings-tab { overflow-wrap: anywhere; }
+#settings-tab :is(.settings-dialog, .settings-body, .settings-rail, .settings-panel, .settings-grid > *, .settings-prompts > *, label) { min-width: 0; }
+#settings-tab .settings-prompts { grid-template-columns: minmax(0, 1fr); }
+#settings-tab .settings-panel label:not(.checkbox-label):not(.pet-choice) { display: flex; flex-direction: column; gap: 9px; }
+#settings-tab .settings-panel :is(input:not([type="checkbox"]), select, textarea) { max-width: 100%; min-width: 0; }
+#settings-tab .settings-panel :is(input:not([type]), input[type="search"]) { width: 100%; }
+#settings-tab .settings-panel .btn { max-width: 100%; white-space: normal; }
+#settings-tab .model-input-row { flex-wrap: wrap; }
+#settings-tab .model-input-row input { flex-basis: 140px; }
+#settings-tab .memory-book-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr); }
+#settings-tab .memory-book-row > p { grid-column: 1 / -1; }
+
 @media (max-width: 720px) {
   .settings-overlay { padding: 0; }
   .settings-dialog { width: 100%; height: 100%; max-height: 100%; border-radius: 0; border: 0; }
@@ -359,16 +373,6 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .settings-panel .profile-row select { flex-basis: 100%; }
   .settings-prompts textarea { width: 100%; min-height: clamp(260px, 45vh, 420px); }
 
-  /* Settings content must shrink and wrap inside the phone's scroll area. */
-  #settings-tab { overflow-wrap: anywhere; }
-  #settings-tab :is(.settings-dialog, .settings-body, .settings-rail, .settings-panel, .settings-grid > *, .settings-prompts > *) { min-width: 0; }
-  #settings-tab .settings-prompts { grid-template-columns: minmax(0, 1fr); }
-  #settings-tab .settings-panel label:not(.checkbox-label):not(.pet-choice) { display: flex; flex-direction: column; gap: 9px; }
-  #settings-tab .settings-panel :is(input:not([type="checkbox"]), select, textarea) { max-width: 100%; min-width: 0; }
-  #settings-tab .settings-panel :is(input:not([type]), input[type="search"]) { width: 100%; }
-  #settings-tab .settings-panel .btn { max-width: 100%; white-space: normal; }
-  #settings-tab .model-input-row { flex-wrap: wrap; }
-  #settings-tab .model-input-row input { flex-basis: 140px; }
   #settings-tab .memory-book-row { grid-template-columns: minmax(0, 1fr) auto; }
   #settings-tab .memory-book-row > :is(label:not(.checkbox-label), p) { grid-column: 1 / -1; }
   #settings-tab .pet-choice { display: grid !important; grid-template-columns: 20px 88px minmax(0, 1fr); flex: 1 1 100%; min-width: 0; max-width: 100%; }
