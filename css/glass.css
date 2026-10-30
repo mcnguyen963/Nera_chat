@@ -111,8 +111,13 @@ input:focus, select:focus, textarea:focus { border-color: #a8a8a8; }
 .chat-tab:not(.is-empty) > .message-list { padding-bottom: calc(var(--composer-height, 110px) + 24px); scroll-padding-bottom: calc(var(--composer-height, 110px) + 12px); }
 .composer-box { display: flex; flex-direction: column; gap: 2px; max-width: var(--reading-width); padding: 8px 10px 6px; border: 1px solid var(--glass-line); border-radius: var(--radius-surface); background: var(--glass); box-shadow: var(--glass-shine); }
 .composer-box:focus-within { border-color: #919191; }
-.composer textarea { width: 100%; min-height: 36px; max-height: min(240px, calc(var(--app-height, 100dvh) * .35)); padding: 0 6px; border: 0; border-radius: 0; background: transparent; text-shadow: 0 1px 6px #000; font-size: 11px; line-height: 26px; }
+.composer textarea { width: 100%; min-height: 36px; max-height: min(240px, calc(var(--app-height, 100dvh) * .35)); padding: 0 6px; border: 0; border-radius: 0; background: transparent; text-shadow: 0 1px 6px #000; font-size: 14px; line-height: 26px; }
 .composer textarea:focus-visible { outline-offset: 1px; border-radius: 4px; }
+/* Show 14px text while retaining the 16px input size that avoids iPhone focus zoom.
+   The wrapper contains the unscaled width, so the composer cannot scroll sideways. */
+@media (max-width: 720px), (hover: none) and (pointer: coarse) {
+  .composer textarea { font-size: 16px; width: calc(100% / .875); transform: scale(.875); transform-origin: top left; }
+}
 .composer-row { width: 100%; display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; }
 .composer-select { position: relative; flex: 1 1 0; min-width: 44px; min-height: 44px; padding-block: 8.5px; border-radius: 9px; }
 .composer-thinking { flex: .7 1 0; min-width: 64px; max-width: 140px; }
@@ -275,7 +280,8 @@ input:focus, select:focus, textarea:focus { border-color: #a8a8a8; }
 /* The idle bar leaves more of the conversation visible. Keep the picker
    available while its native menu has focus. */
 .composer-box:not(:focus-within):not(.thinking-open) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding-block: 4px; padding-left: 52px; }
-.composer-box:not(:focus-within):not(.thinking-open) > textarea { grid-column: 1; grid-row: 1; min-width: 0; max-height: 44px; }
+.composer-box:not(:focus-within):not(.thinking-open) > .composer-input { grid-column: 1; grid-row: 1; min-width: 0; max-height: 44px; }
+.composer-box:not(:focus-within):not(.thinking-open) > .composer-input > textarea { max-height: 44px; }
 .composer-box:not(:focus-within):not(.thinking-open) > .composer-row { grid-column: 2; grid-row: 1; width: auto; }
 .composer-box:not(:focus-within):not(.thinking-open) .composer-thinking { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); margin: 0; }
 #jump-to-latest { display: none; }

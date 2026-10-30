@@ -18,7 +18,7 @@ async function findChrome() {
 
 // Actual browser geometry catches overflow that the DOM substitutes cannot.
 // Set CHROME_BIN when Chromium is not installed in a standard location.
-test('All settings tabs fit without horizontal scrolling, including expanded Memory and long live messages', {timeout:60000}, async t=>{
+test('Touch composer focus stays readable and all settings tabs fit without horizontal scrolling', {timeout:60000}, async t=>{
   const executable=await findChrome();
   if(!executable)return t.skip('Chrome/Chromium unavailable; set CHROME_BIN to run layout verification.');
   const profile=await mkdtemp(join(tmpdir(),'nera-settings-layout-'));
@@ -97,6 +97,35 @@ test('All settings tabs fit without horizontal scrolling, including expanded Mem
         label.append(checkbox,preview,document.createTextNode(pet.name));get('set-pet-choices').append(label);
       }
     });
+    await send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    for(const [width,height] of [[320,568],[390,844],[390,330],[430,932],[932,430],[1024,768]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});
+      const composer=await evaluate(async()=>{
+        const input=document.getElementById('chat-input');document.getElementById('settings-tab').classList.add('hidden');
+        document.getElementById('welcome').hidden=true;
+        const {createComposerSizer}=await import('/js/ui/composer-size.js');const resize=createComposerSizer({input:()=>input});
+        const sizes=[],visibleSizes=[],widths=[],outside=[];
+        const measure=()=>{
+          const style=getComputedStyle(input),font=parseFloat(style.fontSize),scale=new DOMMatrixReadOnly(style.transform).a;
+          sizes.push(font);visibleSizes.push(font*scale);
+          widths.push(Math.abs(input.getBoundingClientRect().width-input.parentElement.clientWidth));
+          for(const el of [input,document.getElementById('btn-send')]){const rect=el.getBoundingClientRect();if(rect.left<0 || rect.right>innerWidth+.5 || rect.top<0 || rect.bottom>innerHeight+.5)outside.push(el.id);}
+        };
+        for(const value of ['', 'A multiline message.\n'.repeat(12)]){
+          input.blur();input.value=value;resize();await new Promise(requestAnimationFrame);measure();
+          input.focus();resize();await new Promise(requestAnimationFrame);measure();
+        }
+        input.blur();document.getElementById('settings-tab').classList.remove('hidden');
+        return {sizes,visibleSizes,widths,outside,touch:matchMedia('(hover: none) and (pointer: coarse)').matches,viewport:document.querySelector('meta[name=viewport]').content};
+      });
+      assert.equal(composer.touch,true,`${width}×${height} touch emulation`);
+      assert.ok(composer.sizes.every(size=>size>=16),`${width}×${height} composer font sizes: ${composer.sizes}`);
+      assert.ok(composer.visibleSizes.every(size=>size===14),`${width}×${height} visible composer text: ${composer.visibleSizes}`);
+      assert.ok(composer.widths.every(difference=>difference<1),`${width}×${height} composer width: ${composer.widths}`);
+      assert.deepEqual(composer.outside,[],`${width}×${height} composer and Send stay in view`);
+      assert.doesNotMatch(composer.viewport,/user-scalable\s*=\s*(?:no|0)|maximum-scale\s*=/i,'Manual zoom stays available');
+    }
+    await send('Emulation.setTouchEmulationEnabled',{enabled:false});
     for(const [width,height] of [[320,568],[375,667],[390,844],[430,932],[667,375],[720,540],[721,540],[768,1024],[820,1180],[932,430],[1024,768],[1280,900]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<=720});
       for(const panel of ['categories','model','context','pets','prompts','story','memory','transfer','account']){
