@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
+import {promptFetch} from './prompt-files.mjs';
 
 const plain=x=>JSON.parse(JSON.stringify(x));
 async function fixture(){
@@ -33,10 +34,26 @@ test('index abort and changed story never save a partial index',async()=>{
   await assert.rejects(h.semantic.index({owner:'a',sid:'s',mem:h.mem,entries:h.entries,check:()=>{throw Error('changed')}}),/changed/);
   assert.equal(h.records.size,0);
 });
-test('local-only connection rejects remote endpoints and credentials',async()=>{
+test('embedding connections accept HTTPS and private network HTTP, but reject unsafe URLs',async()=>{
   const {semanticConnection}=await appHarness()('lore-semantic.js');
-  for(const endpoint of ['https://example.com/v1/embeddings','http://192.168.1.2:11434/v1/embeddings','http://user:pass@localhost:11434/v1/embeddings'])assert.throws(()=>semanticConnection({semanticEndpoint:endpoint,semanticModel:'x'}));
-  assert.equal(semanticConnection({semanticEndpoint:'http://127.0.0.1:11434/v1/embeddings',semanticModel:'x'}).model,'x');
+  for(const endpoint of ['https://example.com/v1/embeddings','http://192.168.1.2:11434/v1/embeddings','http://10.0.0.4:11434/v1/embeddings','http://127.0.0.1:11434/v1/embeddings'])assert.equal(semanticConnection({semanticEndpoint:endpoint,semanticModel:'x'}).model,'x');
+  for(const endpoint of ['http://example.com/v1/embeddings','http://8.8.8.8/v1/embeddings','http://user:pass@localhost:11434/v1/embeddings','https://example.com/v1/embeddings?key=secret','https://example.com/#secret'])assert.throws(()=>semanticConnection({semanticEndpoint:endpoint,semanticModel:'x'}));
+});
+test('device API keys are scoped to account and endpoint and used by lore and historical embeddings',async()=>{
+  const values=new Map(),calls=[];
+  const localStorage={getItem:k=>values.get(k) ?? null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
+  const fetch=async(url,options)=>{if(!options?.method)return promptFetch(url);calls.push({url,options});return {ok:true,json:async()=>({data:JSON.parse(options.body).input.map((_,index)=>({index,embedding:[1,0]}))})};};
+  const use=appHarness({globals:{localStorage,fetch}}),{saveEmbeddingKey,getEmbeddingKey}=await use('embedding-credentials.js'),{semanticConnection,createLoreSemantic}=await use('lore-semantic.js'),{embedTexts}=await use('history-embeddings.js'),{makeEntry}=await use('lore-lines.js');
+  const mem={semanticEndpoint:'https://example.test/v1/embeddings',semanticModel:'embed',semanticLore:true};
+  saveEmbeddingKey('owner',mem.semanticEndpoint,'secret');
+  assert.equal(getEmbeddingKey('other',mem.semanticEndpoint),'');assert.equal(getEmbeddingKey('owner','https://other.test/'),'');
+  const entry=makeEntry('characters','Mara',{id:'mara'});entry.sections.notes.text='A healer.';
+  let record;const storage={load:async()=>record,save:async value=>{record=value;return true;}};
+  await createLoreSemantic({storage}).index({owner:'owner',sid:'s',mem,entries:[entry]});
+  await embedTexts(semanticConnection(mem,'owner'),['test']);
+  assert.equal(calls.length,2);for(const call of calls)assert.equal(call.options.headers.Authorization,'Bearer secret');
+  assert.ok(!JSON.stringify(record).includes('secret'));
+  saveEmbeddingKey('owner',mem.semanticEndpoint,'');assert.equal(getEmbeddingKey('owner',mem.semanticEndpoint),'');
 });
 test('semantic candidates flow through real narration and memory-update budgets',async()=>{
   let calls=0;

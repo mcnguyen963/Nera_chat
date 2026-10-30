@@ -6,6 +6,7 @@ import {requestInputLimit} from '../request-budget.js';
 import {effectivelyPaused,usableLore} from '../continuity.js';
 import {currentUid} from '../auth.js';
 import {loreSemantic,semanticConnection} from '../lore-semantic.js';
+import {getEmbeddingKey,saveEmbeddingKey} from '../embedding-credentials.js';
 import {updateSession} from '../sessions.js';
 import { normalizeMemory, memoryValidationRanges } from '../memory-settings.js';
 import { parseScene, sceneLine } from '../scene.js';
@@ -26,6 +27,7 @@ export function fillMemory(raw) {
   if(get('semantic-status'))get('semantic-status').textContent='';
   for (const key of booleans) get(key).checked = filled[key];
   for (const key of [...strings,...numbers]) get(key).value = filled[key];
+  loadEmbeddingKey();
   if(get('calendar-mode'))get('calendar-mode').value=filled.calendar.mode;
   if(get('calendar-anchor'))get('calendar-anchor').value=filled.calendar.anchor ?? '';
   refreshMemoryProfiles(filled.updateProfileId);
@@ -39,7 +41,7 @@ export function readMemory(validate = false, integerField) {
   const out = normalizeMemory();
   for (const key of booleans) out[key] = get(key).checked;
   for (const key of strings) out[key] = get(key).value;
-  if(validate && out.semanticLore)semanticConnection(out);
+  if(validate && (out.semanticLore || out.historyRecall && out.semanticRecall))semanticConnection(out);
   out.calendar=normalizeCalendar({mode:get('calendar-mode')?.value,anchor:get('calendar-anchor')?.value});
   if(validate && out.calendar.mode==='modern'&&!out.calendar.anchor)throw new Error('Enter a weekday/date anchor, such as Friday 21/10/738.');
   const seed = Object.fromEntries(seedKeys.map(key => [key,get('starting-'+key).value.trim()]));
@@ -68,6 +70,11 @@ export function memoryDirty(original) {
   return Object.keys(saved.books).some(book => get(book+'-on').checked !== saved.books[book].on || ['budget',...(book === 'characters' || book === 'locations' ? ['maxCards'] : [])].some(k => String(get(book+'-'+k).value) !== String(saved.books[book][k])));
 }
 export function initMemorySettings(openLore) {
+  get('semanticEndpoint')?.addEventListener('change',loadEmbeddingKey);
+  get('semantic-key-save')?.addEventListener('click',()=>{
+    const status=get('semantic-key-status');
+    try{const connection=semanticConnection({semanticEndpoint:get('semanticEndpoint').value,semanticModel:get('semanticModel').value});saveEmbeddingKey(currentUid(),connection.endpoint,get('semantic-key').value);status.textContent=get('semantic-key').value.trim() ? 'API key saved on this device.' : 'API key removed from this device.';}catch(error){status.textContent=error.message;}
+  });
   const userRole=get('blockRole')?.querySelector('option[value="user"]');
   if(userRole) userRole.textContent='User (recommended): notes travel with your latest message';
   for (const key of [...booleans,...numbers,...strings,'calendar-mode','calendar-anchor',...seedKeys.map(k => 'starting-'+k),...Object.keys(normalizeMemory().books).flatMap(b => [b+'-on',b+'-budget',...(b === 'characters' || b === 'locations' ? [b+'-maxCards'] : [])])]) get(key)?.addEventListener('input',updateMemorySettingsHints);
@@ -136,6 +143,11 @@ export function initMemorySettings(openLore) {
   get('catch-up').addEventListener('click',() => void catchUpDialog());
   document.addEventListener('memory-refresh',updateMemorySettingsHints);
   document.addEventListener('settings-changed',()=>refreshMemoryProfiles());
+}
+function loadEmbeddingKey(){
+  const field=get('semantic-key'),status=get('semantic-key-status');if(!field)return;
+  try{const endpoint=new URL(get('semanticEndpoint').value.trim()).href;field.value=getEmbeddingKey(currentUid(),endpoint);}catch{field.value='';}
+  if(status)status.textContent='';
 }
 export function refreshMemoryProfiles(selected = get('updateProfileId')?.value ?? '') {
   const select=get('updateProfileId');if(!select)return;

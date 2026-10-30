@@ -10,7 +10,7 @@ import {currentUid} from './auth.js';
 
 const engine=createRecallEngine({storage:recallStorage,embed:embedTexts});
 export function recallEnabled(snapshot) {return snapshot?.session?.memory?.historyRecall===true && snapshot.settings?.narrationMode!=='director';}
-const connectionFor=snapshot=>snapshot.session.memory.semanticRecall===true ? semanticConnection(snapshot.session.memory) : null;
+const connectionFor=snapshot=>snapshot.session.memory.semanticRecall===true ? semanticConnection(snapshot.session.memory,ownerNow()) : null;
 const ownerNow=()=>{try{return currentUid();}catch{return null;}};
 
 // Source messages are the already captured story history. Never read Firebase on Send.

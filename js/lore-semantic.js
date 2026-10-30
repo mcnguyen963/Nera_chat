@@ -3,6 +3,7 @@
 import { capLoreNotes } from './lore-note-window.js';
 import { recordUnits } from './lore-record-select.js';
 import { archivedThread } from './thread-archive.js';
+import {getEmbeddingKey} from './embedding-credentials.js';
 
 const database='nera-lore-semantic-v1', memory=new Map();
 let opened;
@@ -36,11 +37,14 @@ const store={
 };
 export async function clearLoreSemanticAccount(owner){await store.removeOwner(owner);}
 export async function deleteLoreSemanticStory(owner,sid){await store.removeStory(owner,sid);}
-export function semanticConnection(mem){
-  const url=new URL(String(mem.semanticEndpoint ?? '').trim());
-  if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.username || url.password || url.search || url.hash)throw new Error('Use a local Ollama HTTP endpoint on this device, without credentials or query parameters.');
+export function semanticConnection(mem,owner){
+  let url;try{url=new URL(String(mem.semanticEndpoint ?? '').trim());}catch{throw new Error('Enter a valid embedding URL.');}
+  const host=url.hostname,parts=host.split('.').map(Number);
+  const privateIPv4=/^\d+\.\d+\.\d+\.\d+$/.test(host) && parts.every(n=>n>=0 && n<=255) && (parts[0]===10 || parts[0]===127 || parts[0]===192 && parts[1]===168 || parts[0]===172 && parts[1]>=16 && parts[1]<=31 || parts[0]===169 && parts[1]===254);
+  const local=host==='localhost' || host==='[::1]' || host.endsWith('.local') || privateIPv4 || /^\[(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/i.test(host);
+  if((url.protocol!=='https:' && !(url.protocol==='http:' && local)) || url.username || url.password || url.search || url.hash)throw new Error('Use an HTTPS embedding URL or a local HTTP address, without credentials, query parameters or a fragment.');
   const model=String(mem.semanticModel ?? '').trim();if(!model || model.length>200)throw new Error('Enter an embedding model.');
-  return {endpoint:url.href,model,key:JSON.stringify([url.href,model])};
+  return {endpoint:url.href,model,apiKey:getEmbeddingKey(owner,url.href),key:JSON.stringify([url.href,model])};
 }
 function textFor(entry,limit) {
   if(!['characters','locations','facts','events'].includes(entry.book) || archivedThread(entry) || entry.kind==='timeline' || entry.book==='events' && entry.status==='closed')return '';
@@ -64,7 +68,7 @@ async function embed(connection,texts,{signal,timeout=15000}={}) {
   if(signal?.aborted)cancel();else signal?.addEventListener('abort',cancel,{once:true});
   try{
     return await Promise.race([(async()=>{
-      const response=await fetch(connection.endpoint,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:connection.model,input:texts,encoding_format:'float'}),signal:controller.signal});
+      const response=await fetch(connection.endpoint,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',...(connection.apiKey ? {Authorization:'Bearer '+connection.apiKey} : {})},body:JSON.stringify({model:connection.model,input:texts,encoding_format:'float'}),signal:controller.signal});
       if(!response.ok)throw new Error('Embedding server returned HTTP '+response.status+'.');
       const json=await response.json();if(!Array.isArray(json.data) || json.data.length!==texts.length)throw new Error('Invalid embedding response.');
       const rows=[...json.data].sort((a,b)=>a.index-b.index);return rows.map((row,i)=>{if(row.index!==i)throw new Error('Invalid embedding response order.');return validateVector(row.embedding);});
@@ -82,7 +86,7 @@ function documentsFor(entries,mem) {
 export function createLoreSemantic({storage=store,embedder=embed}={}) {
   async function index({owner,sid,mem,entries,signal,check=()=>{},progress=()=>{},force=false}){
     if(!owner || !sid)throw new Error('Open a signed-in story first.');
-    const connection=semanticConnection(mem),key=keyFor(owner,sid,connection),rows=[];
+    const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection),rows=[];
     const documents=documentsFor(entries,mem),old=await storage.load(key);check();
     const stageKey=JSON.stringify([key,'lore-stage-v1',!!force]);
     const staged=await storage.loadStage?.(stageKey);check();
@@ -110,7 +114,7 @@ export function createLoreSemantic({storage=store,embedder=embed}={}) {
     const guard=check ?? (()=>{});
     if(!mem.semanticLore || !owner || !sid || !String(query ?? '').trim())return {ids:[],status:'off'};
     try{
-      const connection=semanticConnection(mem),key=keyFor(owner,sid,connection);let saved=await storage.load(key);guard();
+      const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection);let saved=await storage.load(key);guard();
       if(!saved && storage.findStory)saved=await storage.findStory(owner,sid);guard();
       if(!saved)return {ids:[],status:'index missing'};
       const documents=documentsFor(entries,mem),docs=new Map();
@@ -128,12 +132,12 @@ export function createLoreSemantic({storage=store,embedder=embed}={}) {
     }catch(error){if(signal?.aborted)throw error;guard();return {ids:[],status:'unavailable'};}
   }
   async function exportVectors({owner,sid,mem}) {
-    const connection=semanticConnection(mem);let saved=await storage.load(keyFor(owner,sid,connection));
+    const connection=semanticConnection(mem,owner);let saved=await storage.load(keyFor(owner,sid,connection));
     if(!saved && storage.findStory)saved=await storage.findStory(owner,sid);
     return (saved?.rows ?? []).map(row=>({...row,modelKey:row.modelKey ?? saved.connection}));
   }
   async function importVectors({owner,sid,mem,entries,rows,check=()=>{}}) {
-    const connection=semanticConnection(mem),key=keyFor(owner,sid,connection),existing=await storage.load(key),docs=new Map();
+    const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection),existing=await storage.load(key),docs=new Map();
     for(const doc of documentsFor(entries,mem))docs.set(JSON.stringify([doc.id,doc.recordId]),await digest(doc.text));
     const merged=new Map((existing?.rows ?? []).map(r=>[JSON.stringify([r.id,r.recordId]),r]));let restored=0,skipped=0;
     for(const row of rows) {
