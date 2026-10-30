@@ -358,6 +358,20 @@ details.thinking.streaming summary::after { content: " · thinking…"; }
   .settings-panel .profile-row { flex-wrap: wrap; }
   .settings-panel .profile-row select { flex-basis: 100%; }
   .settings-prompts textarea { width: 100%; min-height: clamp(260px, 45vh, 420px); }
+
+  /* Settings content must shrink and wrap inside the phone's scroll area. */
+  #settings-tab { overflow-wrap: anywhere; }
+  #settings-tab :is(.settings-dialog, .settings-body, .settings-rail, .settings-panel, .settings-grid > *, .settings-prompts > *) { min-width: 0; }
+  #settings-tab .settings-prompts { grid-template-columns: minmax(0, 1fr); }
+  #settings-tab .settings-panel label:not(.checkbox-label):not(.pet-choice) { display: flex; flex-direction: column; gap: 9px; }
+  #settings-tab .settings-panel :is(input:not([type="checkbox"]), select, textarea) { max-width: 100%; min-width: 0; }
+  #settings-tab .settings-panel :is(input:not([type]), input[type="search"]) { width: 100%; }
+  #settings-tab .settings-panel .btn { max-width: 100%; white-space: normal; }
+  #settings-tab .model-input-row { flex-wrap: wrap; }
+  #settings-tab .model-input-row input { flex-basis: 140px; }
+  #settings-tab .memory-book-row { grid-template-columns: minmax(0, 1fr) auto; }
+  #settings-tab .memory-book-row > :is(label:not(.checkbox-label), p) { grid-column: 1 / -1; }
+  #settings-tab .pet-choice { display: grid !important; grid-template-columns: 20px 88px minmax(0, 1fr); flex: 1 1 100%; min-width: 0; max-width: 100%; }
 }
 
 .pet-home-slot { display: inline-block; flex: none; width: 64px; height: 64px; }

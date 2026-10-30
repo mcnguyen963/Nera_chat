@@ -158,7 +158,7 @@
         <div id="settings-backdrop" class="settings-backdrop"></div>
         <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <header class="settings-header">
-            <div><p class="eyebrow">MAKE IT YOURS</p><h1 id="settings-title">Settings</h1></div>
+            <div><button type="button" id="settings-back" class="settings-back btn" aria-label="Back to all settings">← All settings</button><p class="eyebrow">MAKE IT YOURS</p><h1 id="settings-title">Settings</h1></div>
             <div id="settings-footer" class="settings-footer">
               <button id="btn-reset-settings" class="btn" type="button"><span class="settings-label-long">Reset defaults</span><span class="settings-label-short">Defaults</span></button>
               <span id="settings-saved-msg" role="status" aria-live="polite"></span>
@@ -179,7 +179,6 @@
               <button type="button" data-settings-panel="account"><strong>Account</strong><small>Account and diagnostics</small></button>
             </nav>
             <div id="settings-content" class="settings-content">
-              <button type="button" id="settings-back" class="settings-back btn">← All settings</button>
               <p id="settings-scope" class="settings-scope muted" role="note"></p>
               <section data-panel="model" class="settings-panel">
                 <h2>Model connection</h2>

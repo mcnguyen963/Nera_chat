@@ -1,40 +1,39 @@
 /* Floating glass: solid materials are the baseline; only floating chrome blurs. */
 :root {
-  --glass: #20232c;
-  --glass-tint: rgb(27 30 39 / 64%);
-  --dialog-tint: rgb(22 25 33 / 65%);
+  --glass: #1b1b1b;
+  --glass-tint: rgb(30 30 30 / 64%);
+  --dialog-tint: rgb(25 25 25 / 65%);
   --header-height: calc(52px + var(--safe-top));
   --surface-scrim: #0008;
   --dialog-scrim: #000b;
-  --glass-line: rgb(210 221 244 / 18%);
-  --glass-shine: inset 0 1px 0 rgb(245 249 255 / 15%), inset 0 -1px 0 rgb(170 191 224 / 4%);
+  --glass-line: rgb(220 220 220 / 18%);
+  --glass-shine: inset 0 1px 0 rgb(249 249 249 / 15%), inset 0 -1px 0 rgb(189 189 189 / 4%);
   --glass-shadow: 0 18px 48px rgb(0 0 0 / 42%);
   --radius-control: 14px;
   --radius-surface: 26px;
   --space: 12px;
   --reading-width: 780px;
-  --panel: #171a22;
-  --panel-2: #262a35;
+  --panel: #111111;
+  --panel-2: #1b1b1b;
   --border: var(--glass-line);
-  --text: #f0f2f7;
-  --muted: #b0b6c2;
-  --user-bubble: #232834;
+  --text: #ededed;
+  --muted: #aaaaaa;
+  --user-bubble: #202020;
   --composer-safe-bottom: var(--safe-bottom);
 }
-/* The chat keeps its earlier materials; settings and other surfaces retain the
-   refreshed palette. The top menu is portaled outside the header at runtime. */
+/* Neutral chat materials. The top menu is portaled outside the header at runtime. */
 .chat-tab, .top-bar, .top-menu {
-  --glass: #1b1d21;
-  --glass-tint: rgb(18 20 26 / 64%);
-  --glass-line: rgb(225 232 245 / 16%);
+  --glass: #1d1d1d;
+  --glass-tint: rgb(20 20 20 / 64%);
+  --glass-line: rgb(231 231 231 / 16%);
   --glass-shine: inset 0 1px 0 rgb(255 255 255 / 14%), inset 0 -1px 0 rgb(255 255 255 / 3%);
   --glass-shadow: 0 16px 48px rgb(0 0 0 / 45%);
-  --panel: #111215;
-  --panel-2: #1c1e22;
+  --panel: #121212;
+  --panel-2: #1e1e1e;
   --border: var(--glass-line);
-  --text: #eceef2;
-  --muted: #a1a5ae;
-  --user-bubble: #1a1c21;
+  --text: #eeeeee;
+  --muted: #a5a5a5;
+  --user-bubble: #1c1c1c;
   --surface-scrim: #0008;
 }
 .chat-tab { color: var(--text); }
@@ -43,11 +42,11 @@
 .ui-icon { display: block; width: 22px; height: 22px; flex: none; pointer-events: none; }
 .icon-control, .btn.icon-control, .msg-actions .icon-control { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1; color: var(--text); }
 button, summary { touch-action: manipulation; }
-:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #dce5f5; outline-offset: 3px; }
+:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #e4e4e4; outline-offset: 3px; }
 .btn { min-height: 44px; border-radius: var(--radius-control); border-color: var(--glass-line); background: var(--panel-2); box-shadow: var(--glass-shine); }
-.btn.primary { color: #14161a; background: #dce0e7; }
+.btn.primary { color: #161616; background: #e0e0e0; }
 input:not([type=checkbox]), select, textarea { border-radius: var(--radius-control); border-color: var(--glass-line); background-color: var(--panel); }
-input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
+input:focus, select:focus, textarea:focus { border-color: #a8a8a8; }
 /* Keep the scrolling text outside a transformed ancestor. Positioning retains
    visualViewport keyboard offsets without promoting the entire chat surface. */
 .app { position: relative; top: var(--app-offset-top, 0px); z-index: 0; width: 100%; }
@@ -55,11 +54,12 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .main { position: relative; width: 100%; }
 .top-bar { flex: none; position: absolute; inset: 0 0 auto; z-index: 35; height: var(--header-height); min-height: var(--header-height); gap: 8px; padding: var(--safe-top) 12px 0; background: transparent; border: 0; box-shadow: none; pointer-events: none; }
 .top-bar > button, .top-bar > .top-menu-wrap { pointer-events: auto; }
-.top-bar .icon-control, .top-bar .context-indicator { background: var(--glass); border: 0; border-radius: 50%; box-shadow: var(--glass-shine); }
-.context-indicator { display: grid; place-items: center; position: relative; flex: 0 0 44px; width: 44px; height: 44px; margin-left: auto; padding: 5px; border: 0; border-radius: 12px; background: transparent; color: #c8ced9; }
+.top-bar .icon-control, .top-bar .context-indicator { background: rgb(20 20 20 / 5%); border: 0; border-radius: 50%; box-shadow: var(--glass-shine); }
+.top-bar :is(.icon-control, .context-indicator):hover { background: rgb(39 39 39 / 10%); }
+.context-indicator { display: grid; place-items: center; position: relative; flex: 0 0 44px; width: 44px; height: 44px; margin-left: auto; padding: 5px; border: 0; border-radius: 12px; background: transparent; color: #cecece; }
 .context-ring { width: 34px; height: 34px; fill: none; stroke-width: 2; transform: rotate(-90deg); }
-.context-track { stroke: #737b89; }
-.context-fill { stroke: #949ba7; stroke-dasharray: 0 100; stroke-linecap: round; transition: stroke-dasharray .2s, stroke .2s; }
+.context-track { stroke: #7a7a7a; }
+.context-fill { stroke: #9a9a9a; stroke-dasharray: 0 100; stroke-linecap: round; transition: stroke-dasharray .2s, stroke .2s; }
 .sidebar { position: absolute; inset: 0 auto 0 0; z-index: 50; width: min(340px, calc(100% - 32px)); min-width: 0; height: 100%; transform: translateX(-105%); transition: transform .2s; border: 1px solid var(--glass-line); border-radius: 0 var(--radius-surface) var(--radius-surface) 0; background: var(--glass); box-shadow: var(--glass-shadow); }
 .app.sidebar-open .sidebar { transform: translateX(0); }
 .sidebar-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: calc(8px + var(--safe-top)) 14px 16px; }
@@ -69,8 +69,8 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .sidebar-backdrop { position: absolute; z-index: 45; background: var(--surface-scrim); }
 /* Repeated rows and message bodies use solid materials, never backdrop blur. */
 .session-item { border-radius: var(--radius-control); }
-.session-item:hover { background: #2a2f3b; }
-.session-item.active { background: #343a48; border-color: var(--glass-line); color: var(--text); }
+.session-item:hover { background: #2f2f2f; }
+.session-item.active { background: #3a3a3a; border-color: var(--glass-line); color: var(--text); }
 .session-actions button { min-height: 44px; padding: 8px; }
 #btn-logout { min-height: 44px; padding-inline: 10px; color: var(--muted); }
 .top-menu, .message-menu-panel, .pet-menu { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shadow), var(--glass-shine); padding: 8px; }
@@ -104,13 +104,13 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .msg.user .message-menu-panel { left: auto; right: 0; }
 .msg-header-actions .message-menu-panel { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; }
 .message-menu-panel .del { color: var(--danger); }
-.msg.copied { box-shadow: 0 0 0 1px #cbd5e180; background-color: #cbd5e10d; }
+.msg.copied { box-shadow: 0 0 0 1px #d4d4d480; background-color: #d4d4d40d; }
 .composer { padding: 6px 24px calc(8px + var(--composer-safe-bottom)); flex: none; position: relative; background: transparent; pointer-events: none; }
 .composer-box, .floating-copy { pointer-events: auto; }
 .chat-tab:not(.is-empty) > .composer { position: absolute; inset: auto 0 0; z-index: 30; }
 .chat-tab:not(.is-empty) > .message-list { padding-bottom: calc(var(--composer-height, 110px) + 24px); scroll-padding-bottom: calc(var(--composer-height, 110px) + 12px); }
 .composer-box { display: flex; flex-direction: column; gap: 2px; max-width: var(--reading-width); padding: 8px 10px 6px; border: 1px solid var(--glass-line); border-radius: var(--radius-surface); background: var(--glass); box-shadow: var(--glass-shine); }
-.composer-box:focus-within { border-color: #8b929f; }
+.composer-box:focus-within { border-color: #919191; }
 .composer textarea { width: 100%; min-height: 36px; max-height: min(240px, calc(var(--app-height, 100dvh) * .35)); padding: 0 6px; border: 0; border-radius: 0; background: transparent; text-shadow: 0 1px 6px #000; font-size: 11px; line-height: 26px; }
 .composer textarea:focus-visible { outline-offset: 1px; border-radius: 4px; }
 .composer-row { width: 100%; display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; }
@@ -121,26 +121,26 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .composer-select select:hover { background: #ffffff08; }
 .composer-select option { background: var(--glass); color: var(--text); }
 .composer-row .composer-action, #btn-rewrite, #btn-stop, #btn-restore-draft { width: 44px; min-width: 44px; max-width: 44px; flex: 0 0 44px; height: 44px; padding: 0; background: transparent; border: 0; box-shadow: none; }
-#btn-send { width: 44px; height: 44px; flex: 0 0 44px; padding: 0; background: #dde2e9; color: #17191e; border: 0; align-self: auto; }
-#btn-stop { background: #dde2e9; color: #17191e; }
-.floating-copy { position: absolute; right: max(16px, calc((100% - var(--reading-width)) / 2)); bottom: calc(100% + 10px); z-index: 30; background: var(--glass); border-color: var(--glass-line); box-shadow: var(--glass-shine); }
-.btn.floating-copy:hover { background: #282a30; }
+#btn-send { width: 44px; height: 44px; flex: 0 0 44px; padding: 0; background: #e1e1e1; color: #191919; border: 0; align-self: auto; }
+#btn-stop { background: #e1e1e1; color: #191919; }
+.floating-copy { position: absolute; right: max(16px, calc((100% - var(--reading-width)) / 2)); bottom: calc(100% + 10px); z-index: 30; background: rgb(20 20 20 / 5%); border-color: var(--glass-line); box-shadow: var(--glass-shine); }
+.btn.floating-copy:hover { background: rgb(39 39 39 / 10%); }
 .msg-actions > .message-copy { background: transparent; border: 0; box-shadow: none; }
 .welcome { max-width: var(--reading-width); }
 .story-starters button { background: var(--panel); border-color: var(--glass-line); border-radius: 20px; box-shadow: var(--glass-shine); }
-.login-screen { background: radial-gradient(ellipse at 50% 0, #242832 0, #0b0c0f 42%, #000 78%); }
+.login-screen { background: radial-gradient(ellipse at 50% 0, #282828 0, #0c0c0c 42%, #000 78%); }
 .login-card { padding: 30px; width: min(430px, 100%); border: 1px solid var(--glass-line); border-radius: 30px; background: var(--panel); box-shadow: var(--glass-shadow), var(--glass-shine); }
 .settings-dialog, .context-dialog { background: var(--panel); border: 1px solid var(--glass-line); border-radius: var(--radius-surface); box-shadow: var(--glass-shadow), var(--glass-shine); }
-.settings-header { position: relative; min-width: 0; padding: 12px 18px; background: #242833; border-color: var(--glass-line); box-shadow: var(--glass-shine); }
+.settings-header { position: relative; min-width: 0; padding: 12px 18px; background: #282828; border-color: var(--glass-line); box-shadow: var(--glass-shine); }
 .settings-header h2 { min-width: 0; overflow-wrap: anywhere; }
 .settings-close { margin-left: auto; background: #ffffff0b; }
 .settings-header .icon-control { flex-shrink: 0; }
 .settings-rail, .lore-rail { border-color: var(--glass-line); }
 .settings-rail button, .segmented, .lore-list-item, .lore-banner, .context-overview, .context-section { border-radius: var(--radius-control); }
-.settings-rail button.selected, .lore-book.selected, .segmented .selected, .lore-filters .selected { color: var(--text); background: #363d4b; box-shadow: inset 0 0 0 1px rgb(210 221 244 / 20%); }
-.settings-rail button:hover, .lore-list-item:hover, .lore-list-item[aria-selected="true"] { color: var(--text); background: #2d3340; }
+.settings-rail button.selected, .lore-book.selected, .segmented .selected, .lore-filters .selected { color: var(--text); background: #3d3d3d; box-shadow: inset 0 0 0 1px rgb(220 220 220 / 20%); }
+.settings-rail button:hover, .lore-list-item:hover, .lore-list-item[aria-selected="true"] { color: var(--text); background: #333333; }
 .lore-list-item { border-bottom-color: var(--glass-line); }
-.segmented, .context-overview, .context-section, .lore-banner { background: #212630; border-color: var(--glass-line); }
+.segmented, .context-overview, .context-section, .lore-banner { background: #262626; border-color: var(--glass-line); }
 .settings-panel h3, .lore-section, .lore-list { border-color: var(--glass-line); }
 .settings-rail button strong { display: block; font-weight: 600; }
 .settings-rail button small { display: none; }
@@ -156,26 +156,26 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .toast { background: var(--glass); border-color: var(--glass-line); border-radius: 18px; box-shadow: var(--glass-shadow), var(--glass-shine); }
 @supports ((backdrop-filter: blur(16px)) or (-webkit-backdrop-filter: blur(16px))) {
   :root { --surface-scrim: #0006; --dialog-scrim: #0008; }
-  .chat-tab, .top-bar, .top-menu { --panel: rgb(18 20 26 / 44%); --panel-2: rgb(217 227 245 / 9%); --user-bubble: rgb(184 201 228 / 9%); --surface-scrim: #0003; }
+  .chat-tab, .top-bar, .top-menu { --panel: rgb(20 20 20 / 44%); --panel-2: rgb(226 226 226 / 9%); --user-bubble: rgb(199 199 199 / 9%); --surface-scrim: #0003; }
   .top-menu-backdrop { --surface-scrim: #0003; }
-  .btn { background: rgb(217 227 245 / 9%); }
-  .top-bar .icon-control, .top-bar .context-indicator { background: rgb(18 20 26 / 42%); backdrop-filter: blur(12px) saturate(130%); -webkit-backdrop-filter: blur(12px) saturate(130%); }
+  .btn { background: rgb(226 226 226 / 9%); }
+  .top-bar .icon-control, .top-bar .context-indicator { background: rgb(20 20 20 / 5%); backdrop-filter: blur(12px) saturate(130%); -webkit-backdrop-filter: blur(12px) saturate(130%); }
   .sidebar, .toast, .pet-menu { background: linear-gradient(145deg, rgb(255 255 255 / 5%), transparent 55%), var(--glass-tint); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   .top-menu, .message-menu-panel { background: linear-gradient(145deg, #ffffff08, #ffffff01), var(--glass-tint); backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%); }
-  .floating-copy { background: rgb(18 20 26 / 35%); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-  .btn.floating-copy:hover { background: rgb(35 39 47 / 60%); }
-  .composer-box { background: linear-gradient(145deg, rgb(255 255 255 / 8%), transparent 60%), rgb(18 20 26 / 32%); backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
-  .composer-box:focus-within { background: linear-gradient(145deg, rgb(255 255 255 / 8%), transparent 60%), rgb(18 20 26 / 45%); backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
-  #btn-send, #btn-stop { background: rgb(221 226 233 / 78%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%); }
-  #btn-send:hover:enabled, #btn-stop:hover:enabled { background: rgb(238 241 246 / 88%); }
+  .floating-copy { background: rgb(20 20 20 / 5%); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .btn.floating-copy:hover { background: rgb(39 39 39 / 10%); }
+  .composer-box { background: linear-gradient(145deg, rgb(255 255 255 / 8%), transparent 60%), rgb(20 20 20 / 32%); backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
+  .composer-box:focus-within { background: linear-gradient(145deg, rgb(255 255 255 / 8%), transparent 60%), rgb(20 20 20 / 45%); backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
+  #btn-send, #btn-stop { background: rgb(225 225 225 / 78%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%); }
+  #btn-send:hover:enabled, #btn-stop:hover:enabled { background: rgb(241 241 241 / 88%); }
   /* Large sheets use a translucent tint without a viewport-sized blur. */
-  .settings-dialog { background: linear-gradient(145deg, rgb(255 255 255 / 5%), transparent 45%), rgb(22 25 33 / 68%); backdrop-filter: blur(16px) saturate(130%); -webkit-backdrop-filter: blur(16px) saturate(130%); }
-  .settings-header { background: rgb(36 40 51 / 45%); }
-  .segmented, .context-overview, .context-section, .lore-banner { background: rgb(33 38 48 / 72%); }
+  .settings-dialog { background: linear-gradient(145deg, rgb(255 255 255 / 5%), transparent 45%), rgb(25 25 25 / 68%); backdrop-filter: blur(16px) saturate(130%); -webkit-backdrop-filter: blur(16px) saturate(130%); }
+  .settings-header { background: rgb(40 40 40 / 45%); }
+  .segmented, .context-overview, .context-section, .lore-banner { background: rgb(38 38 38 / 72%); }
   .context-dialog, .login-card { background: var(--dialog-tint); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   .settings-backdrop { background: var(--dialog-scrim); }
-  .btn:hover { background: rgb(217 227 245 / 14%); }
-  .btn.primary:hover { background: #eef1f6; }
+  .btn:hover { background: rgb(226 226 226 / 14%); }
+  .btn.primary:hover { background: #f1f1f1; }
 }
 @media (min-width: 721px) { .mobile-back.icon-control { display: none; } }
 @media (max-width: 720px) {
@@ -205,7 +205,8 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
   #settings-tab .settings-rail button small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
   #settings-tab:not(.settings-detail-open) .settings-content, #settings-tab:not(.settings-detail-open) #settings-footer { display: none; }
   #settings-tab.settings-detail-open .settings-rail { display: none; }
-  #settings-tab .settings-back { position: sticky; top: 8px; z-index: 2; display: inline-flex; align-items: center; min-height: 44px; margin-top: 8px; }
+  #settings-tab.settings-detail-open .settings-header h1 { display: none; }
+  #settings-tab.settings-detail-open .settings-back { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; padding: 8px 0; border: 0; background: transparent; box-shadow: none; text-align: left; }
   .memory-actions { padding-bottom: var(--composer-safe-bottom); }
   .login-screen { padding-inline: 12px; }
   .login-card { padding: 24px 20px; }
@@ -214,18 +215,19 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 @media (prefers-reduced-transparency: reduce) {
   :root { --surface-scrim: #0008; --dialog-scrim: #000b; }
-  .chat-tab, .top-bar, .top-menu { --panel: #111215; --panel-2: #1c1e22; --user-bubble: #1a1c21; --surface-scrim: #0008; }
+  .chat-tab, .top-bar, .top-menu { --panel: #121212; --panel-2: #1e1e1e; --user-bubble: #1c1c1c; --surface-scrim: #0008; }
   .top-menu-backdrop { --surface-scrim: #0008; }
   .btn { background: var(--panel-2); }
-  .btn:hover { background: #282a30; }
-  .btn.floating-copy:hover { background: #282a30; }
+  .btn:hover { background: #2a2a2a; }
+  .btn.floating-copy:hover { background: #2a2a2a; }
   .top-bar .icon-control, .top-bar .context-indicator { background: var(--glass); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .top-bar :is(.icon-control, .context-indicator):hover { background: #2a2a2a; }
   .composer-box:focus-within { background: var(--glass); backdrop-filter: none; -webkit-backdrop-filter: none; }
-  #btn-send, #btn-stop { background: #dde2e9; box-shadow: none; }
+  #btn-send, #btn-stop { background: #e1e1e1; box-shadow: none; }
   #btn-send:hover:enabled, #btn-stop:hover:enabled { background: #fff; }
   .settings-dialog, .context-dialog, .login-card { background: var(--panel); backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .settings-header { background: #242833; }
-  .segmented, .context-overview, .context-section, .lore-banner { background: #212630; }
+  .settings-header { background: #282828; }
+  .segmented, .context-overview, .context-section, .lore-banner { background: #262626; }
   .sidebar, .composer-box, .top-menu, .message-menu-panel, .floating-copy, .toast, .pet-menu { background: var(--glass); backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
 
@@ -243,7 +245,7 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
   .compact-overlay { align-items: end; padding: var(--safe-top) 8px calc(8px + var(--composer-safe-bottom)); }
   .compact-sheet { height: auto; max-height: 100%; width: 100%; border-radius: 24px; }
 }
-.msg-editor:focus-visible { outline: 2px solid #dce5f5; outline-offset: 3px; border-radius: 4px; }
+.msg-editor:focus-visible { outline: 2px solid #e4e4e4; outline-offset: 3px; border-radius: 4px; }
 .settings-overlay { top: var(--app-offset-top, 0px); bottom: auto; }
 .toast { bottom: auto; top: calc(var(--app-offset-top, 0px) + var(--app-height, 100dvh) - var(--composer-height, 110px) - 8px); transform: translate(-50%, -100%); }
 .story-starters button, .session-item, .thinking > summary { min-height: 44px; }
@@ -267,14 +269,15 @@ input:focus, select:focus, textarea:focus { border-color: #a1a8b6; }
 .thinking-menu button:hover, .thinking-menu button:focus-visible { background: #ffffff18; }
 .thinking-menu button[aria-checked="true"]::after { content: '\2713'; margin-left: auto; }
 @supports ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
-  .thinking-menu { background: rgb(18 20 26 / 85%); backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%); }
+  .thinking-menu { background: rgb(20 20 20 / 85%); backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%); }
 }
 @media (prefers-reduced-transparency: reduce) { .thinking-menu { background: var(--glass); backdrop-filter: none; -webkit-backdrop-filter: none; } }
 /* The idle bar leaves more of the conversation visible. Keep the picker
    available while its native menu has focus. */
-.composer-box:not(:focus-within):not(.thinking-open) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding-block: 4px; }
+.composer-box:not(:focus-within):not(.thinking-open) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding-block: 4px; padding-left: 52px; }
 .composer-box:not(:focus-within):not(.thinking-open) > textarea { grid-column: 1; grid-row: 1; min-width: 0; max-height: 44px; }
 .composer-box:not(:focus-within):not(.thinking-open) > .composer-row { grid-column: 2; grid-row: 1; width: auto; }
+.composer-box:not(:focus-within):not(.thinking-open) .composer-thinking { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); margin: 0; }
 #jump-to-latest { display: none; }
 @media (max-width: 720px) {
   .chat-tab:not(.is-empty) #jump-to-latest { display: inline-flex; }
