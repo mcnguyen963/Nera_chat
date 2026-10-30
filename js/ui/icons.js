@@ -43,19 +43,7 @@ export function contextRingPresentation({used, max}) {
   return {dash: `${ratio * 100} 100`, color: `rgb(${color.join(', ')})`};
 }
 
-// Distinct silhouettes retain the full native mode menu on touch devices.
-export function thinkingIcon(mode) {
-  const bulb = '<path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z"/>';
-  const marks = {
-    off: '<path d="m13 2-8 12h6l-1 8 9-12h-6Z"/>',
-    none: '<circle cx="12" cy="12" r="8"/><path d="m6 6 12 12"/>',
-    minimal: '<circle cx="12" cy="12" r="3"/>',
-    low: bulb,
-    medium: bulb + '<path d="M12 7v4"/>',
-    high: bulb + '<path d="M10 9h4m-2-2v4M2 6l2 1m16 0 2-1"/>',
-    xhigh: bulb + '<path d="M10 9h4m-2-2v4M2 6l2 1m16 0 2-1M5 2l1 2m12 0 1-2"/>',
-    max: '<path d="m12 2 3 6 7 1-5 5 1 8-6-4-6 4 1-8-5-5 7-1Z"/>',
-    max_tokens: '<path d="M5 3h14M5 21h14M7 3v4l10 10v4M17 3v4L7 17v4"/>',
-  };
-  return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${marks[mode] || marks.off}</svg>`;
+// The selected mode remains available through the picker's accessible label.
+export function thinkingIcon() {
+  return '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a9 9 0 1 1 16 0"/><path d="M12 13l4-4"/><circle cx="12" cy="13" r="1.5"/><path d="M7 17h10"/></svg>';
 }
