@@ -289,3 +289,45 @@ input:focus, select:focus, textarea:focus { border-color: #a8a8a8; }
   .chat-tab:not(.is-empty) #jump-to-latest { display: inline-flex; }
   .jump-to-latest { right: 50%; transform: translateX(50%); width: 44px; height: 44px; border-radius: 50%; align-items: center; justify-content: center; }
 }
+
+/* Reserve header, a little reading space, and the composer controls even when
+   a landscape software keyboard leaves a short visual viewport. */
+.composer { --composer-text-budget: max(36px, calc(var(--app-height, 100dvh) - var(--header-height) - var(--composer-chrome-height, 112px) - 20px)); }
+.composer textarea { max-height: min(240px, calc(var(--app-height, 100dvh) * .35), var(--composer-text-budget)); }
+.composer-row, .composer-action-column { flex-shrink: 0; }
+html[data-keyboard=open] .composer-note { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .login-screen input, .settings-content input, .settings-content textarea, .settings-content select,
+  .memory-content input, .memory-content textarea, .memory-content select, .msg.editing textarea { font-size: 16px; }
+}
+/* Landscape keyboards leave much less height even on a wide phone. */
+@media (max-height: 520px) {
+  html[data-keyboard=open] .settings-overlay { padding-block: 0; }
+  html[data-keyboard=open] .settings-dialog { height: 100%; max-height: 100%; }
+  html[data-keyboard=open] .settings-header { padding-block: 4px; gap: 8px; }
+  html[data-keyboard=open] .settings-header .eyebrow { display: none; }
+  html[data-keyboard=open] .settings-header :is(h1,h2) { font-size: 18px; margin-block: 0; }
+  html[data-keyboard=open] .composer { padding: 4px 8px; }
+  html[data-keyboard=open] .composer-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0; padding: 4px 8px 4px 52px; }
+  html[data-keyboard=open] .composer-box > .composer-input { grid-column: 1; grid-row: 1; min-height: 0; }
+  html[data-keyboard=open] .composer textarea { min-height: 30px; max-height: min(44px, var(--composer-text-budget)); }
+  html[data-keyboard=open] .composer-box > .composer-row { grid-column: 2; grid-row: 1; width: auto; }
+  html[data-keyboard=open] .composer-thinking { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); margin: 0; }
+  /* With a landscape keyboard there may be room for only one control row.
+     Dismissing the keyboard restores navigation immediately. */
+  html[data-keyboard=open] .main:has(textarea:focus) > .top-bar { visibility: hidden; }
+  html[data-keyboard=open] .chat-tab:has(.msg.editing textarea:focus) > .composer { display: none; }
+  /* Keep a usable editing area when the landscape keyboard leaves less height
+     than a header plus a field. Put sheet actions beside the editor instead. */
+  html[data-keyboard=open] .settings-dialog:has(input:focus, textarea:focus) { flex-direction: row-reverse; }
+  html[data-keyboard=open] .settings-dialog:has(input:focus, textarea:focus) > .settings-header { flex: none; align-self: stretch; align-items: flex-start; padding: 4px; border-bottom: 0; border-left: 1px solid var(--glass-line); }
+  html[data-keyboard=open] .settings-dialog:has(input:focus, textarea:focus) > .settings-header > h2,
+  html[data-keyboard=open] #settings-tab:has(input:focus, textarea:focus) .settings-header > div:first-child,
+  html[data-keyboard=open] #settings-tab:has(input:focus, textarea:focus) #btn-reset-settings { display: none; }
+  html[data-keyboard=open] #settings-tab:has(input:focus, textarea:focus) .settings-footer { margin: 0; flex: none; }
+  html[data-keyboard=open] .settings-dialog:has(input:focus, textarea:focus) > :is(.settings-body, .memory-content) { flex: 1; min-width: 0; }
+  html[data-keyboard=open] .lore-name-editor:has(input:focus) { display: flex; align-items: center; gap: 6px; padding: 4px; }
+  html[data-keyboard=open] .lore-name-editor:has(input:focus) > label { flex: 1; min-width: 0; flex-direction: row; align-items: center; margin: 0; white-space: nowrap; }
+  html[data-keyboard=open] .lore-name-editor:has(input:focus) input { flex: 1; min-width: 0; }
+  html[data-keyboard=open] .lore-name-editor:has(input:focus) > button { flex: none; }
+}

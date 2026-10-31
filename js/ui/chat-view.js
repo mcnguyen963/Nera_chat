@@ -1,3 +1,5 @@
+import {composerDrafts} from '../composer-drafts.js';
+import {revealFocusedField} from '../focus-reveal.js';
 import {buildDirectorContext} from '../director-context.js';
 import {seedDirectorState} from '../director-state.js';
 import {tokenUsageCache,tokenContextFingerprint} from './token-usage-cache.js';
@@ -574,7 +576,7 @@ export function initChatView() {
       });
     },
   });
-  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); memoryStories.delete(e.detail.sessionId); clearUnsaved(currentUid(),e.detail.sessionId); });
+  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); memoryStories.delete(e.detail.sessionId); composerDrafts.clearStory(currentUid(),e.detail.sessionId); if(composerDraftSid===e.detail.sessionId){composerDraftSid=null;el.input.value='';} clearUnsaved(currentUid(),e.detail.sessionId); });
   document.addEventListener('memory-session-saved', e => {
     if (e.detail.sessionId !== state.sessionId || !session) return;
     const { partial } = e.detail;
@@ -718,20 +720,20 @@ export function initChatView() {
     onResize:() => { if (wasNearBottom) scrollToEnd(); else clampListScroll(); },
   });
   const autoGrow = () => { sizeComposer(); measureComposer(); };
-  el.input.addEventListener("input", () => { autoGrow(); });
-  window.addEventListener("resize", autoGrow);
-  autoGrow();
-
-  // iOS keyboard: keep the composer right above the keyboard, not pushed far
-  // above it (iOS auto-scrolls the window on focus; app.js cancels that, and
-  // this compensates inside the list if the user was scrolled deep).
-  el.input.addEventListener("focus", () => {
-    requestAnimationFrame(() => alignFieldToKeyboard(document.getElementById("composer-box")));
+  el.input.addEventListener("input", () => { rememberComposerDraft(); autoGrow(); });
+  const flushDraft = () => { rememberComposerDraft(); composerDrafts.flush(); };
+  window.addEventListener("pagehide", flushDraft);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) flushDraft(); });
+  document.addEventListener("composer-draft-storage-error", () => {
+    if (!draftStorageNotice) { draftStorageNotice = true; showTransientError("Draft kept in this tab. Device storage is unavailable; reloading may lose it."); }
   });
+  window.addEventListener("resize", autoGrow);
+  window.visualViewport?.addEventListener("resize", autoGrow);
+  autoGrow();
 
   document.querySelectorAll("[data-starter]").forEach((button) => {
     button.addEventListener("click", () => {
-      el.input.value = button.dataset.starter;
+      setComposerText(button.dataset.starter);
       autoGrow();
       el.input.focus();
     });
@@ -878,6 +880,10 @@ export function setSession(sessionId) {
     saveLocalCache(currentUid(), state.sessionId, snapshot);
     if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
+  rememberComposerDraft();
+  composerDrafts.flush(composerDraftOwner, composerDraftSid);
+  composerDraftOwner = owner; composerDraftSid = sessionId;
+  setComposerText(composerDrafts.read(owner, sessionId));
   rememberMemoryStory();
   tokenUsageCache.cancelPending(owner,state.sessionId);
   clearChatRetry();chatRetry=0;chatStatus='ok';
@@ -976,6 +982,9 @@ function saveLocalCache(owner, sid, snapshot) {
 }
 
 export async function prepareChatLogout() {
+  composerDrafts.clearAccount(composerDraftOwner);
+  composerDraftOwner = composerDraftSid = null;
+  if (el.input) el.input.value = "";
   void selectStorySettings(null);
   cacheWritesPaused = true;indicatorRefresh.invalidate();clearChatRetry();
   updateMemoryChip();
@@ -1516,7 +1525,8 @@ async function startEdit(m, wrap) {
   wrap.insertBefore(status, actions);
   fit(); ta.addEventListener('input', fit);
   refreshFloatingCopy(); updateRewriteControls();
-  ta.focus({preventScroll:true}); el.list.scrollTop = scrollTop;
+  ta.focus({preventScroll:true});
+  requestAnimationFrame(() => { if (document.activeElement === ta) revealFocusedField(ta); });
   await loadLatest();
 }
 
@@ -1656,8 +1666,12 @@ async function regenerateMessage(message, replan = false) {
   } finally {releaseBusy(token);}
 }
 
+let composerDraftOwner = null, composerDraftSid = null, draftStorageNotice = false;
+function rememberComposerDraft() {
+  if (!cacheWritesPaused && composerDraftOwner && composerDraftSid) composerDrafts.set(composerDraftOwner, composerDraftSid, el.input.value);
+}
 function setComposerText(text) {
-  el.input.value = text; indicatorRefresh.invalidate(); sizeComposer({scroll:true});
+  el.input.value = text; rememberComposerDraft(); indicatorRefresh.invalidate(); sizeComposer({scroll:true});
 }
 function clearOriginalDraft() {
   originalDraft = null;
@@ -2566,31 +2580,6 @@ function restoreListPosition(position, replacementId) {
     if(delta)el.list.scrollTop+=delta;
   }
   clampListScroll();
-}
-
-// Scroll the inner message list (never the window) so the field's bottom edge
-// sits just above the iOS keyboard. Runs over a few frames because the
-// keyboard (and thus visualViewport) animates in after focus.
-function alignFieldToKeyboard(field) {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  let frames = 0;
-  const tick = () => {
-    const keyboardTop = vv.offsetTop + vv.height; // viewport-Y of the keyboard
-    const rect = field.getBoundingClientRect();
-    if (rect.bottom > keyboardTop) {
-      // Element extends under the keyboard: scroll the list up by the overlap.
-      el.list.scrollTop += rect.bottom - keyboardTop + 8;
-    } else if (rect.bottom < keyboardTop - vv.height * 0.45) {
-      // Element floats far above the keyboard: walk it back down.
-      el.list.scrollTop -= Math.min(
-        keyboardTop - rect.bottom - vv.height * 0.45,
-        el.list.scrollTop
-      );
-    }
-    if (++frames < 10) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
 }
 
 function setStatus(text, autoHide = false) {

@@ -179,3 +179,16 @@ test('Viewport batches keyboard changes, avoids duplicate safe area and preserve
   viewport.scale=2;viewport.height=225;events['visual:resize']();frames.shift()();assert.equal(props['--app-height'],'450px');
   viewport.scale=1;viewport.height=800;events['visual:resize']();frames.shift()();assert.equal(props['--composer-safe-bottom'],'var(--safe-bottom)');
 });
+
+
+test('Focused input cancels hidden body panning without moving conversation scrollers', async()=>{
+ const events={},frames=[],body={scrollTop:402,scrollLeft:5,addEventListener:(name,fn)=>events['body:'+name]=fn};
+ const list={scrollTop:11735},document={body,documentElement:{dataset:{},style:{setProperty(){}}},activeElement:{matches:()=>true},addEventListener:(name,fn)=>events[name]=fn};
+ const window={visualViewport:{scale:1,height:800,offsetTop:0,addEventListener:(name,fn)=>events['vv:'+name]=fn},innerWidth:1280,innerHeight:800,addEventListener(){}};
+ const {initViewport}=await appHarness({globals:{document,window,navigator:{userAgent:'Chrome'},requestAnimationFrame:fn=>frames.push(fn)}})('viewport.js');
+ initViewport();assert.equal(body.scrollTop,0);assert.equal(body.scrollLeft,0);assert.equal(list.scrollTop,11735);
+ body.scrollTop=120;events['body:scroll']();events.focusin();assert.equal(frames.length,1);frames.shift()();assert.equal(body.scrollTop,0);
+ document.activeElement={matches:()=>false,closest:selector=>selector==='#app'?{}:null};
+ body.scrollTop=402;events.focusin();frames.shift()();assert.equal(body.scrollTop,0,'focusing Stop must not pan the app');assert.equal(list.scrollTop,11735);
+ window.visualViewport.scale=2;body.scrollTop=50;events['body:scroll']();frames.shift()();assert.equal(body.scrollTop,50,'pinch zoom is preserved');
+});

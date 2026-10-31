@@ -81,7 +81,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     URL, Blob, console, structuredClone, document, TextDecoder, TextEncoder, AbortController, ...globals,
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } }, ...globals.navigator },
     requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
-    localStorage: { getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
+    localStorage: { get length(){return localCache.size;}, key:i=>[...localCache.keys()][i], getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
     window: { addEventListener(type,fn) { ((calls.windowListeners ??= {})[type] ??= []).push(fn); } }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     prompt:()=>calls.prompt,
@@ -3881,4 +3881,36 @@ test('Continue replacement keeps recovery and refuses a changed history source',
  await namedButton(h.el('message-list'),'Continue replacement').click();await settle();
  assert.deepEqual(fixture.stored,before);assert.equal(clears.length,0);assert.equal(h.calls.requests.length,requests);
  assert.ok(h.el('message-list').querySelector('.unsaved'));assert.equal(h.state.busy,false);
+});
+
+
+test('Composer drafts switch per story, flush on pagehide, and clear on logout',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();
+ const {composerDrafts}=await h.use('composer-drafts.js');
+ chat.setSession('draft-a');h.el('chat-input').value='A text';await h.fire('chat-input','input');
+ chat.setSession('draft-b');assert.equal(h.el('chat-input').value,'');
+ h.el('chat-input').value='B text';await h.fire('chat-input','input');
+ chat.setSession('draft-a');assert.equal(h.el('chat-input').value,'A text');
+ h.el('chat-input').value='A latest';await h.fire('chat-input','input');
+ for(const fn of h.calls.windowListeners.pagehide)fn();
+ assert.equal([...h.localCache.values()].includes('A latest'),true);
+ await chat.prepareChatLogout();assert.equal(h.el('chat-input').value,'');
+ assert.equal(composerDrafts.read('test-user','draft-a'),'');
+ assert.equal([...h.localCache.keys()].some(k=>k.startsWith('nera.composer-draft.')),false);
+ for(const fn of h.calls.windowListeners.pagehide)fn();
+ assert.equal([...h.localCache.keys()].some(k=>k.startsWith('nera.composer-draft.')),false,'late lifecycle flush cannot revive signed-out text');
+});
+test('Composer restores durable text on selection without focusing the field',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();
+ const {composerDrafts}=await h.use('composer-drafts.js');composerDrafts.set('test-user','restored','Recovered text');composerDrafts.flush();
+ h.document.activeElement=null;chat.setSession('restored');assert.equal(h.el('chat-input').value,'Recovered text');assert.equal(h.document.activeElement,null);
+});
+test('Composer draft survives pre-acceptance failure and clears on accepted Send',async()=>{
+ const h=await harness();await openImprovementChat(h);const {composerDrafts}=await h.use('composer-drafts.js');
+ h.el('chat-input').value='Keep until accepted';await h.fire('chat-input','input');
+ const model=h.state.settings.modelId;h.state.settings.modelId='';
+ await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.el('chat-input').value,'Keep until accepted');assert.equal(composerDrafts.read('test-user',h.state.sessionId),'Keep until accepted');
+ h.state.settings.modelId=model;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.el('chat-input').value,'');assert.equal(composerDrafts.read('test-user',h.state.sessionId),'');
 });

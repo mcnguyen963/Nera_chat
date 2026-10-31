@@ -26,3 +26,12 @@ test('Floating composer reserves actual growth and shrinkage without repeated wr
   callback();frames.shift()();assert.equal(resizeCount,3);
   height=0;callback();frames.shift()();assert.equal(writes.length,3);
 });
+
+test('Composer remeasures height-only visual viewport changes without altering selection',async()=>{
+ const window={visualViewport:{height:600}},frames=[],writes=[];
+ const field={value:'same text',clientWidth:300,scrollHeight:200,selectionStart:4,selectionEnd:4,style:new Proxy({},{set:(t,k,v)=>{writes.push(v);t[k]=v;return true;}})};
+ const {createComposerSizer}=await appHarness({globals:{window}})('ui/composer-size.js');
+ const resize=createComposerSizer({input:()=>field,frame:fn=>frames.push(fn)});
+ resize();frames.shift()();resize();frames.shift()();assert.equal(writes.length,2);
+ window.visualViewport.height=220;resize();resize();assert.equal(frames.length,1);frames.shift()();assert.equal(writes.length,4);assert.equal(field.selectionStart,4);assert.equal(field.selectionEnd,4);
+});

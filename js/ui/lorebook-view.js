@@ -755,7 +755,7 @@ function renderNameChips(parent,{aliasesOnly=false}={}) {
       if(aliasesOnly && index===0)continue;
       const chip = node('span',null,'lore-name-chip'); chip.draggable = true;
       const edit = button(name,() => {
-        const dialog = subSheet('Edit name',{compact:true}), body = node('div',null,'memory-content'), f = field(index ? 'Other name' : 'Main name',name); f.input.maxLength=60;
+        const dialog = subSheet('Edit name',{compact:true}), body = node('div',null,'memory-content lore-name-editor'), f = field(index ? 'Other name' : 'Main name',name); f.input.maxLength=60;
         body.append(f.wrap,button('Save',() => { const value=f.input.value.trim(); if (!value) return; if (index) staged.aliases[index-1]=value; else staged.name=value; dialog.hide(); render(); },'btn primary'),button('Cancel',dialog.hide)); dialog.dialog.append(body);
       },'lore-link'); edit.addEventListener('keydown',e => { if (e.altKey && ['ArrowLeft','ArrowRight'].includes(e.key)) { e.preventDefault(); move(index,index+(e.key === 'ArrowLeft' ? -1 : 1)); } }); chip.append(edit);
       if (index) chip.append(button('×',() => { staged.aliases.splice(index-1,1); render(); },'btn small'));

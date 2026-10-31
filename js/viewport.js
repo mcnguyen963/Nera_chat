@@ -1,3 +1,4 @@
+import {revealFocusedField} from './focus-reveal.js';
 export function viewportVars(viewport) {
   if (!viewport || Math.abs(viewport.scale - 1) >= 0.01 ||
       !Number.isFinite(viewport.height) || viewport.height <= 0) return null;
@@ -38,6 +39,13 @@ export function initViewport() {
     if(document.documentElement.dataset.keyboard!==keyboardState)document.documentElement.dataset.keyboard=keyboardState;
     // Only undo keyboard focus panning, never normal browser toolbar scrolling.
     if (keyboard && ios && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0);
+    // Browsers can pan the overflow-hidden body on focus without changing
+    // window.scrollY. The app owns inner scrollers; undo only that outer pan.
+    if (focused || keyboard || document.activeElement?.closest?.('#app')) {
+      if (document.body?.scrollTop) document.body.scrollTop = 0;
+      if (document.body?.scrollLeft) document.body.scrollLeft = 0;
+    }
+    revealFocusedField();
   };
   const schedule = () => { if (!queued) { queued = true; requestAnimationFrame(sync); } };
   vv.addEventListener("resize", schedule);
@@ -45,6 +53,7 @@ export function initViewport() {
   window.addEventListener("resize", schedule);
   window.addEventListener("scroll", schedule, { passive: true });
   window.addEventListener("pageshow", schedule);
+  document.body?.addEventListener?.("scroll", schedule, { passive: true });
   document.addEventListener('focusin', schedule);
   let settleTimer;
   document.addEventListener("focusout", () => {
