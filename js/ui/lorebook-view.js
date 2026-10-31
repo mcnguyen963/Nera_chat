@@ -29,7 +29,7 @@ import { latestScene } from '../scene.js';
 import { planReorganize, runReorganizeBatch } from '../memory-reorganize.js';
 import * as tokenizer from '../tokenizer.js';
 import { createWorkBudget, afterUiPaint } from '../ui-work.js';
-import { node, button, field, sheet, subSheet, toast, copy, download } from './memory-ui.js';
+import { node, button, field, sheet, subSheet, toast, copy, download, actionMenu } from './memory-ui.js';
 import { rebaseSavedDraft } from './save-draft.js';
 let opened = false, sid = null, book = 'characters', screen = 'books', filter = 'all', selected = null, base = null, staged = null, editor = null, list = null, rail = null, view = null, search = '', threadFilter = 'open', newPrefill = null;
 let focusRestore = null, editorVersion = 0, deletedHistoryReady = false, historyLoadToken = 0;
@@ -202,7 +202,10 @@ function renderList(render=captureRender()) {
   render.restoreNavigation=rowNavigation && rowNavigation.from===document.activeElement && rowNavigation.owner===render.owner && rowNavigation.sid===render.sid ? rowNavigation : null;
   rowNavigation=null;
   list.replaceChildren(); list.append(button('‹ Books',() => { if (!canLeave()) return; staged = base = null; screen = 'books'; renderShell(); },'btn small mobile-back'));
-  list.append(node('h3',BOOK_LABELS[book]),button('Import card…',()=>cardTransfer()),button('Import book…',()=>{if(!canLeave())return;staged=base=null;selected=null;screen='book-transfer';renderShell();}),button('Export book…',exportBook));
+  const tools=[button('Import card…',()=>cardTransfer()),button('Import book…',()=>{if(!canLeave())return;staged=base=null;selected=null;screen='book-transfer';renderShell();}),button('Export book…',exportBook)];
+  const toolbar=node('div',null,'lore-list-toolbar');
+  toolbar.append(node('h3',BOOK_LABELS[book]),button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),actionMenu('Tools',tools,BOOK_LABELS[book]+' tools'));
+  list.append(toolbar);
   if (book === 'events') {
     const tabs = node('div',null,'segmented');
     tabs.append(button('Timeline',() => { const timeline = entries().find(e => e.kind === 'timeline'); if (timeline) openCard(timeline); else void newCard('Timeline','timeline'); }),button('Threads',() => { selected = null; staged = base = null; renderList(); })); list.append(tabs);
@@ -230,8 +233,8 @@ function renderList(render=captureRender()) {
     const snapshot=render.snapshot;
     list.append(button(rebuildLabel(snapshot),async()=>{if(!confirm('Re-extract this edited history? Generated notes will be backed up and marked for review.'))return;await rebuildFrom(sid,edited);toast('Re-extraction finished; prior notes remain for review.');}),button('Dismiss',async()=>{try{if(state.busy){toast('Finish the current turn first');return;}await dismissMemoryRebuild(snapshot.session.id,snapshot.session.historyRevision ?? 0);}catch(e){toast(e.message);}}));
   }
-  list.append(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
-  list.append(button('+ New',() => newCard(newPrefill ?? ''),'btn primary'),...(book==='plan' ? [] : [button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small')]));
+  tools.push(button('Rebuild generated memory',async () => { try {const snapshot = live(),mem=normalizeMemory(snapshot.session.memory),turns=computeTurns(snapshot.messages); const eligible=turns.assistants.slice(0,Math.max(0,turns.assistants.length-mem.lagTurns)); if(!confirm(`Rebuild will re-read ${eligible.length} turns in about ${Math.ceil(eligible.length/mem.batchTurns)} model calls and mark generated notes for review. Continue?`))return; const finished=await rebuild(snapshot.session.id); toast(finished ? 'Memory rebuild finished; prior notes remain for review.' : 'Memory rebuild stopped. '+(live()?.session.memoryState?.lastError ?? 'Saved updates are kept.'));}catch(e){toast(e.message);} },'btn small'));
+  if(book!=='plan')tools.push(button('Reorganize book…',() => reorganize(entries().filter(e => e.book === book)),'btn small'));
   if (filter === 'deleted' && deletedHistoryReady && render.snapshot?.historyComplete === true) { const affected = books.filter(e => passes(e,'deleted',render)), count = affected.reduce((n,e) => n+linesOf(e).filter(l=>deletedLine(l,render)).length,0); if (count) list.append(button('Remove all '+count,() => removeDeletedNotes(affected,count),'btn danger')); }
   const missing = books.filter(e => sizeFor(e,render)==null);
   if (missing.length) void (async()=>{
@@ -345,7 +348,6 @@ function renderEditor() {
   if (!editor || !staged) return;
   const version = ++editorVersion; editor.replaceChildren();
   editor.append(button('‹ '+BOOK_LABELS[book],() => { if (!canLeave()) return; staged = base = null; selected = null; screen = 'list'; renderShell(); },'btn small mobile-back'),node('h2',staged.name),node('p','','concurrent-notice muted'));
-  editor.append(button('Export card…',exportCard),button('Import into this card…',()=>cardTransfer(selected)));
   if (staged.draft) {
     const banner = node('div',null,'lore-banner'); banner.append(node('p',`This card was created by a memory update (turn ${linesOf(staged)[0]?.turn ?? '?'}). Check it's a new character, not someone you already have.`),button('Keep',async () => { if (state.busy) throw new Error('Wait for the current reply or summary.'); const ctx=cardFlowContext(),original = entries().find(e => e.id === staged.id) ?? base;await store.saveEntry(ctx.source,{ ...original,draft:false },original);if(ctx.isCurrent()){base.draft=false;staged.draft=false;banner.remove();}if(currentUid()===ctx.source.uid)toast('Saved'); }),button('Merge into…',mergeCard),button('Delete',deleteCard)); editor.append(banner);
   }
@@ -423,7 +425,11 @@ function renderEditor() {
   async function updateFooter() { const tokens = await countTokens(renderEntry(staged)), budget = normalizeMemory(live()?.session.memory).books[book].budget; if (version !== editorVersion) return; tokenLabel.textContent = `${tokens.toLocaleString()} / ${budget.toLocaleString()} tokens · ${linesOf(staged).length} lines`; tokenLabel.style.color = tokens>budget ? 'var(--danger)' : ''; if (new TextEncoder().encode(JSON.stringify(staged)).length > 700000) tokenLabel.textContent += ' · Too big to store much longer — reorganize it'; }
   const reorganizeBtn = button('Reorganize…',() => { if (dirty()) { toast('Save or cancel your changes before reorganizing.'); return; } return reorganize([entries().find(e => e.id === selected) ?? staged]); }); reorganizeBtn.disabled = linesOf(staged).filter(l => l.by !== 'user').length < 3; reorganizeBtn.title = reorganizeBtn.disabled ? 'Nothing to tidy yet' : '';
   const save = button('Save',saveCard,'btn primary'); save.disabled = reorganizing.has(staged.id);
-  footer.append(reorganizeBtn,button('Merge into…',mergeCard),button('Duplicate name check',() => toast(aliasWarnings(staged).join(' · ') || 'No duplicate names.')),button('Delete card',deleteCard,'btn danger'),button('Cancel',() => { staged = structuredClone(base); renderEditor(); }),save); editor.append(footer); void updateFooter();
+  const more=actionMenu('More',[
+    button('Export card…',exportCard),button('Import into this card…',()=>cardTransfer(selected)),
+    reorganizeBtn,button('Merge into…',mergeCard),button('Duplicate name check',() => toast(aliasWarnings(staged).join(' · ') || 'No duplicate names.')),button('Delete card',deleteCard,'btn danger'),
+  ],staged.name+' actions');
+  footer.append(button('Cancel',() => { staged = structuredClone(base); renderEditor(); }),save,more); editor.append(footer); void updateFooter();
 }
 function aliasWarnings(e) {
   const warnings = []; for (const n of [e.name,...e.aliases]) { if (n.length<3 || STOPLIST.has(normalizeName(n))) warnings.push('Very short names can match by accident: '+n); const clash = entries().find(x => x.book === e.book && x.id !== e.id && [x.name,...x.aliases].some(a => normalizeName(a) === normalizeName(n))); if (clash) warnings.push('Also used by '+clash.name+': '+n); } return warnings;

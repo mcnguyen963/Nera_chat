@@ -80,6 +80,13 @@ test('Long conversation replays unchanged without provider calls or input mutati
  assert.equal(messages.length,581);assert.equal(JSON.stringify({messages,session}),before);assert.equal(JSON.stringify(loreEntries),beforeLore);assert.equal(providerCalls,0);assert.ok(built.apiMessages.length);assert.ok(built.usedTokens<=125000);assert.ok(built.droppedCount>0);assert.ok(built.apiMessages.some(m=>m.content.includes('Replay message 581:')));
 });
 
+test('Clearing story settings after authentication ends needs no signed-in account',async()=>{
+ const use=appHarness({stubs:{'auth.js':{currentUid(){throw new Error('Not signed in');}},'db.js':{db:{}},'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc(){throw Error('No network expected');},getDocFromServer(){throw Error('No network expected');},runTransaction(){throw Error('No network expected');},serverTimestamp(){}}}});
+ const {state}=await use('state.js'),store=await use('story-settings-store.js');
+ state.storySettings={revision:1,values:{}};state.storySettingsId='previous';state.storySettingsLoadFailed=true;
+ await store.selectStorySettings(null);assert.equal(state.storySettings,null);assert.equal(state.storySettingsId,null);assert.equal(state.storySettingsLoadFailed,false);
+});
+
 test('Active-story cached prompts ignore external updates until explicit refresh and reject stale account loads',async()=>{
  let uid='u',releaseA,delayA=false;const docs=new Map(),callbacks=new Map();
  const snap=(path,metadata={})=>({metadata,exists:()=>docs.has(path),data:()=>structuredClone(docs.get(path))});

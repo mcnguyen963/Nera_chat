@@ -1,8 +1,8 @@
 import { openDirectorState } from './director-view.js';
 import { activeSheet } from './memory-ui.js';
+import {settingsVisibility,applySettingsVisibility} from './settings-visibility.js';
 import { currentUid } from '../auth.js';
 import { beginSettingsSave } from './pending-settings.js';
-import {setIcon} from './icons.js';
 import {initProviderPicker} from './provider-picker.js';
 import {providerOrder,resetProviderCooldown} from '../provider-routing.js';
 import {initModelPicker} from './model-picker.js';
@@ -83,14 +83,40 @@ export function initSettingsView() {
     reset: input("btn-reset-settings"), profiles: input("set-profiles"),
     petChoices: input("set-pet-choices"),
   });
+  el.overlay.addEventListener('input', () => {
+    refreshVisibility();
+    if (input('settings-unsaved')) input('settings-unsaved').textContent = 'Unsaved changes';
+  });
+  el.overlay.addEventListener('change', event => {
+    if (['set-narration-mode','set-auto-summary-enabled','set-streaming'].includes(event.target.id) || event.target.id?.startsWith('mem-') && event.target.type==='checkbox') {
+      for (const group of el.overlay.querySelectorAll('[data-settings-review]')) delete group.dataset.settingsReview;
+    }
+    capture(); refreshVisibility(); updateDirtyState();
+  });
+  el.overlay.addEventListener('toggle', event => {
+    if (event.target.tagName === 'DETAILS') event.target.querySelector('summary')?.setAttribute('aria-expanded',String(event.target.open));
+  },true);
   input("btn-close-settings").addEventListener("click", closeSettingsPopup);
+  // Keep the keyboard layout stable until a pointer activation reaches click.
+  // Blurring an editor on pointerdown can move landscape header actions away
+  // from the pointer before pointerup, dropping the intended Save or Close.
+  for (const button of [el.save, el.saveSession, input('btn-close-settings')]) {
+    button.addEventListener('pointerdown', event => {
+      const active = document.activeElement;
+      if (event.button === 0 && /^(INPUT|TEXTAREA)$/.test(active?.tagName) && active.closest('#settings-tab') === el.overlay) event.preventDefault();
+    });
+    if (button !== input('btn-close-settings')) button.addEventListener('click', () => {
+      const active = document.activeElement;
+      if (/^(INPUT|TEXTAREA)$/.test(active?.tagName) && active.closest('#settings-tab') === el.overlay) active.blur?.();
+    });
+  }
   input("settings-backdrop").addEventListener("click", closeSettingsPopup);
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || el.overlay.classList.contains("hidden") || activeSheet() || document.querySelector('dialog[open]')) return;
     if (event.key === "Escape") { event.preventDefault(); closeSettingsPopup(); }
     if (event.key !== "Tab") return;
     const focusables = [...el.overlay.querySelectorAll("button, input, select, textarea, summary")]
-      .filter((node) => !node.disabled && !node.closest(".hidden") && node.getClientRects().length);
+      .filter((node) => !node.disabled && !node.closest(".hidden,[hidden]") && node.getClientRects().length);
     const first = focusables[0], last = focusables.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -99,6 +125,7 @@ export function initSettingsView() {
     button.addEventListener("click", () => {showPanel(button.dataset.settingsPanel);if(globalThis.matchMedia?.('(max-width: 720px)').matches)input('settings-back').focus();}));
   input('settings-back').addEventListener('click',()=>{
     capture();el.overlay.classList.remove('settings-detail-open');
+    input('settings-title').textContent='Settings';
     document.querySelectorAll('[data-settings-panel]').forEach(button=>{if(button.dataset.settingsPanel===panel)button.focus();});
   });
   document.querySelectorAll('[data-reset-prompt]').forEach(button=>button.addEventListener('click',()=>{draft[button.dataset.resetPrompt]=defaultStorySettings()[button.dataset.resetPrompt] ?? DEFAULT_SETTINGS[button.dataset.resetPrompt];set(button.dataset.promptField,draft[button.dataset.resetPrompt]);if(button.dataset.resetPrompt==='directorNarratorSystemPrompt'){draft.directorNarratorPromptNeedsReview=false;renderNarratorReview();}clearMessage();}));
@@ -151,7 +178,7 @@ export function initSettingsView() {
   input("btn-export-st").addEventListener("click", handleExport);
   input('btn-export-full').addEventListener('click',async()=>{if(state.busy){feedback('Finish the current turn first',true);return;}const b=input('btn-export-full');if(b.disabled || !state.sessionId)return;b.disabled=true;try{await storyTransfer.exportFullBackup(state.sessionId);feedback('Exported cached lore.');}catch(error){feedback('Export failed: '+error.message,true);}finally{b.disabled=false;}});
   document.addEventListener("session-changed", (event) => {
-    if (!el.overlay.classList.contains("hidden") && (panel === "story" || panel === "memory") && (sessionId !== state.sessionId || !sessionDirty())) fillSession(event);
+    if (!el.overlay.classList.contains("hidden") && (sessionId !== state.sessionId || !sessionDirty())) fillSession(event);
   });
   document.addEventListener('story-settings-changed',()=>{if(!saving && !el.overlay.classList.contains('hidden'))receiveSettingsChange();});
   document.addEventListener("settings-changed", () => {
@@ -170,12 +197,14 @@ export function openSettingsPopup(trigger = document.activeElement, options = {}
   document.body.classList.add("settings-open");
   if(retainedDraft && draftOwner===currentUid() && promptStoryId===state.sessionId){retainedDraft=false;if(options.panel)showPanel(options.panel);}
   else {retainedDraft=false;reloadGlobalSettings();showPanel(["model", "pets", "memory", "story", "context", "transfer", "prompts", "account"].includes(options.panel) ? options.panel : "model");}
-  if(!options.panel)el.overlay.classList.remove('settings-detail-open');
+  if(!options.panel){el.overlay.classList.remove('settings-detail-open');input('settings-title').textContent='Settings';}
+  void fillSession();
   input("btn-close-settings").focus();
 }
 
 function reloadGlobalSettings() {
   providerResets.clear();
+  for (const group of el.overlay.querySelectorAll('[data-settings-review]')) delete group.dataset.settingsReview;
   viewVersion++;draftOwner=currentUid();
   draft = structuredClone(state.settings);
   promptStoryId=state.sessionId;promptBase=null;
@@ -258,15 +287,19 @@ function showPanel(name) {
   }
   el.content.scrollTop = 0;
   const global = ["model", "context", "pets", "prompts"].includes(name);
-  setIcon(el.save, 'save', name==='prompts' ? 'Save story prompts' : 'Save shared settings');
-  setIcon(el.saveSession, 'save', 'Save story and memory settings');
-  input('settings-scope').textContent=({model:'Shared across your stories. Save shared settings to apply changes.',context:'Shared across your stories. Save shared settings to apply changes.',pets:'Shared across your stories. Save shared settings to apply changes.',prompts:'Saved separately for the current story. Save story prompts to apply changes.',story:'Settings for the current story. Save story and memory settings to apply changes.',memory:'Settings for the current story. Save story and memory settings to apply changes. Show scene is a device-only preference and applies immediately.',transfer:'Import and export actions apply when selected.',account:'Account changes apply when submitted.'})[name] ?? '';
+  el.save.setAttribute('aria-label',name==='prompts' ? 'Save story prompts' : 'Save shared settings');
+  el.saveSession.setAttribute('aria-label','Save story and memory settings');
+  input('settings-scope').textContent=({model:'Shared across your stories.',context:'Shared across your stories.',pets:'Shared across your stories.',prompts:'Instructions for the current story.',story:'Changes apply to the current story.',memory:'For the current story. Show scene is device-only and applies immediately.',transfer:'Import and export actions apply when selected.',account:'Account changes apply when submitted.'})[name] ?? '';
   const promptHeading=document.querySelector('[data-panel="prompts"] h2');if(promptHeading)promptHeading.textContent='Prompts · '+(sessionOriginal.title || 'current story');
   if(name==='prompts' && state.sessionId)void getSession(state.sessionId).then(s=>{if(panel==='prompts' && promptHeading)promptHeading.textContent='Prompts · '+(s?.title ?? 'Select a story');}).catch(error=>feedback(error.message,true));
   el.footer.classList.toggle("hidden", !global && !["story", "memory"].includes(name));
   el.save.classList.toggle("hidden", !global);
   el.reset.classList.toggle("hidden", !global);
   el.saveSession.classList.toggle("hidden", !["story", "memory"].includes(name));
+  if (input('settings-options')) input('settings-options').hidden = !global;
+  if (input('settings-options')) input('settings-options').open = false;
+  input('settings-title').textContent = document.querySelector(`[data-settings-panel="${name}"] strong`)?.textContent || 'Settings';
+  refreshVisibility();updateDirtyState();
   clearMessage();
   if (["story", "memory"].includes(name)) fillSession();
 }
@@ -295,6 +328,41 @@ function renderAll() {
   set("set-memory-update-prompt", draft.memoryExtractionPrompt);
   set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
   set('set-rewrite-n',draft.rewriteRecentMessages ?? 10);set('set-stream-vibration',draft.streamVibrationMode ?? 'spaces');renderRewritePrompt();
+  refreshVisibility();
+}
+function refreshVisibility() {
+  if (!el.overlay || !draft) return;
+  applySettingsVisibility(el.overlay,settingsVisibility({
+    mode:raw('set-narration-mode'), memory:readMemory() ?? {},
+    endpoint:raw('set-endpoint'), autoSummary:input('set-auto-summary-enabled').checked,
+    streaming:input('set-streaming').checked,
+  }));
+}
+function updateDirtyState() {
+  const status=input('settings-unsaved');
+  if (status) status.textContent=panel==='prompts' && sessionId===state.sessionId && memoryDirty(sessionOriginal.memory)
+    ? 'Memory changes are unsaved — save in Memory.'
+    : globalDirty() || sessionDirty() ? 'Unsaved changes' : '';
+}
+function validationFailure(error) {
+  feedback(error.message,true);
+  const promptField=Object.fromEntries([...document.querySelectorAll('[data-reset-prompt]')].map(button=>[button.dataset.resetPrompt,button.dataset.promptField]));
+  Object.assign(promptField,{directorFocusLimit:'set-director-focus',directorMaxInputTokens:'set-director-input',directorMaxOutputTokens:'set-director-output',directorRecentTurns:'set-director-turns'});
+  const key=Object.keys(promptField).find(key=>error.message.includes(key));
+  const field=input(error.fieldId || promptField[key]);
+  if (!field) return;
+  const reveal=()=>{
+    const destination=field.closest('[data-panel]')?.dataset.panel;
+    if(destination && destination!==panel)showPanel(destination);
+    for(let ancestor=field.parentElement;ancestor && ancestor!==el.overlay;ancestor=ancestor.parentElement){
+      if(ancestor.dataset.settingsWhen){ancestor.dataset.settingsReview='true';ancestor.hidden=false;}
+      if(ancestor.tagName==='DETAILS')ancestor.open=true;
+    }
+    field.focus();
+  };
+  if(field.closest('[hidden]')){
+    const review=document.createElement('button');review.type='button';review.className='btn small';review.textContent='Review field';review.addEventListener('click',reveal);el.message.append(review);
+  } else reveal();
 }
 function renderNarratorReview() {
   const pending=draft.directorNarratorPromptNeedsReview===true;
@@ -342,6 +410,7 @@ function renderProfile() {
   input("set-advanced-enabled").checked = !!(profile?.advancedParametersEnabled ?? draft.advancedParametersEnabled);
   syncOptionalControls();
   providerPicker?.reset();
+  refreshVisibility();
 }
 function renderPetChoices(selectedIds = []) {
   petChoicesReady = true;
@@ -411,8 +480,8 @@ function capture() {
   draft.petMovement = raw("set-pet-movement") === "stay" ? "stay" : "roam";
   if (petChoicesReady) draft.petCharacterIds = [...el.petChoices.querySelectorAll("input:checked")].map((checkbox) => checkbox.value);
   draft.modelContextTokens=raw('set-model-context').trim();
-  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.narratorProfileId=raw('set-narrator-profile');draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt') || defaultStorySettings().directorSystemPrompt;
-  for(const [key,id,fallback] of [['directorMaxInputTokens','set-director-input',20000],['directorMaxOutputTokens','set-director-output',4000],['directorRecentTurns','set-director-turns',5],['directorFocusLimit','set-director-focus',5]])draft[key]=Number(raw(id) || fallback);
+  draft.narrationMode=raw('set-narration-mode') || 'classic';draft.narratorProfileId=raw('set-narrator-profile');draft.directorProfileId=raw('set-director-profile');draft.directorSystemPrompt=raw('set-director-prompt');
+  for(const [key,id] of [['directorMaxInputTokens','set-director-input'],['directorMaxOutputTokens','set-director-output'],['directorRecentTurns','set-director-turns'],['directorFocusLimit','set-director-focus']])draft[key]=Number(raw(id));
   draft.narratorSystemPrompt = raw("set-narrator-prompt");
   draft.directorNarratorSystemPrompt=raw("set-director-narrator-prompt");
   draft.directorNarratorPromptNeedsReview ??= false;
@@ -457,6 +526,7 @@ function resetPanel() {
     set("set-memory-reorganize-prompt", draft.memoryReorganizePrompt);
   }
   feedback("Defaults ready. Save to apply.");
+  refreshVisibility();updateDirtyState();
 }
 
 function numberField(value, id, min, max, optional = false) {
@@ -465,7 +535,7 @@ function numberField(value, id, min, max, optional = false) {
   const number = Number(text);
   const valid = text !== "" && Number.isFinite(number) && number >= min && number <= max &&
     (/^-?(?:\d+\.?\d*|\.\d+)$/.test(text));
-  if (!valid) throw new Error(`${input(id).closest("label").firstChild.textContent.trim()}: enter a number from ${min} to ${max}.`);
+  if (!valid) throw Object.assign(new Error(`${input(id).closest("label").firstChild.textContent.trim()}: enter a number from ${min} to ${max}.`),{fieldId:id});
   return number;
 }
 function integerField(value, id) {
@@ -473,7 +543,7 @@ function integerField(value, id) {
   const min = Number(field.dataset.min), max = field.dataset.max ? Number(field.dataset.max) : Number.MAX_SAFE_INTEGER;
   const text = String(value ?? "").trim();
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text)) || Number(text) < min || Number(text) > max)
-    throw new Error(`${field.closest("label").firstChild.textContent.trim()}: enter a whole number from ${min}${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ""}.`);
+    throw Object.assign(new Error(`${field.closest("label").firstChild.textContent.trim()}: enter a whole number from ${min}${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ""}.`),{fieldId:id});
   return Number(text);
 }
 export function normalizeReasoningBudget(value,responseLimit) {
@@ -524,7 +594,7 @@ async function handleSaveSettings() {
   capture();
   let validated;
   try { validated = panel==='prompts' ? explicitStorySettings({...draft,rewriteRecentMessages:integerField(draft.rewriteRecentMessages,'set-rewrite-n')}) : validatedDraft(Object.fromEntries(STORY_SETTING_KEYS.map(k=>[k,state.settings[k]]))); }
-  catch (error) { feedback(error.message, true); return; }
+  catch (error) { validationFailure(error); return; }
   const version=viewVersion,owner=currentUid(),submitted=structuredClone(draft),savedPanel=panel;
   const resetSnapshot=[...providerResets.entries()];
   const finishSave=beginSettingsSave(owner,savedPanel==='prompts'?promptStoryId:null);let committed=false;
@@ -534,7 +604,7 @@ async function handleSaveSettings() {
       if(!promptBase || promptStoryId!==state.sessionId)throw new Error('Story changed or prompts have not loaded. Reopen Settings.');
       if(state.busy)throw new Error('Finish the current reply before saving story settings.');
       if(validated.narrationMode==='director' && !validated.directorProfileId)throw new Error('Choose a Director connection profile.');
-      for(const key of ['narratorProfileId','directorProfileId'])if(validated[key] && !draft.profiles.some(p=>p.id===validated[key]))throw new Error('The selected '+(key==='narratorProfileId'?'Narrator':'Director')+' profile is missing. Choose another.');
+      for(const key of ['narratorProfileId',...(validated.narrationMode==='director'?['directorProfileId']:[])])if(validated[key] && !draft.profiles.some(p=>p.id===validated[key]))throw new Error('The selected '+(key==='narratorProfileId'?'Narrator':'Director')+' profile is missing. Choose another.');
       validated.directorNarratorPromptNeedsReview=false;
       const result=await saveStorySettings(promptStoryId,promptBase,changedStoryFields(promptBase,validated));
       committed=true;
@@ -571,6 +641,7 @@ async function handleSaveSettings() {
 function feedback(message, error = false) {
   el.message.textContent = message;
   el.message.style.color = error ? "var(--danger)" : "var(--ok)";
+  updateDirtyState();
 }
 function clearMessage() { if (el.message) {if(saving)feedback('Saving…');else el.message.textContent = "";} }
 
@@ -580,6 +651,7 @@ async function fillSession(event) {
     sessionOriginal = { title: "", longTermPlan: "", allowLlmPlanUpdates: false };
     set("set-session-title", ""); set("set-session-plan", "");
     fillMemory();
+    refreshVisibility();
     return;
   }
   const requestedId = state.sessionId;
@@ -600,6 +672,7 @@ async function fillSession(event) {
     set("set-session-title", sessionOriginal.title);
     set("set-session-plan", sessionOriginal.longTermPlan);
     fillMemory(sessionOriginal.memory);
+    refreshVisibility();updateDirtyState();
   } catch (error) { feedback("Could not load story: " + error.message, true); }
 }
 async function handleSaveSession() {
@@ -637,7 +710,7 @@ async function handleSaveSession() {
     if(nextMemory && JSON.stringify(readMemory())===JSON.stringify(submittedMemory))fillMemory(normalizeMemory(sessionOriginal.memory));
     feedback("Session saved ✓");
     refreshContextIndicator();
-  } catch (error) {if(version===viewVersion && owner===currentUid())feedback("Save failed: " + error.message, true); }
+  } catch (error) {if(version===viewVersion && owner===currentUid())validationFailure(Object.assign(error,{message:'Save failed: '+error.message})); }
   finally {finishSave(committed);saving = false; el.saveSession.disabled = el.save.disabled = false;el.saveSession.setAttribute('aria-busy','false'); }
 }
 async function handleImport() {

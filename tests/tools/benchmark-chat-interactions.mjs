@@ -11,7 +11,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 test('Long-story UX benchmark',async()=>{
   const path=process.env.NERA_BENCHMARK_BACKUP;if(!path)throw new Error('Set NERA_BENCHMARK_BACKUP to a local story backup.');
   // Preserve the production 300 ms context debounce; the general unit harness accelerates it to zero.
-  const data=JSON.parse(await readFile(path,'utf8')),h=await harness({timers:{setTimeout:(fn,ms)=>{if(ms===300 || ms===0)return setTimeout(fn,ms);},clearTimeout},extraStubs:{'tokenizer.js':{countTokens:async text=>Math.ceil(countTokens(text)*1.02),tokenizerReady:()=>true}}});h.calls.loreEntries=data.lore ?? [];
+  const data=JSON.parse(await readFile(path,'utf8')),h=await harness({timers:{setTimeout:(fn,ms)=>{if(ms<=500)return setTimeout(fn,ms);},clearTimeout},extraStubs:{'tokenizer.js':{countTokens:async text=>Math.ceil(countTokens(text)*1.02),estimateTokens:text=>Math.ceil(text.length*.306),tokenizerReady:()=>true,tokenizerStatus:()=> 'ok',setTokenCountingMode(){}}}});h.calls.loreEntries=data.lore ?? [];
   const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('benchmark');await tick();
   // The offline settings adapter supplies revision 1; no production metadata is written.
   h.calls.sessionCallbacks.at(-1)({id:'benchmark',exists:()=>true,data:()=>({...data.session,id:'benchmark',storySettingsRevision:1})});
@@ -27,7 +27,9 @@ test('Long-story UX benchmark',async()=>{
   assert.equal(bubble(),undefined);
   let late;h.calls.streamReader={read:()=>new Promise(resolve=>late=resolve),cancel:()=>new Promise(()=>{})};
   h.el('chat-input').value='Continue';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
-  for(let i=0;i<200&&!late;i++)await tick();assert.ok(late,'Narrator must reach the mocked stream with persistence still delayed');
+  const readyDeadline=performance.now()+5000;
+  while(!late && performance.now()<readyDeadline)await tick();assert.ok(late,'Narrator must reach the mocked stream with persistence still delayed');
+  while(h.el('btn-stop').disabled && performance.now()<readyDeadline)await tick();assert.equal(h.el('btn-stop').disabled,false,'Wait for the real Stop protection window before measuring cancellation');
   start=performance.now();await h.fire('btn-stop');const cancelMs=performance.now()-start;assert.equal(h.state.busy,false);
   late({done:true});await send;
   console.log(JSON.stringify({messages:data.messages.length,loreCards:data.lore?.length ?? 0,editFeedbackMs:+editMs.toFixed(2),deleteFeedbackMs:+deleteMs.toFixed(2),composerReleaseMs:+cancelMs.toFixed(2),persistence:'indefinitely delayed mock',measurement:'desktop DOM fixture; no browser layout or phone measurement',liveFirebaseRequests:0,paidLLMCalls:0}));

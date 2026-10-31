@@ -1,6 +1,6 @@
 import {exportAllStories} from '../import-export.js';
 import {cachedSessionIds} from '../chat-cache.js';
-import {subSheet,node,button,pendingButton} from './memory-ui.js';
+import {subSheet,node,button,pendingButton,actionMenu} from './memory-ui.js';
 import { toast } from "./memory-ui.js";
 import { friendlyError } from "../errors.js";
 import { state } from "../state.js";
@@ -122,7 +122,7 @@ function render(listEl, sessions) {
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Delete";
-    delBtn.className = "del";
+    delBtn.className = "del danger";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (delBtn.disabled) return;
@@ -139,7 +139,7 @@ function render(listEl, sessions) {
     });
 
     const copyBtn = document.createElement("button");
-    copyBtn.textContent = "Copy";
+    copyBtn.textContent = "Duplicate";
     copyBtn.className = "cpy";
     copyBtn.title = "Copy the entire session";
     copyBtn.addEventListener("click", async (e) => {
@@ -158,7 +158,10 @@ function render(listEl, sessions) {
       }
     });
 
-    actions.append(renameBtn, copyBtn, delBtn);
+    const more=actionMenu('More',[renameBtn,copyBtn,delBtn],s.title || 'Untitled story');
+    more.setAttribute('aria-label','Actions for '+(s.title || 'Untitled story'));
+    more.addEventListener('click',event=>event.stopPropagation());
+    actions.append(more);
     li.append(title, actions);
     li.addEventListener("click", () => {
       if (!setSession(s.id)) return;

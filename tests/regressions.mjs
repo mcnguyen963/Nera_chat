@@ -337,6 +337,20 @@ test('Settings category navigation preserves drafts and exposes the right save s
  assert.equal(h.calls.writes.length,0);
 });
 
+test('Settings pointer actions keep a focused editor stable until click and still save once',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');h.state.sessionId='story';
+ view.initSettingsView();view.openSettingsPopup(null,{panel:'story'});await new Promise(resolve=>setImmediate(resolve));
+ const field=h.el('set-session-plan');field.tagName='TEXTAREA';field.closest=()=>h.el('settings-tab');field.value='Keep this plan';field.focus();
+ for(const id of ['btn-save-settings','btn-save-session','btn-close-settings']){
+  let prevented=false;await h.el(id).dispatchEvent({type:'pointerdown',button:0,preventDefault(){prevented=true;}});assert.equal(prevented,true,id+' must not move before click');
+ }
+ let blurred=false;field.blur=()=>{blurred=true;h.document.activeElement=null;};
+ await h.fire('btn-save-session');assert.equal(blurred,true,'dismiss the keyboard after click has been delivered');assert.equal(h.calls.sessionWrites.length,1);assert.equal(h.calls.sessionWrites[0][1].longTermPlan,'Keep this plan');
+ field.focus();
+ let prevented=false;await h.el('btn-save-session').dispatchEvent({type:'pointerdown',button:2,preventDefault(){prevented=true;}});assert.equal(prevented,false,'secondary pointer actions are unchanged');
+ h.document.activeElement=h.el('btn-save-session');await h.el('btn-save-session').dispatchEvent({type:'pointerdown',button:0,preventDefault(){prevented=true;}});assert.equal(prevented,false,'keyboard/button focus is unchanged');
+});
+
 test('Inline model and thinking selectors restore per-profile choices and recover after failed saves', async () => {
   const h = await harness();
   h.calls.settingsDoc = {
@@ -1655,10 +1669,10 @@ test('initial estimates receive lore and disabled auto-summary avoids a post-tur
 
 test('R2 sidebar guards duplicate creation and catches failed create, rename and logout',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
- await h.fire('btn-new-session');const blank=()=>h.document.body.querySelectorAll('button').find(b=>b.textContent==='Blank story');
+ await h.fire('btn-new-session');const blank=()=>h.document.body.querySelectorAll('button').find(b=>b.textContent==='Create blank story');
  const pending=blank().click();await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(!!h.el('btn-new-session').disabled,false);
  h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');await blank().click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
- h.calls.sidebarCallback([{id:'s',title:'Story'}]);h.calls.failRename=true;await h.el('session-list').querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
+ h.calls.sidebarCallback([{id:'s',title:'Story'}]);h.calls.failRename=true;await h.el('session-list').querySelector('.action-menu-trigger').click();await h.document.body.querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
  h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.ok(h.document.body.querySelector('.toast').textContent.includes('Logout failed'));assert.equal(h.el('btn-logout').disabled,false);
 });
 
@@ -1666,10 +1680,10 @@ test('new story picker shows three openings and blocks duplicate selection while
  const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();
  let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
  await h.fire('btn-new-session');await h.fire('btn-new-session');
- assert.equal(h.document.body.querySelectorAll('.story-mode-card').length,3);
- assert.deepEqual(h.document.body.querySelectorAll('.story-mode-card').map(card=>card.querySelector('h3').textContent),['The Household Hearing','The Duke’s Summons','A Bond and a Secret']);
+ assert.equal(h.document.body.querySelectorAll('.story-mode-card').length,4);
+ assert.deepEqual(h.document.body.querySelectorAll('.story-mode-card').map(card=>card.querySelector('h3').textContent),['Blank story','The Household Hearing','The Duke’s Summons','A Bond and a Secret']);
  assert.equal(h.document.body.querySelectorAll('summary').filter(el=>el.textContent==='Read the opening').length,3);
- const cards=h.document.body.querySelectorAll('.story-mode-card'),pending=cards[0].querySelector('button').click();await ready;
+ const cards=h.document.body.querySelectorAll('.story-mode-card').filter(card=>card.tagName==='ARTICLE'),pending=cards[0].querySelector('button').click();await ready;
  await cards[1].querySelector('button').click();assert.equal(h.calls.creates,1);
  finish('new-story');await pending;assert.equal(h.calls.creates,1);
 });
@@ -2033,8 +2047,14 @@ async function cardUI() {
  return {h,l,f,lore,card,other,root:h.el('lorebook-overlay')};
 }
 const namedButton=(root,text)=>root.querySelectorAll('button').find(b=>b.textContent===text);
+async function menuAction(h,root,text){
+ const trigger=namedButton(root,/^(Import card|Import book|Export book)/.test(text)?'Tools':'More');assert.ok(trigger,'Secondary actions remain discoverable');await trigger.click();
+ const menu=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1),control=namedButton(menu,text);assert.ok(control,text+' remains available');
+ // This DOM fixture does not bubble events: deliver the parent's capture phase.
+ if(!control.disabled)await menu.querySelector('.action-menu-list').dispatchEvent({type:'click',target:{closest:()=>control}});return control;
+}
 test('single-card paste import previews explicit destination, honors rename, opens result and Undo uses captured story',async()=>{
- const {h,f,card,other,root}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');
+ const {h,f,card,other,root}=await cardUI();await (await menuAction(h,root,'Import into this card…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1);
  const incoming=structuredClone(card);incoming.name=other.name;incoming.sections.notes.text='<script>text only</script>';
  dialog.querySelector('textarea').value=f.serializeCard(incoming,{format:'json',storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
  assert.ok(dialog.querySelectorAll('pre').some(e=>e.textContent.includes('<script>text only</script>')));assert.equal(dialog.querySelector('select').value,card.id);assert.equal(dialog.querySelectorAll('select')[1].value,'replace');
@@ -2042,22 +2062,22 @@ test('single-card paste import previews explicit destination, honors rename, ope
  h.state.sessionId='other-story';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();assert.equal(h.calls.cardRestores[0][0].id,'improvement');assert.equal(h.calls.cardRestores[0][0].uid,'test-user');
 });
 test('single-card transfers block unsaved editor changes and export defaults to Markdown',async()=>{
- const {h,root}=await cardUI();await namedButton(root,'Export card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');assert.equal(dialog.querySelector('select').children[0].value,'md');await namedButton(dialog,'Cancel').click();
+ const {h,root}=await cardUI();await (await menuAction(h,root,'Export card…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1);assert.equal(dialog.querySelector('select').children[0].value,'md');await namedButton(dialog,'Cancel').click();
  const section=root.querySelectorAll('.lore-section').at(-1).querySelector('textarea');section.value='Unsaved';await section.dispatchEvent({type:'input'});
- await namedButton(root,'Import into this card…').click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);await namedButton(root,'Export card…').click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);assert.equal(h.calls.cardImports,undefined);
+ await (await menuAction(h,root,'Import into this card…')).click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);await (await menuAction(h,root,'Export card…')).click();assert.match(h.document.body.querySelector('.toast').textContent,/Save or discard/);assert.equal(h.calls.cardImports,undefined);
 });
 for(const change of ['story','account','destination','cancel'])test('single-card async file read cancels on '+change+' switch',async()=>{
- const {h,f,lore,card,other,root}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet'),picker=dialog.querySelector('input');let finish;picker.files=[{size:100,text:()=>new Promise(r=>finish=r)}];const pending=picker.dispatchEvent({type:'change'});
+ const {h,f,lore,card,other,root}=await cardUI();await (await menuAction(h,root,'Import into this card…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1),picker=dialog.querySelector('input');let finish;picker.files=[{size:100,text:()=>new Promise(r=>finish=r)}];const pending=picker.dispatchEvent({type:'change'});
  if(change==='story')h.state.sessionId='another';if(change==='account')h.calls.uid='another';if(change==='destination')lore.openLorebooks({entryId:other.id});if(change==='cancel')await namedButton(dialog,'Cancel').click();
  finish(f.serializeCard(card,{storyId:'improvement'}));await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
 });
 test('book list import requires an explicit choice for ambiguous name matches',async()=>{
- const {h,f,lore,card,other,root}=await cardUI();other.aliases=[card.name];await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'test-user',sessionId:'improvement',revision:1,snapshot:{entries:[card,other],loadedRevision:0}}});lore.openLorebooks({screen:'list',book:'characters'});await namedButton(root,'Import card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'different'});await namedButton(dialog,'Read pasted text').click();assert.equal(dialog.querySelector('select').value,'');assert.equal(namedButton(dialog,'Import card').disabled,true);assert.ok(dialog.querySelectorAll('p').some(e=>/Several cards match/.test(e.textContent)));
+ const {h,f,lore,card,other,root}=await cardUI();other.aliases=[card.name];await h.document.dispatchEvent({type:'local-lore-saved',detail:{uid:'test-user',sessionId:'improvement',revision:1,snapshot:{entries:[card,other],loadedRevision:0}}});lore.openLorebooks({screen:'list',book:'characters'});await (await menuAction(h,root,'Import card…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1);dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'different'});await namedButton(dialog,'Read pasted text').click();assert.equal(dialog.querySelector('select').value,'');assert.equal(namedButton(dialog,'Import card').disabled,true);assert.ok(dialog.querySelectorAll('p').some(e=>/Several cards match/.test(e.textContent)));
  const select=dialog.querySelector('select');select.value='__new';await select.dispatchEvent({type:'change'});await namedButton(dialog,'Import card').click();assert.equal(h.calls.cardImports.length,1);assert.notEqual(h.calls.cardImports[0][1].id,card.id);
 });
 
 test('changing the import preview while a write is queued cancels its captured destination',async()=>{
- const {h,f,root,card}=await cardUI();await namedButton(root,'Import into this card…').click();const dialog=h.document.body.querySelector('.memory-sub-sheet');dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
+ const {h,f,root,card}=await cardUI();await (await menuAction(h,root,'Import into this card…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1);dialog.querySelector('textarea').value=f.serializeCard(card,{storyId:'improvement'});await namedButton(dialog,'Read pasted text').click();
  let release;h.calls.onCardImport=()=>new Promise(r=>release=r);const pending=namedButton(dialog,'Import card').click();const mode=dialog.querySelectorAll('select')[1];mode.value='merge';await mode.dispatchEvent({type:'change'});release();await pending;assert.equal(h.calls.cardImports,undefined);assert.match(h.document.body.querySelector('.toast').textContent,/cancelled/);
 });
 test('lore message lookback hydrates, stages and saves per story while rejecting invalid counts',async()=>{
@@ -2244,7 +2264,7 @@ async function bookPreview({book='characters',mode='merge',empty=false}={}) {
  const fact=l.makeEntry('facts','World'),closed=l.makeEntry('events','Closed quest',{kind:'thread',status:'closed'}),timeline=l.makeEntry('events','Timeline',{kind:'timeline'});
  const scheduled=l.makeEntry('plan','Festival',{schedule:{start:'21/10/738',end:'22/10/738',status:'pending',phases:[]}});scheduled.sections.text.text='Keep the invitation pending.';
  h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
- lore.openLorebooks({screen:'list',book});await namedButton(root,'Import book…').click();
+ lore.openLorebooks({screen:'list',book});await (await menuAction(h,root,'Import book…')).click();
  const selects=root.querySelectorAll('select');assert.equal(selects[0].value,'merge');assert.equal(selects[1].value,'mine');selects[0].value=mode;
  await namedButton(root,'Paste text').click();const paste=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);paste.querySelector('textarea').value=f.toJson(empty?[]:h.calls.loreEntries,{books:empty?[book]:undefined});await namedButton(paste,'Read').click();
  return {...ctx,preview:h.document.body.querySelectorAll('.memory-sub-sheet').at(-1)};
@@ -2273,7 +2293,7 @@ for(const book of ['characters','locations','facts','events','plan'])for(const f
  h.calls.loreEntries=[card,other,timeline,closed,open,fact,place,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
  lore.openLorebooks({screen:'list',book,filter:'always'});const search=root.querySelector('input');search.value='No match';await search.dispatchEvent({type:'input'});
  const create=h.document.createElement;h.document.createElement=tag=>{const e=create(tag);if(tag==='a')e.click=async()=>exports.push({name:e.download,text:await (await fetch(e.href)).text()});return e;};
- await namedButton(root,'Export book…').click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);const select=dialog.querySelector('select');select.value=format;await select.dispatchEvent({type:'change'});await namedButton(dialog,'Export book').click();await new Promise(r=>setImmediate(r));
+ await (await menuAction(h,root,'Export book…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);const select=dialog.querySelector('select');select.value=format;await select.dispatchEvent({type:'change'});await namedButton(dialog,'Export book').click();await new Promise(r=>setImmediate(r));
  assert.equal(exports.length,1);assert.match(exports[0].name,new RegExp('-'+book+'-.*\\.'+format+'$'));const parsed=format==='md'?f.fromMarkdown(exports[0].text):f.fromJson(exports[0].text);assert.deepEqual(Array.from(parsed.entries,e=>e.name).sort(),h.calls.loreEntries.filter(e=>e.book===book).map(e=>e.name).sort());
 });
 test('queued category import cancels when navigation changes before store execution',async()=>{
@@ -2653,7 +2673,7 @@ test('Send waiting on a lore operation acknowledges immediately and can be cance
 
 test('Deleting a card preserves a newly selected editor and Undo targets the original story',async()=>{
  const {h,lore,other,root}=await cardUI();let finish;h.calls.onCardDelete=()=>new Promise(resolve=>finish=resolve);
- const pending=namedButton(root,'Delete card').click();assert.ok(finish);lore.openLorebooks({entryId:other.id});finish();await pending;
+ const pending=(await menuAction(h,root,'Delete card')).click();assert.ok(finish);lore.openLorebooks({entryId:other.id});finish();await pending;
  assert.ok(root.querySelectorAll('h2').some(n=>n.textContent==='Other'));
  h.state.sessionId='another-story';await namedButton(h.document.body.querySelector('.toast'),'Undo').click();
  assert.equal(h.calls.cardRestores[0][0].id,'improvement');
@@ -2711,7 +2731,7 @@ test('Closing a child after its parent was hidden restores focus to the visible 
 test('Finishing story creation does not interrupt navigation made while it was pending',async()=>{
  const h=await harness();(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/sidebar.js')).initSidebar();
  h.calls.prompt='New story';let finish;h.calls.onCreate=()=>new Promise(resolve=>finish=resolve);
- await h.fire('btn-new-session');const pending=h.document.body.querySelectorAll('button').find(b=>b.textContent==='Blank story').click();
+ await h.fire('btn-new-session');const pending=h.document.body.querySelectorAll('button').find(b=>b.textContent==='Create blank story').click();
  h.state.sessionId='another-story';finish('created-story');await pending;
  assert.equal(h.state.sessionId,'another-story');assert.equal(!!h.el('btn-new-session').disabled,false);
 });
@@ -3913,4 +3933,34 @@ test('Composer draft survives pre-acceptance failure and clears on accepted Send
  assert.equal(h.el('chat-input').value,'Keep until accepted');assert.equal(composerDrafts.read('test-user',h.state.sessionId),'Keep until accepted');
  h.state.settings.modelId=model;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
  assert.equal(h.el('chat-input').value,'');assert.equal(composerDrafts.read('test-user',h.state.sessionId),'');
+});
+
+
+test('Secondary actions close their menu before opening an editor and restore the original trigger',async()=>{
+ const h=await harness(),ui=await h.use('ui/memory-ui.js'),root=h.el('flow-parent');
+ root.contains=target=>{for(let node=target;node;node=node.parentNode)if(node===root)return true;return false;};
+ const parent=ui.sheet(root,'Parent');let child,calls=0;
+ const action=ui.button('Edit details',()=>{calls++;child=ui.subSheet('Details');});
+ const more=ui.actionMenu('More',[action],'Tools');parent.dialog.append(more);more.focus();await more.click();
+ const menu=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);
+ await menu.querySelector('.action-menu-list').dispatchEvent({type:'click',target:{closest:()=>action}});
+ await action.click();assert.equal(calls,1);assert.equal(menu.classList.contains('hidden'),true);assert.equal(h.document.activeElement,child.dialog);
+ child.hide();assert.equal(h.document.activeElement,more);
+});
+
+test('Blank story uses its inline title, retains it after failure and makes no model request',async()=>{
+ const h=await harness(),ui=await h.use('ui/story-mode-picker.js');let title;
+ ui.openStoryModePicker({createBlank:async value=>{title=value;throw Error('Synthetic save failure');},onCreated:()=>assert.fail('failed creation cannot navigate')});
+ const root=h.document.body.querySelector('.memory-sub-sheet'),form=root.querySelector('form'),field=form.querySelector('input');
+ field.value='A locally named story';await form.querySelector('button').click();
+ assert.equal(title,'A locally named story');assert.equal(field.value,title);assert.match(h.document.body.querySelector('.toast').textContent,/Synthetic save failure/);
+ assert.equal(h.calls.requests?.length ?? 0,0);assert.equal(root.classList.contains('hidden'),false);
+});
+
+
+test('Switching away from Director preserves an empty edited prompt for validation instead of replacing it',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'prompts'});
+ h.el('set-director-prompt').value='';h.el('set-narration-mode').value='classic';await h.fire('settings-back');await h.fire('nav-prompts');
+ assert.equal(h.el('set-director-prompt').value,'');await h.fire('btn-save-settings');
+ assert.equal(h.el('set-director-prompt').value,'');assert.match(h.el('settings-saved-msg').textContent,/directorSystemPrompt.*must contain text/);assert.equal(h.calls.writes.length,0);
 });

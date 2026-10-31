@@ -67,9 +67,10 @@ export async function saveStorySettings(sid,base,changes) {
 }
 function emit(sessionPatch=null){if(typeof document!=='undefined')document.dispatchEvent(new CustomEvent('story-settings-changed',{detail:{sessionPatch}}));}
 export async function selectStorySettings(sid,{force=false}={}) {
-  const run=++epoch,uid=currentUid();
+  const run=++epoch;
   state.storySettings=null;state.storySettingsId=sid;state.storySettingsLoadFailed=false;emit();
   if(!sid)return;
+  const uid=currentUid();
   try {
     const stored=force?null:await loadStoryData(uid,sid);
     const loaded=(!force && cache.get(uid+':'+sid)) || (stored?.storySettings ? await readDocument(stored.storySettings) : await ensureStorySettings(sid,uid));

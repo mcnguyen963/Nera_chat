@@ -66,7 +66,10 @@ input[type="checkbox"] { accent-color: #dededb; width: 16px; height: 16px; }
 .session-item.active { background: #232323; color: #f0f0f0; }
 .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-actions { display: none; width: 100%; gap: 12px; padding-top: 6px; }
-.session-item:hover .session-actions, .session-item:focus-within .session-actions { display: flex; }
+.session-item:focus-within .session-actions { display: flex; }
+/* Touch Safari treats hover-revealed content as a first-tap action, delaying
+   story selection until a second tap. Active stories retain their actions. */
+@media (hover: hover) { .session-item:hover .session-actions { display: flex; } }
 .session-actions button { padding: 4px 0; background: transparent; border: 0; color: #999; font-size: 11px; }
 .session-actions button:hover { color: #fff; }
 .session-actions .del:hover { color: var(--danger); }

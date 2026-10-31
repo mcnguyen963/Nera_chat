@@ -103,7 +103,7 @@ document.addEventListener('keydown', event => {
   if (event.key !== 'Tab') return;
   const root = document.body.classList.contains('sidebar-open') ? document.getElementById('sidebar') : !el.topMenu.hidden ? el.topMenu : null;
   if (!root) return;
-  const items = [...root.querySelectorAll('button, a, [tabindex="0"]')].filter(n => !n.disabled && n.getClientRects().length);
+  const items = [...root.querySelectorAll('button, a, summary, [tabindex="0"]')].filter(n => !n.disabled && n.getClientRects().length);
   const first = items[0], last = items.at(-1);
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

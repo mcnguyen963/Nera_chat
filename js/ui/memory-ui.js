@@ -22,6 +22,25 @@ export function button(text, action, className = 'btn') {
     }catch(e){toast(e);}finally{if(restore)restore();else b.disabled=false;}
   });return b;
 }
+// Reuse the original controls so their guards, confirmations and pending states
+// stay attached when secondary actions move into a compact sheet.
+export function actionMenu(label, controls, title = label) {
+  for (const control of controls) control.classList.add('btn');
+  const trigger = button(label, () => {
+    const menu = subSheet(title, {compact:true,className:'action-menu-sheet'});
+    const body = node('div', null, 'memory-content action-menu-list');
+    for (const control of controls) control.classList.add('btn');
+    body.append(...controls);
+    body.addEventListener('click', event => {
+      const control = event.target.closest('button');
+      if (control && !control.disabled) menu.hide();
+    }, true);
+    menu.dialog.append(body);
+    controls.find(control => !control.disabled)?.focus();
+  }, 'btn small action-menu-trigger');
+  trigger.setAttribute('aria-haspopup', 'dialog');
+  return trigger;
+}
 export function field(label, value = '', { textarea = false, type = 'text' } = {}) { const wrap = node('label',label), input = node(textarea ? 'textarea' : 'input'); if (!textarea) input.type = type; else input.rows = 3; input.value = value ?? ''; wrap.append(input); if (textarea) input.addEventListener('input',() => { input.style.height = 'auto'; input.style.height = input.scrollHeight+'px'; }); return { wrap,input }; }
 export function toast(text, action, callback) { text=friendlyError(text); document.querySelector('.toast')?.remove(); const t = node('div',text,'toast action'); t.setAttribute('role','status'); if (action) t.append(button(action,() => { t.remove(); return callback?.(); },'toast-link')); document.body.append(t); setTimeout(() => t.remove(),6000); }
 export function sheet(root,title,{ close = () => true, className = '', back, compact = false } = {}) {
