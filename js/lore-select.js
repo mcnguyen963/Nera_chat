@@ -121,6 +121,7 @@ function* selectionWork(entries, mem, text, scene, recentText, sources) {
   const start=sources.startingScene ? resolveScene(sources.startingScene,index) : null, transition=!!start;
   const required=new Set(sources.directorRequiredIds ?? []),directorIds=new Set(sources.directorMemoryIds ?? []);
   const semanticIds=new Set(sources.semanticIds ?? []);
+  const historicalIds=new Set(sources.semanticHistoricalIds ?? []);
   const asList = value => value == null ? [] : Array.isArray(value) ? value : [value];
   const recent = sources.recent == null ? [{id:'__lore_recent',order:0,role:null,content:recentText}] : asList(sources.recent);
   const current = sources.current == null ? [{id:'__lore_current',order:recent.reduce((order,m)=>Math.max(order,m.order ?? 0),0)+1,role:'user',content:text}] : asList(sources.current);
@@ -160,7 +161,7 @@ function* selectionWork(entries, mem, text, scene, recentText, sources) {
         if (e.kind === 'thread') {
           if (currentHits.has(e.id)) add(e,0,'mentioned');
           if (recentHits.has(e.id)) add(e,1,'recent mention');
-          if (e.status !== 'closed' && semanticIds.has(e.id)) add(e,1.5,'semantic match');
+          if ((e.status !== 'closed' || historicalIds.has(e.id)) && semanticIds.has(e.id)) add(e,1.5,'semantic match');
           if (e.status !== 'closed') add(e,2,'open thread');
         } else if (e.kind === 'timeline') add(e,3,'timeline');
         continue;

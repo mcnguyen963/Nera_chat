@@ -1,4 +1,6 @@
 // Historical recall is derived evidence. It never changes story or scene state.
+import {compatibleEmbedding,HISTORY_VECTOR_FORMAT} from './embedding-space.js';
+import EnglishStemmer from './vendor/snowball-3.2.0/english-stemmer.js';
 export const RECALL_VERSION = 1;
 // History must not silently discard older passages from long stories.
 export const RECALL_MAX_ROWS = Number.MAX_SAFE_INTEGER;
@@ -71,12 +73,20 @@ export function cosine(a,b) {
   for(let i=0;i<a.length;i++){dot+=a[i]*b[i];aa+=a[i]*a[i];bb+=b[i]*b[i];}
   const score=dot/Math.sqrt(aa*bb);return Number.isFinite(score) ? score : -1;
 }
-export function rankPassages(rows, query, queryVector = null, modelKey = '') {
-  const q = [...new Set(terms(query))].slice(0,64);
+const stems=new Map();let englishStemmer;
+function inflection(word){
+  if(!/^[a-z]+$/.test(word))return word;
+  if(stems.has(word))return stems.get(word);
+  const stem=(englishStemmer??=new EnglishStemmer()).stem(word);
+  if(stems.size>=50000)stems.clear();stems.set(word,stem);return stem;
+}
+export function rankPassages(rows, query, queryVector = null, modelKey = '', model = '', {stem=false}={}) {
+  const tokenize=text=>stem?terms(text).map(inflection):terms(text);
+  const q = [...new Set(tokenize(query))].slice(0,64);
   if (!q.length) return [];
   const df=new Map(q.map(t=>[t,0]));
   const docs=rows.map(row=>{
-    const words=terms(row.text),frequency=new Map();
+    const words=tokenize(row.text),frequency=new Map();
     for(const word of words)if(df.has(word))frequency.set(word,(frequency.get(word) ?? 0)+1);
     for(const word of frequency.keys())df.set(word,df.get(word)+1);
     return {row,length:words.length,frequency};
@@ -85,9 +95,7 @@ export function rankPassages(rows, query, queryVector = null, modelKey = '') {
     const tf=frequency.get(t) ?? 0;
     return n+(tf ? Math.log(1+(rows.length+1)/(1+df.get(t)))*tf/(tf+1.2*(.25+.75*length/150)) : 0);
   },0)})).filter(r=>r.lexical>0).sort((a,b)=>b.lexical-a.lexical || a.row.order-b.row.order);
-  // A model mismatch is reported to the caller, but the user can still choose
-  // to compare vectors of compatible dimensions.
-  const semantic=queryVector ? rows.filter(r=>r.vector?.length===queryVector.length).map(row=>({row,similarity:cosine(queryVector,row.vector)})).filter(r=>r.similarity>=.35).sort((a,b)=>b.similarity-a.similarity || a.row.order-b.row.order) : [];
+  const semantic=queryVector ? rows.filter(r=>r.vector?.length===queryVector.length && compatibleEmbedding(r,{key:modelKey,model},HISTORY_VECTOR_FORMAT)).map(row=>({row,similarity:cosine(queryVector,row.vector)})).filter(r=>r.similarity>=.35).sort((a,b)=>b.similarity-a.similarity || a.row.order-b.row.order) : [];
   const combined=new Map();
   for(const [kind,list] of [['keyword',lexical],['semantic',semantic]]) for(const [i,hit] of list.entries()) {
     const value=combined.get(hit.row.id) ?? {row:hit.row,score:0,methods:[]};
@@ -105,6 +113,10 @@ export function recallQuery(messages, opts = {}) {
   const latestMessage=recent.findLast(m=>m.role==='user');
   const latest=opts.draftText?.trim() ? recallText({role:'user',content:opts.draftText}) : recallText(latestMessage);
   if(!latest) return '';
+  const named=/\b\p{Lu}[\p{L}\p{N}'’\-]{2,}\b/u.test(latest.replace(/^\s*\S+\s*/,''));
+  const referential=/\b(?:he|she|they|him|her|them|it|its|this|that|there|speaker|person)\b/i.test(latest);
+  const standalone=opts.preferStandalone && /\b(?:what|which|who|why|how|when|where)\b/i.test(latest) && /\?\s*$/.test(latest) && terms(latest).length>=6 && (!referential||named);
+  if(opts.queryOnly||standalone)return latest.slice(0,1000);
   const queryIds=new Set(opts.queryMessageIds ?? []);
   const context=recent.filter(m=>queryIds.has(m.id) && (opts.draftText?.trim() || m.id!==latestMessage?.id)).slice(-2);
   return [latest.slice(0,1000),...context.map(m=>recallText(m).slice(0,250))].join('\n').slice(0,1500);

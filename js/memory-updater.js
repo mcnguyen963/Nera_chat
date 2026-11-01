@@ -14,6 +14,7 @@ const inFlight = new Map(), rawAnswers = new Map();
 let runtime = null;
 export function configureMemoryUpdater(value) { runtime = value; }
 export function isRunning(sid) { return inFlight.has(sid); }
+export function isExtracting(sid) {const job=inFlight.get(sid);return !!job && !job.memoryFinished && !job.signal.aborted;}
 export async function waitForIdle(sid) {
   while(inFlight.has(sid)) {
     await new Promise(resolve=>{
@@ -110,7 +111,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
   scope?.check();
   if (isRunning(sid)) return false;
   const controller = new AbortController(),owner = currentUid();
-  let live,mem,settings,source,entries,streamedAnswer='',embeddingJob=null;
+  let live,mem,settings,source,entries,streamedAnswer='',embeddingJob=null,embeddingPending=false;
   const stillCurrent = () => {
     if (controller.signal.aborted || !sameOwner(owner) || scope && !scope.current()) return false;
     if (!captured) return true;
@@ -118,10 +119,10 @@ async function start(sid,range,manual,captured=null,scope=null) {
     return !!latest && latest.storyEpoch===captured.storyEpoch;
   };
   const waitForWrites = async () => {
-    await runtime.waitIdle(controller.signal);
+    await runtime.waitIdle(controller.signal,{allowSummary:true});
     if (!stillCurrent()) return;
     await runtime.flush?.(sid);
-    if (stillCurrent()) await runtime.waitIdle(controller.signal);
+    if (stillCurrent()) await runtime.waitIdle(controller.signal,{allowSummary:true});
   };
   inFlight.set(sid,controller); rawAnswers.delete(sid); emit({ sessionId:sid,status:'running' });
   try {
@@ -136,23 +137,20 @@ async function start(sid,range,manual,captured=null,scope=null) {
     if(!stillCurrent())return false;
     const snapshot = stamp(range.messages);
     const guard={storySettingsRevision:settings._storySettingsRevision,startPointer:live.session.memoryState?.extractedThroughOrder ?? 0,startRevision:live.session.historyRevision ?? 0,fromOrder:range.messages[0].order,endOrder:range.endOrder,owner};
-    if(!manual && mem.historyRecall && mem.semanticRecall && live.settings.narrationMode!=='director') {
+    if(mem.historyRecall && mem.semanticRecall && live.settings.narrationMode!=='director') {
+      embeddingPending=true;
+      emit({sessionId:sid,status:'info',searchPhase:'running'});
       const embeddingSnapshot=structuredClone({session:live.session,settings:live.settings,messages:source,storyEpoch:live.storyEpoch,historyComplete:live.historyComplete});
       embeddingJob=Promise.resolve().then(async()=>{
         const indexHistoryBatch=runtime.indexHistoryBatch ?? (await import('./history-recall.js')).indexHistoryBatch;
         return indexHistoryBatch(embeddingSnapshot,range,{signal:controller.signal,check:()=>stillCurrent() && rangeUnchanged(range,runtime.get(sid)?.messages ?? [],snapshot)});
       })
         .then(async result=>{
+          if(result?.persisted)embeddingPending=false;
           if(!stillCurrent() || !result)return;
-          emit({sessionId:sid,status:'info',message:`Historical search updated: ${result.indexedMessages} messages indexed.`});
-          if(mem.vectorCloudSync && result.persisted){
-            await runtime.waitIdle(controller.signal);if(!stillCurrent())return;
-            const current=runtime.get(sid);if(!current)return;
-            try{const {uploadStoryVectors}=await import('./vector-cloud-sync.js');await uploadStoryVectors(current,'history',{getLive:()=>runtime.get(sid)});}
-            catch(error){if(stillCurrent())emit({sessionId:sid,status:'info',message:'Search vectors are saved locally; cloud sync is pending: '+String(error.message).slice(0,180)});}
-          }
+          emit({sessionId:sid,status:'info',searchPhase:result.persisted?'ready':'failed',message:result.persisted?`Historical search updated: ${result.indexedMessages} messages indexed.`:'Historical search is available in memory only; device storage is unavailable. Retry indexing in Memory settings.'});
         })
-        .catch(error=>{if(stillCurrent())emit({sessionId:sid,status:'info',message:'Historical search update failed; it will retry in a later batch: '+String(error.message).slice(0,180)});});
+        .catch(error=>{if(stillCurrent())emit({sessionId:sid,status:'info',searchPhase:'failed',message:'Historical search update failed; it will retry in a later batch: '+String(error.message).slice(0,180)});});
     }
     const result = await chatCompletion({ settings,messages:built.messages,onDelta:t => { streamedAnswer+=t; },signal:controller.signal });
     if(!stillCurrent())return false;
@@ -178,8 +176,10 @@ async function start(sid,range,manual,captured=null,scope=null) {
     // Real commits publish their canonical entries once through local-lore-saved.
     runtime.patch(sid,{extractedThroughOrder:range.endOrder,lastUpdateTurns:range.fromTurn+'–'+range.toTurn,failureStreak:0,lastError:null,paused:false,lastSkipped},committed?.cacheApplied ? undefined : nextEntries,committed?.loreRevision);
     const notes = committed?.notes ?? changes.appends.length+changes.creates.reduce((n,e) => n+Object.values(e.sections).reduce((n,s) => n+s.lines.length,0),0);
+    controller.memoryFinished=true;
     emit({ sessionId:sid,status:'success',range,notes,drafts:changes.creates.filter(e => e.book === 'characters').length,manual,semanticStatus:built.semanticStatus,skipped:[...parsed.skipped,...changes.skipped,...(committed?.skipped ?? [])] }); return true;
   } catch (error) {
+    controller.memoryFinished=true;
     if(!stillCurrent())return false;
     if(error instanceof StaleSourceError || error instanceof SupersededError){emit({sessionId:sid,status:'info',message:error.message,manual});return false;}
     if (error.partial?.content || streamedAnswer) rawAnswers.set(sid,error.partial?.content || streamedAnswer);
@@ -194,7 +194,7 @@ async function start(sid,range,manual,captured=null,scope=null) {
     const failure=await controller.committing;
     if(!stillCurrent())return false;
     runtime.patch(sid,failure); emit({ sessionId:sid,status:'failed',...failure,manual }); return false;
-  } finally { await embeddingJob; if(inFlight.get(sid)===controller){inFlight.delete(sid);emit({ sessionId:sid,status:'idle' });} }
+  } finally { await embeddingJob; if(inFlight.get(sid)===controller){inFlight.delete(sid);emit({ sessionId:sid,status:'idle',...(embeddingPending&&controller.signal.aborted&&sameOwner(owner)?{searchPhase:'pending'}:{}) });} }
 }
 
 export function dueRangeFor(sid) {

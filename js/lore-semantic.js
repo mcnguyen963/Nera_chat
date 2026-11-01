@@ -4,8 +4,13 @@ import { capLoreNotes } from './lore-note-window.js';
 import { recordUnits } from './lore-record-select.js';
 import { archivedThread } from './thread-archive.js';
 import {getEmbeddingKey} from './embedding-credentials.js';
+import {compatibleEmbedding,LORE_VECTOR_FORMAT} from './embedding-space.js';
+import {rankPassages} from './history-recall-core.js';
 
 const database='nera-lore-semantic-v1', memory=new Map();
+const ownerVersions=new Map(),storyVersions=new Map();
+const scopeVersion=(owner,sid)=>(ownerVersions.get(owner)??0)+':'+(storyVersions.get(JSON.stringify([owner,sid]))??0);
+function scopeCheck(owner,sid,check){const version=scopeVersion(owner,sid);return ()=>{if(scopeVersion(owner,sid)!==version)throw new Error('Search index was cleared; restart indexing.');check();};}
 let opened;
 function open() {
   if(typeof indexedDB==='undefined')return Promise.resolve(null);
@@ -22,8 +27,8 @@ async function transaction(mode,action) {
 }
 const store={
   async load(key){if(memory.has(key))return memory.get(key);const result=await transaction('readonly',(s,set)=>{const r=s.get(key);r.onsuccess=()=>set(r.result ?? null);});if(result)memory.set(key,result);return result;},
-  async findStory(owner,sid){
-    let best=null;const consider=value=>{if(!value?.staging && value?.owner===owner && value.sid===sid && (!best || (value.updatedAt ?? 0)>(best.updatedAt ?? 0)))best=value;};
+  async findStory(owner,sid,connection){
+    let best=null;const consider=value=>{if(!value?.staging && value?.owner===owner && value.sid===sid && (!connection || value.rows?.some(row=>compatibleEmbedding({...row,modelKey:row.modelKey ?? value.connection},connection,LORE_VECTOR_FORMAT))) && (!best || (value.updatedAt ?? 0)>(best.updatedAt ?? 0)))best=value;};
     for(const value of memory.values())consider(value);
     await transaction('readonly',(s,set)=>{const r=s.openCursor();r.onsuccess=()=>{const c=r.result;if(!c){set(true);return;}consider(c.value);c.continue();};});
     return best;
@@ -31,12 +36,17 @@ const store={
   async save(value,check=()=>{}){const saved=await transaction('readwrite',(s,set)=>{check();s.put(value);set(true);});if(saved)memory.set(value.key,value);return !!saved;},
   async loadStage(key){return this.load(key);},
   async saveStage(value,check){return this.save(value,check);},
-  async removeStage(key){memory.delete(key);return transaction('readwrite',(s,set)=>{s.delete(key);set(true);});},
+  async removeStage(key,check=()=>{}){return transaction('readwrite',(s,set)=>{check();memory.delete(key);s.delete(key);set(true);});},
   async removeOwner(owner){const clear=()=>{for(const [key,value] of memory)if(value.owner===owner)memory.delete(key);};clear();const result=await transaction('readwrite',s=>{const r=s.openCursor();r.onsuccess=()=>{const c=r.result;if(!c)return;if(c.value.owner===owner)c.delete();c.continue();};});clear();return result;},
   async removeStory(owner,sid){const clear=()=>{for(const [key,value] of memory)if(value.owner===owner && value.sid===sid)memory.delete(key);};clear();const result=await transaction('readwrite',s=>{const r=s.openCursor();r.onsuccess=()=>{const c=r.result;if(!c)return;if(c.value.owner===owner && c.value.sid===sid)c.delete();c.continue();};});clear();return result;},
 };
-export async function clearLoreSemanticAccount(owner){await store.removeOwner(owner);}
-export async function deleteLoreSemanticStory(owner,sid){await store.removeStory(owner,sid);}
+export async function clearLoreSemanticAccount(owner){ownerVersions.set(owner,(ownerVersions.get(owner)??0)+1);await store.removeOwner(owner);}
+export async function deleteLoreSemanticStory(owner,sid){const key=JSON.stringify([owner,sid]);storyVersions.set(key,(storyVersions.get(key)??0)+1);await store.removeStory(owner,sid);}
+const pendingKey=(owner,sid)=>JSON.stringify([owner,sid,'pending-lore-v1']);
+export const loreIndexProgress={
+  async load(owner,sid){return (await store.load(pendingKey(owner,sid)))?.pending===true;},
+  async save(owner,sid,pending,check=()=>{}){return store.save({key:pendingKey(owner,sid),owner,sid,staging:true,pending},check);},
+};
 export function semanticConnection(mem,owner){
   let url;try{url=new URL(String(mem.semanticEndpoint ?? '').trim());}catch{throw new Error('Enter a valid embedding URL.');}
   const host=url.hostname,parts=host.split('.').map(Number);
@@ -47,7 +57,7 @@ export function semanticConnection(mem,owner){
   return {endpoint:url.href,model,apiKey:getEmbeddingKey(owner,url.href),key:JSON.stringify([url.href,model])};
 }
 function textFor(entry,limit) {
-  if(!['characters','locations','facts','events'].includes(entry.book) || archivedThread(entry) || entry.kind==='timeline' || entry.book==='events' && entry.status==='closed')return '';
+  if(!['characters','locations','facts','events'].includes(entry.book) || archivedThread(entry) || entry.kind==='timeline')return '';
   let fragments;
   if(entry.schemaVersion===3){
     const records=recordUnits(entry,{loreNotesPerSection:limit}).units;
@@ -80,14 +90,23 @@ function documentsFor(entries,mem) {
   return entries.filter(e=>mem.books?.[e.book]?.on!==false).flatMap(entry=>{
     if(!textFor(entry,0))return [];
     if(entry.schemaVersion!==3)return [{id:entry.id,recordId:null,text:textFor(entry,mem.loreNotesPerSection)}];
-    return recordUnits(entry,{loreNotesPerSection:0}).units.filter(r=>!r.blocked&&!r.fallback && r.resolved.text.trim()).map(r=>({id:entry.id,recordId:r.id,text:[entry.book,entry.name,...(entry.aliases ?? []),r.resolved.text].join('\n')}));
+    return recordUnits(entry,{loreNotesPerSection:0}).units.filter(r=>!r.blocked&&!r.fallback && r.resolved.text.trim()).map(r=>({id:entry.id,recordId:r.id,body:r.resolved.text,text:[entry.book,entry.name,...(entry.aliases ?? []),r.resolved.text].join('\n')}));
   });
 }
 export function createLoreSemantic({storage=store,embedder=embed}={}) {
+  async function needsRefresh({owner,sid,mem,entries}) {
+    const connection=semanticConnection(mem,owner),saved=await storage.load(keyFor(owner,sid,connection)),documents=documentsFor(entries,mem);
+    if(!saved)return documents.length>0;
+    if(saved.rows.length!==documents.length)return true;
+    const old=new Map(saved.rows.map(row=>[JSON.stringify([row.id,row.recordId]),row]));
+    for(const doc of documents){const row=old.get(JSON.stringify([doc.id,doc.recordId]));if(!row || !compatibleEmbedding({...row,modelKey:row.modelKey??saved.connection},connection,LORE_VECTOR_FORMAT) || row.hash!==await digest(doc.text))return true;}
+    return false;
+  }
   async function index({owner,sid,mem,entries,signal,check=()=>{},progress=()=>{},force=false}){
     if(!owner || !sid)throw new Error('Open a signed-in story first.');
+    check=scopeCheck(owner,sid,check);
     const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection),rows=[];
-    const documents=documentsFor(entries,mem),old=await storage.load(key);check();
+    const documents=documentsFor(entries,mem),old=await storage.load(key) ?? await storage.findStory?.(owner,sid,connection);check();
     const stageKey=JSON.stringify([key,'lore-stage-v1',!!force]);
     const staged=await storage.loadStage?.(stageKey);check();
     if(documents.length>20000)throw new Error('The local index supports up to 20,000 lore records.');
@@ -96,18 +115,18 @@ export function createLoreSemantic({storage=store,embedder=embed}={}) {
     for(let i=0;i<documents.length;i+=8){
       check();if(signal?.aborted)throw new Error('Indexing stopped.');
       const batch=documents.slice(i,i+8),hashes=await Promise.all(batch.map(x=>digest(x.text)));
-      const cached=batch.map((x,j)=>{const k=JSON.stringify([x.id,x.recordId,hashes[j]]),ready=stagedRows.get(k);if(ready?.modelKey===connection.key)return ready;const row=previous.get(k);return !force && row && (row.modelKey ?? old?.connection)===connection.key ? row : null;});
+      const cached=batch.map((x,j)=>{const k=JSON.stringify([x.id,x.recordId,hashes[j]]),ready=stagedRows.get(k);if(ready && compatibleEmbedding(ready,connection,LORE_VECTOR_FORMAT))return ready;const row=previous.get(k);return !force && row && compatibleEmbedding({...row,modelKey:row.modelKey ?? old?.connection},connection,LORE_VECTOR_FORMAT) ? row : null;});
       const missing=batch.filter((_,j)=>!cached[j]);
       const vectors=missing.length ? await embedder(connection,missing.map(x=>x.text),{signal}) : [];check();if(signal?.aborted)throw new Error('Indexing stopped.');
       if(vectors.length!==missing.length || vectors.some(v=>v.length!==vectors[0].length))throw new Error('Incompatible embedding dimensions.');
-      let k=0;for(let j=0;j<batch.length;j++)rows.push({id:batch[j].id,recordId:batch[j].recordId,hash:hashes[j],vector:cached[j]?.vector ?? vectors[k++],modelKey:cached[j]?.modelKey ?? connection.key,modelId:cached[j]?.modelId ?? connection.model});
+      let k=0;for(let j=0;j<batch.length;j++){const vector=cached[j]?.vector ?? vectors[k++];rows.push({id:batch[j].id,recordId:batch[j].recordId,hash:hashes[j],vector,modelKey:cached[j]?.modelKey ?? connection.key,modelId:cached[j]?.modelId ?? connection.model,dimensions:vector.length,formatVersion:LORE_VECTOR_FORMAT});}
       if(storage.saveStage){for(const row of rows.slice(-batch.length))stagedRows.set(JSON.stringify([row.id,row.recordId,row.hash]),row);if(!await storage.saveStage({key:stageKey,owner,sid,connection:connection.key,staging:true,rows:[...stagedRows.values()]},check))throw new Error('Could not save embedding progress on this device.');}
       progress({done:rows.length,total:documents.length});
     }
     check();if(signal?.aborted)throw new Error('Indexing stopped.');
     if(rows.some(r=>r.vector.length!==rows[0].vector.length))throw new Error('Incompatible embedding dimensions.');
     if(!await storage.save({key,owner,sid,connection:connection.key,updatedAt:Date.now(),rows},check))throw new Error('Device storage is unavailable or the story changed; index was not saved.');
-    await storage.removeStage?.(stageKey);
+    check();await storage.removeStage?.(stageKey,check);check();
     return {count:new Set(rows.map(row=>row.id)).size,records:rows.length};
   }
   async function search({owner,sid,mem,entries,query,signal,check}){
@@ -115,39 +134,50 @@ export function createLoreSemantic({storage=store,embedder=embed}={}) {
     if(!mem.semanticLore || !owner || !sid || !String(query ?? '').trim())return {ids:[],status:'off'};
     try{
       const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection);let saved=await storage.load(key);guard();
-      if(!saved && storage.findStory)saved=await storage.findStory(owner,sid);guard();
+      if(!saved && storage.findStory)saved=await storage.findStory(owner,sid,connection) ?? await storage.findStory(owner,sid);guard();
       if(!saved)return {ids:[],status:'index missing'};
       const documents=documentsFor(entries,mem),docs=new Map();
       for(const doc of documents)docs.set(JSON.stringify([doc.id,doc.recordId]),await digest(doc.text));
-      const valid=saved.rows.filter(row=>docs.get(JSON.stringify([row.id,row.recordId]))===row.hash);
+      const sourced=saved.rows.filter(row=>docs.get(JSON.stringify([row.id,row.recordId]))===row.hash);
+      const modelMismatch=sourced.some(row=>!compatibleEmbedding({...row,modelKey:row.modelKey ?? saved.connection},connection,LORE_VECTOR_FORMAT));
+      const historical=/\b(?:was|were|did|had|recorded|posted|recall|remember|before|after|previous|past)\b/i.test(query),closed=new Set(entries.filter(e=>e.book==='events' && e.status==='closed').map(e=>e.id));
+      const compatible=sourced.filter(row=>compatibleEmbedding({...row,modelKey:row.modelKey ?? saved.connection},connection,LORE_VECTOR_FORMAT));
+      const valid=compatible.filter(row=>historical || !closed.has(row.id));
       guard();
       if(!documents.length)return {ids:[],records:{},candidates:[],status:'ready'};
-      if(!valid.length)return {ids:[],records:{},candidates:[],status:'index out of date'};
+      if(!valid.length)return {ids:[],records:{},candidates:[],modelMismatch,status:compatible.length?'ready':'index out of date'};
       const [vector]=await embedder(connection,[String(query).slice(-4000)],{signal,timeout:1500});guard();
-      const ranked=valid.filter(row=>row.vector.length===vector.length).map(row=>{let score=0;for(let i=0;i<vector.length;i++)score+=row.vector[i]*vector[i];return {id:row.id,recordId:row.recordId,score};}).sort((a,b)=>b.score-a.score);
+      // Keep exact words useful without allowing a keyword-only record to bypass
+      // the vector relevance floor. Rank records, rather than entire cards.
+      const lexical=rankPassages(documents.map(doc=>({...doc,text:doc.body??doc.text,id:JSON.stringify([doc.id,doc.recordId]),order:0})),query),maxLexical=Math.max(0,...lexical.map(hit=>hit.lexical));
+      const words=new Map(lexical.map(hit=>[hit.row.id,hit.lexical/(maxLexical||1)]));
+      const ranked=valid.filter(row=>row.vector.length===vector.length).map(row=>{let similarity=0;for(let i=0;i<vector.length;i++)similarity+=row.vector[i]*vector[i];const keyword=words.get(JSON.stringify([row.id,row.recordId]))??0;return {id:row.id,recordId:row.recordId,similarity,lexical:keyword,score:similarity+.15*keyword};}).sort((a,b)=>b.score-a.score || String(a.id).localeCompare(String(b.id)) || String(a.recordId).localeCompare(String(b.recordId)));
       if(!ranked.length)return {ids:[],modelMismatch:valid.some(row=>(row.modelKey ?? saved.connection)!==connection.key),incompatibleDimensions:valid.filter(row=>row.vector.length!==vector.length).length,status:'index out of date'};
-      const matches=ranked.filter(r=>r.score>=0.4),ids=[...new Set(matches.map(r=>r.id))].slice(0,3),records={};
+      const floor=/qwen3[\-_]embedding/i.test(connection.model) ? .45 : .4;
+      const relevant=ranked.filter(r=>r.similarity>=floor),matches=relevant.filter(r=>r.score>=(relevant[0]?.score??Infinity)-.08),ids=[...new Set(matches.map(r=>r.id))].slice(0,3),records={};
       for(const match of matches)if(ids.includes(match.id)&&match.recordId!=null && (records[match.id]?.length ?? 0)<3)(records[match.id] ??= []).push(match.recordId);
-      return {ids,records,candidates:matches.filter(r=>ids.includes(r.id)),modelMismatch:valid.some(row=>(row.modelKey ?? saved.connection)!==connection.key),status:valid.length<documents.length?'partial index':'ready'};
+      return {ids,historicalIds:ids.filter(id=>closed.has(id)),records,candidates:matches.filter(r=>ids.includes(r.id)),modelMismatch,status:compatible.length<documents.length?'partial index':'ready'};
     }catch(error){if(signal?.aborted)throw error;guard();return {ids:[],status:'unavailable'};}
   }
-  async function exportVectors({owner,sid,mem}) {
+  async function exportVectors({owner,sid,mem,entries}) {
     const connection=semanticConnection(mem,owner);let saved=await storage.load(keyFor(owner,sid,connection));
     if(!saved && storage.findStory)saved=await storage.findStory(owner,sid);
-    return (saved?.rows ?? []).map(row=>({...row,modelKey:row.modelKey ?? saved.connection}));
+    const documents=entries ? new Map(await Promise.all(documentsFor(entries,mem).map(async doc=>[JSON.stringify([doc.id,doc.recordId]),await digest(doc.text)]))) : null;
+    return (saved?.rows ?? []).filter(row=>!documents || documents.get(JSON.stringify([row.id,row.recordId]))===row.hash).map(row=>({...row,modelKey:row.modelKey ?? saved.connection}));
   }
   async function importVectors({owner,sid,mem,entries,rows,check=()=>{}}) {
+    check=scopeCheck(owner,sid,check);
     const connection=semanticConnection(mem,owner),key=keyFor(owner,sid,connection),existing=await storage.load(key),docs=new Map();
     for(const doc of documentsFor(entries,mem))docs.set(JSON.stringify([doc.id,doc.recordId]),await digest(doc.text));
-    const merged=new Map((existing?.rows ?? []).map(r=>[JSON.stringify([r.id,r.recordId]),r]));let restored=0,skipped=0;
+    const merged=new Map((existing?.rows ?? []).filter(r=>docs.get(JSON.stringify([r.id,r.recordId]))===r.hash).map(r=>[JSON.stringify([r.id,r.recordId]),r]));let restored=0,skipped=0;
     for(const row of rows) {
       check();const id=JSON.stringify([row.id,row.recordId]);
-      if(docs.get(id)!==row.hash){skipped++;continue;}
-      try {const v=validateVector(Array.from(row.vector ?? [])),local=merged.get(id);if(!local || local.hash!==row.hash){merged.set(id,{...row,vector:v});restored++;}}catch{skipped++;}
+      if(docs.get(id)!==row.hash || !compatibleEmbedding(row,connection,LORE_VECTOR_FORMAT)){skipped++;continue;}
+      try {const v=validateVector(Array.from(row.vector ?? [])),local=merged.get(id);if(!local || local.hash!==row.hash || !compatibleEmbedding(local,connection,LORE_VECTOR_FORMAT)){merged.set(id,{...row,vector:v,dimensions:v.length,formatVersion:row.formatVersion ?? LORE_VECTOR_FORMAT});restored++;}}catch{skipped++;}
     }
     check();if(!await storage.save({key,owner,sid,connection:connection.key,updatedAt:Date.now(),rows:[...merged.values()]},check))throw new Error('Device storage is unavailable.');
     return {restored,skipped};
   }
-  return {index,search,exportVectors,importVectors};
+  return {index,search,exportVectors,importVectors,needsRefresh};
 }
 export const loreSemantic=createLoreSemantic();

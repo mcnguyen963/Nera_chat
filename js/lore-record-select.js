@@ -28,7 +28,7 @@ export function renderRecordSelection(entry,records,protagonist='') {
     return [key,{...s,text:merged.map(([a,b])=>s.text.slice(a,b)).join('\n'),lines:(s.lines ?? []).filter(l=>ids.has(l.id))}];
   }));return renderEntry({...entry,sections},null,protagonist);
 }
-export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3,semanticRecords={}}={}) {
+export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3,semanticRecords={},semanticOnly=false,preferSemantic=false,baselineSources=null}={}) {
   const complete=reconcileRecords(entry);
   const matched=new Set(semanticRecords[entry.id] ?? []);
   entry=capLoreNotes(complete,loreNotesPerSection,[...matched]);
@@ -50,9 +50,11 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
     const linked=[...new Set([...(r.relatedEntryIds ?? []),...literalLinks])].filter(id=>id!==entry.id && anchors.has(id));
     const current=matches.current.length+explicitCurrent.length,recent=matches.recent.length+explicitRecent.length;
     const activeState=r.category==='state'&&anchors.has(entry.id);
-    const round=r.pinned||core ? 1 : current||activeState ? 2 : recent||linked.length||matched.has(r.id) ? 3 : ['characterization','appearance','relationship','constraint'].includes(r.category)&&anchors.has(entry.id) ? 4 : 5;
+    const round=r.pinned||core ? 1 : preferSemantic&&matched.has(r.id) ? 2 : current||activeState ? (preferSemantic?3:2) : recent||linked.length||matched.has(r.id) ? (preferSemantic?4:3) : ['characterization','appearance','relationship','constraint'].includes(r.category)&&anchors.has(entry.id) ? 4 : 5;
     const recency=Math.max(0,...r.resolved.sources.map(s=>s.source.data.turn ?? s.source.data.cutoff?.order ?? s.source.data.at ?? 0));
-    return {...r,core,round,current,recent,linked,recency,author:Number(r.resolved.sources.some(s=>s.source.data.by==='user'||s.source.data.origin==='user')),currentMatches:[...matches.current,...explicitCurrent],recentMatches:[...matches.recent,...explicitRecent],reason:capReason ?? (!r.resolved.valid ? r.resolved.reason : replaced.has(r.id) ? 'explicitly superseded' : r.pinned ? 'pinned' : core ? 'approved core' : current ? 'current input match' : activeState ? 'state of relevant subject' : recent ? 'recent conversation match' : linked.length ? 'related subject' : matched.has(r.id) ? 'semantic match' : round===4 ? 'selected subject detail' : 'background'),blocked:!!capReason||!r.resolved.valid||replaced.has(r.id)};
+    const inBaseline=!baselineSources || r.resolved.sources.every(source=>(baselineSources[entry.id]??[]).some(prior=>prior.section===source.section && prior.lineId===source.lineId && prior.start<=source.start && prior.end>=source.end));
+    const unmatched=(!inBaseline || semanticOnly && matched.size>0) && !matched.has(r.id) && !r.pinned && !core;
+    return {...r,core,round,current,recent,linked,recency,author:Number(r.resolved.sources.some(s=>s.source.data.by==='user'||s.source.data.origin==='user')),currentMatches:[...matches.current,...explicitCurrent],recentMatches:[...matches.recent,...explicitRecent],reason:capReason ?? (!r.resolved.valid ? r.resolved.reason : replaced.has(r.id) ? 'explicitly superseded' : unmatched ? 'not matched by semantic search' : r.pinned ? 'pinned' : core ? 'approved core' : current ? 'current input match' : activeState ? 'state of relevant subject' : recent ? 'recent conversation match' : linked.length ? 'related subject' : matched.has(r.id) ? 'semantic match' : round===4 ? 'selected subject detail' : 'background'),blocked:!!capReason||!r.resolved.valid||replaced.has(r.id)||unmatched};
   });
   const cores=units.filter(u=>u.core&&!u.blocked);
   for(const u of units.filter(u=>!u.blocked)) {
@@ -60,14 +62,14 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
     while(changed){changed=false;for(const c of cores)if(!attached.has(c.id)&&u.resolved.sources.some(a=>c.resolved.sources.some(b=>overlaps(a,b)))){attached.add(c.id);u.resolved={...u.resolved,sources:[...u.resolved.sources,...c.resolved.sources.filter(b=>!u.resolved.sources.some(a=>a.sourceId===b.sourceId&&a.start===b.start&&a.end===b.end))]};changed=true;}}
   }
   // Match the existing complete-section fallback when no approved core exists.
-  if(entry.book==='characters'&&!cores.length)for(const key of ['personality','appearance']) {
+  if(entry.book==='characters'&&!cores.length && !(semanticOnly&&matched.size))for(const key of ['personality','appearance']) {
     const group=units.filter(u=>!u.blocked&&u.resolved.sources.some(s=>s.section===key));
     if(group.length)units.push({id:'fallback:'+key,category:key==='personality'?'characterization':'appearance',resolved:{valid:true,sources:group.flatMap(u=>u.resolved.sources),text:group.map(u=>u.resolved.text).join('\n')},round:1,core:false,fallback:true,current:0,recent:0,author:1,recency:0,reason:'unreviewed complete '+key+' fallback',linked:[],currentMatches:[],recentMatches:[]});
   }
   return {entry,capCompanions:[...companions.values()],units:units.sort((a,b)=>a.round-b.round||b.current-a.current||b.recent-a.recent||b.author-a.author||b.recency-a.recency||a.id.localeCompare(b.id))};
 }
 export async function fitRecords(selected,budget,count,options={}) {
-  const cap=Math.max(0,budget),records=selected.map(item=>({...item,...recordUnits(item.entry,options),chosen:[],identity:false}));
+  const cap=Math.max(0,budget),preferSemantic=selected.some(item=>item.entry.book==='events' && options.semanticRecords?.[item.entry.id]?.length),records=selected.map(item=>({...item,...recordUnits(item.entry,{...options,preferSemantic,semanticOnly:item.reason==='semantic match'}),chosen:[],identity:false}));
   const render=()=>records.filter(r=>r.identity).map(r=>renderRecordSelection(r.entry,r.chosen,options.protagonist)).join('\n\n');
   const renderOne=r=>r.identity&&r.chosen.length ? renderRecordSelection(r.entry,r.chosen,options.protagonist) : '';
   const fill=async(active,fits,protectedOnly=false)=>{

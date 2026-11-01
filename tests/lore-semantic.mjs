@@ -22,7 +22,7 @@ test('semantic index is scoped by account and story, and warns when its model di
   assert.equal((await h.semantic.search({...base,owner:'two',query})).status,'index missing');
   assert.equal((await h.semantic.search({...base,sid:'other',query})).status,'index missing');
   const mismatched=await h.semantic.search({...base,mem:{...h.mem,semanticModel:'other'},query});
-  assert.equal(mismatched.modelMismatch,true);assert.deepEqual(plain(mismatched.ids),['mara']);
+  assert.equal(mismatched.modelMismatch,true);assert.deepEqual(plain(mismatched.ids),[]);assert.equal(mismatched.status,'index out of date');
   const edited=structuredClone(h.entries);edited[0].sections.notes.text='Changed since indexing.';
   const stale=await h.semantic.search({...base,entries:edited,query});
   assert.equal(stale.status,'partial index');assert.ok(!stale.ids.includes('mara'));
@@ -33,6 +33,25 @@ test('index abort and changed story never save a partial index',async()=>{
   await assert.rejects(h.semantic.index({owner:'a',sid:'s',mem:h.mem,entries:h.entries,signal:controller.signal}),/stopped/);
   await assert.rejects(h.semantic.index({owner:'a',sid:'s',mem:h.mem,entries:h.entries,check:()=>{throw Error('changed')}}),/changed/);
   assert.equal(h.records.size,0);
+});
+test('clearing lore caches invalidates in-flight manual builds only in their own scope',async()=>{
+  for(const scope of ['account','story','other-account','other-story']){
+    const h=await fixture(),module=await h.use('lore-semantic.js');let release,started;
+    const gate=new Promise(r=>release=r),entered=new Promise(r=>started=r),records=[];
+    const semantic=module.createLoreSemantic({storage:{load:async()=>null,save:async(value,check)=>{check();records.push(value);return true;}},embedder:async(_connection,texts)=>{started();await gate;return texts.map(()=>[1,0]);}});
+    const job=semantic.index({owner:'owner',sid:'story',mem:h.mem,entries:h.entries});await entered;
+    const removed=scope==='account'||scope==='story',finished=removed?assert.rejects(job,/cleared/):job;
+    if(scope.includes('account'))await module.clearLoreSemanticAccount(scope==='account'?'owner':'other');
+    else await module.deleteLoreSemanticStory('owner',scope==='story'?'story':'other');
+    release();await finished;assert.equal(records.length,removed?0:1);
+  }
+});
+test('a lore download waiting on storage cannot restore vectors after its cache is cleared',async()=>{
+  const h=await fixture(),module=await h.use('lore-semantic.js');let release,started;
+  const entered=new Promise(r=>started=r),gate=new Promise(r=>release=r);let saves=0;
+  const semantic=module.createLoreSemantic({storage:{load:async()=>{started();return gate;},save:async()=>{saves++;return true;}}});
+  const job=semantic.importVectors({owner:'owner',sid:'story',mem:h.mem,entries:h.entries,rows:[]}),stopped=assert.rejects(job,/cleared/);
+  await entered;await module.clearLoreSemanticAccount('owner');release(null);await stopped;assert.equal(saves,0);
 });
 test('embedding connections accept HTTPS and private network HTTP, but reject unsafe URLs',async()=>{
   const {semanticConnection}=await appHarness()('lore-semantic.js');
@@ -160,4 +179,42 @@ test('an interrupted lore rebuild keeps the active index and resumes completed b
   const semantic=createLoreSemantic({storage,embedder}),args={owner:'a',sid:'s',mem:h.mem,entries,force:true};
   await assert.rejects(semantic.index(args),/Interrupted/);assert.equal(records.size,0);assert.equal(stages.size,1);
   const result=await semantic.index(args);assert.equal(result.count,10);assert.equal(calls,3);assert.equal(stages.size,0);
+});
+
+test('semantic admission sends matched records without unrelated card fallback, while named cards keep their normal context',async()=>{
+  const use=appHarness(),{makeEntry}=await use('lore-lines.js'),records=await use('lore-records.js'),{fitRecords}=await use('lore-record-select.js');
+  const e=makeEntry('characters','Mira',{id:'mira'});e.sections.notes.text='Dilute the antidote with water.';e.sections.personality.text='Collects antique clocks.';e.sections.appearance.text='Wears a green coat.';
+  const entry=records.reconcileRecords(e),match=entry.recordLayout.records.find(r=>records.resolveRecord(entry,r).text.includes('antidote'));
+  const options={loreNotesPerSection:3,semanticRecords:{mira:[match.id]},anchors:new Set(['mira'])},count=async text=>text.length;
+  const semantic=await fitRecords([{entry,reason:'semantic match'}],10000,count,options);
+  assert.match(semantic.text,/Dilute the antidote/);assert.doesNotMatch(semantic.text,/antique clocks|green coat/);
+  const named=await fitRecords([{entry,reason:'mentioned'}],10000,count,options);
+  assert.match(named.text,/antique clocks/);assert.match(named.text,/green coat/);
+});
+
+test('reopening detects changed and deleted lore without querying the embedding provider',async()=>{
+  const h=await fixture(),args={owner:'a',sid:'s',mem:h.mem,entries:h.entries};
+  assert.equal(await h.semantic.needsRefresh(args),true);await h.semantic.index(args);assert.equal(await h.semantic.needsRefresh(args),false);
+  const changed=structuredClone(h.entries);changed[0].sections.notes.text='A changed recipe.';
+  assert.equal(await h.semantic.needsRefresh({...args,entries:changed}),true);
+  assert.equal(await h.semantic.needsRefresh({...args,entries:[]}),true);
+  await h.semantic.index({...args,entries:[]});assert.equal(await h.semantic.needsRefresh({...args,entries:[]}),false);
+});
+
+test('past questions can retrieve a completed thread as closed reference without reopening it',async()=>{
+  const h=await fixture(),e=structuredClone(h.entries[0]);e.book='events';e.kind='thread';e.status='closed';e.name='Clinic journey';e.sections={text:{text:'The healer packed herbs for the journey.',lines:[]}};
+  const args={owner:'a',sid:'s',mem:h.mem,entries:[e]};await h.semantic.index(args);
+  const normal=await h.semantic.search({...args,query:'Find poison herbs.'});assert.deepEqual(plain(normal.ids),[]);
+  const past=await h.semantic.search({...args,query:'What herbs were packed before the journey?'});assert.deepEqual(plain(past.historicalIds),[e.id]);
+  const {selectEntries}=await h.use('lore-select.js'),selection=selectEntries([e],h.mem,'What was packed?',null,'',{semanticIds:past.ids,semanticHistoricalIds:past.historicalIds});
+  assert.equal(selection.selected.events[0].entry.status,'closed');assert.equal(e.status,'closed');
+});
+
+test('semantic fitting cannot fill newly freed space with unselected background sources',async()=>{
+  const use=appHarness(),{makeEntry}=await use('lore-lines.js'),records=await use('lore-records.js'),{fitRecords}=await use('lore-record-select.js');
+  const e=makeEntry('facts','Clinic',{id:'clinic'});e.sections.text.lines=[{id:'dose',text:'Dilute the antidote with two cups of water.',by:'user'},{id:'base',text:'The clinic opens at dawn.',by:'user'},{id:'extra',text:'An unrelated ship sails on Friday.',by:'user'}];
+  const entry=records.reconcileRecords(e),units=(await use('lore-record-select.js')).recordUnits(entry).units;
+  const dose=units.find(r=>r.resolved.text.includes('Dilute')),base=units.find(r=>r.resolved.text.includes('opens at dawn'));
+  const result=await fitRecords([{entry,reason:'recent'}],10000,async t=>t.length,{semanticRecords:{clinic:[dose.id]},baselineSources:{clinic:base.resolved.sources.map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end}))}});
+  assert.match(result.text,/Dilute the antidote/);assert.match(result.text,/opens at dawn/);assert.doesNotMatch(result.text,/unrelated ship/);
 });

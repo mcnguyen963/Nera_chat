@@ -200,7 +200,9 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const recentLoreText = cleanedLoreMessages.map(m => m.content).join('\n');
   const semantic=opts.onlyRequiredWindow || opts.continuationId ? {ids:[],status:'off'} : await loreSemantic.search({owner:settings.providerCooldownAccount,sid:session.id,mem,entries:filtered.entries,query:latest?.content,signal:opts.signal,check:opts.check});
   if(mem.semanticLore && !['ready','off'].includes(semantic.status))warnings.push('Semantic lore search: '+semantic.status+'. Existing selection remains active.');
-  const selection = await selectEntriesAsync(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,{records:session.loreSchemaVersion===3,semanticIds:semantic.ids,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds,directorBackgroundIds:turn.cast.backgroundCharacterIds} : {})},{signal:opts.signal,check:opts.check});
+  const selectionSources={records:session.loreSchemaVersion===3,semanticIds:semantic.ids,semanticHistoricalIds:semantic.historicalIds,current:opts.continuationId || !latest ? [] : [{id:latest.id,order:latest.order,role:latest.role,content:latest.content}],recent:cleanedLoreMessages,...(turn ? {startingScene:parseScene(directorScene(turn.before)),directorMemoryIds:turn.contract.memoryIds,directorRequiredIds:turn.contract.requiredMemoryIds,directorBackgroundIds:turn.cast.backgroundCharacterIds} : {})};
+  const select=sources=>selectEntriesAsync(filtered.entries,mem,opts.continuationId ? '' : latest?.content ?? '',mem.scene ? current.scene : null,recentLoreText,sources,{signal:opts.signal,check:opts.check});
+  const selection = await select(selectionSources);
   if(turn)for(const id of turn.contract.memoryIds){const entry=filtered.entries.find(e=>e.id===id);if(!entry)throw new Error('A Director-selected memory changed. Retry the turn.');if(!mem.books[entry.book]?.on){if(turn.contract.requiredMemoryIds.includes(id))throw new Error('A required Director memory book is disabled: '+entry.book);warnings.push('Director memory skipped because its book is disabled: '+entry.name);}}
   const scheduled = mem.lorebooks && mem.books.plan.on
     ? selectScheduledPlan(filtered.entries,mem.scene && (director || mem.calendar.mode==='modern') ? current.scene?.when : null,jump)
@@ -208,10 +210,14 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   selection.selected.plan=[...(selection.selected.plan ?? []),...scheduled.selected.filter(i=>!(selection.selected.plan ?? []).some(x=>x.entry.id===i.entry.id))];warnings.push(...scheduled.warnings);
   const skipped = [...filtered.skipped,...selection.skipped,...scheduled.skipped];
   const recordMode=session.loreSchemaVersion===3;
+  const baselineSelection=recordMode && Object.values(semantic.records??{}).some(ids=>ids.length) ? await select({...selectionSources,semanticIds:[],semanticHistoricalIds:[]}) : null;
+  const baselineAnchors=baselineSelection ? relevantSubjects(baselineSelection.index,baselineSelection,opts.continuationId?'':latest?.content??'',recentLoreText) : null;
   const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
   if(turn && recordAnchors){for(const id of turn.contract.memoryIds)recordAnchors.add(id);for(const book of ['characters','locations'])for(const item of selection.selected[book])if(['starting character','starting place','in scene','current place'].includes(item.reason))recordAnchors.add(item.entry.id);}
+  if(turn && baselineAnchors){for(const id of turn.contract.memoryIds)baselineAnchors.add(id);for(const book of ['characters','locations'])for(const item of baselineSelection.selected[book])if(['starting character','starting place','in scene','current place'].includes(item.reason))baselineAnchors.add(item.entry.id);}
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
     if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
+    if(baselineSelection && !baselineSelection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:baselineAnchors,index:baselineSelection.index,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))baselineSelection.selected.events.push({entry,reason:'related closed thread'});
   }
   // Related records can admit a closed thread after direct name matching.
   for(let i=skipped.length-1;i>=0;i--)if(skipped[i].reason==='no name or alias match' && selection.selected[skipped[i].book]?.some(item=>item.entry.id===skipped[i].entryId))skipped.splice(i,1);
@@ -225,7 +231,15 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'plan' ? '' : book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{loreNotesPerSection:mem.loreNotesPerSection,semanticRecords:semantic.records ?? {},protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index}) : book === 'characters' && mem.characterSelection
+    const recordOptions={loreNotesPerSection:mem.loreNotesPerSection,protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index};
+    let baselineSources=null;
+    if(baselineSelection && book!=='plan'){
+      const ordinary=await fitRecords(baselineSelection.selected[book],budget,count,{...recordOptions,anchors:baselineAnchors,semanticRecords:{}});
+      baselineSources=Object.fromEntries(ordinary.recordReport.entries.map(entry=>[entry.entryId,entry.records.filter(record=>record.selected).flatMap(record=>record.sources)]));
+    }
+    // Promoting evidence must not use its freed space to introduce unrelated
+    // background records that the ordinary request would not have contained.
+    let fit = book === 'plan' ? await fitScheduledPlan(selection.selected.plan,budget,count) : recordMode ? await fitRecords(selection.selected[book],budget,count,{...recordOptions,baselineSources,semanticRecords:semantic.records ?? {}}) : book === 'characters' && mem.characterSelection
       ? await fitCharacters(selection.selected[book],budget,count,{loreNotesPerSection:mem.loreNotesPerSection,protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText})
       : await fitBook(selection.selected[book],budget,count,{ loreNotesPerSection:mem.loreNotesPerSection,protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],events:book === 'events',provenance:false });
     noteOmissions.push(...(fit.noteOmissions ?? []));

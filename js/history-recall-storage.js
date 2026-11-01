@@ -39,7 +39,16 @@ async function transaction(mode,action) {
 export const recallStorage={
   loadPendingBatch:(owner,sid)=>transaction('readonly',(store,result)=>{const request=store.get(JSON.stringify([owner,sid,'pending-batch']));request.onsuccess=()=>result(request.result?.value ?? null);return null;}),
   savePendingBatch:(owner,sid,value)=>transaction('readwrite',(store,result)=>{store.put({key:JSON.stringify([owner,sid,'pending-batch']),owner,value});result(true);return null;}),
-  clearPendingBatch:(owner,sid)=>transaction('readwrite',(store,result)=>{store.delete(JSON.stringify([owner,sid,'pending-batch']));result(true);return null;}),
+  mergePendingBatch:(owner,sid,value,check=()=>true)=>transaction('readwrite',(store,result)=>{
+    const key=JSON.stringify([owner,sid,'pending-batch']),request=store.get(key);
+    request.onsuccess=()=>{try{if(check()===false)return;const old=request.result?.value,merged={fromOrder:Math.min(value.fromOrder,old?.fromOrder??value.fromOrder),throughOrder:Math.max(value.throughOrder,old?.throughOrder??value.throughOrder),version:(old?.version??0)+1};store.put({key,owner,value:merged});result(merged);}catch{}};
+    return null;
+  }),
+  clearPendingBatch:(owner,sid,expectedVersion)=>transaction('readwrite',(store,result)=>{
+    const key=JSON.stringify([owner,sid,'pending-batch']);
+    if(expectedVersion==null){store.delete(key);result(true);return null;}
+    const request=store.get(key);request.onsuccess=()=>{if(request.result?.value?.version===expectedVersion){store.delete(key);result(true);}else result(false);};return null;
+  }),
   loadStage:stageKey=>transaction('readonly',(store,result)=>{
     const request=store.index('storyKey').getAll(stageKey);request.onsuccess=()=>result((request.result ?? []).map(item=>item.row));return null;
   }),
@@ -56,12 +65,13 @@ export const recallStorage={
     const passages=store.index('storyKey').getAll(key);passages.onsuccess=()=>{rows=passages.result;rowsReady=true;finish();};
     return null;
   }),
-  save:record=>transaction('readwrite',(store,result)=>{
+  save:(record,check=()=>true)=>transaction('readwrite',(store,result)=>{
     const request=store.get(record.key);
     request.onsuccess=()=>{
+      try{if(check()===false)return;}catch{return;}
       const previous=request.result,signatures={},rowIds=record.rows.map(r=>r.id);
       for(const row of record.rows) {
-        const signature=JSON.stringify([row.sourceHash,row.revision,row.order,row.role,row.start,row.end,row.sourceRevision,row.modelKey,row.modelId,vectorFingerprint(row.vector)]);
+        const signature=JSON.stringify([row.sourceHash,row.revision,row.order,row.role,row.start,row.end,row.sourceRevision,row.modelKey,row.modelId,row.dimensions,row.formatVersion,vectorFingerprint(row.vector)]);
         signatures[row.id]=signature;
         if(previous?.signatures?.[row.id]!==signature)store.put({key:JSON.stringify([record.key,row.id]),owner:record.owner,storyKey:record.key,row});
       }
@@ -87,7 +97,7 @@ export async function clearRecallAccount(uid) {
   });
 }
 export async function deleteRecallStory(owner,sid) {
-  globalThis.document?.dispatchEvent(new CustomEvent('history-recall-cleared',{detail:{owner}}));
+  globalThis.document?.dispatchEvent(new CustomEvent('history-recall-cleared',{detail:{owner,sid}}));
   await recallStorage.remove(JSON.stringify([owner,sid]));
   await recallStorage.clearPendingBatch(owner,sid);
   return transaction('readwrite',store=>{const request=store.openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;try{const parts=JSON.parse(cursor.value.storyKey ?? '');if(parts[0]===owner && parts[1]===sid && parts[2]==='embedding-stage-v1')cursor.delete();}catch{}cursor.continue();};return null;});

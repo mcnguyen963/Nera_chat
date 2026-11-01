@@ -1479,6 +1479,19 @@ test('composer advance notice responds to settings, checkpoints, history edits, 
  assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Updating memory · Keep open');
  await chat.prepareChatLogout();assert.equal(notice.hidden,true);assert.equal(h.el('composer-box').classList.contains('memory-updating'),false);
 });
+test('historical indexing completion while viewing another story clears its old composer progress',async()=>{
+ const h=await harness(),metadata={memory:{historyRecall:true}},chat=await openImprovementChat(h,metadata);
+ const notice=h.el('composer-memory-status'),phase=(searchPhase,sessionId='improvement')=>h.document.dispatchEvent({type:'memory-status',detail:{sessionId,status:'info',searchPhase}});
+ await phase('running');assert.match(notice.textContent,/Updating search index/);
+ chat.setSession('another-story');await new Promise(r=>setTimeout(r,0));await phase('ready');
+ chat.setSession('improvement');await new Promise(r=>setTimeout(r,0));
+ h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({title:'Story',...metadata})});h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+ assert.doesNotMatch(notice.textContent,/Updating search index/);
+ await phase('running');assert.match(notice.textContent,/Updating search index/);
+ await h.document.dispatchEvent({type:'history-recall-cleared',detail:{owner:'test-user',sid:'another-story'}});assert.match(notice.textContent,/Updating search index/);
+ await h.document.dispatchEvent({type:'history-recall-cleared',detail:{owner:'test-user'}});
+ assert.doesNotMatch(notice.textContent,/Updating search index/);
+});
 test('composer advance notice stays hidden for incomplete or stale history without fetching history',async()=>{
  const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
  const h=await harness({sources:{'ui/chat-view.js':source+`\nexport function noticeHistoryFixture({revision,earlier,full}){historyMessages=full ? lastMessages : null;historyRevision=revision;hasEarlier=earlier;updateMemoryChip();}`}});

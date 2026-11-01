@@ -5,6 +5,7 @@ import {getPref,setPref} from '../local-pref.js';
 import {requestInputLimit} from '../request-budget.js';
 import {effectivelyPaused,usableLore} from '../continuity.js';
 import {currentUid} from '../auth.js';
+import {embeddingSourcesUnchanged} from '../embedding-source.js';
 import {loreSemantic,semanticConnection} from '../lore-semantic.js';
 import {getEmbeddingKey,saveEmbeddingKey} from '../embedding-credentials.js';
 import {updateSession} from '../sessions.js';
@@ -17,7 +18,7 @@ import { isRunning, updateNow, catchUp, stop, rebuildFrom } from '../memory-upda
 import { copyText } from './clipboard.js';
 import { node, button, subSheet, toast } from './memory-ui.js';
 const get = key => document.getElementById('mem-'+key);
-const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow','semanticLore','historyRecall','semanticRecall','vectorCloudSync'];
+const booleans = ['characterSelection','scene','sceneFallback','lorebooks','autoUpdate','memoryBlock','blockWindow','semanticLore','historyRecall','semanticRecall'];
 const strings = ['protagonist','blockRole','sceneFallbackModel','replyContract','updateProfileId','semanticEndpoint','semanticModel'];
 const seedKeys = ['date','time','place','present'];
 const numbers = ['loreNotesPerSection','loreLookbackMessages','batchTurns','lagTurns','updateMaxTokens','reorganizeMaxTokens','blockDepth','historyRecallBudget','historyRecallPassages'];
@@ -90,15 +91,14 @@ export function initMemorySettings(openLore) {
       if(!live.historyComplete)throw new Error('Full story history is not available. Open the story and try again.');
       const mem=readMemory();
       const captured=structuredClone({session:live.session,messages:live.messages,entries:live.entries});
-      const check=()=>{const now=memorySnapshot();if(currentUid()!==owner || !now || now.session.id!==sid || now.storyEpoch!==epoch || now.session.historyRevision!==captured.session.historyRevision || now.session.loreRevision!==captured.session.loreRevision)throw new Error('Story or lore changed; build the index again.');};
+      const check=()=>{const now=memorySnapshot();if(currentUid()!==owner || !now || now.session.id!==sid || now.storyEpoch!==epoch || now.session.loreRevision!==captured.session.loreRevision || !embeddingSourcesUnchanged(captured.messages,now.messages))throw new Error('Story or lore changed; build the index again.');};
       const entries=usableLore(captured.entries,captured.messages,captured.session).entries;
       status.textContent='Building the device index…';
       const result=await loreSemantic.index({owner,sid,mem,entries,check,force,signal:loreIndexController.signal,progress:({done,total})=>{status.textContent=`Indexed ${done} of ${total} records…`;}});
+      check();
       status.textContent=`Indexed ${result.count} cards on this device. Save story settings to enable semantic search.`;
-      if(live.session.memory?.vectorCloudSync && live.session.memory.semanticModel===mem.semanticModel && live.session.memory.semanticEndpoint===mem.semanticEndpoint){
-        try{const {uploadStoryVectors}=await import('../vector-cloud-sync.js');await uploadStoryVectors(live,'lore',{getLive:()=>memorySnapshot()});status.textContent+= ' Lore vectors synced to cloud.';}
-        catch(error){status.textContent+=' Cloud sync pending: '+error.message;}
-      }
+      if(live.session.memory?.semanticModel===mem.semanticModel && live.session.memory.semanticEndpoint===mem.semanticEndpoint)document.dispatchEvent(new CustomEvent('lore-index-built',{detail:{sessionId:sid}}));
+
     }catch(error){status.textContent='Indexing failed: '+error.message;}
     finally{button.disabled=false;loreIndexController=null;get('semantic-cancel').hidden=true;}
   });
@@ -114,10 +114,8 @@ export function initMemorySettings(openLore) {
       const result=await indexOlderHistory(live,{getLive:()=>memorySnapshot(),force,signal:historyIndexController.signal,onProgress:p=>{status.textContent=`Indexed ${p.messages} messages; embedded ${p.embedded} of ${p.total ?? p.passages} passages.`;}});
       if(currentUid()!==owner || state.sessionId!==sid || memorySnapshot()?.storyEpoch!==epoch)return;
       status.textContent=result.persisted ? `Indexed ${result.indexedMessages} messages and ${result.rows.length} passages on this device.` : 'Indexing finished in memory, but device storage is unavailable; it will not survive reload.';
-      if(result.persisted && live.session.memory?.vectorCloudSync){
-        try{const {uploadStoryVectors}=await import('../vector-cloud-sync.js');await uploadStoryVectors(live,'history',{getLive:()=>memorySnapshot()});status.textContent+=' Message vectors synced to cloud.';}
-        catch(error){status.textContent+=' Cloud sync pending: '+error.message;}
-      }
+      document.dispatchEvent(new CustomEvent('memory-status',{detail:{sessionId:sid,status:'info',searchPhase:result.persisted?'ready':'failed'}}));
+
     } catch(error) {status.textContent='Indexing failed: '+error.message;}
     finally {button.disabled=false;historyIndexController=null;get('history-cancel').hidden=true;}
   });
@@ -129,7 +127,7 @@ export function initMemorySettings(openLore) {
       const operation=direction==='download' ? downloadStoryVectors : uploadStoryVectors,results=[];
       for(const kind of ['history','lore']){
         status.textContent=`${direction==='download'?'Downloading':'Uploading'} ${kind} vectors…`;
-        try{const result=await operation(live,kind,{getLive:()=>memorySnapshot(),force:direction==='repair'});results.push(direction==='download' ? `${kind}: ${result.restored} restored, ${result.skipped} outdated${result.modelIds?.length ? '; models: '+result.modelIds.join(', ') : ''}` : result.unchanged ? `${kind}: no local changes; cloud was not checked` : `${kind}: ${result.manifest.count} vectors synced`);}catch(error){results.push(`${kind}: ${error.message}`);}
+        try{const result=await operation(live,kind,{getLive:()=>memorySnapshot(),force:direction==='repair'});results.push(direction==='download' ? `${kind}: ${result.restored} restored, ${result.skipped} outdated${result.modelIds?.length ? '; models: '+result.modelIds.join(', ') : ''}` : result.unchanged ? `${kind}: already synced` : `${kind}: ${result.manifest.count} vectors synced`);}catch(error){results.push(`${kind}: ${error.message}`);}
       }
       status.textContent=results.join(' · ');
     }catch(error){status.textContent='Vector sync failed: '+error.message;}

@@ -298,11 +298,17 @@ test('a failed source lookup does not hide other valid recall, and remote verifi
   const result=await engine.search({owner:'u',sid:'s',messages:[user('latest',20,'Find silver bell.')],excludeIds:['latest'],resolveMessage:async row=>{reads++;if(row.messageId==='old-0')throw Error('Deleted');return messages.find(m=>m.id===row.messageId);}});
   assert.equal(reads,4);assert.equal(result.passages.length,3);assert.equal(result.omitted[0].messageId,'old-0');
 });
-test('a compatible different embedding model remains usable and reports a mismatch',async()=>{
+test('the same embedding model remains usable across connection changes',async()=>{
   const {engine,calls}=await setup(),messages=[assistant('bell',1,'A silver bell.'),user('latest',10,'Follow the ringing chime.')];
   await engine.index({owner:'u',sid:'s',messages,connection});
   const result=await engine.search({owner:'u',sid:'s',messages,excludeIds:['latest'],connection:{...connection,key:'other-model'}});
-  assert.equal(calls.length,2);assert.equal(result.status,'hybrid');assert.equal(result.modelMismatch,true);assert.equal(result.passages[0].messageId,'bell');
+  assert.equal(calls.length,2);assert.equal(result.status,'hybrid');assert.equal(result.modelMismatch,false);assert.equal(result.passages[0].messageId,'bell');
+});
+test('different models with the same dimensions do not contribute semantic matches',async()=>{
+  const {engine,calls}=await setup(),messages=[assistant('bell',1,'A silver bell.'),user('latest',10,'Follow the ringing chime.')];
+  await engine.index({owner:'u',sid:'s',messages,connection});
+  const result=await engine.search({owner:'u',sid:'s',messages,excludeIds:['latest'],connection:{...connection,key:'different',model:'other'}});
+  assert.equal(calls.length,1);assert.equal(result.modelMismatch,true);assert.equal(result.passages.length,0);
 });
 test('a scheduled batch with a different model does not rebuild older messages',async()=>{
   const {engine,calls}=await setup(),old=assistant('old',1,'Older silver bell.'),next=assistant('new',3,'Newer silver bell.');
@@ -318,6 +324,32 @@ test('clearing account memory while an index read is pending cannot repopulate i
   finish({version:1,owner:'owner',sid:'s',rows:[{id:'old:0',messageId:'old',start:0,end:6,order:1,text:'Secret'}],indexedMessages:1});
   assert.equal((await pending).rows.length,0);assert.equal((await engine.load('owner','s')).rows.length,0);
 });
+test('pending history claims merge ranges and an older completion cannot clear newer work',async()=>{
+  const fixture=indexedDBFixture({stories:[]}),{recallStorage}=await appHarness({globals:{indexedDB:fixture.indexedDB}})('history-recall-storage.js');
+  const first=await recallStorage.mergePendingBatch('u','s',{fromOrder:10,throughOrder:20});
+  const second=await recallStorage.mergePendingBatch('u','s',{fromOrder:30,throughOrder:40});
+  assert.equal(second.fromOrder,10);assert.equal(second.throughOrder,40);assert.ok(second.version>first.version);
+  assert.equal(await recallStorage.clearPendingBatch('u','s',first.version),false);assert.equal((await recallStorage.loadPendingBatch('u','s')).throughOrder,40);
+  assert.equal(await recallStorage.clearPendingBatch('u','s',second.version),true);assert.equal(await recallStorage.loadPendingBatch('u','s'),null);
+});
+test('pending historical indexing resumes after reload and tolerates a concurrent summary checkpoint',async()=>{
+  const storage=memoryStorage();let pending={fromOrder:1,throughOrder:2},finish;
+  storage.loadPendingBatch=async()=>pending;storage.savePendingBatch=async(_owner,_sid,value)=>{pending=value;return true;};storage.clearPendingBatch=async()=>{pending=null;return true;};
+  const phases=[],use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'history-recall-storage.js':{recallStorage:storage},'lore-semantic.js':{semanticConnection:()=>connection},'history-embeddings.js':{embedTexts:async(_c,texts)=>{await new Promise(resolve=>finish=resolve);return texts.map(()=>[1,0]);}},'tokenizer.js':{countTokens:async t=>Math.ceil(t.length/4)}}});
+  const runtime=await use('history-recall.js'),snapshot={session:{id:'s',historyRevision:1,memory:{historyRecall:true,semanticRecall:true}},settings,messages:[user('u',1,'Visit the clinic.'),assistant('a',2,'Mira stores a willow-bark antidote.')],storyEpoch:1,historyComplete:true};
+  const job=runtime.resumePendingHistory(snapshot,{getLive:()=>snapshot,onStatus:s=>phases.push(s.searchPhase)});
+  while(!finish)await new Promise(resolve=>setImmediate(resolve));
+  snapshot.session.historyRevision=2;snapshot.session.breakpointOrder=20;snapshot.messages.push({id:'summary',order:3,role:'summary',content:'Summary'});
+  finish();assert.equal((await job).persisted,true);assert.equal(pending,null);assert.deepEqual(phases,['running','ready']);
+});
+for(const change of ['checkpoint','edit','deletion'])test('manual full-history indexing handles concurrent '+change+' without accepting changed sources',async()=>{
+  const storage=memoryStorage();let finish;
+  const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'history-recall-storage.js':{recallStorage:storage},'lore-semantic.js':{semanticConnection:()=>connection},'history-embeddings.js':{embedTexts:async(_c,texts)=>{await new Promise(resolve=>finish=resolve);return texts.map(()=>[1,0]);}},'tokenizer.js':{countTokens:async t=>Math.ceil(t.length/4)}}}),runtime=await use('history-recall.js'),snapshot={session:{id:'s',historyRevision:1,memory:{historyRecall:true,semanticRecall:true}},settings,messages:[user('u',1,'Visit the clinic.'),assistant('a',2,'Mira prepares an antidote.')],storyEpoch:1,historyComplete:true};
+  const job=runtime.indexOlderHistory(snapshot,{getLive:()=>snapshot});while(!finish)await new Promise(resolve=>setImmediate(resolve));
+  snapshot.session.historyRevision=2;
+  if(change==='checkpoint'){snapshot.session.breakpointOrder=2;snapshot.messages.push({id:'summary',order:3,role:'summary',content:'Saved summary'});}else if(change==='edit')snapshot.messages[1].content='Edited source';else snapshot.messages.pop();
+  if(change==='checkpoint'){finish();assert.equal((await job).persisted,true);}else{const failed=assert.rejects(job,/cancelled/);finish();await failed;}
+});
 test('index vectors persist as compact float32 arrays and survive a new engine instance',async()=>{
   const {engine,create,storage,embed}=await setup(),messages=[assistant('bell',1,'A silver bell.'),user('latest',10,'Follow ringing chime.')];
   await engine.index({owner:'u',sid:'s',messages,connection});
@@ -329,10 +361,50 @@ test('a control-only current action cannot fall back to an older action as its s
   const {core}=await setup(),messages=[user('old',1,'Find silver bell.'),assistant('a',2,'A bell rings.'),user('latest',3,'<ad>Change the narrator style.</ad>')];
   assert.equal(core.recallQuery(messages),'');assert.equal(core.recallQuery(messages,{draftText:'<OOC>Adjust formatting</OOC>'}),'');
 });
+test('cloud restoration waits for indexing and preserves newly indexed messages',async()=>{
+  const {create,storage,embed}=await setup();let finish,entered;
+  const started=new Promise(resolve=>entered=resolve),engine=create({storage,embed:async(...args)=>{entered();await new Promise(resolve=>finish=resolve);return embed(...args);}}),messages=[assistant('a',1,'A silver bell.'),assistant('b',2,'A river ford.')];
+  const indexing=engine.index({owner:'u',sid:'s',messages,connection});await started;
+  let imported=false;const restore=engine.importRows({owner:'u',sid:'s',messages,rows:[],connection}).then(result=>{imported=true;return result;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(imported,false);finish();await Promise.all([indexing,restore]);
+  assert.equal((await engine.load('u','s')).rows.length,2);
+});
+for(const owner of ['u','other'])test('forgetting '+owner+' cancels only its own in-flight historical indexing',async()=>{
+  const {create,storage,embed}=await setup();let finish,entered;
+  const started=new Promise(resolve=>entered=resolve),engine=create({storage,embed:async(...args)=>{entered();await new Promise(resolve=>finish=resolve);return embed(...args);}}),job=engine.index({owner:'u',sid:'s',messages:[assistant('a',1,'A silver bell.')],connection});
+  await started;engine.forget(owner);
+  if(owner==='u'){const cancelled=assert.rejects(job,/cancelled/);finish();await cancelled;assert.equal(storage.data.size,0);}else{finish();assert.equal((await job).persisted,true);}
+});
+test('a cached vector with conflicting model metadata is rebuilt even when its endpoint key is unchanged',async()=>{
+  const {engine,create,storage,embed,calls}=await setup(),messages=[assistant('a',1,'A silver bell.')];await engine.index({owner:'u',sid:'s',messages,connection});
+  const saved=await storage.load(JSON.stringify(['u','s']));saved.rows[0].modelId='different-model';await storage.save(saved);
+  const reloaded=create({storage,embed});await reloaded.index({owner:'u',sid:'s',messages,connection});assert.equal(calls.length,2);assert.equal((await reloaded.load('u','s')).rows[0].modelId,connection.model);
+});
+test('purging another account or story while history loads cannot discard the unaffected index',async()=>{
+  for(const scope of ['other-account','other-story']){
+    const h=await setup();await h.engine.index({owner:'u',sid:'s',messages:[assistant('old',1,'An old silver bell.')],connection});
+    let release,entered;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+    const storage={...h.storage,load:async key=>{entered();await gate;return h.storage.load(key);}},engine=h.create({storage,embed:h.embed});
+    const job=engine.index({owner:'u',sid:'s',messages:[assistant('new',2,'A newly discovered ford.')],connection});await started;
+    if(scope==='other-account')engine.forget('other');else engine.forget('u','other');
+    release();assert.equal((await job).persisted,true);assert.deepEqual(Array.from((await engine.load('u','s')).rows,r=>r.messageId),['old','new']);
+  }
+});
 test('query context includes earlier messages without repeating the latest action',async()=>{
   const {core}=await setup(),messages=[user('a',1,'A previous action.'),assistant('b',2,'A previous reply.'),user('latest',3,'A fresh question.')];
   const query=core.recallQuery(messages,{queryMessageIds:['a','b','latest']});
   assert.equal(query.split('A fresh question.').length-1,1);assert.match(query,/previous action/);assert.match(query,/previous reply/);
+});
+test('standalone historical questions avoid unrelated recent context while pronoun questions retain it',async()=>{
+  const {core}=await setup(),prior=[user('old',1,'Visit the manor.'),assistant('reply',2,'Katarina waits by the carriage.')],query='Which instructor dismissed the boys promise of many repetitions?';
+  assert.equal(core.recallQuery([...prior,user('latest',3,query)],{preferStandalone:true,queryMessageIds:['old','reply']}),query);
+  const referential='What did she promise about visiting the new room?';
+  assert.match(core.recallQuery([...prior,user('latest',3,referential)],{preferStandalone:true,queryMessageIds:['old','reply']}),/Katarina waits/);
+});
+test('optional English inflection matching preserves the default literal ranking',async()=>{
+  const {core}=await setup(),rows=[{id:'right',order:1,text:'The guard promised a safe journey.'},{id:'other',order:2,text:'The guard bought bread.'}];
+  assert.equal(core.rankPassages(rows,'guards promising journeys').length,0);
+  const ranked=core.rankPassages(rows,'guards promising journeys',null,'','',{stem:true});assert.equal(ranked[0].row.id,'right');assert.ok(ranked[0].lexical>ranked[1].lexical);
 });
 test('a full context skips embedding queries and index reads altogether',async()=>{
   let activity=0;

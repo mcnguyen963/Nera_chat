@@ -1,4 +1,6 @@
 import {composerDrafts} from '../composer-drafts.js';
+import {mergeSummaryResult} from '../summary-state.js';
+import {createLoreIndexUpdater} from '../lore-index-updater.js';
 import {revealFocusedField} from '../focus-reveal.js';
 import {buildDirectorContext} from '../director-context.js';
 import {seedDirectorState} from '../director-state.js';
@@ -80,6 +82,7 @@ let streamState = null;  // live streaming UI handle
 let busy = false;
 let waitingForMemoryBatch = false;
 const batchSummaryDue=new Map();
+const historySearchPhases=new Map();
 const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
 const releaseBusy=token=>{
   if(busyGate.active!==token)return false;
@@ -87,7 +90,7 @@ const releaseBusy=token=>{
 };
 const acquireBusy=kind=>{
   const token=busyGate.acquire(kind);if(!token)return null;
-  token.loreHold=holdLoreWrites(token.sid);
+  if(kind!=='summary')token.loreHold=holdLoreWrites(token.sid);
   if(['send','reply','continue','regenerate','rewrite'].includes(kind)){
     token.abort=()=>{token.cancelled=true;restoreStreamUI();releaseBusy(token);};
     el.stopBtn?.classList.remove('hidden');if(el.sendBtn)el.sendBtn.hidden=true;
@@ -341,6 +344,15 @@ const dismissedStaleScenes=new Set();
 let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
 let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
 const memoryStories = new Map();
+const loreIndexUpdater=createLoreIndexUpdater({getSnapshot:memorySnapshot,ownerNow:()=>{try{return currentUid();}catch{return null;}},onStatus:detail=>document.dispatchEvent(new CustomEvent('search-index-status',{detail}))});
+function resumeLoreIndex(){
+  const snapshot=memorySnapshot();if(!snapshot)return;
+  void loreIndexUpdater.resume(snapshot).catch(error=>showTransientInfo('Search update pending: '+error.message));
+  if(snapshot.historyComplete && snapshot.session.memory?.historyRecall && snapshot.session.memory.semanticRecall){
+    const owner=currentUid(),sid=snapshot.session.id;
+    void import('../history-recall.js').then(({resumePendingHistory})=>resumePendingHistory(snapshot,{getLive:()=>memorySnapshot(sid),onStatus:detail=>{if(currentUid()===owner)document.dispatchEvent(new CustomEvent('memory-status',{detail:{...detail,sessionId:sid,status:'info'}}));}})).catch(error=>showTransientInfo('Search update pending: '+error.message));
+  }
+}
 let lastMemoryReport = null;
 let lastSentContext = null;
 export function memorySnapshot(sid = state.sessionId) {
@@ -502,6 +514,7 @@ async function prepareStoryDocument(fresh,token = null) {
     // else if(preparationKey(session)!==preparationKey({...fresh,memoryState:{...fresh.memoryState,extractedThroughOrder:0}}))throw new Error('Story changed while setting memory start. Refresh and retry.');
   }
   rememberMemoryStory();
+  resumeLoreIndex();
   return memorySnapshot();
 }
 function validateSavedStorySettings() {
@@ -515,7 +528,10 @@ function validateSavedStorySettings() {
 let memoryChipMemo=null;
 function updateMemoryChip() {
   const active = !!session && session.id === state.sessionId && !cacheWritesPaused;
-  const running = active && memoryUpdater.isRunning(session.id);
+  const running = active && (memoryUpdater.isExtracting?.(session.id) ?? memoryUpdater.isRunning(session.id));
+  const searchStatus=active ? loreIndexUpdater.status(currentUid(),session.id) : 'idle';
+  const historyPhase=active ? historySearchPhases.get(unsavedKey(currentUid(),session.id)) : null;
+  const indexing=['pending','running'].includes(searchStatus) || historyPhase==='running',searchFailed=searchStatus==='failed' || ['failed','pending'].includes(historyPhase);
   const mem = normalizeMemory(session?.memory), pointer = session?.memoryState?.extractedThroughOrder;
   const completeHistory = historyRevision === (session?.historyRevision ?? 0)
     && (historyMessages ? historyStartOrder === 0 : latestReady && !hasEarlier);
@@ -530,22 +546,28 @@ function updateMemoryChip() {
     ? memoryChipMemo.timing : null;
   const composerStatus = document.getElementById('composer-memory-status');
   if (composerStatus) {
-    const text = running ? 'Updating memory · Keep open' : timing === 'due' ? 'Memory update pending.' : timing === 'with-next-turn' ? 'Memory update with next reply.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
+    const text = running ? 'Updating memory · Keep open' : indexing ? 'Updating search index · Keep open' : searchFailed ? 'Memory saved · Search update needs retry in Memory settings.' : timing === 'due' ? 'Memory update pending.' : timing === 'with-next-turn' ? 'Memory update with next reply.' : timing === 'next-turn' ? 'Memory update after next turn.' : '';
     if (composerStatus.textContent !== text) composerStatus.textContent = text;
     composerStatus.hidden = !text;
     composerStatus.classList.toggle('upcoming',!!timing);
   }
-  document.getElementById('composer-box')?.classList.toggle('memory-updating', running);
+  document.getElementById('composer-box')?.classList.toggle('memory-updating', running || indexing);
   const chip = document.getElementById('btn-memory'); if (!chip) return;chip.setAttribute('aria-controls','lorebook-overlay');chip.setAttribute('aria-expanded',String(managerOpen));
   const turn = turnsFor(historyMessages ?? lastMessages).assistants.filter(a => a.order <= (pointer ?? 0)).at(-1)?.turn ?? 0;
   chip.classList.toggle('hidden', !session || !anyMemory(mem) && !loreEntries.length);
-  chip.classList.toggle('running', running); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
+  chip.classList.toggle('running', running || indexing); chip.classList.toggle('paused', effectivelyPaused(session?.memoryState));
   chip.title=session?.memoryState?.needsRebuild ? 'History edited. Re-extract from the Memory settings.' : loreStatus==='error' ? 'Lorebooks unavailable. Use Sync data to retry.' : status.reason==='pointer-unset' ? 'Memory start not set. Choose a start turn.' : status.reason==='pending' ? `Waiting for you to accept the reply at T${status.turn}.` : status.reason==='waiting' ? `${status.have} of ${status.need} turns ready (the last ${status.lag} turns wait).` : 'Memory ready to update.';
-  chip.textContent = running ? 'Updating memory…' : effectivelyPaused(session?.memoryState) ? 'Memory paused' : loreStatus==='error' ? 'Lorebooks offline' : mem.autoUpdate && pointer==null ? 'Choose start' : mem.autoUpdate && turn ? 'Memory · T'+turn : 'Memory';
+  chip.textContent = running ? 'Updating memory…' : indexing ? 'Updating search index…' : searchFailed ? 'Search update pending' : effectivelyPaused(session?.memoryState) ? 'Memory paused' : loreStatus==='error' ? 'Lorebooks offline' : mem.autoUpdate && pointer==null ? 'Choose start' : mem.autoUpdate && turn ? 'Memory · T'+turn : 'Memory';
 }
 
 
 export function initChatView() {
+  document.addEventListener('session-changed',resumeLoreIndex);
+  document.addEventListener('lore-index-built',resumeLoreIndex);
+  document.addEventListener('settings-save-finished',resumeLoreIndex);
+  window.addEventListener('online',resumeLoreIndex);
+  document.addEventListener('history-recall-cleared',e=>{const {owner,sid}=e.detail;loreIndexUpdater.stop(owner,sid);for(const key of historySearchPhases.keys())if(sid!=null?key===unsavedKey(owner,sid):key.startsWith(unsavedKey(owner,'')))historySearchPhases.delete(key);updateMemoryChip();});
+  document.addEventListener('search-index-status',e=>{if(e.detail.sessionId!==state.sessionId)return;updateMemoryChip();if(e.detail.status==='failed')showTransientInfo('Memory saved. Search update pending: '+e.detail.message);});
   document.addEventListener('provider-fallback',event=>showTransientInfo('Provider unavailable. Trying '+event.detail.to+'…'));
   // Disabled automatic full Sync; reconnecting still retries pending saves.
   // document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestStoryFreshness();});
@@ -568,15 +590,16 @@ export function initChatView() {
       memoryStories.set(sid,{ ...live,owner:currentUid() });
       if (sid === state.sessionId) { session = live.session; if (entries)loreEntries=entries;const local=storyStore(sid);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});updateMemoryChip();void updateIndicator(); }
     },
-    waitIdle(signal) {
-      if (!busy || signal?.aborted) return Promise.resolve();
+    waitIdle(signal,{allowSummary=false}={}) {
+      const blocked=()=>busy && !(allowSummary && busyGate.active?.kind==='summary');
+      if (!blocked() || signal?.aborted) return Promise.resolve();
       return new Promise(resolve => {
-        const done = () => { if (!busy || signal?.aborted) { document.removeEventListener('turn-finished', done); signal?.removeEventListener('abort', done); resolve(); } };
+        const done = () => { if (!blocked() || signal?.aborted) { document.removeEventListener('turn-finished', done); signal?.removeEventListener('abort', done); resolve(); } };
         document.addEventListener('turn-finished', done); signal?.addEventListener('abort', done, { once: true });
       });
     },
   });
-  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); memoryStories.delete(e.detail.sessionId); composerDrafts.clearStory(currentUid(),e.detail.sessionId); if(composerDraftSid===e.detail.sessionId){composerDraftSid=null;el.input.value='';} clearUnsaved(currentUid(),e.detail.sessionId); });
+  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); loreIndexUpdater.stop(currentUid(),e.detail.sessionId); memoryStories.delete(e.detail.sessionId); composerDrafts.clearStory(currentUid(),e.detail.sessionId); if(composerDraftSid===e.detail.sessionId){composerDraftSid=null;el.input.value='';} clearUnsaved(currentUid(),e.detail.sessionId); });
   document.addEventListener('memory-session-saved', e => {
     if (e.detail.sessionId !== state.sessionId || !session) return;
     const { partial } = e.detail;
@@ -612,13 +635,15 @@ export function initChatView() {
       for(const part of parts.slice(0,-1))target=target[part]={...target[part]};
       target[parts.at(-1)]=value;
     }
-    if(!active){memoryStories.set(d.sessionId,{...remembered,session:patched,entries:d.snapshot.entries});return;}
+    if(!active){memoryStories.set(d.sessionId,{...remembered,session:patched,entries:d.snapshot.entries});void loreIndexUpdater.request(memorySnapshot(d.sessionId));return;}
     session=patched;loreEntries=d.snapshot.entries;verifiedLoreRevision=d.snapshot.loadedRevision;
     if(d.snapshot.initialized!==false)loreStatus='ok';
     const store=storyStore(d.sessionId);
     if(store && !store.status.pending && !store.status.paused)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
     rememberMemoryStory();updateMemoryChip();void updateIndicator();queueCacheSave();
     document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:d.sessionId,entries:loreEntries}}));
+    void loreIndexUpdater.request(memorySnapshot(d.sessionId));
+    if(!memorySnapshot(d.sessionId)?.historyComplete)void ensureHistory().then(resumeLoreIndex).catch(error=>showTransientInfo('Search update pending: '+error.message));
   });
   document.addEventListener('scene-preference', () => { invalidateRenderedMessages(); renderMessages(lastMessages); });
   const openViewer = () => document.dispatchEvent(new CustomEvent('context-details'));
@@ -626,6 +651,7 @@ export function initChatView() {
   document.getElementById('btn-memory')?.addEventListener('click', () => document.dispatchEvent(new CustomEvent(session?.memory?.autoUpdate && session?.memoryState?.extractedThroughOrder==null ? 'memory-settings' : 'lorebooks')));
   document.addEventListener('lorebook-visibility', e => { managerOpen = e.detail.open;document.getElementById('btn-memory')?.setAttribute('aria-expanded',String(managerOpen)); syncLore(); });
   document.addEventListener('memory-status', e => {
+    if(e.detail.searchPhase)historySearchPhases.set(unsavedKey(currentUid(),e.detail.sessionId),e.detail.searchPhase);
     if (e.detail.sessionId !== state.sessionId) return;
     updateMemoryChip(); document.dispatchEvent(new CustomEvent('memory-refresh'));
     const d = e.detail;
@@ -1117,13 +1143,7 @@ async function ensureHistory(forceServer = false) {
 function applySummaryResult(result) {
   if(result?.lintWarnings?.length)showTransientInfo(`Summary has ${result.lintWarnings.length} suspect lines — review it in the summary editor.`);
   if (result.skipped) return;
-  session = {
-    ...session,
-    ...(result.session ?? {}),
-    activeSummaryMessageId: result.summaryId,
-    breakpointOrder: result.newBreakpointOrder,
-    historyRevision:result.historyRevision ?? session.historyRevision,
-  };
+  session = mergeSummaryResult(session,result);
   historyMessages = mergeMessages(historyMessages ?? [], [result.summaryMessage]);
   historyRevision = session.historyRevision ?? 0;
   const store=storyStore(state.sessionId);if(store && !store.status.pending && !store.status.paused)store.adopt({session,messages:historyMessages,turns:store.view.turns},{serverConfirmed:true});
@@ -2338,7 +2358,6 @@ function streamSummaryUI(label) {
 }
 
 async function handleSummarize() {
-  if (memoryUpdater.isRunning(state.sessionId)) { showTransientError('Wait for the current memory update.'); return; }
   if (busy || !session) return;
   const petTurn = startPetTurn();
   const token=acquireBusy('summary');if(!token)return;
@@ -2372,7 +2391,6 @@ async function handleSummarize() {
 // Full-history summary: ignores the checkpoint and folds in every message
 // from the very start, replacing the active summary (local-only action).
 async function handleFullSummarize() {
-  if (memoryUpdater.isRunning(state.sessionId)) { showTransientError('Wait for the current memory update.'); return; }
   if (busy || !session) return;
   if (
     !confirm(

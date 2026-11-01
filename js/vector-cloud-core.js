@@ -6,7 +6,10 @@ const bytes=s=>encoder.encode(s).length;
 const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function packVector(vector){
   const raw=new Uint8Array(vector.length*4),view=new DataView(raw.buffer);for(let i=0;i<vector.length;i++)view.setFloat32(i*4,vector[i],true);
-  let out='';for(let i=0;i<raw.length;i+=3){const n=(raw[i]<<16)|((raw[i+1]??0)<<8)|(raw[i+2]??0);out+=alphabet[(n>>18)&63]+alphabet[(n>>12)&63]+(i+1<raw.length?alphabet[(n>>6)&63]:'=')+(i+2<raw.length?alphabet[n&63]:'=');}return out;
+  // Flatten each vector immediately; retaining thousands of concatenation
+  // chains until chunk serialization multiplies memory for larger embeddings.
+  const out=new Array(Math.ceil(raw.length/3)*4);let offset=0;
+  for(let i=0;i<raw.length;i+=3){const n=(raw[i]<<16)|((raw[i+1]??0)<<8)|(raw[i+2]??0);out[offset++]=alphabet[(n>>18)&63];out[offset++]=alphabet[(n>>12)&63];out[offset++]=i+1<raw.length?alphabet[(n>>6)&63]:'=';out[offset++]=i+2<raw.length?alphabet[n&63]:'=';}return out.join('');
 }
 function unpackVector(text){
   if(typeof text!=='string' || text.length%4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text))throw new Error('Invalid encoded vector.');
@@ -21,16 +24,18 @@ async function digest(text) {
 function storedRow(row,kind) {
   const vector=typeof row.vector==='string' ? unpackVector(row.vector) : Array.from(row.vector ?? []);
   if(!vector.length || vector.length>8192 || vector.some(n=>typeof n!=='number' || !Number.isFinite(n) || !Number.isFinite(Math.fround(n))) || !vector.some(n=>Math.fround(n)!==0))throw new Error('Invalid embedding vector.');
+  if(row.dimensions!=null && row.dimensions!==vector.length || row.formatVersion!=null && (typeof row.formatVersion!=='string' || !row.formatVersion || row.formatVersion.length>80))throw new Error('Invalid embedding format metadata.');
+  const metadata={dimensions:vector.length,formatVersion:row.formatVersion ?? (kind==='history'?'history-passages-v1':'lore-records-v2')};
   if(row.modelKey!=null && (typeof row.modelKey!=='string' || row.modelKey.length>1000) || row.modelId!=null && (typeof row.modelId!=='string' || row.modelId.length>200))throw new Error('Invalid embedding model metadata.');
   let inferredModel='';try{const parsed=JSON.parse(row.modelKey ?? '');if(Array.isArray(parsed) && typeof parsed[1]==='string')inferredModel=parsed[1];}catch{}
   if(kind==='history') {
     const {id,messageId,revision,order,role,start,end,sourceHash,sourceRevision,modelKey,modelId}=row;
     if(typeof id!=='string' || !id || id.length>500 || typeof messageId!=='string' || !messageId || messageId.length>500 || !Number.isSafeInteger(order) || order<0 || !['user','assistant'].includes(role) || !Number.isInteger(start) || start<0 || !Number.isInteger(end) || end<=start || !Number.isSafeInteger(revision ?? 0) || (revision ?? 0)<0 || !Number.isSafeInteger(sourceRevision ?? 0) || (sourceRevision ?? 0)<0 || !/^[a-f0-9]{64}$/.test(sourceHash ?? ''))throw new Error('Invalid historical vector source.');
-    return {id,messageId,revision:revision ?? 0,order,role,start,end,sourceHash,sourceRevision:sourceRevision ?? 0,modelKey:modelKey ?? '',modelId:modelId || inferredModel,vector};
+    return {id,messageId,revision:revision ?? 0,order,role,start,end,sourceHash,sourceRevision:sourceRevision ?? 0,modelKey:modelKey ?? '',modelId:modelId || inferredModel,...metadata,vector};
   }
   const {id,recordId,hash,modelKey,modelId}=row;
   if(typeof id!=='string' || !id || id.length>500 || recordId!=null && (typeof recordId!=='string' || recordId.length>500) || !/^[a-f0-9]{64}$/.test(hash ?? ''))throw new Error('Invalid lore vector source.');
-  return {id,recordId:recordId ?? null,hash,modelKey:modelKey ?? '',modelId:modelId || inferredModel,vector};
+  return {id,recordId:recordId ?? null,hash,modelKey:modelKey ?? '',modelId:modelId || inferredModel,...metadata,vector};
 }
 export async function encodeVectorChunks(kind,rows) {
   if(!['history','lore'].includes(kind))throw new Error('Invalid vector index type.');

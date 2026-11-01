@@ -18,7 +18,7 @@ async function fixture(hooks={}){
   'lore-store.js':{markGeneratedForReview:async(...args)=>action('mark',args,[]),commitExtraction:async()=>{const c=deferred();commits.push(c);return c.promise;}},
   'session-memory.js':{clearMemoryInvalidations:async(...args)=>action('clear',args,{memoryInvalidations:[],memoryState:{extractedThroughOrder:0}}),recordMemoryFailure:async()=>{const f=deferred();failures.push(f);return f.promise;}},
  }});
- const updater=await use('memory-updater.js');updater.configureMemoryUpdater({get:()=>live,busy:()=>false,prepare:hooks.prepare ?? (async()=>{}),waitIdle:async()=>{},patch:(_sid,...args)=>{patches.push(args);Object.assign(live.session.memoryState,args[0]);}});
+ const updater=await use('memory-updater.js');updater.configureMemoryUpdater({get:()=>live,busy:()=>false,indexHistoryBatch:hooks.indexHistoryBatch,prepare:hooks.prepare ?? (async()=>{}),waitIdle:async()=>{},patch:(_sid,...args)=>{patches.push(args);Object.assign(live.session.memoryState,args[0]);}});
  return {updater,events,patches,providers,commits,failures,writes,live,switchOwner:(next='other')=>owner=next};
 }
 test('Sync cancellation detaches an unresponsive memory provider and ignores its late success without clearing a newer job',async()=>{
@@ -93,4 +93,10 @@ test('manual work completing after a story change cannot commit into the active 
 test('an in-flight memory update safely detaches when the auth helper throws after sign-out',async()=>{
  const h=await fixture(),pending=h.updater.updateNow('s');await tick();h.switchOwner(null);h.providers[0].resolve({content:'NONE'});
  assert.equal(await pending,false);assert.equal(h.commits.length,0);assert.equal(h.patches.length,0);assert.equal(h.failures.length,0);assert.equal(h.updater.isRunning('s'),false);
+});
+test('manual memory batches index history and never auto-upload with the legacy cloud flag enabled',async()=>{
+ let indexes=0;const h=await fixture({indexHistoryBatch:async(_snapshot,range,{check})=>{assert.equal(check(),true);assert.equal(range.endOrder,2);indexes++;return {indexedMessages:2,persisted:true};}});
+ Object.assign(h.live.session.memory,{historyRecall:true,semanticRecall:true,vectorCloudSync:true});h.live.historyComplete=true;
+ const job=h.updater.updateNow('s');await tick();assert.equal(indexes,1);h.providers[0].resolve({content:'Saved notes'});await tick();h.commits[0].resolve({entries:[]});
+ assert.equal(await job,true);assert.ok(h.events.some(e=>e.searchPhase==='ready'));assert.ok(!h.events.some(e=>String(e.message).includes('cloud')));
 });
