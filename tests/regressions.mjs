@@ -1685,7 +1685,8 @@ test('R2 sidebar guards duplicate creation and catches failed create, rename and
  await h.fire('btn-new-session');const blank=()=>h.document.body.querySelectorAll('button').find(b=>b.textContent==='Create blank story');
  const pending=blank().click();await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(!!h.el('btn-new-session').disabled,false);
  h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');await blank().click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
- h.calls.sidebarCallback([{id:'s',title:'Story'}]);h.calls.failRename=true;await h.el('session-list').querySelector('.action-menu-trigger').click();await h.document.body.querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
+ h.calls.sidebarCallback([{id:'s',title:'Story'}]);const actions=h.el('session-list').querySelector('.session-actions');assert.deepEqual(actions.querySelectorAll('button').map(b=>b.textContent),['Rename','Duplicate','Delete']);assert.equal(actions.querySelector('.action-menu-trigger'),null);
+ h.calls.failRename=true;await actions.querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
  h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.ok(h.document.body.querySelector('.toast').textContent.includes('Logout failed'));assert.equal(h.el('btn-logout').disabled,false);
 });
 

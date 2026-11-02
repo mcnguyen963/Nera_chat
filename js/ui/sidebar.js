@@ -1,6 +1,6 @@
 import {exportAllStories} from '../import-export.js';
 import {cachedSessionIds} from '../chat-cache.js';
-import {subSheet,node,button,pendingButton,actionMenu} from './memory-ui.js';
+import {subSheet,node,button,pendingButton} from './memory-ui.js';
 import { toast } from "./memory-ui.js";
 import { friendlyError } from "../errors.js";
 import { state } from "../state.js";
@@ -158,10 +158,8 @@ function render(listEl, sessions) {
       }
     });
 
-    const more=actionMenu('More',[renameBtn,copyBtn,delBtn],s.title || 'Untitled story');
-    more.setAttribute('aria-label','Actions for '+(s.title || 'Untitled story'));
-    more.addEventListener('click',event=>event.stopPropagation());
-    actions.append(more);
+    for(const control of [renameBtn,copyBtn,delBtn])control.setAttribute('aria-label',`${control.textContent} ${s.title || 'Untitled story'}`);
+    actions.append(renameBtn,copyBtn,delBtn);
     li.append(title, actions);
     li.addEventListener("click", () => {
       if (!setSession(s.id)) return;
