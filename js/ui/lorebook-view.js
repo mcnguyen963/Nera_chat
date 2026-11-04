@@ -73,7 +73,6 @@ function lineContext(snapshot=live()) {
 function deletedOrders() {return lineContext().orders;}
 function deletedLine(l,render) {const ctx=render?.lineContext ?? lineContext();return deletedHistoryReady && (render?.snapshot ?? live())?.historyComplete === true && l.src!=null && Number(l.src)<=ctx.maxOrder && !ctx.orders.has(Number(l.src));}
 function editedSource(l) {if(l.src==null)return false;const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
-const newCount = e => linesOf(e).filter(l => l.at > (seen()[e.id] ?? 0)).length;
 function captureRender() {
   const snapshot=live(),cards=entries(snapshot),read=seen(),mem=normalizeMemory(snapshot?.session.memory);
   const stats=new Map(cards.map(e=>{const lines=linesOf(e);return [e.id,{newCount:lines.filter(l=>l.at>(read[e.id] ?? 0)).length,newest:Math.max(0,maxOf(lines.map(l=>l.at))),search:normSearch([e.name,...e.aliases,threadSummary(threadView(e))].join(' '))}];}));

@@ -1,3 +1,4 @@
+import { createTokenIndicatorView } from './token-indicator-view.js';
 import { createDeviceUploadView } from './device-upload-view.js';
 import { createQuickControls } from './quick-controls.js';
 import { streamSummaryUI as createSummaryStream } from './summary-stream.js';
@@ -76,8 +77,6 @@ import {
 const unsavedReplies=new Map(),unsavedRevisions=new Map();
 const unsavedKey=(owner,sid)=>owner+':'+sid;
 let unsavedNode=null,unsavedLoad=null;
-let chatRetry=0,chatRetryTimer=null,chatStatus='ok';
-function clearChatRetry(){clearTimeout(chatRetryTimer);chatRetryTimer=null;}
 let msgUnsub = null;
 let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
@@ -725,7 +724,7 @@ export function initChatView() {
 // Saved connections are shared; Director mode can select both roles per story.
 const storyRoleProfiles=()=>state.storySettings?.values?.narrationMode==='director' || !!state.storySettings?.values?.narratorProfileId;
 let thinkingPicker;
-const {initQuickControls}=createQuickControls({get activeProfile(){return activeProfile;},get busy(){return busy;},get chatLoading(){return chatLoading;},get el(){return el;},get historyMessages(){return historyMessages;},get initThinkingPicker(){return initThinkingPicker;},get mirrorFromActiveProfile(){return mirrorFromActiveProfile;},get mirrorToActiveProfile(){return mirrorToActiveProfile;},get normalizeProfiles(){return normalizeProfiles;},get refreshContextIndicator(){return refreshContextIndicator;},get resolveModelProfile(){return resolveModelProfile;},get saveSettings(){return saveSettings;},get saveStorySettings(){return saveStorySettings;},get session(){return session;},set session(value){session=value;},get showTransientError(){return showTransientError;},get state(){return state;},get storyRoleProfiles(){return storyRoleProfiles;},get storyStore(){return storyStore;},get thinkingIcon(){return thinkingIcon;},get thinkingPicker(){return thinkingPicker;},set thinkingPicker(value){thinkingPicker=value;},get updateIndicator(){return updateIndicator;}});
+const {initQuickControls}=createQuickControls({activeProfile,get busy(){return busy;},get chatLoading(){return chatLoading;},el,get historyMessages(){return historyMessages;},initThinkingPicker,mirrorFromActiveProfile,mirrorToActiveProfile,normalizeProfiles,get refreshContextIndicator(){return refreshContextIndicator;},resolveModelProfile,saveSettings,saveStorySettings,get session(){return session;},set session(value){session=value;},showTransientError,state,storyRoleProfiles,storyStore,thinkingIcon,get thinkingPicker(){return thinkingPicker;},set thinkingPicker(value){thinkingPicker=value;},updateIndicator});
 
 export function setSession(sessionId) {
   const owner = currentUid();
@@ -747,7 +746,7 @@ export function setSession(sessionId) {
   setComposerText(composerDrafts.read(owner, sessionId));
   rememberMemoryStory();
   tokenUsageCache.cancelPending(owner,state.sessionId);
-  clearChatRetry();chatRetry=0;chatStatus='ok';
+
   indicatorRefresh.invalidate();clearTimeout(loreRetryTimer);loreRetry=0;loreStatus='ok';
   loreUnsub?.(); loreUnsub = null; loreSessionId = null; loreEntries = []; lastMemoryReport = null; lastSentContext = null; lastProviderUsage = null; tokenUsageError=null;tokenDisplayMeta=null;
   msgUnsub?.();
@@ -846,7 +845,7 @@ export async function prepareChatLogout() {
   composerDraftOwner = composerDraftSid = null;
   if (el.input) el.input.value = "";
   void selectStorySettings(null);
-  cacheWritesPaused = true;indicatorRefresh.invalidate();clearChatRetry();
+  cacheWritesPaused = true;indicatorRefresh.invalidate();
   updateMemoryChip();
   clearTimeout(cacheSaveTimer); cacheSaveTimer = null;
   busyGate.active?.abort?.();
@@ -1468,24 +1467,8 @@ export async function updateIndicator() {
   clearTimeout(indicatorTimer);
   indicatorTimer=setTimeout(()=>{indicatorTimer=null;void indicatorRefresh.request();},300);
 }
-function applyIndicator(record) {
-  refreshTokenDisplayMeta();
-  const view=tokenUsageSnapshot(),max=view.max,settings=effectiveActiveSettings();
-  const lastSent=record.kind==='provider' || record.kind==='sent-estimate',estimated=record.kind!=='provider';
-  el.contextLabel.title=(lastSent ? indicatorHint : record.kind==='manual' ? 'Manual current-context calculation, excluding unsent input.' : 'Cached context estimate, excluding unsent input.')+(view.contextChanged ? ' Context changed since this count.' : '')+
-    (record.droppedCount>0 && !settings.autoSummarizationEnabled ? ' Older turns no longer fit. Turn on auto-summary or run Summarize to keep them in memory.' : '');
-  const ring=contextRingPresentation({used:record.tokens,max});
-  el.contextFill.style.strokeDasharray=ring.dash;el.contextFill.style.stroke=ring.color;
-  el.contextFill.classList.toggle('over',record.tokens>=max*settings.autoSummaryThresholdPercent/100);
-  el.contextThreshold.style.left=settings.autoSummaryThresholdPercent+'%';
-  el.contextLabel.textContent=`${record.tokens.toLocaleString()} input / ${max.toLocaleString()} tokens`+
-    (lastSent ? ' · last sent' : record.kind==='manual' ? ' · manual' : '')+(estimated ? ' · estimate' : ' · provider')+
-    (record.droppedCount>0 ? ` · ${record.droppedCount} ${settings.autoSummarizationEnabled ? 'out of window' : 'turns not sent'}` : '')+
-    (view.contextChanged ? ' · context changed' : '')+(record.recentOnly ? ' · recent history only' : '');
-  const indicator=document.getElementById('context-indicator');
-  indicator.setAttribute('aria-label','View context: '+el.contextLabel.textContent+'. '+el.contextLabel.title);
-  indicator.title=el.contextLabel.textContent+'. '+el.contextLabel.title;updateMemoryChip();
-}
+const applyIndicator=createTokenIndicatorView({contextRingPresentation,effectiveActiveSettings,el,get indicatorHint(){return indicatorHint;},refreshTokenDisplayMeta,tokenUsageSnapshot,updateMemoryChip});
+
 export const refreshContextIndicator = updateIndicator;
 
 // ---------- send / stream / summarize ----------
@@ -1718,7 +1701,7 @@ function deviceUploadFingerprint() {
   return JSON.stringify([state.sessionId,preparationKey(session),state.storySettings,
     (view?.messages ?? historyMessages ?? lastMessages).map(m=>[m.id,m.order,m.role,m.revision,m.content,m.scene,m.sceneMeta]),loreEntries]);
 }
-export const openDeviceStoryUpload=createDeviceUploadView({get busy(){return busy;},get button(){return button;},get cachedLoreSnapshot(){return cachedLoreSnapshot;},get currentUid(){return currentUid;},get deviceStoryCopies(){return deviceStoryCopies;},get deviceUploadFingerprint(){return deviceUploadFingerprint;},get directStorySaves(){return directStorySaves;},get download(){return download;},get editingState(){return editingState;},get forceUploadDeviceStory(){return forceUploadDeviceStory;},get historyEpoch(){return historyEpoch;},get historyMessages(){return historyMessages;},get historyRevision(){return historyRevision;},get loadChatCache(){return loadChatCache;},get loadStoryData(){return loadStoryData;},get loadUnsavedReply(){return loadUnsavedReply;},get loreEntries(){return loreEntries;},get loreSessionId(){return loreSessionId;},get loreStatus(){return loreStatus;},get node(){return node;},get session(){return session;},get showTransientInfo(){return showTransientInfo;},get state(){return state;},get storyQueueStorage(){return storyQueueStorage;},get storyStore(){return storyStore;},get subSheet(){return subSheet;},get unsavedKey(){return unsavedKey;},get unsavedReplies(){return unsavedReplies;},get validateDeviceStory(){return validateDeviceStory;}});
+export const openDeviceStoryUpload=createDeviceUploadView({get busy(){return busy;},button,cachedLoreSnapshot,currentUid,deviceStoryCopies,deviceUploadFingerprint,directStorySaves,download,get editingState(){return editingState;},forceUploadDeviceStory,get historyEpoch(){return historyEpoch;},get historyMessages(){return historyMessages;},get historyRevision(){return historyRevision;},loadChatCache,loadStoryData,loadUnsavedReply,get loreEntries(){return loreEntries;},get loreSessionId(){return loreSessionId;},get loreStatus(){return loreStatus;},node,get session(){return session;},showTransientInfo,state,storyQueueStorage,storyStore,subSheet,unsavedKey,unsavedReplies,validateDeviceStory});
 
 export async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFingerprint(),owner=currentUid(),epoch=historyEpoch,backupDownloaded=false,onProgress=()=>{},onComplete=()=>{}}={}) {
   const sid=state.sessionId;

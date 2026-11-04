@@ -5,12 +5,12 @@
   ],
   "sizes": {
     "js/ui/chat-view.js": {
-      "lines": 2382,
-      "bytes": 158955
+      "lines": 2365,
+      "bytes": 156229
     },
     "js/ui/lorebook-view.js": {
-      "lines": 784,
-      "bytes": 84646
+      "lines": 783,
+      "bytes": 84565
     }
   }
 }

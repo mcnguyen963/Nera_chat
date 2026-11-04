@@ -76,7 +76,7 @@
   },
   "js/ui/chat-view.js": {
     "no-unused-vars": {
-      "count": 12
+      "count": 10
     },
     "preserve-caught-error": {
       "count": 1
@@ -84,7 +84,7 @@
   },
   "js/ui/lorebook-view.js": {
     "no-unused-vars": {
-      "count": 4
+      "count": 3
     }
   },
   "js/ui/memory-settings-view.js": {
