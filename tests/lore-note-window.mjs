@@ -119,7 +119,7 @@ for(const records of [false,true])test('Director hints, excerpts and Narrator re
  const unlimited=await director.buildDirectorContext({...session,memory:{...session.memory,loreNotesPerSection:0}},config,messages,entries,before);assert.match(wire(unlimited),/NOTE_mira_ordinary1_END/);
 });
 
-test('extraction caps notes while reorganization sees all eligible sources and keeps the input unchanged',async()=>{
+test('extraction and reorganization see all eligible sources independently of the narrator cap',async()=>{
  const h=await setup(),prompts=await h.use('memory-prompts.js'),reorg=await h.use('memory-reorganize.js'),m=await h.use('memory-settings.js'),t=await h.use('turns.js');
  const {e,key}=fixture(h);e.sections[key].lines.push(note('manual',1,'user'),note('imported',1,'import'));
  const mem=m.normalizeMemory({lorebooks:true,loreNotesPerSection:2,lagTurns:0,batchTurns:2}),range=t.dueRange(history,{extractedThroughOrder:0},mem,{manual:true}),sections={[e.id]:[key]},before=JSON.stringify(e);
@@ -127,7 +127,7 @@ test('extraction caps notes while reorganization sees all eligible sources and k
  // Mention the card inside the processed batch, not just the latest user input.
  const mentionedHistory=history.map((v,i)=>i===0?{...v,content:'Ask Mira.'}:v),mentionedRange=t.dueRange(mentionedHistory,{extractedThroughOrder:0},mem,{manual:true});
  const mentioned=await prompts.buildExtractionMessages({settings,mem,entries:[e],messages:mentionedHistory,range:mentionedRange,count});
- assert.doesNotMatch(wire(mentioned),/NOTE_mira_ordinary[123]_END/);assert.match(wire(mentioned),/NOTE_mira_ordinary[45]_END/);assert.equal(mentioned.noteOmissions.length,3);
+ for(const n of [1,2,3,4,5])assert.match(wire(mentioned),new RegExp('NOTE_mira_ordinary'+n+'_END'));assert.equal(mentioned.noteOmissions.length,0);
  const live={session:{id:'s'},settings,mem,messages:history},plan=await reorg.planReorganize(live,[e],sections,'',count);
  assert.equal(plan.batches.length,1);assert.equal(plan.noteOmissions.length,0);assert.equal(plan.warnings.length,0);
  let request,calls=0;
@@ -157,9 +157,9 @@ test('serialized story and maintenance requests retain separate pinned caps and 
  const narrator=await builder.buildContextForRequest(session,settings,{messages,loreEntries:[entry]});
  const extraction=await p.buildExtractionMessages({settings,mem,entries:[entry],messages,range:t.dueRange(messages,{extractedThroughOrder:0},mem,{manual:true}),count});
  const reorganize=p.buildReorganizeMessages({settings,mem,entries:[entry],sections:{mira:['status']}});
- for(const body of [wire(narrator),wire(extraction)]) {
+ for(const body of [wire(narrator)]) {
    assert.doesNotMatch(body,/NOTE_mira_ordinary[123]_END|NOTE_pin[123]_END/);
    for(const id of ['mira_ordinary4','mira_ordinary5','pin4','pin5','core1','core2','core3','core4'])assert.match(body,new RegExp('NOTE_'+id+'_END'));
  }
- for(const id of ['mira_ordinary1','mira_ordinary2','mira_ordinary3','mira_ordinary4','mira_ordinary5','pin1','pin2','pin3','pin4','pin5','core1','core2','core3','core4'])assert.match(JSON.stringify(reorganize),new RegExp('NOTE_'+id+'_END'));
+ for(const body of [wire(extraction),JSON.stringify(reorganize)])for(const id of ['mira_ordinary1','mira_ordinary2','mira_ordinary3','mira_ordinary4','mira_ordinary5','pin1','pin2','pin3','pin4','pin5','core1','core2','core3','core4'])assert.match(body,new RegExp('NOTE_'+id+'_END'));
 });

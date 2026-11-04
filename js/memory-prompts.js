@@ -69,7 +69,7 @@ export async function buildExtractionMessages({ settings, mem, entries, messages
   if (await count(fixed) > inputBudget) throw new Error('Known names and turns exceed the memory update input budget.');
   const noteCandidates=entries.filter(e => ids.has(e.id) || e.book === 'facts' || e.book === 'events' && e.kind === 'thread');
   if(semanticIds.size)noteCandidates.sort((a,b)=>(literalIds.has(b.id)?2:semanticIds.has(b.id)?1:0)-(literalIds.has(a.id)?2:semanticIds.has(a.id)?1:0));
-  const notes = await fitBook(noteCandidates.map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { loreNotesPerSection:mem.loreNotesPerSection,protagonist: mem.protagonist, provenance:true });
+  const notes = await fitBook(noteCandidates.map(entry => ({ entry, reason: 'mentioned' })), Math.max(0, Math.min(inputBudget * .3, inputBudget - await count(fixed))), count, { loreNotesPerSection:0,protagonist: mem.protagonist, provenance:true });
   const content = renderPrompt(prompts.memoryExtractionFrame,{...frame,NOTES:'\n'+notes.included.map(e => renderEntry(e.entry,e.lineIds,mem.protagonist,{provenance:true})).join('\n')});
   if (await count(content)+await count(prompt)+24 > requestInputLimit({...settings,maxResponseTokens:mem.updateMaxTokens})) throw new Error('Memory update input exceeds the context budget.');
   return { messages: [{ role:'system', content:prompt }, { role:'user', content }], range: fitted,noteOmissions:notes.noteOmissions,semanticStatus:semantic.status };

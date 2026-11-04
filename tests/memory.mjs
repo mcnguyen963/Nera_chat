@@ -794,3 +794,20 @@ test('reorganization consolidates every eligible note independently of the narra
  const result=await r.runReorganizeBatch(live,[e],sections,'',{count,complete:async()=>({content:'T6 [char] Mira | status: Consolidated all established state.'})});
  assert.equal(result.previews[0].sent.status.length,10);assert.equal(result.previews[0].sections.status.length,1);assert.equal(e.sections.status.lines.length,10);
 });
+
+test('extraction sees all existing notes within its input budget despite a narrator cap of three',async()=>{
+ const use=await setup({'tokenizer.js':{countTokens:count}}),p=await use('memory-prompts.js'),l=await use('lore-lines.js'),t=await use('turns.js'),{normalizeMemory}=await use('memory-settings.js');
+ const e=l.makeEntry('characters','Mira');e.sections.status.lines=Array.from({length:12},(_,i)=>line('extract'+i,'EXISTING_STATUS_'+String(i).padStart(2,'0')+'_END',Math.min(6,i+1)));
+ const mem=normalizeMemory({loreNotesPerSection:3,batchTurns:6,lagTurns:0}),history=messages.map((m,i)=>i===0?{...m,content:'Ask Mira about the agreement.'}:m),range=t.dueRange(history,{extractedThroughOrder:0},mem,{manual:true});
+ const result=await p.buildExtractionMessages({settings,mem,entries:[e],messages:history,range,count}),body=JSON.stringify(result.messages);
+ for(const note of e.sections.status.lines)assert.ok(body.includes(note.text),note.id);
+});
+
+test('extraction budget keeps a newest suffix of notes after removing its narrator cap',async()=>{
+ const use=await setup({'tokenizer.js':{countTokens:count}}),p=await use('memory-prompts.js'),l=await use('lore-lines.js'),t=await use('turns.js'),{normalizeMemory}=await use('memory-settings.js');
+ const e=l.makeEntry('characters','Mira');e.sections.status.lines=Array.from({length:12},(_,i)=>line('budget'+i,'BUDGET_NOTE_'+String(i).padStart(2,'0')+'_END '+('detail '.repeat(150)),Math.min(6,i+1)));
+ const mem=normalizeMemory({loreNotesPerSection:3,batchTurns:6,lagTurns:0}),history=messages.map((m,i)=>i===0?{...m,content:'Ask Mira about the agreement.'}:m),range=t.dueRange(history,{extractedThroughOrder:0},mem,{manual:true});
+ const result=await p.buildExtractionMessages({settings:{...settings,maxContextTokens:50000},mem,entries:[e],messages:history,range,count}),body=JSON.stringify(result.messages);
+ const included=e.sections.status.lines.filter(n=>body.includes(n.text));assert.ok(included.length>0&&included.length<12);assert.equal(included.at(-1).id,'budget11');
+ assert.deepEqual(included.map(n=>n.id),e.sections.status.lines.slice(-included.length).map(n=>n.id));assert.equal(e.sections.status.lines.length,12);
+});
