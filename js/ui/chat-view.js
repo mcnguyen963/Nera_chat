@@ -893,7 +893,7 @@ function refreshQuickControls() {
 
 export function setSession(sessionId) {
   const owner = currentUid();
-  if (state.sessionId === sessionId) return true;
+  if (state.sessionId === sessionId && (session || !sessionId)) return true;
   if (busy) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
@@ -1814,6 +1814,8 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
     try{if(store)await store.flush({whilePaused:true});else await flushStory(sid);}
     catch(error){
       if(!discardConflicts || error.code!=='story-conflict')throw error;
+      // flushStory may have opened the persisted outbox after this refresh began.
+      if(!store){store=storyStore(sid);if(!store)throw error;await store.pause();check();}
       const unsavedReply=unsavedReplies.get(unsavedKey(owner,sid)) ?? await loadUnsavedReply(owner,sid);check();
       const localBackup={format:'nera-chat-backup',version:1,deviceHistoryComplete:true,exportedAt:new Date().toISOString(),session:store.view.session,messages:store.view.messages,
         storySettings:state.storySettings,lore:loreEntries,loreSnapshot:{initialized:loreStatus==='ok',entries:loreEntries,schemaVersion:session.loreSchemaVersion ?? 2,generation:session.loreGeneration ?? null},directorTurns:Object.values(store.view.turns),...(unsavedReply?{unsavedReply}:{})};
@@ -1866,6 +1868,10 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
   }finally{if(refreshingStory===refreshScope)refreshingStory=null;store?.resume();if(!token && !saveHold)hold.release();}
 }
 export async function syncChatData({pendingStateSave=false}={}){
+  if(!session && state.sessionId){
+    if(busy){showTransientInfo('Wait for the current reply to finish.');return false;}
+    showTransientInfo('Reloading story…');return setSession(state.sessionId);
+  }
   if(editingState){showTransientInfo('Finish editing before Sync.');return false;}
   // A dismissed live-state save can finish while Send waits on that save.
   if(pendingStateSave && hasPendingSettings(currentUid(),state.sessionId)){
@@ -2082,7 +2088,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
     let directorTurn=null,lastDirectorRequest=null;
     if(directorMode){
       showTransientInfo('Directing…');
-      directorTurn=await waitForPreparation(prepareDirectorTurn(sourceSession,settings,sourceMessages,structuredClone(loreEntries),opts,{signal:controller.signal,getTurn:(...args)=>storyStore(sid).getTurn(...args),saveTurn:(...args)=>{assertActive(token);return storyStore(sid).saveTurn(...args);},check:()=>assertActive(token),onRequest:serialized=>{if(!busyGate.stillActive(token))return;lastDirectorRequest={requestBody:JSON.parse(serialized),sentAt:Date.now()};}}),controller);
+      // The Director request uses the client's response deadline, including reasoning.
+      directorTurn=await prepareDirectorTurn(sourceSession,settings,sourceMessages,structuredClone(loreEntries),opts,{signal:controller.signal,getTurn:(...args)=>storyStore(sid).getTurn(...args),saveTurn:(...args)=>{assertActive(token);return storyStore(sid).saveTurn(...args);},check:()=>assertActive(token),onRequest:serialized=>{if(!busyGate.stillActive(token))return;lastDirectorRequest={requestBody:JSON.parse(serialized),sentAt:Date.now()};}});
       assertActive(token);
       if(directorTurn.contract.action==='wait'){showTransientInfo(directorTurn.contract.objective);finishPetTurn('ready',petTurn);return;}
       opts={...opts,directorTurn};
@@ -2219,8 +2226,8 @@ async function runAssistantTurn(opts = {},suppliedToken=null,recoveryReply=null)
     if (truncated) {if(stopReason)showTransientInfo(stopReason==='timeout' ? 'Partial reply saved (timed out after 120 s).' : stopReason==='dropped' ? 'Partial reply saved (connection dropped).' : 'Partial reply saved (stopped).');else showTransientError('Reply saved but cut off at the output limit. Raise Max response tokens or use Regenerate.');}
     else if (sceneEnabled && !ooc && acceptedScene.sceneMeta?.kind==='carried') showTransientInfo('No scene tag in this reply; the previous scene was kept.');
     lastMemoryReport = built.report;
-    if(directorMode && truncated)return;
     finishPetTurn('ready',petTurn);
+    if(directorMode && truncated)return;
     pendingMaintenance={sid,owner:currentUid(),key:preparationKey(session),settings,opts,maintenanceUsed:maintenanceUsed || earlyMemoryStarted,petTurn};
     scheduleIdleMaintenance();
 

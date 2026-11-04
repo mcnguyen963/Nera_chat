@@ -17,3 +17,11 @@ test('E9 ResizeObserver loop notices warn without global toast or diagnostics',a
  assert.equal(warnings.length,2);assert.equal(shown.length,0);assert.equal(e.recentErrors().length,0);
  handlers.error({message:'Ordinary failure',error:Error('Ordinary failure')});assert.equal(shown.length,1);
 });
+
+test('WP-01 free-text errors retain their cause and only exact database codes map',async()=>{
+ const e=await appHarness()('errors.js');
+ for(const text of ['API error 503: Provider unavailable','Device storage is unavailable.','permission-denied in provider response','unavailable'])assert.equal(e.friendlyError(text),text);
+ assert.equal(e.friendlyError({code:'unavailable'}),'Offline — changes will retry.');
+ assert.equal(e.friendlyError({code:'firestore/unavailable'}),'Offline — changes will retry.');
+ assert.equal(e.friendlyError({code:'provider-unavailable',message:'Provider failed'}),'Provider failed');
+});

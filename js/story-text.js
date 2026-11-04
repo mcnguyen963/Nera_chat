@@ -14,7 +14,7 @@ export function stripTurnStamps(text) {
     let cleaned = line
       .replace(new RegExp(String.raw`\(\s*${group}\)|\[\s*${group}\]`, 'g'), '')
       .replace(/\([^)]*\)|\[[^\]]*\]/g, bracket => bracket.replace(new RegExp(String.raw`\b${stamp}\s*·\s*`, 'g'), ''))
-      .replace(new RegExp(String.raw`(?:${preposition})?\b${stamp}\b\s*[,;:]?\s*(\p{Ll})?`, 'gu'), (match,next,offset,source) => next ? (/(?:^|[.!?])\s*$/.test(source.slice(0,offset)) ? next.toUpperCase() : next) : '')
+      .replace(new RegExp(String.raw`(?:^\s*(?:${preposition})?|${preposition}(?=${stamp}\s*[,;:.])|[·—]\s*)${stamp}\b\s*[,;:]?\s*(\p{Ll})?`, 'gu'), (match,next,offset,source) => next ? (/(?:^|[.!?])\s*$/.test(source.slice(0,offset)) ? next.toUpperCase() : next) : '')
       .replace(/([\[(]\s*)Turn\s+\d+\s*[:·]?\s*/g, '$1')
       .replace(/^\s*Turn\s+\d+\b\s*[:·]?\s*|\bTurn\s+\d+\s*[:·]\s*/g, '');
     if (cleaned === line) return line;

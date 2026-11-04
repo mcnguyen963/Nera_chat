@@ -777,3 +777,10 @@ test('E3 dotted honorifics are not first names and genuine first names remain ca
  assert.deepEqual(plain(findMentions('Will Rose Hope',index,'characters')),cards.slice(4).map(card=>card.id));
  assert.deepEqual(plain(findMentions('Mr. Will Reed arrived.',index,'characters')),[cards[0].id]);
 });
+
+for(const variant of ['regenerate','empty'])test('legacy recent-window warning ignores '+variant+' exclusions',async()=>{
+ const use=await setup({'messages.js':{getMessages:async()=>[]},'tokenizer.js':{countTokens:count}}),builder=await use('context-builder.js');
+ const history=messages.slice(0,6).map(m=>({...m}));if(variant==='empty')history[3].content='<think>private only</think>';
+ const result=await builder.buildContextForRequest({id:'s'}, {...settings,keepRecentMessagesAfterSummary:10}, {messages:history,...(variant==='regenerate'?{upToOrder:6}:{})});
+ assert.deepEqual(plain(result.report.warnings),[]);
+});

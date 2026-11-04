@@ -33,3 +33,22 @@ test('scoped copies retain draft, provenance and reviewed note core references',
  e.sections.notes.lines=[{id:'source',text:'She never commands the council.',turn:7,when:null,src:null,by:'user',at:1}];e.coreReferences=[core.reviewCore(e,[core.coreSource(e,'notes','source')])];
  for(const text of [f.toJson([e]),f.toMarkdown([e],{includeEmpty:true})]){const parsed=f.detectFormat(text)==='json'?f.fromJson(text):f.fromMarkdown(text),p=f.planImport([],parsed,{book:'characters'}),copy=p.writes[0].data;assert.notEqual(copy.id,e.id);assert.equal(copy.draft,true);assert.deepEqual(plain(copy.sections),plain(e.sections));assert.equal(core.resolveCore(copy,copy.coreReferences[0]).valid,true);}
 });
+
+test('WP-03 indented Markdown control lines round-trip in text, phases and notes',async()=>{
+ const {f,l}=await setup();
+ const body=['First','  ### X','  ## Y','  #### Z','  Updates:','**Updates:**','  <!-- nera-line: {} -->','  \\literal','Last'].join('\n');
+ const card=l.makeEntry('characters','Mira');card.sections.notes.text=body;
+ card.sections.notes.lines=[{id:'control',text:body,turn:4,when:null,src:1,by:'auto',at:1}];
+ const plan=l.makeEntry('plan','Visit',{schedule:{start:'1/10/738',end:'2/10/738',status:'pending',phases:[{id:'phase',title:'Meeting',start:'1/10/738',end:'2/10/738',status:'pending',text:body}]}});
+ const parsed=f.fromMarkdown(f.toMarkdown([card,plan],{includeEmpty:true}));
+ assert.deepEqual(plain(parsed.warnings),[]);assert.equal(parsed.entries.length,2);
+ assert.deepEqual(plain(parsed.entries[0].sections),plain(card.sections));
+ assert.deepEqual(plain(parsed.entries[1].schedule),plain(plan.schedule));
+});
+test('WP-03 old column-zero escaped exports still import identically',async()=>{
+ const {f}=await setup();
+ const text=['# Lorebooks','format: nera-lorebooks-md 2','## World facts','### Old card','First','\\## literal','\\Updates:','\\\\literal','Last'].join('\n');
+ const parsed=f.fromMarkdown(text);
+ assert.deepEqual(plain(parsed.warnings),[]);
+ assert.equal(parsed.entries[0].sections.text.text,'First\n## literal\nUpdates:\n\\literal\nLast');
+});

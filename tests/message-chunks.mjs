@@ -1536,3 +1536,15 @@ test('Scene receipts include retired summaries, the fallback checkpoint and extr
  assert.equal(result.session.memoryState.needsRebuild,true);assert.equal(result.session.memoryState.rebuildFromOrder,4);
  assert.equal(result.session.memoryInvalidations.at(-1).revision,result.historyRevision);
 });
+
+for(const operation of ['bulk','copy','migration'])test('WP-04 summaries do not advance the next narrator turn during '+operation,async()=>{
+ const h=await setup();
+ const messages=[{id:'u1',order:1,role:'user',content:'First',narratorTurn:1},{id:'a1',order:2,role:'assistant',content:'Reply',narratorTurn:1},{id:'u2',order:3,role:'user',content:'Unanswered',narratorTurn:2},{id:'summary',order:4,role:'summary',content:'Earlier story',coveredRange:{fromOrder:1,toOrder:2}}];
+ if(operation==='migration'){
+  h.documents.set(h.sessionPath,{nextOrder:4,storageVersion:2,activeChunkId:'chunk_000000000001',historyRevision:0});
+  h.documents.set(h.sessionPath+'/messageChunks/chunk_000000000001',{firstOrder:1,lastOrder:4,messages});
+  await h.api.ensureContinuityMetadata('s');
+ }else await h.api.addMessagesBulk('s',messages);
+ const path=operation==='copy'?'users/u/sessions/'+await h.sessions.duplicateSession('s'):h.sessionPath;
+ assert.equal(h.documents.get(path).nextNarratorTurn,2);
+});

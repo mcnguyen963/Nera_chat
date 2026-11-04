@@ -199,10 +199,10 @@ test('Director refuses narrative state changes for explicit OOC input',async()=>
  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{role:'user',content:'<ooc>Who is Lysia?</ooc>',order:1}],[]),/OOC/);assert.equal(saved,0);
 });
 test('Regenerating a continuation reuses the latest continuation contract, rather than planning another scene',async()=>{
- const old={id:'continuation',version:1,status:'completed',before:state,after:state,contract:contract({})};let calls=0;
- const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async id=>old,savePendingDirectorTurn:async()=>{}},'llm-client.js':{chatCompletion:async()=>{calls++;}}}})('director-turn.js');
+ const old={id:'continuation',version:1,status:'completed',before:state,after:state,contract:contract({})};let calls=0;const requested=[];
+ const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async(_sid,id)=>{requested.push(id);assert.equal(id,old.id);return old;},savePendingDirectorTurn:async()=>{}},'llm-client.js':{chatCompletion:async()=>{calls++;}}}})('director-turn.js');
  const turn=await api.prepareDirectorTurn({id:'s',directorState:state,directorCheckpoint:old.id},settings,[{id:'u',order:1,role:'user',content:'Begin'},{id:'a',order:2,role:'assistant',content:'Original prefix',directorTurnId:'original'}],[],{overwriteId:'a',continuationId:'a',directorReuseId:old.id});
- assert.equal(turn.id,'continuation');assert.equal(calls,0);
+ assert.equal(turn.id,'continuation');assert.equal(calls,0);assert.deepEqual(requested,[old.id]);
 });
 
 test('captured Haiku bare-array ledger failure is rejected before saving and final reminder specifies operation objects',async()=>{

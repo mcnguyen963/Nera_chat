@@ -19,6 +19,13 @@ export function computeTurns(messages) {
   const trailing = raw.filter(m => m.order > (assistants.at(-1)?.order ?? 0));
   return { turnById,assistants,lastTurn:assistants.at(-1)?.turn ?? 0,trailingStartOrder:trailing[0]?.order ?? null };
 }
+// Summaries do not consume a narrator turn, including after an unanswered user.
+export function nextNarratorTurnForMessages(messages,turns=computeTurns(messages)) {
+  const narrative=messages.filter(m=>m.role!=='summary');
+  const last=narrative.at(-1);
+  const maximum=narrative.reduce((max,m)=>Math.max(max,m.narratorTurn ?? turns.turnById.get(m.id) ?? 0),0);
+  return maximum+(last?.role==='user' ? 0 : 1);
+}
 export function turnStartOrder(turns, t) { return turns.assistants.find(a => a.turn === t)?.startOrder ?? (t === turns.lastTurn+1 ? turns.trailingStartOrder : null); }
 export function assistantOrderOfTurn(turns, t) { return turns.assistants.find(a => a.turn === t)?.order ?? null; }
 function prepareEligibility(messages, memoryState, mem) {

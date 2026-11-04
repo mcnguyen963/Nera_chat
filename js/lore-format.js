@@ -4,7 +4,7 @@ import {normalizeThreadMeta} from './thread-lifecycle.js';
 import { validateSchedule, mergePlanSchedule } from './scheduled-plan.js';
 import { toRecordDocument, fromRecordDocument, validateRecords } from './lore-records.js';
 import { validateCoreReferences } from './character-core.js';
-const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|<!-- nera-)/.test(l)?'\\'+l:l).join('\n');
+const escapeContent=t=>String(t).split('\n').map(l=>/^(?:\\|#|Updates:|\*\*Updates:\*\*|<!-- nera-)/i.test(l.trim())?'\\'+l:l).join('\n');
 import { cardFingerprint } from './lore-card-state.js';
 import { sectionMeta } from './continuity.js';
 import { makeEntry, newLoreId, normalizeName, sectionKey, SECTION_MAP, SECTION_KEYS } from './lore-lines.js';
@@ -120,7 +120,8 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
   const aliases = { characters:['characters','character','people','cast'],locations:['locations','location','places','place'],facts:['world facts','facts','world','lore'],events:['events','events & threads','events and threads','timeline','threads','story'],plan:['plan','plans','scheduled plan'] };
   const warn = (line,reason) => warnings.push({ line,reason });
   for (const [i,line] of source.entries()) {
-    const trimmed = line.trim(), bookMatch = trimmed.match(/^##\s+(.+)$/), cardMatch = trimmed.match(/^###\s+(.+)$/), sectionMatch = trimmed.match(/^####\s*(.+)$/);
+    const escaped=line.trimStart().startsWith('\\'), literal=line.replace(/^(\s*)\\/,'$1');
+    const trimmed = line.trim(), syntax=escaped ? '' : trimmed, bookMatch = syntax.match(/^##\s+(.+)$/), cardMatch = syntax.match(/^###\s+(.+)$/), sectionMatch = syntax.match(/^####\s*(.+)$/);
     if (bookMatch) { book = Object.keys(aliases).find(k => aliases[k].includes(normalizeName(bookMatch[1]))) ?? null; entry = null; phase = null; if (book) { if (!books.includes(book)) books.push(book); } else warn(i+1,'unknown book; skipped'); continue; }
     if (!book) { if (/^story:/i.test(trimmed)) story = trimmed.replace(/^story:\s*/i,''); continue; }
     if (cardMatch) {
@@ -132,14 +133,14 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
       if(!entry.schedule)throw new Error('Plan schedule metadata is missing.');
       phase={id:newLoreId('phase'),title:sectionMatch[1].replace(/^Phase:\s*/i,''),start:entry.schedule.start,end:entry.schedule.end,status:'pending',text:''};entry.schedule.phases.push(phase);continue;
     }
-    const phaseMeta=trimmed.match(/^<!-- nera-phase: (.*) -->$/);
+    const phaseMeta=syntax.match(/^<!-- nera-phase: (.*) -->$/);
     if(phaseMeta) {
       if(!phase)throw new Error('Phase metadata needs a Phase heading.');
       try { const data=JSON.parse(phaseMeta[1]);for(const key of ['id','start','end','status'])if(key in data)phase[key]=data[key]; } catch {throw new Error('Invalid phase metadata at line '+(i+1));}continue;
     }
-    if(phase && !sectionMatch) {phase.text+=(phase.text ? '\n' : '')+(line.startsWith('\\') ? line.slice(1) : line);continue;}
+    if(phase && !sectionMatch) {phase.text+=(phase.text ? '\n' : '')+(escaped ? literal : line);continue;}
     if(sectionMatch)phase=null;
-    const provenance = trimmed.match(/^<!-- nera-(entry|section|line): (.*) -->$/);
+    const provenance = syntax.match(/^<!-- nera-(entry|section|line): (.*) -->$/);
     if (provenance) {
       try {
         const value = JSON.parse(provenance[2]);
@@ -153,7 +154,7 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
       continue;
     }
     if (metadata) {
-      const m = trimmed.match(/^(aliases|always load|status|name|importance):\s*(.*)$/i);
+      const m = syntax.match(/^(aliases|always load|status|name|importance):\s*(.*)$/i);
       if (m) { const prop = m[1].toLowerCase(); if(prop==='importance'){if(book!=='characters')throw new Error('Importance is only supported for characters.');if(!/^[1-4]$/.test(m[2]))throw new Error('Character importance must be an integer from 1 to 4.');entry.importance=Number(m[2]);} if(strictFields && prop==='status' && !/^(open|closed)$/i.test(m[2]))throw new Error('Thread status must be open or closed.');if(strictFields && prop==='always load' && !/^(yes|no|true|false|1|0)$/i.test(m[2]))throw new Error('Always load must be yes or no.'); if (prop === 'aliases') entry.aliases = m[2].startsWith('[') ? JSON.parse(m[2]) : m[2].split(',').map(n => n.trim()).filter(Boolean); if (prop === 'always load') entry.alwaysLoad = /^(yes|true|1)$/i.test(m[2]); if (prop === 'status' && entry.kind === 'thread') entry.status = /^closed$/i.test(m[2]) ? 'closed' : 'open'; continue; }
       metadata = false;
     }
@@ -162,18 +163,22 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
       if (['characters','locations'].includes(book) && key === 'notes' && !SECTION_MAP[book][normalizeName(sectionMatch[1])]) { prefix = sectionMatch[1]+': '; warn(i+1,'unknown section → Notes'); }
       continue;
     }
-    if (/^(?:Updates:|\*\*Updates:\*\*)$/i.test(trimmed)) { updates = true; continue; }
+    if (/^(?:Updates:|\*\*Updates:\*\*)$/i.test(syntax)) { updates = true; continue; }
     // Bare timeline bullets are accepted when all text lines are bullets.
-    const bareTimeline = entry.kind === 'timeline' && !entry.sections.text.text.trim() && /^[-*]\s+/.test(trimmed);
+    const bareTimeline = entry.kind === 'timeline' && !entry.sections.text.text.trim() && /^[-*]\s+/.test(syntax);
     if (updates || bareTimeline) {
-      const bullet = trimmed.match(/^[-*]\s+(.*)$/);
+      const bullet = syntax.match(/^[-*]\s+(.*)$/);
       if (bullet) {
         let value = bullet[1], turn = null, when = null; const stamp = value.match(/^\[([^\]]+)\]\s*/);
         if (stamp) { const t = stamp[1].match(/^T(\d+)(?:\s*[·|,]\s*(.*))?$/i); if (t) { turn = Number(t[1]); when = t[2]?.trim() || null; } else when = stamp[1].trim(); value = value.slice(stamp[0].length); }
         if (value.trim()) entry.sections[key].lines.push(importedLine({ text:prefix+(value.startsWith('\\')?value.slice(1):value).trim(),turn,when }));
-      } else if (/^\s+\S/.test(line) && entry.sections[key].lines.length) entry.sections[key].lines.at(-1).text += (/^format: nera-(?:lorebooks|lore-card)-md /m.test(unfence(text)) ? '\n' : ' ')+(trimmed.startsWith('\\') ? trimmed.slice(1) : trimmed);
+      } else if (/^\s+\S/.test(line) && entry.sections[key].lines.length) {
+        const exported=/^format: nera-(?:lorebooks|lore-card)-md /m.test(unfence(text));
+        const continuation=exported ? line.slice(2) : trimmed;
+        entry.sections[key].lines.at(-1).text += (exported ? '\n' : ' ')+continuation.replace(/^\\/,'');
+      }
       else if (trimmed) warn(i+1,'update line could not be read');
-    } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(line.startsWith('\\')?line.slice(1):line) : '');
+    } else entry.sections[key].text += (entry.sections[key].text ? '\n' : '')+(trimmed ? prefix+(escaped ? literal : line) : '');
   }
   for(const e of entries)validateImportance(e);
   for(const e of entries)if(e.book==='plan'){for(const phase of e.schedule?.phases ?? [])phase.text=phase.text.trim();validateSchedule(e.schedule);}

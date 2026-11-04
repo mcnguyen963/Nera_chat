@@ -33,7 +33,7 @@ export const clockText = minutes => `${String(Math.floor(minutes/60)).padStart(2
 // overnight wrap, not a backwards correction. Unknown clocks/dates stay unknown.
 export function midnightRolloverDate(previousDate,previousTime,date,time) {
   const before=parseStoryDate(previousDate),after=parseStoryDate(date),oldClock=parseClock(previousTime),clock=parseClock(time);
-  if(!before?.valid || !after?.valid || before.ordinal!==after.ordinal || oldClock===null || clock===null || oldClock<720 || clock>=720)return null;
+  if(!before?.valid || !after?.valid || before.ordinal!==after.ordinal || oldClock===null || clock===null || oldClock<720 || clock>=720 || 1440-oldClock+clock>720)return null;
   let {year,month,day}=before;
   if(++day>daysInMonth(year,month)){day=1;if(++month>12){month=1;year++;}}
   if(year>9999)throw new Error('Story date exceeds the supported calendar.');
@@ -71,13 +71,21 @@ const temporalData = text => String(text ?? '').replace(/<(scene|plan|plan_threa
 const future = /\b(?:tomorrow|yesterday|appointment|scheduled|will|would|next week|last week)\b/i;
 const NUMBER_WORDS={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
 const durationNumber='(?:\\d+(?:\\.\\d+)?|(?:'+Object.keys(NUMBER_WORDS).join('|')+')(?:[ -](?:one|two|three|four|five|six|seven|eight|nine))?)';
+const durationAmount=value=>/^\d/.test(value)?Number(value):value.toLowerCase().split(/[ -]/).reduce((sum,w)=>sum+NUMBER_WORDS[w],0);
 function duration(text) {
   const values=[];
   for(const sentence of temporalData(text).split(/(?<=[.!?])\s+|\n+/)) {
     if(future.test(sentence)||! /\b(?:wait(?:ed|s|ing)?|spen[dt]|pass(?:ed|es)?|after|later|elapsed|for|take|takes|took|walk(?:ed|s|ing)?|travel(?:led|s|ing)?|continue)\b/i.test(sentence))continue;
-    const matches=[...sentence.matchAll(new RegExp(`\\b(${durationNumber})\\s*(minutes?|hours?|days?)\\b`,'gi'))];
+    // Expand fractions before the bare hour matcher can claim their integer part.
+    const expanded=sentence
+      .replace(new RegExp(`\\b(${durationNumber})\\s+hours?\\s+and\\s+a\\s+half\\b`,'gi'),(_,n)=>`${(durationAmount(n)+.5)*60} minutes`)
+      .replace(new RegExp(`\\b(${durationNumber})\\s+and\\s+a\\s+half\\s+hours?\\b`,'gi'),(_,n)=>`${(durationAmount(n)+.5)*60} minutes`)
+      .replace(/\bhalf\s+(?:an?\s+)?hour\b/gi,'30 minutes')
+      .replace(/\b(?:a\s+)?quarter\s+(?:of\s+an?\s+)?hour\b/gi,'15 minutes');
+    if(/\b(?:half|quarter)\b/i.test(expanded))continue;
+    const matches=[...expanded.matchAll(new RegExp(`\\b(${durationNumber})\\s*(minutes?|hours?|days?)\\b`,'gi'))];
     if(matches.length)values.push(matches.reduce((n,m)=>{
-      const amount=/^\d/.test(m[1])?Number(m[1]):m[1].toLowerCase().split(/[ -]/).reduce((sum,w)=>sum+NUMBER_WORDS[w],0);
+      const amount=durationAmount(m[1]);
       return n+amount*({minute:1,hour:60,day:1440}[m[2].toLowerCase().replace(/s$/,'')]);
     },0));
   }
@@ -118,7 +126,7 @@ export function validateModernTimestamp(fields,{calendar,prior,narration='',user
   }
   const suppliedFormatted=formatStoryDate(effectiveDate,calendar),expectedWeekday=parseStoryDate(suppliedFormatted).weekday;
   if(date?.weekday!==null&&date?.weekday!==undefined&&date.weekday!==expectedWeekday)return rejected('Scene weekday conflicts with the story anchor; prior timestamp kept.');
-  const correctionRequested=/\b(?:correct(?:ion)?|set|actually|rewind|flashback)\b/i.test(userText);
+  const correctionRequested=/\b(?:correct(?:ion)?|set|actually|rewind|flashback)\b/i.test(userText) && exactEvidence(userText,effectiveDate,effectiveClock,oldDate?.ordinal===effectiveDate.ordinal);
   const rolled=correctionRequested?null:midnightRolloverDate(previousDate,previousTime,`${effectiveDate.day}/${effectiveDate.month}/${effectiveDate.year}`,effectiveClock===null?null:clockText(effectiveClock));
   if(rolled)effectiveDate=parseStoryDate(rolled);
   const formatted=formatStoryDate(effectiveDate,calendar);

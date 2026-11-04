@@ -19,7 +19,9 @@ export async function uploadStoryVectors(snapshot,kind,{getLive=()=>snapshot,onP
   if(kind==='lore' && snapshot.session.memory?.semanticLore && await loreSemantic.needsRefresh?.({owner,sid,mem:snapshot.session.memory,entries}))throw new Error('Lore search is still updating or out of date. Finish or retry indexing before uploading.');check();
   const rows=kind==='history' ? await exportHistoryVectors(sid,{messages:snapshot.messages}) : await loreSemantic.exportVectors({owner,sid,mem:snapshot.session.memory,entries});check();
   const result=await uploadVectorIndex({adapter,kind,rows,previousManifest,check,onProgress,force});check();
-  await saveCachedVectorManifest(owner,sid,kind,result.manifest,check);check();return result;
+  const cached=await saveCachedVectorManifest(owner,sid,kind,result.manifest,check);check();
+  if(!cached)throw new Error('Cloud upload completed, but the device manifest could not be saved. Retry downloading the index before another upload.');
+  return result;
 }
 export async function downloadStoryVectors(snapshot,kind,{getLive=()=>snapshot,onProgress=()=>{}}={}){
   if(!snapshot.historyComplete)throw new Error('Complete local history is needed to verify downloaded vectors.');
@@ -30,5 +32,7 @@ export async function downloadStoryVectors(snapshot,kind,{getLive=()=>snapshot,o
   const imported=kind==='history' ? await importHistoryVectors(snapshot,result.rows,{check:()=>{check();return true;}}) : await loreSemantic.importVectors({owner,sid,mem:snapshot.session.memory,entries:usableLore(snapshot.entries,snapshot.messages,snapshot.session).entries,rows:result.rows,check});check();
   if(imported.persisted===false)throw new Error('Device storage is unavailable; downloaded vectors were not saved.');
   for(const [id,payload] of cached){check();await saveCachedVectorChunk(owner,sid,kind,id,payload,check);check();}
-  await saveCachedVectorManifest(owner,sid,kind,manifest,check);check();return {...imported,reads:result.reads,modelIds:[...new Set(result.rows.map(r=>r.modelId).filter(Boolean))]};
+  const saved=await saveCachedVectorManifest(owner,sid,kind,manifest,check);check();
+  if(!saved)throw new Error('Downloaded vectors were imported, but the device manifest could not be saved. Retry downloading the index before uploading.');
+  return {...imported,reads:result.reads,modelIds:[...new Set(result.rows.map(r=>r.modelId).filter(Boolean))]};
 }

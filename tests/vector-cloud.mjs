@@ -76,7 +76,7 @@ test('a chunk-write interruption leaves the previous complete cloud index downlo
 async function syncFixture(){
   const remote=adapter();let cached=null,exports=0,pending=null,staleLore=false;
   const snapshot={historyComplete:true,storyEpoch:1,session:{id:'s',historyRevision:1,loreRevision:1,memory:{}},messages:[],entries:[]};
-  const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>cached,saveCachedVectorManifest:async(_o,_s,_k,value)=>{cached=value;},readCachedVectorChunk:async()=>null,saveCachedVectorChunk:async()=>{}},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>pending}},'history-recall.js':{exportHistoryVectors:async(_sid,options)=>{assert.equal(options.messages,snapshot.messages);exports++;return [];},importHistoryVectors:async()=>({restored:0,skipped:0,persisted:true})},'lore-semantic.js':{loreSemantic:{exportVectors:async()=>[],needsRefresh:async()=>staleLore,importVectors:async()=>({restored:0,skipped:0})}}}});
+  const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>cached,saveCachedVectorManifest:async(_o,_s,_k,value)=>{cached=value;return true;},readCachedVectorChunk:async()=>null,saveCachedVectorChunk:async()=>{}},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>pending}},'history-recall.js':{exportHistoryVectors:async(_sid,options)=>{assert.equal(options.messages,snapshot.messages);exports++;return [];},importHistoryVectors:async()=>({restored:0,skipped:0,persisted:true})},'lore-semantic.js':{loreSemantic:{exportVectors:async()=>[],needsRefresh:async()=>staleLore,importVectors:async()=>({restored:0,skipped:0})}}}});
   return {remote,snapshot,sync:await use('vector-cloud-sync.js'),setCached:value=>cached=value,getCached:()=>cached,exports:()=>exports,setPending:value=>pending=value,setStaleLore:value=>staleLore=value};
 }
 test('manual sync detects a newer remote revision even if local vectors would be unchanged',async()=>{
@@ -101,4 +101,20 @@ test('manual upload preserves the complete cloud index while device indexing is 
   await assert.rejects(h.sync.uploadStoryVectors(h.snapshot,'history'),/still updating/);assert.equal(h.remote.manifests.get('history').count,1);assert.equal(h.exports(),0);
   h.setPending(null);h.setStaleLore(true);h.snapshot.session.memory.semanticLore=true;h.setCached(null);
   await assert.rejects(h.sync.uploadStoryVectors(h.snapshot,'lore'),/out of date/);assert.equal(h.remote.manifests.has('lore'),false);
+});
+
+for(const failure of ['error','blocked','timeout','throw'])test('vector cache retries after initial open '+failure,async()=>{
+ const fixture=indexedDBFixture({items:[]});let opens=0,timeout,late,closed=0;
+ const indexedDB={open(...args){if(++opens>1)return fixture.indexedDB.open(...args);if(failure==='throw')throw Error('temporary open failure');const request={result:{close(){closed++;}}};late=request;queueMicrotask(()=>{if(failure==='timeout')timeout();else request[failure==='error'?'onerror':'onblocked']();});return request;}};
+ const cache=await appHarness({globals:{indexedDB,setTimeout:fn=>{timeout=fn;return 1;},clearTimeout:()=>{}}})('vector-cloud-cache.js');
+ assert.equal(await cache.saveCachedVectorManifest('u','s','history',{revision:1}),false);
+ assert.equal(await cache.saveCachedVectorManifest('u','s','history',{revision:2}),true);assert.equal(opens,2);
+ if(failure==='timeout'){late.onsuccess();assert.equal(closed,1);}
+ assert.equal((await cache.readCachedVectorManifest('u','s','history')).revision,2);assert.equal(opens,2);
+});
+for(const direction of ['upload','download'])test('vector '+direction+' reports a failed device manifest save',async()=>{
+ const remote=adapter(),snapshot={historyComplete:true,storyEpoch:1,session:{id:'s',historyRevision:1,loreRevision:1,memory:{}},messages:[],entries:[]};
+ const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>null,saveCachedVectorManifest:async()=>false,readCachedVectorChunk:async()=>null,saveCachedVectorChunk:async()=>true},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>null}},'history-recall.js':{exportHistoryVectors:async()=>[],importHistoryVectors:async()=>({restored:0,persisted:true})},'lore-semantic.js':{loreSemantic:{}}}});
+ if(direction==='download')await (await use('vector-cloud-core.js')).uploadVectorIndex({adapter:remote,kind:'history',rows:[]});
+ const sync=await use('vector-cloud-sync.js');await assert.rejects(sync[direction+'StoryVectors'](snapshot,'history'),/device.*manifest|manifest.*device/i);
 });

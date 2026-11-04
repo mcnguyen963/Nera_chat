@@ -11,19 +11,20 @@ function vectorFingerprint(vector){
 }
 function open() {
   if(typeof indexedDB==='undefined')return Promise.resolve(null);
-  if(pending)return pending;
-  pending=new Promise(resolve=>{
+  if(pending)return pending.promise;
+  const attempt={promise:null};pending=attempt;
+  attempt.promise=new Promise(resolve=>{
     let settled=false;
-    const done=value=>{if(settled){value?.close();return;}settled=true;clearTimeout(timer);resolve(value);};
+    const done=value=>{if(settled){value?.close();return;}settled=true;clearTimeout(timer);if(!value && pending===attempt)pending=null;resolve(value);};
     const timer=setTimeout(()=>done(null),3000);
     try {
       const request=indexedDB.open(DATABASE,1);
       request.onupgradeneeded=()=>request.result.createObjectStore('stories',{keyPath:'key'}).createIndex('storyKey','storyKey');
       request.onerror=request.onblocked=()=>done(null);
-      request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();pending=null;};done(request.result);};
+      request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();if(pending===attempt)pending=null;};done(request.result);};
     } catch {done(null);}
   });
-  return pending;
+  return attempt.promise;
 }
 async function transaction(mode,action) {
   const db=await open();if(!db)return null;

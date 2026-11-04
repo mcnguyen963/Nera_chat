@@ -136,3 +136,14 @@ test('cancelling an active request does not cool down its provider or try anothe
   const pending=client.chatCompletion({settings,messages:[],signal:controller.signal});controller.abort('user');
   await assert.rejects(pending,error=>error.classification==='cancelled');assert.equal(fetches,1);assert.equal(routing.providerRetryAt(settings,'first'),0);
 });
+
+test('WP-02 non-streamed total deadline never cools down healthy providers',async()=>{
+ let deadline,delay,fetches=0;
+ const use=appHarness({globals:{fetch:async()=>{fetches++;return new Promise(()=>{});},setTimeout:(fn,ms)=>{deadline=fn;delay=ms;return 1;},clearTimeout(){}}});
+ const client=await use('llm-client.js'),routing=await use('provider-routing.js');
+ const pending=client.chatCompletion({settings,messages:[]});
+ const rejected=assert.rejects(pending,error=>error.classification==='deadline' && /deadline/i.test(error.message));
+ deadline();await new Promise(resolve=>setImmediate(resolve));if(fetches>1)deadline();await rejected;
+ assert.ok(delay>=300000);assert.equal(fetches,1);
+ for(const tag of settings.providerOrder)assert.equal(routing.providerRetryAt(settings,tag),0);
+});

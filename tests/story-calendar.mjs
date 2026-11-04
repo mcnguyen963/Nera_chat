@@ -95,3 +95,21 @@ test('midnight is next-day, future dates are not incremented twice, and unknown 
  assert.equal(calendar.midnightRolloverDate(null,'23:59',null,'00:10'),null);
  assert.equal(calendar.midnightRolloverDate('21/10/738','15:40','21/10/738','15:30'),null);
 });
+
+for(const [phrase,time] of [['half an hour','15:30'],['an hour and a half','16:30'],['a quarter of an hour','15:15'],['an hour','16:00'],['two and a half hours','17:30'],['two hours and a half','17:30']])test('WP-05 explicit duration '+phrase,()=>{
+ const result=calendar.validateModernTimestamp({when:prior.when,time},{calendar:anchor,prior:{...prior,time:'15:00'},userText:'I wait '+phrase+'.'});
+ assert.deepEqual([...result.warnings],[]);assert.equal(result.time,time);
+});
+for(const input of ['I set my glass down and leave.','I actually walk home.'])test('WP-05 ordinary prose permits midnight rollover: '+input,()=>{
+ const result=calendar.validateModernTimestamp({when:prior.when,time:'00:20'},{calendar:anchor,prior:{...prior,time:'23:40'},userText:input,narration:'You walk home past midnight.'});
+ assert.deepEqual([...result.warnings],[]);assert.equal(result.date,'Saturday 22/10/738');assert.equal(result.time,'00:20');
+});
+test('WP-05 a small backwards clock slip across noon cannot advance the date',async()=>{
+ assert.equal(calendar.midnightRolloverDate(prior.when,'12:10',prior.when,'11:50'),null);
+ const result=calendar.validateModernTimestamp({when:prior.when,time:'11:50'},{calendar:anchor,prior:{...prior,time:'12:10'}});
+ assert.match(result.warnings[0],/Unsupported backward scene time/);assert.equal(result.time,'12:10');
+ const director=await use('director-state.js');
+ const before={version:2,scene:{date:'21/10/738',time:'12:10',location:'Hall',present:[]},event:null,decisions:[],threads:[],commitments:[]};
+ const contract={version:1,action:'narrate',transition:'unchanged',objective:'Wait.',stopCondition:'Before the next decision.',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'11:50'}}};
+ assert.throws(()=>director.parseDirectorContract(JSON.stringify(contract),before,[]),/backward|backwards/);
+});

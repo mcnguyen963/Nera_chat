@@ -2,9 +2,10 @@ const DATABASE='nera-vector-cloud-cache-v1';
 let pending;
 function open(){
   if(typeof indexedDB==='undefined')return Promise.resolve(null);
-  if(pending)return pending;
-  pending=new Promise(resolve=>{let done=false;const finish=db=>{if(done){db?.close();return;}done=true;clearTimeout(timer);resolve(db);};const timer=setTimeout(()=>finish(null),3000);
-    try{const request=indexedDB.open(DATABASE,1);request.onupgradeneeded=()=>request.result.createObjectStore('items',{keyPath:'key'});request.onerror=request.onblocked=()=>finish(null);request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();pending=null;};finish(request.result);};}catch{finish(null);}});return pending;
+  if(pending)return pending.promise;
+  const attempt={promise:null};pending=attempt;
+  attempt.promise=new Promise(resolve=>{let done=false;const finish=db=>{if(done){db?.close();return;}done=true;clearTimeout(timer);if(!db && pending===attempt)pending=null;resolve(db);};const timer=setTimeout(()=>finish(null),3000);
+    try{const request=indexedDB.open(DATABASE,1);request.onupgradeneeded=()=>request.result.createObjectStore('items',{keyPath:'key'});request.onerror=request.onblocked=()=>finish(null);request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();if(pending===attempt)pending=null;};finish(request.result);};}catch{finish(null);}});return attempt.promise;
 }
 async function operation(mode,act){const db=await open();if(!db)return null;return new Promise(resolve=>{try{const tx=db.transaction('items',mode),request=act(tx.objectStore('items'));let value=null;request.onsuccess=()=>{value=request.result??true;};tx.oncomplete=()=>resolve(value);tx.onabort=tx.onerror=()=>resolve(null);}catch{resolve(null);}});}
 const key=(owner,sid,kind,id)=>JSON.stringify([owner,sid,kind,id]);

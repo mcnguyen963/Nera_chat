@@ -3,7 +3,7 @@ import {findReceipt,readReceipt,writeReceipt} from './operation-receipts.js';
 import { directorReplyPatch, directorTurnRef } from './director-store.js';
 import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
-import { computeTurns } from './turns.js';
+import { computeTurns, nextNarratorTurnForMessages } from './turns.js';
 import { canonicalScene, validateSceneEdit } from './scene.js';
 import { assertSource, revisionOf, trimInvalidations, StoryConflict } from './continuity.js';
 import {
@@ -162,7 +162,7 @@ async function ensureBaseContinuityMetadata(sessionId) {
     assertMigrationSource(session);
     const active = chunks.docs.find(chunk => chunk.id === session.activeChunkId);
     if (session.activeChunkId && !active) throw new Error('Active history chunk is missing; migration was not completed.');
-    tx.update(target,{ continuityVersion:2,historyRevision:sourceRevision,nextNarratorTurn:Math.max(0,maxOf(source.map(m => m.narratorTurn ?? turns.turnById.get(m.id) ?? 0)))+ (source.at(-1)?.role === 'user' ? 0 : 1),...(active ? { activeChunkBytes:chunkBytes(migrateMessages(active.data().messages ?? [])) } : {}) });
+    tx.update(target,{ continuityVersion:2,historyRevision:sourceRevision,nextNarratorTurn:nextNarratorTurnForMessages(source,turns),...(active ? { activeChunkBytes:chunkBytes(migrateMessages(active.data().messages ?? [])) } : {}) });
   });
   metadataReady.add(key);
 }
@@ -299,7 +299,7 @@ export async function addMessagesBulk(sessionId, items) {
     tx.update(sessionRef(sessionId,owner), {
     nextOrder: messages.at(-1).order,
     historyRevision:(current.historyRevision ?? 0)+1,continuityVersion:2,lookupVersion:1,...summaryLookup(messages),
-    nextNarratorTurn:Math.max(0,maxOf(messages.map(m => m.narratorTurn ?? 0)))+(messages.at(-1)?.role === "user" ? 0 : 1),
+    nextNarratorTurn:nextNarratorTurnForMessages(messages,turns),
     updatedAt: serverTimestamp(),
     activeChunkId: chunkId(last[0].order),
     activeChunkBytes: chunkBytes(last),

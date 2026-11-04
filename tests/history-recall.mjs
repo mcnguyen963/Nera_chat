@@ -246,10 +246,19 @@ test('embedding transport validates vectors and ordering, sends no narrator opti
   for(const endpoint of ['http://example.test/embeddings','https://user:secret@example.test/embeddings','https://example.test/embeddings?key=secret'])assert.throws(()=>embeddingConnection({embeddingEndpoint:endpoint,embeddingModelId:'embed'}));
 });
 test('embedding transport rejects nonfinite, zero and incompatible vectors and duplicate response indices',async()=>{
-  for(const data of [[{index:0,embedding:[0,0]}],[{index:0,embedding:[null,1]}],[{index:0,embedding:[1]},{index:1,embedding:[1,2]}],[{index:0,embedding:[1]},{index:0,embedding:[1]}]]){
+  for(const [data,expected] of [
+    [[{index:0,embedding:[0,0]}],/Invalid embedding/],
+    [[{index:0,embedding:[null,1]}],/Invalid embedding/],
+    [[{index:0,embedding:[1]},{index:1,embedding:[1,2]}],/dimensions/],
+    [[{index:0,embedding:[1]},{index:0,embedding:[1]}],/order/],
+  ]){
     const use=appHarness({globals:{fetch:async()=>({ok:true,json:async()=>({data})})}}),{embedTexts}=await use('history-embeddings.js');
-    await assert.rejects(embedTexts({endpoint:'https://example.test',model:'x'},data.length===1 ? ['one'] : ['one','two']));
+    await assert.rejects(embedTexts({endpoint:'https://example.test',model:'x'},data.length===1 ? ['one'] : ['one','two']),expected);
   }
+  const {embedTexts}=await appHarness({globals:{fetch:async()=>({ok:false,status:500})}})('history-embeddings.js');
+  await assert.rejects(embedTexts({endpoint:'https://example.test',model:'x'},['one']),/HTTP 500/);
+  await assert.rejects(embedTexts({endpoint:'https://example.test',model:'x'},Array(9).fill('one')),/Invalid embedding batch/);
+  const controller=new AbortController();controller.abort();await assert.rejects(embedTexts({endpoint:'https://example.test',model:'x'},['one'],{signal:controller.signal}),/stopped or timed out/);
 });
 test('explicit backfill uses captured full history without reading Firebase',async()=>{
   let owner='u',reads=0,embeddings=0;const storage=memoryStorage();
@@ -429,4 +438,14 @@ test('IndexedDB stores passage vectors incrementally and account/story cleanup r
   await clearRecallAccount('A');assert.equal(await recallStorage.load(JSON.stringify(['A','two'])),null);
   assert.equal((await recallStorage.load(JSON.stringify(['B','one']))).rows.length,1);
   assert.equal([...fixture.stores.get('stories').values()].filter(v=>v.owner==='A').length,0);
+});
+
+for(const failure of ['error','blocked','timeout','throw'])test('history storage retries after initial open '+failure,async()=>{
+ const fixture=indexedDBFixture({stories:[]});let opens=0,timeout,late,closed=0;
+ const indexedDB={open(...args){if(++opens>1)return fixture.indexedDB.open(...args);if(failure==='throw')throw Error('temporary open failure');const request={result:{close(){closed++;}}};late=request;queueMicrotask(()=>{if(failure==='timeout')timeout();else request[failure==='error'?'onerror':'onblocked']();});return request;}};
+ const {recallStorage}=await appHarness({globals:{indexedDB,setTimeout:fn=>{timeout=fn;return 1;},clearTimeout:()=>{}}})('history-recall-storage.js');
+ assert.equal(await recallStorage.savePendingBatch('u','s',{throughOrder:2}),null);
+ assert.equal(await recallStorage.savePendingBatch('u','s',{throughOrder:4}),true);assert.equal(opens,2);
+ if(failure==='timeout'){late.onsuccess();assert.equal(closed,1);}
+ assert.equal((await recallStorage.loadPendingBatch('u','s')).throughOrder,4);assert.equal(opens,2);
 });

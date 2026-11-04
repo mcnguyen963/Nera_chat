@@ -5,7 +5,7 @@ const messages={
  'permission-denied':'This account is not allowed to use the app (or you were signed out).',
  unavailable:'Offline — changes will retry.'
 };
-const codeOf=e=>{const text=typeof e==='string'?e:String(e?.code ?? '');return text.match(/resource-exhausted|permission-denied|unavailable/)?.[0] ?? text.split('/').at(-1);};
+const codeOf=e=>typeof e?.code==='string' ? e.code.match(/^(?:firestore\/)?(resource-exhausted|permission-denied|unavailable)$/)?.[1] : undefined;
 export function friendlyError(e){return messages[codeOf(e)] ?? (typeof e==='string' ? e : e?.message || String(e));}
 const recent=[];
 export function recordError(e){

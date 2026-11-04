@@ -15,6 +15,12 @@ async function load(path) {
 const module = await load('story-text.js');
 await module.evaluate();
 const cases = [
+ ['The T1000 robot attacked.','The T1000 robot attacked.'],
+ ['Pilots flew the T38 trainer.','Pilots flew the T38 trainer.'],
+ ['She parked on level T2 near the exit.','She parked on level T2 near the exit.'],
+ ['They arrived at T5 station.','They arrived at T5 station.'],
+ ['Mira (T4) left.','Mira left.'],
+ ['Mira — T4: left.','Mira left.'],
  ['Take Turn 5 of the dance','Take Turn 5 of the dance'],
  ['turn 3 of the wheel','turn 3 of the wheel'],
  ['t12 code','t12 code'],

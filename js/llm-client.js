@@ -176,11 +176,13 @@ export async function chatCompletion(options) {
 
 async function completionAttempt(options) {
   const controller=new AbortController();let timer,content='',thinking='';
-  const kick=()=>{if(controller.signal.aborted)return;globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort('timeout'),120000);timer?.unref?.();};
+  const streaming=!!options.settings.streaming,deadlineMs=streaming ? 120000 : Math.max(300000,(Number(options.settings.maxResponseTokens)||0)*30);
+  const timeoutReason=streaming ? 'timeout' : 'deadline';
+  const kick=()=>{if(controller.signal.aborted)return;globalThis.clearTimeout?.(timer);timer=setTimeout(()=>controller.abort(timeoutReason),deadlineMs);timer?.unref?.();};
   const cancel=()=>controller.abort(options.signal?.reason ?? 'user');
   if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
   let rejectAbort;
-  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{classification:controller.signal.reason==='timeout' ? 'timeout' : 'cancelled',aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
+  const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(Object.assign(new Error(controller.signal.reason==='deadline' ? `The model exceeded its response deadline (${Math.round(deadlineMs/1000)} s). Try again or lower the output limit.` : controller.signal.reason==='timeout' ? 'The model stopped responding (120 s).' : 'Stopped.'),{classification:controller.signal.reason==='deadline' ? 'deadline' : controller.signal.reason==='timeout' ? 'timeout' : 'cancelled',aborted:controller.signal.reason,partial:{content,thinking}}));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
   kick();
   try {
     if(controller.signal.aborted)rejectAbort();

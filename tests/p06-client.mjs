@@ -6,7 +6,7 @@ import { appHarness } from './app-harness.mjs';
 async function client({ streaming, reason, content = 'Narration.' }) {
   const logs = [], requests = [];
   const use = appHarness({ globals: {
-    console: { ...console, log: (...args) => logs.push(args) },
+    console: new Proxy({}, {get:(_target,method)=>(...args)=>logs.push([method,args])}),
     fetch: async (_url, init) => {
       requests.push(JSON.parse(init.body));
       const choice = { finish_reason: reason, message: { content }, delta: { content } };

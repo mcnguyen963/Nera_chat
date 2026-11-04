@@ -1,3 +1,4 @@
+import {storyText} from './story-text.js';
 import {continuationTarget} from './continuation.js';
 import {createTokenCounter} from './token-cache.js';
 import {normalizeMemory,memoryActive} from './memory-settings.js';
@@ -55,7 +56,7 @@ export async function buildContextForRequest(session, settings, opts = {}) {
     const {planOverride,...options}=opts;
     const result=await buildLegacyContext({...session,allowLlmPlanUpdates:false},settings,{...options,messages:all});
     const anchors=new Set(result.entries.filter(e=>e.source==='Opening exchange').map(e=>e.id));
-    const target=keep ? all.filter(m=>['user','assistant'].includes(m.role) && !anchors.has(m.id) && m.order>(session.activeSummaryMessageId ? session.breakpointOrder ?? 0 : 0)).slice(-keep) : [];
+    const target=keep ? all.filter(m=>['user','assistant'].includes(m.role) && m.order<(opts.upToOrder ?? Infinity) && (m.role==='user' ? normalizeAdDirective(m.content) : storyText(m.content)).trim() && !anchors.has(m.id) && m.order>(session.activeSummaryMessageId ? session.breakpointOrder ?? 0 : 0)).slice(-keep) : [];
     const retained=target.filter(m=>result.entries.some(e=>e.id===m.id)).length;
     const warnings=[];
     if(retained<target.length) warnings.push(`Recent window reduced from ${target.length} to ${retained} messages to fit the request budget.`);

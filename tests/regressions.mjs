@@ -3,11 +3,11 @@ import { promptFetch, promptImportMeta } from './prompt-files.mjs';
 // Exercise the browser modules with isolated Firestore and DOM substitutes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import {indexedDBFixture} from './indexeddb-fixture.mjs';
 
-export async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {},firestoreOverrides = {} } = {}) {
+export async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {},firestoreOverrides = {},fixtureListeners=true,strictTimers=false,autoFrames=true } = {}) {
   const elements = new Map();
   class Element {
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
@@ -76,16 +76,21 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   document.querySelector = selector => { const [first,...rest] = selector.split(' '); const root = first.startsWith('#') ? elements.get(first.slice(1)) : document.body?.querySelector(first); return rest.length ? root?.querySelector(rest.join(' ')) : root; };
   document.body = new Element();
   const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, prompt:'Story',confirm: true, response: 'summary', responseData: null, streamLines: null };
-  const localCache = new Map(),stopTimers=new Map();let stopTimerId=0;
+  const localCache = new Map(),timerJobs=new Map(),frames=new Map();let timerSequence=0,frameSequence=0,clockNow=0;
+  const flushFrames=()=>{const pending=[...frames];frames.clear();for(const [,fn]of pending)fn();return pending.length;};
+  const runTimer=id=>{const job=timerJobs.get(id);if(!job)return;timerJobs.delete(id);if(job.native)clearTimeout(job.native);return job.fn();};
+  const schedule=(fn,ms=0)=>{const id=++timerSequence,job={fn,ms,due:clockNow+ms,stopGuard:/protectStop/.test(new Error().stack)};timerJobs.set(id,job);if(ms===0 || ms===300)job.native=setTimeout(()=>runTimer(id),0);return id;};
+  const cancel=id=>{const job=timerJobs.get(id);if(job?.native)clearTimeout(job.native);timerJobs.delete(id);};
+  const advance=async ms=>{const until=clockNow+ms;for(let n=0;n<10000;n++){const next=[...timerJobs].filter(([,j])=>j.due<=until).sort((a,b)=>a[1].due-b[1].due)[0];if(!next){clockNow=until;return;}clockNow=next[1].due;await runTimer(next[0]);await new Promise(r=>setImmediate(r));}throw Error('Timer loop did not settle');};
   const context = vm.createContext({
     URL, Blob, console, structuredClone, document, TextDecoder, TextEncoder, AbortController, ...globals,
     navigator: { clipboard: { writeText: async text => { calls.clipboard=text; } }, ...globals.navigator },
-    requestAnimationFrame: fn => { fn(); return 1; }, cancelAnimationFrame() {},
+    requestAnimationFrame: fn => {const id=++frameSequence;frames.set(id,fn);if(autoFrames)setImmediate(()=>{if(frames.has(id)){frames.delete(id);fn();}});return id;}, cancelAnimationFrame:id=>frames.delete(id),
     localStorage: { get length(){return localCache.size;}, key:i=>[...localCache.keys()][i], getItem: (key) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.get(key) ?? null;}, setItem: (key, value) => {if(calls.storageBlocked)throw Error('Storage blocked');return localCache.set(key, value);},removeItem:key=>localCache.delete(key) },
-    window: { addEventListener(type,fn) { ((calls.windowListeners ??= {})[type] ??= []).push(fn); } }, crypto,
+    window: { location:{reload(){calls.reloads=(calls.reloads ?? 0)+1;}}, addEventListener(type,fn) { ((calls.windowListeners ??= {})[type] ??= []).push(fn); } }, crypto,
     CustomEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     prompt:()=>calls.prompt,
-    setTimeout: timers?.setTimeout ?? ((fn,ms)=>{if(ms===500){const id=++stopTimerId;stopTimers.set(id,fn);return id;}if(ms===300 || ms===0)return setTimeout(fn,0);}), clearTimeout: timers?.clearTimeout ?? (id=>{stopTimers.delete(id);clearTimeout(id);}), confirm: message => { (calls.confirmations ??= []).push(message);return calls.confirmResponses?.length ? calls.confirmResponses.shift() : calls.confirm; },
+    setTimeout: timers?.setTimeout ?? schedule, clearTimeout: timers?.clearTimeout ?? cancel, confirm: message => { (calls.confirmations ??= []).push(message);return calls.confirmResponses?.length ? calls.confirmResponses.shift() : calls.confirm; },
     fetch: async (_url, options) => {
       if (options?.method === 'GET') {
         (calls.modelRequests ??= []).push({ url: _url, options });
@@ -147,10 +152,10 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('Logout failed');} },
+    'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('logout detail');} },
     'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>{calls.estimateCalls=(calls.estimateCalls ?? 0)+1;return Math.ceil(text.length*0.306);}, countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
-      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('Create failed');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('Rename failed');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
+      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('create detail');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('rename detail');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
       getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
@@ -214,7 +219,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   stubs['lore-store.js'].readLoreEntry=async(_sid,id)=>structuredClone(calls.loreEntries?.find(e=>e.id===id) ?? null);
   stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{loreSnapshots.delete(uid+':'+sid);};
   Object.assign(stubs,extraStubs);
-  if(chatCache)stubs['chat-cache.js']={replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
+  if(chatCache)stubs['chat-cache.js']={loadChatCache:async()=>null,saveChatCache:async()=>true,deleteChatCache:async()=>{},replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
   const cache = new Map();
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
@@ -242,7 +247,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     return module;
   }
   async function use(path) {
-    if(path==='ui/chat-view.js' && !cache.has(path)) {
+    if(fixtureListeners && path==='ui/chat-view.js' && !cache.has(path)) {
       const source=sources[path] ?? await readFile(new URL('../js/'+path,import.meta.url),'utf8');
       sources[path]=source+`
 export function seedLoreFixture(entries){loreEntries=entries;verifiedLoreRevision=session?.loreRevision ?? 0;}\nexport function seedSessionFixture(value,metadata){if(metadata?.fromCache || metadata?.hasPendingWrites || (value.historyRevision ?? 0)<(session?.historyRevision ?? 0))return;sessionSnapshotVersion++;session=value;syncLore();updateRewriteControls();void updateIndicator();}
@@ -250,7 +255,7 @@ export async function seedMessagesFixture(value){lastMessages=value.messages;has
     }
     const module = await load(path);
     if (module.status !== 'evaluated') await module.evaluate();
-    if(path==='ui/chat-view.js'){fixtureLore=module.namespace.seedLoreFixture;fixtureSession=module.namespace.seedSessionFixture;fixtureMessages=module.namespace.seedMessagesFixture;}
+    if(fixtureListeners && path==='ui/chat-view.js'){fixtureLore=module.namespace.seedLoreFixture;fixtureSession=module.namespace.seedSessionFixture;fixtureMessages=module.namespace.seedMessagesFixture;}
     return module.namespace;
   }
   const { state } = await use('state.js');
@@ -258,7 +263,10 @@ export async function seedMessagesFixture(value){lastMessages=value.messages;has
   state.settings = settings.hydrateProfiles(structuredClone(settings.DEFAULT_SETTINGS));
   state.settingsSource = "server";
   return { use, state, settings, calls, localCache, document, el: document.getElementById,
-    stopAfterGuard:async()=>{for(const [id,fn]of [...stopTimers]){stopTimers.delete(id);fn();}return document.getElementById('btn-stop').dispatchEvent({type:'click'});},
+    flushFrames,advance,timerJobs,
+    runTimers:async(filter=()=>true)=>{for(const [id,job]of [...timerJobs])if(filter(job))await runTimer(id);},
+    assertTimersHandled:()=>{if(strictTimers)assert.deepEqual([...timerJobs.values()].map(j=>j.ms),[],'Unconsumed timer delays');},
+    stopAfterGuard:async()=>{for(const [id,job]of [...timerJobs])if(job.stopGuard)await runTimer(id);return document.getElementById('btn-stop').dispatchEvent({type:'click'});},
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
 
@@ -1157,18 +1165,11 @@ test('cached history reconciles outside recent subscription and unchanged revisi
 });
 
 
-test('cached, pending and delayed lower-revision metadata do not roll back server-reconciled history',async () => {
-  const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
-  const messages = [{ id:'u',order:1,role:'user',content:'Server version',revision:2 }]; h.calls.serverHistory = messages;
-  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:3 }) });
-  h.calls.latestCallbacks.at(-1)({ messages,hasEarlier:false }); await chat.prepareMemorySnapshot();
-  const reads = h.calls.historyReads;
-  for (const metadata of [{ fromCache:true },{ hasPendingWrites:true },{}]) {
-    h.calls.sessionCallbacks.at(-1)({ id:'story',metadata,exists:() => true,data:() => ({ title:'Stale',historyRevision:1 }) });
-    assert.equal(chat.memorySnapshot().session.historyRevision,3);
-    assert.equal(chat.memorySnapshot().messages[0].content,'Server version');
-  }
-  assert.equal(chat.memorySnapshot().session.title,'Story'); assert.equal(h.calls.historyReads,reads);
+test('lower-revision recovered metadata cannot roll back the production cached-story load',async()=>{
+ const message={id:'a',order:1,role:'assistant',content:'Server version',revision:2};
+ const {h,chat}=await productionLoadHarness({cache:{session:loadingSession,history:[message],historyRevision:3,recent:[message],hasEarlier:false},aux:{confirmed:{session:{...loadingSession,title:'Stale',historyRevision:1},messages:[{...message,content:'Old version'}],turns:{}}}});
+ chat.setSession('real-load');await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);for(let n=0;n<4;n++)await settle();
+ assert.equal(chat.memorySnapshot().session.historyRevision,3);assert.equal(chat.memorySnapshot().session.title,'Cached story');assert.equal(chat.memorySnapshot().messages[0].content,'Server version');assert.equal(h.calls.sessionReads ?? 0,0);
 });
 
 
@@ -1536,7 +1537,7 @@ test('Final twenty-turn replay keeps narration plus maintenance at two calls and
   h.el('chat-input').value='Continue '+turn;await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
   const calls=h.calls.requests.length-before+(h.calls.memoryStarts ?? 0)-memoryBefore;assert.ok(calls>=1 && calls<=2,'Turn '+turn+': '+calls+' calls');totalCalls+=calls;rows.push({turn:turn+1,modelRequests:h.calls.requests.length-before,memoryJobs:(h.calls.memoryStarts ?? 0)-memoryBefore,totalCalls:calls,reconcileReads:(h.calls.sessionReads ?? 0)-readsBefore});assert.equal(h.state.busy,false);assert.equal((h.calls.sessionReads ?? 0)-readsBefore,0);
  }
- assert.ok(totalCalls>20);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,20);await writeFile('/tmp/nera-twenty-turns.json',JSON.stringify({simulated:true,rows,totalCalls},null,2));
+ assert.ok(totalCalls>20);assert.equal(h.calls.messages.filter(c=>c[1].role==='assistant').length,20);
 });
 test('U7 cached or default settings cannot overwrite server preferences before an authoritative load',async()=>{
  const h=await harness();for(const source of ['cache','defaults']){h.state.settingsSource=source;await assert.rejects(h.settings.saveSettings(h.state.settings),/reload before saving/);}assert.equal(h.calls.writes.length,0);h.state.settingsSource='server';await h.settings.saveSettings(h.state.settings);assert.equal(h.calls.writes.length,1);
@@ -1684,10 +1685,10 @@ test('R2 sidebar guards duplicate creation and catches failed create, rename and
  const h=await harness(),chat=await h.use('ui/chat-view.js'),side=await h.use('ui/sidebar.js');chat.initChatView();side.initSidebar();let finish,started;const ready=new Promise(resolve=>started=resolve);h.calls.onCreate=()=>{started();return new Promise(resolve=>finish=resolve);};
  await h.fire('btn-new-session');const blank=()=>h.document.body.querySelectorAll('button').find(b=>b.textContent==='Create blank story');
  const pending=blank().click();await ready;await h.fire('btn-new-session');assert.equal(h.calls.creates,1);finish('s');await pending;assert.equal(!!h.el('btn-new-session').disabled,false);
- h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');await blank().click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Create failed'));
+ h.calls.onCreate=null;h.calls.failCreate=true;await h.fire('btn-new-session');await blank().click();assert.equal(h.document.body.querySelector('.toast').textContent,'create detail');
  h.calls.sidebarCallback([{id:'s',title:'Story'}]);const actions=h.el('session-list').querySelector('.session-actions');assert.deepEqual(actions.querySelectorAll('button').map(b=>b.textContent),['Rename','Duplicate','Delete']);assert.equal(actions.querySelector('.action-menu-trigger'),null);
- h.calls.failRename=true;await actions.querySelector('.ren').click();assert.ok(h.document.body.querySelector('.toast').textContent.includes('Rename failed'));
- h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.ok(h.document.body.querySelector('.toast').textContent.includes('Logout failed'));assert.equal(h.el('btn-logout').disabled,false);
+ h.calls.failRename=true;await actions.querySelector('.ren').click();assert.equal(h.document.body.querySelector('.toast').textContent,'rename detail');
+ h.calls.failLogout=true;await h.fire('btn-logout');assert.equal(h.calls.logouts,1);assert.equal(h.document.body.querySelector('.toast').textContent,'Sign out failed: logout detail Reload to continue.');await namedButton(h.document.body.querySelector('.toast'),'Reload').click();assert.equal(h.calls.reloads,1);assert.equal(h.el('btn-logout').disabled,false);
 });
 
 test('new story picker shows three openings and blocks duplicate selection while creating',async()=>{
@@ -1914,7 +1915,7 @@ test('MAIN merge stops a rewrite during history loading without a model call',as
  const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
  h.calls.onHistoryRead=()=>{started();return new Promise(resolve=>release=resolve);};
  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:1})});
- const running=h.fire('btn-rewrite');await ready;await h.fire('btn-rewrite');await running;
+ const running=h.fire('btn-rewrite');await ready;h.flushFrames();await h.fire('btn-rewrite');await running;
  assert.equal(h.state.busy,false);assert.equal(h.el('chat-input').value,'I tell him about the story');assert.equal(h.calls.requests.length,0);release();
 });
 test('MAIN merge manual Sync refreshes full history without making a model call',async()=>{
@@ -2046,7 +2047,7 @@ test('Continue previews inline and restores on Stop',async()=>{
  const h=await continueChatHarness();h.state.settings.streaming=true;h.calls.confirm=false;
  let read=0,release,started;const ready=new Promise(r=>started=r);
  h.calls.streamReader={read:async()=>{if(!read++){return {done:false,value:new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Preview passage"}}]}\n')};}started();return new Promise(r=>release=r);},cancel:async()=>release?.({done:true})};
- const running=h.fire('btn-rewrite');await ready;
+ const running=h.fire('btn-rewrite');await ready;h.flushFrames();
  assert.equal(h.el('message-list').children.filter(n=>n.className==='msg assistant').length,1);
  assert.equal(h.el('message-list').querySelector('.msg-content').textContent,'<OOC>Explain this</OOC>');
  assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Saved prefix.  \n\nPreview passage'));
@@ -2054,10 +2055,10 @@ test('Continue previews inline and restores on Stop',async()=>{
  assert.equal(h.calls.overwrites?.length ?? 0,0);assert.equal(h.calls.history.at(-1).content,'Saved prefix.  ');
 });
 
-async function cardUI() {
+async function cardUI(configure=()=>{},messages=[]) {
  const h=await harness(),l=await h.use('lore-lines.js'),f=await h.use('lore-format.js');
- const card=l.makeEntry('characters','Mira'),other=l.makeEntry('characters','Other');card.sections.notes.text='Before';h.calls.loreEntries=[card,other];
- await openImprovementChat(h);const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({entryId:card.id});await new Promise(r=>setImmediate(r));
+ const card=l.makeEntry('characters','Mira'),other=l.makeEntry('characters','Other');card.sections.notes.text='Before';configure(card);h.calls.loreEntries=[card,other];
+ await openImprovementChat(h,{},messages);const lore=await h.use('ui/lorebook-view.js');lore.initLorebookView();lore.openLorebooks({entryId:card.id});await new Promise(r=>setImmediate(r));
  return {h,l,f,lore,card,other,root:h.el('lorebook-overlay')};
 }
 const namedButton=(root,text)=>root.querySelectorAll('button').find(b=>b.textContent===text);
@@ -3977,4 +3978,131 @@ test('Switching away from Director preserves an empty edited prompt for validati
  h.el('set-director-prompt').value='';h.el('set-narration-mode').value='classic';await h.fire('settings-back');await h.fire('nav-prompts');
  assert.equal(h.el('set-director-prompt').value,'');await h.fire('btn-save-settings');
  assert.equal(h.el('set-director-prompt').value,'');assert.match(h.el('settings-saved-msg').textContent,/directorSystemPrompt.*must contain text/);assert.equal(h.calls.writes.length,0);
+});
+
+test('WP-02 a healthy Director call may finish after the preparation deadline',async()=>{
+ const timers=controlledTimers(),response=deferred();let entered=false;
+ const h=await harness({timers,extraStubs:{'director-turn.js':{prepareDirectorTurn:async()=>{entered=true;return response.promise;}}}});
+ h.state.settings.narrationMode='director';
+ const chat=await openImprovementChat(h,{},[{id:'u',role:'user',order:1,content:'Wait.'}]);
+ await settle();const retry=namedButton(h.el('message-list'),'Retry reply').click();
+ for(let i=0;i<100&&!entered;i++){timers.advance(0);await settle();}
+ assert.equal(entered,true);
+ timers.advance(125000);await settle();
+ response.resolve({contract:{action:'wait',objective:'Waiting is complete.'}});await retry;await settle();
+ assert.deepEqual(h.calls.petFinishes,['ready']);assert.equal(h.state.busy,false);
+ assert.ok(!h.el('chat-status').textContent?.includes('preparation stopped'));
+});
+
+for(const action of ['sync','reselect'])test('WP-06 explicit '+action+' reloads a story after its first server read fails',async()=>{
+ let h,reads=0;
+ const story={id:'recovery',title:'Recovered story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:0};
+ h=await harness({extraStubs:{
+  'sessions.js':{updateSession:async()=>{},duplicateSession:async()=>{},getSession:async()=>story,getSessionFromServer:async()=>{if(++reads===1)throw Error('First read failed');return story;}},
+  'story-settings-store.js':{selectStorySettings:async sid=>{h.state.storySettingsId=sid;h.state.storySettings={revision:1,values:{}};},effectiveActiveSettings:()=>h.state.settings,saveStorySettings:async()=>{},readStorySettingsRefresh:async()=>({revision:1,values:{}}),applyStorySettingsRefresh(){},invalidateStorySettingsLoads(){},preserveLegacyStorySeed:async()=>({}),ensureStorySettings:async()=>({revision:1,values:{}}),writeInitialStorySettings:async()=>{}},
+ }});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('recovery');
+ await waitForParallel(()=>reads===1);for(let n=0;n<5;n++)await settle();
+ assert.equal(chat.memorySnapshot(),null);assert.equal(reads,1,'no automatic server retry');
+ if(action==='sync')await chat.syncChatData();else chat.setSession('recovery');
+ for(let n=0;n<30&&!chat.memorySnapshot();n++)await settle();
+ assert.equal(chat.memorySnapshot()?.session.title,'Recovered story');assert.equal(reads,2);
+});
+
+test('WP-06 Sync backs up a conflicted outbox when its store was initially closed',async()=>{
+ const fixture=indexedDBFixture({sessions:[]}),h=await harness({globals:{indexedDB:fixture.indexedDB}});
+ const chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Original'}]);await settle();
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ const local=await h.use('local-story-store.js'),cache=await h.use('chat-cache.js'),base=structuredClone(local.storyStore('improvement').view);
+ local.forgetStoryStore('improvement');assert.equal(local.storyStore('improvement'),undefined);
+ const op={id:'closed-store-op',kind:'add',payload:{id:'queued',message:{role:'user',content:'Unsynced action'}},createdAt:1};
+ assert.equal(await cache.storyQueueStorage.put('test-user','improvement',op,base),true);
+ h.calls.addMessage=async()=>{throw Object.assign(Error('Conflicting history'),{code:'story-conflict'});};
+ h.calls.serverHistory=[{id:'server',role:'assistant',order:1,content:'Server reply'}];
+ assert.equal(await chat.syncChatData(),true);
+ const data=await cache.loadStoryData('test-user','improvement');
+ assert.ok(data.deviceRecoveryBackups.at(-1).snapshot.messages.some(m=>m.content==='Unsynced action'));
+ assert.equal(chat.memorySnapshot().messages[0].content,'Server reply');
+ assert.equal(local.storyStore('improvement').status.paused,false);
+});
+
+
+test('source-edited badges require a source and still track edited assistants',async()=>{
+ const {root}=await cardUI(card=>{card.sections.notes.lines=[{id:'manual',text:'Manual note',src:null,by:'user',at:10},{id:'auto',text:'Generated note',src:2,turn:1,by:'auto',at:10}];},[{id:'u',role:'user',order:1,content:'Start'},{id:'a',role:'assistant',order:2,content:'Reply',editedAt:new Date(30).toISOString()},{id:'s',role:'summary',order:3,content:'Summary',editedAt:new Date(40).toISOString()}]);
+ const manual=root.querySelectorAll('.lore-lines').flatMap(n=>n.children).find(n=>n.querySelectorAll('span').some(s=>s.textContent==='Manual note'));
+ const auto=root.querySelectorAll('.lore-lines').flatMap(n=>n.children).find(n=>n.querySelectorAll('span').some(s=>s.textContent==='Generated note'));
+ assert.ok(manual);assert.ok(auto);assert.equal(manual.querySelectorAll('.badge').some(s=>s.textContent==='Source edited'),false);assert.equal(auto.querySelectorAll('.badge').some(s=>s.textContent==='Source edited'),true);
+});
+
+test('opening legacy section metadata does not create unsaved card changes',async()=>{
+ const {h,root}=await cardUI(card=>{for(const section of Object.values(card.sections)){delete section.kind;delete section.origin;delete section.cutoff;}card.sections.notes.lines=Array.from({length:3},(_,i)=>({id:'n'+i,text:'Generated '+i,by:'auto',at:i+1,src:null}));});
+ await (await menuAction(h,root,'Reorganize…')).click();
+ assert.doesNotMatch(h.document.body.querySelector('.toast')?.textContent ?? '',/Save or cancel/);
+ const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').filter(e=>!e.classList.contains('hidden')).at(-1);assert.ok(dialog);await namedButton(dialog,'Cancel').click();
+ const before=h.calls.confirmations?.length ?? 0;await root.querySelector('.lore-editor').querySelector('button').click();
+ assert.equal(h.calls.confirmations?.length ?? 0,before);
+});
+
+test('cancelling memory-start selection clears saving status without a write',async()=>{
+ const source=await readFile(new URL('../js/ui/memory-settings-view.js',import.meta.url),'utf8');
+ const h=await harness({sources:{'ui/memory-settings-view.js':source.replace('export async function chooseMemoryStart(mem,previous,session,force=false) {',"export async function chooseMemoryStart(mem,previous,session,force=false) { return 'cancel';")}});
+ await openImprovementChat(h);const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await settle();
+ h.el('mem-autoUpdate').checked=true;await h.fire('btn-save-session');
+ assert.doesNotMatch(h.el('settings-saved-msg').textContent,/Saving/);assert.equal(h.el('btn-save-session').disabled,false);assert.equal(h.calls.sessionWrites.length,0);
+});
+
+test('a saved truncated Director narration finishes the pet activity',async()=>{
+ let pending;const h=await harness({extraStubs:{'director-store.js':{discardPendingDirector:async()=>{},getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn)=>pending={...turn,status:'pending'}}}});
+ Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'large',profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
+ await openImprovementChat(h,{directorState:saveSeed,memory:{scene:true}});
+ h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({version:1,action:'narrate',transition:'unchanged',objective:'Dinner',stopCondition:'Stop',memoryIds:[],requiredMemoryIds:[],updates:{}}):'Partial dinner'},finish_reason:body.model==='director'?'stop':'length'}]};};
+ h.el('chat-input').value='Dinner';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ assert.equal(h.calls.messages.find(c=>c[1].role==='assistant')?.[1].truncated,true);
+ assert.equal(h.calls.petFinishes?.at(-1),'ready');assert.equal(h.state.busy,false);
+});
+
+// These loading tests use production boundaries and disable the legacy listener
+// fixtures. Other regression cases still use those fixtures; see package notes.
+async function productionLoadHarness({cache=null,outbox=null,aux=null}={}){
+ let h;h=await harness({fixtureListeners:false,chatCache:{loadChatCache:async()=>cache,loadStoryData:async()=>aux,storyQueueStorage:{load:async()=>outbox,put:async()=>true,ack:async()=>true}},extraStubs:{'story-settings-store.js':{selectStorySettings:async sid=>{h.state.storySettingsId=sid;h.state.storySettings={revision:1,values:{}};},effectiveActiveSettings:()=>h.state.settings,saveStorySettings:async()=>{},readStorySettingsRefresh:async()=>({revision:1,values:{}}),applyStorySettingsRefresh(){},invalidateStorySettingsLoads(){},preserveLegacyStorySeed:async()=>({}),ensureStorySettings:async()=>({revision:1,values:{}}),writeInitialStorySettings:async()=>{}}}});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();return {h,chat};
+}
+const loadingSession={id:'real-load',title:'Cached story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:3,nextOrder:2};
+
+test('real story loading merges a persisted outbox and enables narration without fixture exports',async()=>{
+ const base={session:loadingSession,messages:[{id:'a',order:1,role:'assistant',content:'Existing reply'}],turns:{}};
+ const outbox={base,operations:[{id:'pending',kind:'add',payload:{id:'recovered',message:{role:'user',content:'Recovered local action'}},createdAt:1}]};
+ const {h,chat}=await productionLoadHarness({outbox});h.calls.addMessage=()=>new Promise(()=>{});chat.setSession('real-load');
+ await waitForParallel(()=>chat.memorySnapshot()?.messages.some(m=>m.id==='recovered'));
+ assert.equal(chat.seedSessionFixture,undefined);assert.equal(chat.seedMessagesFixture,undefined);
+ assert.equal(chat.memorySnapshot().historyComplete,true);
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Recovered local action'));assert.equal(h.el('btn-send').disabled,false);
+});
+
+test('streaming paints later chunks and coalesces content between animation frames',async()=>{
+ const h=await harness({autoFrames:false});await openImprovementChat(h);h.state.settings.streaming=true;
+ let resume,reads=0;h.calls.streamReader={read:()=>{reads++;return new Promise(r=>resume=r);},cancel:async()=>resume?.({done:true})};
+ h.el('chat-input').value='Begin';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await waitForParallel(()=>reads===1);h.flushFrames();
+ const content=()=>h.el('message-list').querySelectorAll('.msg-content').at(-1);
+ const chunk=async(text,thinking='')=>{const before=reads;resume({done:false,value:new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:text,reasoning:thinking}}]})+'\n')});await waitForParallel(()=>reads>before);};
+ await chunk('First. ');h.flushFrames();assert.equal(content().textContent,'First.');
+ await chunk('Second. ');h.flushFrames();assert.equal(content().textContent,'First. Second.');
+ await chunk('<plan>hidden</plan>Third.','x'.repeat(4100));await chunk(' Fourth.','y');
+ assert.equal(content().textContent,'First. Second.');assert.equal(h.flushFrames(),1);
+ assert.equal(content().textContent,'First. Second. Third. Fourth.');assert.equal(h.el('message-list').querySelectorAll('.thinking-body').at(-1).textContent.length,4000);
+ resume({done:false,value:new TextEncoder().encode('data: [DONE]\n')});await sending;assert.equal(h.state.busy,false);
+});
+
+test('default timer clock runs the delayed cache save for the current story',async()=>{
+ const saved=[],h=await harness({chatCache:{saveChatCache:async(...args)=>{saved.push(args);return true;}}});await openImprovementChat(h);h.calls.response='New reply';h.el('chat-input').value='New action';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
+ const before=saved.length;assert.ok([...h.timerJobs.values()].some(j=>j.ms===1000));await h.advance(1000);
+ assert.ok(saved.length>before);assert.equal(saved.at(-1)[1],'improvement');assert.ok(saved.at(-1)[2].history.some(m=>m.content==='New reply'));
+});
+
+test('Stop guard does not fire a simultaneous hold-to-copy timer',async()=>{
+ const h=await harness();await openImprovementChat(h,{},[{id:'a',order:1,role:'assistant',content:'Do not copy this'}]);let started;const ready=new Promise(r=>started=r);h.calls.streamReader={read:()=>{started();return new Promise(()=>{});},cancel:async()=>{}};h.state.settings.streaming=true;
+ h.el('chat-input').value='Act';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await ready;
+ const target=h.el('message-list').children.find(n=>n.className==='msg assistant');await target.dispatchEvent({type:'pointerdown',pointerType:'touch',target:{closest:()=>null},clientX:10,clientY:10});await h.stopAfterGuard();
+ await target.dispatchEvent({type:'pointerup'});assert.equal(h.calls.clipboard,undefined);assert.equal(target.classList.contains('holding'),false);assert.equal(h.state.busy,false);
+ void sending;
 });

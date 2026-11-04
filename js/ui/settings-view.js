@@ -695,7 +695,7 @@ async function handleSaveSession() {
       const budget = nextMemory.lorebooks ? Object.values(nextMemory.books).filter(b => b.on).reduce((n,b) => n+b.budget,0) : 0;
       if (budget > .9*(requestInputLimit(state.settings))) throw new Error('Book budgets are larger than the space available. Lower them or raise Max context tokens (Context & summaries).');
       const start = await chooseMemoryStart(nextMemory, normalizeMemory(sessionOriginal.memory), sessionOriginal);
-      if (start === 'cancel') return;
+      if (start === 'cancel') { feedback('Save cancelled.'); return; }
       Object.assign(partial,diffMemorySettings(normalizeMemory(sessionOriginal.memory),nextMemory));
       if (start != null && start !== sessionOriginal.memoryState?.extractedThroughOrder) partial['memoryState.extractedThroughOrder'] = start;
     }

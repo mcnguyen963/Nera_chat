@@ -72,7 +72,7 @@ function lineContext(snapshot=live()) {
 }
 function deletedOrders() {return lineContext().orders;}
 function deletedLine(l,render) {const ctx=render?.lineContext ?? lineContext();return deletedHistoryReady && (render?.snapshot ?? live())?.historyComplete === true && l.src!=null && Number(l.src)<=ctx.maxOrder && !ctx.orders.has(Number(l.src));}
-function editedSource(l) {const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
+function editedSource(l) {if(l.src==null)return false;const ctx=lineContext();return (ctx.editedAtByTurn.get(ctx.turnByOrder.get(l.src)) ?? 0)>l.at;}
 const newCount = e => linesOf(e).filter(l => l.at > (seen()[e.id] ?? 0)).length;
 function captureRender() {
   const snapshot=live(),cards=entries(snapshot),read=seen(),mem=normalizeMemory(snapshot?.session.memory);
@@ -385,14 +385,14 @@ function renderEditor() {
     const section = staged.sections[key], container = node('section',null,'lore-section');
     const label = key === 'text' ? book === 'facts' ? 'Facts' : staged.kind === 'timeline' ? 'Backstory before the story starts (optional)' : 'Notes' : sectionLabel(key,protagonist)+(key === 'personality' ? ' · ONLY YOU WRITE' : '');
     container.append(node('h3',label,'eyebrow'));
-    Object.assign(section,sectionMeta(section,staged));
+    const meta = sectionMeta(section,staged);
     if (snapshotNeedsReview(section,staged,live()?.session)) container.append(node('p','Needs review: snapshot excluded after a history change. Assign a verified cutoff or declare author canon.','memory-warning'));
     const classification = node('select');
     for (const kind of ['canon','snapshot','background']) { const option = node('option',kind === 'canon' ? 'Author canon' : kind === 'snapshot' ? 'State snapshot' : 'Background (unknown cutoff)'); option.value = kind; classification.append(option); }
-    classification.value = section.kind;
-    const cutoff = field('Snapshot cutoff: narrator turn',section.cutoff?.turn ?? ''); cutoff.input.type = 'number'; cutoff.input.min = '1';
+    classification.value = meta.kind;
+    const cutoff = field('Snapshot cutoff: narrator turn',meta.cutoff?.turn ?? ''); cutoff.input.type = 'number'; cutoff.input.min = '1';
     const updateKind = () => { section.kind = classification.value; section.origin = 'user'; section.unavailable = false; section.sourceRevision = live()?.session.historyRevision ?? 0; cutoff.wrap.hidden = section.kind !== 'snapshot'; };
-    classification.addEventListener('change',updateKind); cutoff.wrap.hidden = section.kind !== 'snapshot';
+    classification.addEventListener('change',updateKind); cutoff.wrap.hidden = meta.kind !== 'snapshot';
     cutoff.input.addEventListener('input',() => { const turn = Number(cutoff.input.value), assistant = computeTurns(live()?.messages ?? []).assistants.find(a => a.turn === turn); section.cutoff = assistant ? { turn,order:assistant.order } : null; section.unavailable = false; section.sourceRevision = live()?.session.historyRevision ?? 0; });
     container.append(classification,cutoff.wrap);
 

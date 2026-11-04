@@ -1,3 +1,4 @@
+import {nextNarratorTurnForMessages} from './turns.js';
 import {flushStory} from './story-sync.js';
 import { exportDirectorTurns, importDirectorTurns } from './director-store.js';
 import * as loreStore from './lore-store.js';
@@ -248,7 +249,7 @@ export async function duplicateSession(sourceId, messageCount = null, throughMes
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     nextOrder: selected.at(-1)?.order ?? 0,
-    nextNarratorTurn:Math.max(0,maxOf(selected.map(m => m.narratorTurn ?? 0)))+(selected.at(-1)?.role === "user" ? 0 : 1),
+    nextNarratorTurn:nextNarratorTurnForMessages(selected),
     storageVersion: 2,lookupVersion:1,...summaryLookup(selected),
     activeChunkId: last ? chunkId(last[0].order) : null,
     activeChunkBytes: last ? chunkBytes(last) : 0,

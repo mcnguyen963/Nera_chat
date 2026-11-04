@@ -101,7 +101,7 @@ test('thread list keeps archives separate from open, closed and all filters',asy
 test('Restore control stages a recoverable change and preserves the resolved outcome',async()=>{
  const h=await fixture(),item=structuredClone(h.entry);let changes=0;
  const node=(tag,text='')=>({tag,text,children:[],listeners:{},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},addEventListener(name,fn){this.listeners[name]=fn;}});
- const use=appHarness({stubs:{'ui/memory-ui.js':{node,field:(label,value)=>({wrap:node('label',label),input:{value,addEventListener(){}}})}}}),ui=await use('ui/thread-editor.js'),parent=node('div');
+ const use=appHarness({stubs:{'ui/memory-ui.js':{node,field:(label,value)=>({wrap:node('label',label),input:Object.assign(node('input'),{value})})}}}),ui=await use('ui/thread-editor.js'),parent=node('div');
  ui.renderThreadEditor(parent,item,{onChange:()=>changes++});const archive=parent.children[0],restore=archive.children.find(n=>n.tag==='button');
  assert.match(archive.children[0].text,/resolved within three story days/);restore.listeners.click();
  assert.equal(changes,1);assert.equal(item.threadHistory.archive,null);assert.equal(item.status,'closed');assert.equal(item.threadMeta.outcome,'resolved');assert.match(archive.children[0].text,/Save to apply/);assert.ok(h.entry.threadHistory.archive);
@@ -113,4 +113,15 @@ test('cross-story card transfer keeps archive exclusion without depending on for
  const imported=f.planCardImport([],parsed,{storyId:'destination'}).data;
  assert.equal(imported.threadHistory.opened.by,'import');assert.equal(imported.threadHistory.opened.evidence.length,0);
  assert.equal(h.c.usableLore([imported],[],{}).entries.length,0);
+});
+
+
+test('thread editor timing and outcome inputs update staged thread provenance and status',async()=>{
+ const h=await fixture(),item=structuredClone(h.entry);item.threadHistory.archive=null;item.threadMetaSource={evidence:[]};let changes=0;
+ const node=(tag,text='')=>({tag,text,children:[],listeners:{},append(...items){this.children.push(...items);},addEventListener(name,fn){this.listeners[name]=fn;}}),fields={};
+ const use=appHarness({stubs:{'ui/memory-ui.js':{node,field:(label,value)=>{const input=Object.assign(node('input'),{value});fields[label]=input;return {wrap:node('label',label),input};}}}}),ui=await use('ui/thread-editor.js'),parent=node('div');ui.renderThreadEditor(parent,item,{onChange:()=>changes++});
+ const details=parent.children.find(n=>n.tag==='details'),outcome=details.children.find(n=>n.text==='Outcome').children[0];
+ outcome.value='resolved';outcome.listeners.change();assert.equal(item.status,'closed');assert.equal(item.threadMetaSource,null);assert.equal(item.threadMeta.outcome,'resolved');
+ outcome.value='';outcome.listeners.change();assert.equal(item.status,'open');assert.equal(item.threadMeta.outcome,null);
+ fields['Meeting location (optional)'].value='Library';fields['Meeting location (optional)'].listeners.input();assert.equal(item.threadMeta.location,'Library');assert.equal(changes,3);
 });
