@@ -77,9 +77,9 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const protagonist=available.find(e=>e.book==='characters' && e.name===mem.protagonist);
   if(protagonist){const i=candidates.findIndex(item=>item.entry.id===protagonist.id);if(i>=0)candidates.splice(i,1);candidates.unshift({entry:protagonist});}
   const roster=attendanceHints(capped,text,before.scene);
-  const control=[...selectScheduledPlan(available,before.scene.date,latest.planJump ?? null).selected.map(item=>({id:item.entry.id,name:item.entry.name,text:renderPlanUnit(item).slice(0,6000)})),...roster];let controlTokens=0;
+  const control=[...selectScheduledPlan(available,before.scene.date,latest.planJump ?? null).selected.map(item=>({id:item.entry.id,name:item.entry.name,text:renderPlanUnit(item).slice(0,6000)})),...roster];
   while(control.length && await count(JSON.stringify(control))>4500)control.pop();
-  controlTokens=await count(JSON.stringify(control));
+  let controlTokens=await count(JSON.stringify(control));
   for(const {entry} of candidates){
     const constraints=entry.schemaVersion===3 ? recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection,anchors,currentText:text,recentText,index:selection.index}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(cappedById.get(entry.id),null,mem.protagonist);
     const excerpt=constraints.slice(0,6000),tokens=await count(excerpt);

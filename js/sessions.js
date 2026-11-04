@@ -18,7 +18,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
-import { ensureChunked, ensureContinuityMetadata } from "./messages.js";
+import { ensureContinuityMetadata } from "./messages.js";
 import { packMessages, chunkId, chunkRecord, chunkBytes, summaryLookup } from "./message-chunks.js";
 
 // Every session lives under users/{uid}/sessions/... so each user's chat history

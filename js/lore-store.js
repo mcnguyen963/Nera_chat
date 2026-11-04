@@ -8,7 +8,7 @@ import { minOf, maxOf } from './math-utils.js';
 import { limitSkippedNotes } from './memory-skipped.js';
 import { assertStory } from './errors.js';
 import { assertSource, noteNeedsReview, sectionMeta, assertExtractionSource } from './continuity.js';
-import { doc, collection, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, writeBatch, serverTimestamp, Timestamp, increment } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { doc, collection, getDocFromServer, getDocsFromServer, runTransaction, writeBatch, serverTimestamp, Timestamp, increment } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { db } from './db.js';
 import { getMessages } from './messages.js';
 import { currentUid } from './auth.js';

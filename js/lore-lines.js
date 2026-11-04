@@ -79,7 +79,7 @@ export function parseMemoryLines(text,ctx={}) {
     if(section==='alias' && !validRecallAlias(value)){skip('not a valid alias');continue;}
     if((!value && !['open','closed','expired','background'].includes(tag)) || value.length>400){skip('empty or oversized note');continue;}
     if(ops.length>=80){info.push('too many notes; first 80 kept');continue;}
-    let turn=Math.max(Number(m[1]),Number(m[2] ?? m[1])),startTurn=Math.min(Number(m[1]),Number(m[2] ?? m[1])),assistant,evidence=[],original=null;
+    let turn=Math.max(Number(m[1]),Number(m[2] ?? m[1])),startTurn=Math.min(Number(m[1]),Number(m[2] ?? m[1])),assistant,evidence,original=null;
     const declaredStart=startTurn,declaredTurn=turn;
     if(ctx.reorganize) {
       const entry=ctx.entries?.find(e=>[e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(name)));

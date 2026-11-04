@@ -1,0 +1,183 @@
+{
+  "js/continuity.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/history-recall-core.js": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "js/history-recall-engine.js": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "js/import-export.js": {
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "js/lore-format.js": {
+    "preserve-caught-error": {
+      "count": 2
+    }
+  },
+  "js/lore-lines.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/lore-select.js": {
+    "no-control-regex": {
+      "count": 2
+    }
+  },
+  "js/lore-semantic.js": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "js/lore-store.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/memory-context.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/memory-updater.js": {
+    "no-unused-vars": {
+      "count": 2
+    }
+  },
+  "js/messages.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/scene-parser.js": {
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "js/scene-recovery.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/sessions.js": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "js/story-text.js": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "js/ui/chat-view.js": {
+    "no-unused-vars": {
+      "count": 13
+    },
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "js/ui/lorebook-view.js": {
+    "no-unused-vars": {
+      "count": 4
+    }
+  },
+  "js/ui/memory-settings-view.js": {
+    "no-unused-vars": {
+      "count": 2
+    }
+  },
+  "js/ui/settings-view.js": {
+    "no-unused-vars": {
+      "count": 2
+    },
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "scripts/stamp-version.mjs": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "tests/history-recall.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/lore-note-window.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/lore-record-store.mjs": {
+    "no-unused-vars": {
+      "count": 2
+    }
+  },
+  "tests/message-chunks.mjs": {
+    "no-unused-vars": {
+      "count": 6
+    }
+  },
+  "tests/narrator-context.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/pets.mjs": {
+    "no-unused-vars": {
+      "count": 2
+    }
+  },
+  "tests/provider-picker.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/regressions.mjs": {
+    "no-unused-vars": {
+      "count": 6
+    }
+  },
+  "tests/story-settings.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/thread-lifecycle.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/tokenizer.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/tools/director-eval.mjs": {
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "tests/tools/embedding-quality.mjs": {
+    "no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/tools/narrator-comparison.mjs": {
+    "preserve-caught-error": {
+      "count": 1
+    }
+  }
+}

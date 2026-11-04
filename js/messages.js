@@ -8,7 +8,7 @@ import { canonicalScene, validateSceneEdit } from './scene.js';
 import { assertSource, revisionOf, trimInvalidations, StoryConflict } from './continuity.js';
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
-  limitToLast, updateDoc, collection, runTransaction, writeBatch, serverTimestamp,
+  limitToLast, collection, runTransaction, serverTimestamp,
   Timestamp, arrayUnion, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";

@@ -12,7 +12,7 @@ import { initAuth, login, resetPassword, changePassword, currentUserInfo } from 
 import { loadSettings, watchSettings, DEFAULT_SETTINGS, hydrateProfiles } from "./settings.js";
 import { state } from "./state.js";
 import { initSidebar } from "./ui/sidebar.js";
-import { initChatView, setSession, prepareChatLogout } from "./ui/chat-view.js";
+import { initChatView, prepareChatLogout } from "./ui/chat-view.js";
 import { initSettingsView, openSettingsPopup } from "./ui/settings-view.js";
 
 const el = {

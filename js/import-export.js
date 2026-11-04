@@ -10,7 +10,7 @@ import * as messagesApi from './messages.js';
 import {currentUid} from './auth.js';
 import {normalizeLoreEntry} from './lore-format.js';
 import {download} from './ui/memory-ui.js';
-import { getLore, importLore } from './lore-store.js';
+import { importLore } from './lore-store.js';
 import * as loreStore from './lore-store.js';
 import { normalizeMemory } from './memory-settings.js';
 import {rebaseImportedLore,recoveredReplyForImport,validateImportedMessages,validateRecoveredReply} from './import-recovery.js';

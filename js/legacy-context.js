@@ -222,18 +222,6 @@ export async function computeLegacyUsage(session, settings, messages = null) {
 // The tag is emitted by the model anywhere in its reply; the app extracts it,
 // saves it as the session's long-term plan only when allowed, and strips it from visible content.
 
-function extractPlan(text) {
-  if (!text) return null;
-  const m = text.match(/<plan>([\s\S]*?)<\/plan>/i);
-  return m ? m[1].trim() : null;
-}
-
-function extractPlanThread(text) {
-  if (!text) return null;
-  const m = text.match(/<plan_thread>([\s\S]*?)<\/plan_thread>/i);
-  return m ? m[1].trim() : null;
-}
-
 function stripPlanThread(text) {
   if (!text) return "";
   return text
