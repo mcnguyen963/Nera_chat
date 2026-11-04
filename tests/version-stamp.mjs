@@ -69,9 +69,11 @@ test('site assembly versions nested vendor modules and writes a release manifest
 
 test('CI tests each branch and deploys only main after the test gate', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml',import.meta.url),'utf8');
-  assert.match(workflow,/node-version: '20'/);
-  assert.match(workflow,/node --experimental-vm-modules --test tests\/\*\.mjs/);
-  assert.match(workflow,/build:\s+if: github.ref == 'refs\/heads\/main'\s+needs: test/);
+  assert.match(workflow,/node: '20'/);
+  assert.match(workflow,/run: node scripts\/test-rerun\.mjs/);
+  assert.match(workflow,/node: '24'/);assert.match(workflow,/REQUIRE_BROWSER: '1'/);
+  assert.match(workflow,/find _site -name '\*\.d\.ts' -type f -delete/);
+  assert.match(workflow,/build:\s+if: github.ref == 'refs\/heads\/main'\s+needs: \[static, test\]/);
   assert.match(workflow,/deploy:\s+if: github.ref == 'refs\/heads\/main'\s+needs: build/);
   assert.doesNotMatch(workflow,/if: github.ref == 'refs\/heads\/feature\//);
   assert.match(workflow,/node scripts\/stamp-version.mjs _site "\$GITHUB_SHA"/);

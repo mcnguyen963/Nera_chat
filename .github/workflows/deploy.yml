@@ -12,25 +12,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
+  static:
+    name: Static checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Placeholder Firebase config for static analysis
+        run: cp js/firebase-config.example.js js/firebase-config.js
+      - run: npm run check:syntax
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run check:qc
+
+  test:
+    name: Tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REQUIRE_BROWSER: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20'
+            coverage: false
+          - node: '24'
+            coverage: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: ${{ matrix.coverage && 'npm' || '' }}
+      - name: Syntax on oldest Node
+        if: ${{ !matrix.coverage }}
+        run: node scripts/check-syntax.mjs
       - name: Regression suite
-        run: node --experimental-vm-modules --test tests/*.mjs
+        if: ${{ !matrix.coverage }}
+        run: node scripts/test-rerun.mjs
+      - name: Install QC tooling
+        if: ${{ matrix.coverage }}
+        run: npm ci --ignore-scripts
+      - name: Regression suite with coverage ratchet
+        if: ${{ matrix.coverage }}
+        run: npm run test:coverage
+      - name: Upload coverage report
+        if: ${{ always() && matrix.coverage }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage
+            !coverage/raw
+            !coverage/v8
+          retention-days: 14
+          if-no-files-found: ignore
 
   build:
     if: github.ref == 'refs/heads/main'
-    needs: test
+    needs: [static, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       # Generate js/firebase-config.js before publishing to GitHub Pages.
       - name: Write firebase-config.js
@@ -73,7 +126,7 @@ jobs:
           for f in $(grep -o '"[A-Za-z0-9-]*\.md"' js/system-prompts.js | tr -d '"'); do
             test -s "_site/system prompts/$f"
           done
-          for p in lorebooks play-history investigate data docs starting production-reports production-backups tests scripts private .private .secret memory.md opencode.json REVIEW_FINDINGS.md improvePlan.md firebase.json firestore.rules RELEASE.md register.html; do
+          for p in lorebooks play-history investigate data docs starting production-reports production-backups tests scripts private .private .secret memory.md opencode.json REVIEW_FINDINGS.md improvePlan.md firebase.json firestore.rules RELEASE.md register.html package.json package-lock.json node_modules eslint.config.js eslint-suppressions.json jsconfig.json types coverage; do
             test ! -e "_site/$p"
           done
 
