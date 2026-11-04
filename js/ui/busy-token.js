@@ -11,10 +11,7 @@ export function protectStop(token,{isActive,onReady,schedule=setTimeout,cancel=c
   const timer=schedule(()=>{if(isActive(token)){token.stopReady=true;onReady();}},delay);
   return ()=>cancel(timer);
 }
-export function bridgeHistory(base,revision,message) {
-  if(!base || revision!==message.historyRevision-1)return null;
-  const map=new Map(base.map(m=>[m.id,m]));map.set(message.id,message);return [...map.values()].sort((a,b)=>a.order-b.order);
-}
+
 
 // Stop must release reply preparation even if a storage read or tokenizer hangs.
 export async function waitForPreparation(promise, controller, timeoutMs = 120000) {

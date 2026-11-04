@@ -36,7 +36,7 @@ export function mergeStorySettings(current,base,changes) {
   for(const key of Object.keys(pickStorySettings(changes)))if(JSON.stringify(current[key])!==JSON.stringify(base[key]))throw new Error('These story prompts changed on another device. Reload and review before saving.');
   return explicitStorySettings({...current,...pickStorySettings(changes)});
 }
-export function snapshotRevisions(s={}) {return {historyRevision:s.historyRevision ?? 0,loreRevision:s.loreRevision ?? 0,storySettingsRevision:s.storySettingsRevision ?? 0,directorRevision:s.directorRevision ?? 0,directorPending:s.directorPending ?? null};}
+function snapshotRevisions(s={}) {return {historyRevision:s.historyRevision ?? 0,loreRevision:s.loreRevision ?? 0,storySettingsRevision:s.storySettingsRevision ?? 0,directorRevision:s.directorRevision ?? 0,directorPending:s.directorPending ?? null};}
 export function assertSnapshotRevisions(before,after,{cachedLore=false}={}) {
   const a=snapshotRevisions(before),b=snapshotRevisions(after);if(cachedLore){delete a.loreRevision;delete b.loreRevision;}
   if(!after || after.deleting || JSON.stringify(a)!==JSON.stringify(b))throw new Error('The story changed while copying or exporting. Try again when both devices are idle.');

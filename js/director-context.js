@@ -32,10 +32,10 @@ function entityIndex(entries) {
   const rows=entries.filter(e=>['characters','locations'].includes(e.book)).map(e=>({id:e.id,book:e.book,name:e.name,aliases:e.aliases ?? [],brief:brief(e)}));
   return rows;
 }
-export const DIRECTOR_RESPONSE_FORMAT=Object.freeze({type:'json_object'});
+const DIRECTOR_RESPONSE_FORMAT=Object.freeze({type:'json_object'});
 export function directorOutputOptions(settings,context) {
   return {responseFormat:context?.responseFormat ?? DIRECTOR_RESPONSE_FORMAT,
-    ...(/^https:\/\/openrouter\.ai\//i.test(settings.endpoint) ? {provider:{require_parameters:true}} : {})};
+    ...(isDirectorSchemaEndpoint(settings) ? {provider:{require_parameters:true}} : {})};
 }
 export function directorTaskSettings(settings) {
   if (!settings.directorProfileId) throw new Error('Choose a Director connection profile in story settings.');

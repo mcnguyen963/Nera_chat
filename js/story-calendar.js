@@ -1,8 +1,8 @@
 // Story dates use modern month lengths, but weekdays come from an author anchor.
-export const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 const normalize = value => String(value ?? '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g,' ');
-export const daysInMonth = (year,month) => [31,year%4===0&&(year%100!==0||year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
+const daysInMonth = (year,month) => [31,year%4===0&&(year%100!==0||year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
 export function parseStoryDate(value) {
   let text=normalize(value),weekday=null,m;
   const prefix=text.match(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)[, ]+/);
@@ -29,14 +29,17 @@ export function parseClock(value) {
   return hour*60+minute;
 }
 export const clockText = minutes => `${String(Math.floor(minutes/60)).padStart(2,'0')}:${String(minutes%60).padStart(2,'0')}`;
+export function nextStoryDay({year,month,day}) {
+  if(++day>daysInMonth(year,month)){day=1;if(++month>12){month=1;year++;}}
+  if(year>9999)throw new Error('Story date exceeds the supported calendar.');
+  return {year,month,day};
+}
 // An afternoon/evening clock followed by an earlier morning clock is an
 // overnight wrap, not a backwards correction. Unknown clocks/dates stay unknown.
 export function midnightRolloverDate(previousDate,previousTime,date,time) {
   const before=parseStoryDate(previousDate),after=parseStoryDate(date),oldClock=parseClock(previousTime),clock=parseClock(time);
   if(!before?.valid || !after?.valid || before.ordinal!==after.ordinal || oldClock===null || clock===null || oldClock<720 || clock>=720 || 1440-oldClock+clock>720)return null;
-  let {year,month,day}=before;
-  if(++day>daysInMonth(year,month)){day=1;if(++month>12){month=1;year++;}}
-  if(year>9999)throw new Error('Story date exceeds the supported calendar.');
+  const {year,month,day}=nextStoryDay(before);
   return (before.weekday===null?'':WEEKDAYS[(before.weekday+1)%7]+' ')+`${day}/${month}/${year}`;
 }
 export function normalizeCalendar(raw) {

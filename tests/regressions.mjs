@@ -250,7 +250,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     if(fixtureListeners && path==='ui/chat-view.js' && !cache.has(path)) {
       const source=sources[path] ?? await readFile(new URL('../js/'+path,import.meta.url),'utf8');
       sources[path]=source+`
-export function seedLoreFixture(entries){loreEntries=entries;verifiedLoreRevision=session?.loreRevision ?? 0;}\nexport function seedSessionFixture(value,metadata){if(metadata?.fromCache || metadata?.hasPendingWrites || (value.historyRevision ?? 0)<(session?.historyRevision ?? 0))return;sessionSnapshotVersion++;session=value;syncLore();updateRewriteControls();void updateIndicator();}
+export function seedLoreFixture(entries){loreEntries=entries;}\nexport function seedSessionFixture(value,metadata){if(metadata?.fromCache || metadata?.hasPendingWrites || (value.historyRevision ?? 0)<(session?.historyRevision ?? 0))return;session=value;syncLore();updateRewriteControls();void updateIndicator();}
 export async function seedMessagesFixture(value){lastMessages=value.messages;hasEarlier=value.hasEarlier;latestReady=true;historyMessages=null;historyRevision=null;renderMessages(lastMessages);const all=value.hasEarlier ? await messagesApi.getMessages(state.sessionId) : value.messages;historyMessages=all;if(session){session={...session,nextOrder:Math.max(session.nextOrder ?? 0,...all.map(m=>m.order ?? 0))};}historyRevision=session?.historyRevision ?? 0;const store=storyStore(state.sessionId);if(store && !store.status.pending)store.adopt({session,messages:all,turns:store.view.turns});renderMessages(lastMessages);if(!cacheWritesPaused)await ensureLocalStory();void updateIndicator();}`;
     }
     const module = await load(path);
@@ -2176,6 +2176,14 @@ test('character selection captures the exact sent request and keeps its report a
   const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(JSON.stringify(chat.memorySnapshot().sentContext),original);assert.equal(h.calls.requests.length,1);
   const root=h.el('context-viewer'),last=root.querySelectorAll('details').find(d=>d.dataset.contextKey==='last-sent');assert.ok(last);last.open=true;await last.dispatchEvent({type:'toggle'});assert.ok(last.querySelectorAll('summary').some(s=>s.textContent==='Read exact serialized request body'));
+  assert.ok(last.querySelectorAll('p').some(p=>p.textContent.startsWith('Character budget ·')));
+  const sentKeys=last.querySelectorAll('details').map(d=>d.dataset.contextKey).filter(Boolean).sort();
+  await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();
+  const currentSent=root.querySelectorAll('details').find(d=>d.dataset.contextKey==='last-sent');
+  currentSent.open=true;await currentSent.dispatchEvent({type:'toggle'});
+  assert.deepEqual(currentSent.querySelectorAll('details').map(d=>d.dataset.contextKey).filter(Boolean).sort(),sentKeys);
+  assert.ok(currentSent.querySelectorAll('p').some(p=>p.textContent.startsWith('Character budget ·')));
+  assert.equal(JSON.stringify(chat.memorySnapshot().sentContext),original);assert.equal(h.calls.requests.length,1);
   chat.setSession('other');assert.equal(chat.memorySnapshot()?.sentContext ?? null,null);
 });
 
@@ -4181,4 +4189,17 @@ test('Stop guard does not fire a simultaneous hold-to-copy timer',async()=>{
  const target=h.el('message-list').children.find(n=>n.className==='msg assistant');await target.dispatchEvent({type:'pointerdown',pointerType:'touch',target:{closest:()=>null},clientX:10,clientY:10});await h.stopAfterGuard();
  await target.dispatchEvent({type:'pointerup'});assert.equal(h.calls.clipboard,undefined);assert.equal(target.classList.contains('holding'),false);assert.equal(h.state.busy,false);
  void sending;
+});
+
+for(const effort of ['none','minimal','low','medium','high','xhigh','max'])test(`every settings reasoning effort survives save, hydration and request serialization: ${effort}`,async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js'),client=await h.use('llm-client.js');view.initSettingsView();view.openSettingsPopup();
+ h.el('set-model').value='model-a';h.el('set-apikey').value='test-key';h.el('set-reasoning-enabled').checked=true;h.el('set-reasoning-mode').value='effort';h.el('set-reasoning-effort').value=effort;
+ await h.fire('btn-save-settings');const loaded=h.settings.hydrateProfiles(structuredClone(h.calls.writes.at(-1)));
+ assert.equal(loaded.reasoning.effort,effort);assert.equal(client.buildRequestBody(loaded,[]).reasoning.effort,effort);
+});
+
+test('shared dotted patches clone modified ancestors and preserve unrelated fields',async()=>{
+ const h=await harness(),{applyDottedPatch}=await h.use('dotted-patch.js');const before={sections:{status:{text:'old',lines:[1]},notes:{text:'keep'}},name:'Mira'};
+ const after=applyDottedPatch(before,{'sections.status.text':'new','name':'Mira Veyr'});
+ assert.equal(after.sections.status.text,'new');assert.equal(before.sections.status.text,'old');assert.equal(after.sections.status.lines,before.sections.status.lines);assert.equal(after.sections.notes,before.sections.notes);
 });

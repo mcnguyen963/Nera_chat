@@ -40,7 +40,7 @@ function summarizerSettings(settings, outputCapacity) {
   return { ...settings, maxResponseTokens, reasoning };
 }
 
-export function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
+function formatAsTranscript(msgs) { return formatTurnsTranscript(msgs); }
 
 // Surface suspect summary lines for manual review; preserve the model's text.
 export function lintSummary(content) {

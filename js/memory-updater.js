@@ -36,7 +36,7 @@ export function stopAll() { for (const controller of inFlight.values()) controll
 const emit = detail => document.dispatchEvent(new CustomEvent('memory-status',{ detail }));
 const editTime = value => value?.toMillis?.() ?? (typeof value?.seconds === 'number' ? value.seconds*1000+Math.floor((value.nanoseconds ?? 0)/1e6) : value instanceof Date ? value.getTime() : value ?? null);
 const stamp = messages => JSON.stringify(messages.map(m => ({ id:m.id,order:m.order,role:m.role,content:m.content,scene:m.scene,sceneMeta:m.sceneMeta,revision:m.revision })));
-export function rangeUnchanged(range,messages,snapshot) { return stamp(messages.filter(m => range.messages.some(r => r.id === m.id))) === snapshot; }
+function rangeUnchanged(range,messages,snapshot) { return stamp(messages.filter(m => range.messages.some(r => r.id === m.id))) === snapshot; }
 export function shouldSkipAutoSummary(mem, running, due) { return running || mem.autoUpdate && !!due; }
 export function maybeStartAfterTurn(sid) {
   const live = runtime?.get(sid); if (!live) return false;

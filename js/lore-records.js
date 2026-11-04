@@ -20,7 +20,7 @@ export function recordSources(entry) {
     ...(s.lines ?? []).map(l=>({id:'l:'+section+':'+l.id,section,lineId:l.id,data:{...l}}))
   ]);
 }
-export function sourceCategory(entry,section) {
+function sourceCategory(entry,section) {
   if(entry.book==='facts')return 'world_rule';
   if(entry.book==='events')return entry.kind==='thread' ? 'thread' : 'event';
   return ({personality:'characterization',appearance:'appearance',description:'appearance',status:'state',state:'state',bond:'relationship',relations:'relationship'})[section] ?? 'background';

@@ -1,5 +1,5 @@
 import {recentErrors} from './errors.js';
-export function runningVersion(doc=document){return {sha:doc.querySelector('meta[name="nera-version"]')?.content ?? 'local',builtAt:doc.querySelector('meta[name="nera-built-at"]')?.content ?? ''};}
+function runningVersion(doc=document){return {sha:doc.querySelector('meta[name="nera-version"]')?.content ?? 'local',builtAt:doc.querySelector('meta[name="nera-built-at"]')?.content ?? ''};}
 export function diagnostics(state,{version=runningVersion(),agent=navigator.userAgent}={}){
  const ms=state.session?.memoryState ?? state.memoryState ?? {};
  return {version,userAgent:agent,sessionId:state.sessionId ?? null,memory:{extractedThroughOrder:ms.extractedThroughOrder ?? null,failureStreak:ms.failureStreak ?? 0,paused:!!ms.paused,needsRebuild:!!ms.needsRebuild},errors:recentErrors()};

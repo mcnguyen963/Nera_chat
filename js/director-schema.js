@@ -1,4 +1,4 @@
-import { normalizeName } from './lore-lines.js';
+import { isNamed } from './lore-lines.js';
 export const isDirectorSchemaEndpoint=settings=>/^https:\/\/openrouter\.ai\//i.test(settings.endpoint ?? '');
 const object=properties=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const string={type:'string'};
@@ -13,7 +13,7 @@ const reference=(name,values)=>values.length ? list({$ref:'#/$defs/'+name}) : li
 export function directorResponseFormat(settings,{entries,before,offeredIds,protagonist='',focusLimit=5}) {
   if(!isDirectorSchemaEndpoint(settings))return {type:'json_object'};
   const offered=new Set(offeredIds),memoryIds=entries.filter(e=>offered.has(e.id)).map(e=>e.id);
-  const characterIds=entries.filter(e=>offered.has(e.id)&&e.book==='characters'&&![e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist))).map(e=>e.id);
+  const characterIds=entries.filter(e=>offered.has(e.id)&&e.book==='characters'&&!isNamed(e,protagonist)).map(e=>e.id);
   const metadata=nullable(object({kind:{type:'string',enum:['appointment','commitment','ongoing']},dueDate:nullable(string),dueTime:nullable(string),participants:list(string),location:nullable(string),outcome:nullable({type:'string',enum:['resolved','cancelled','expired-unresolved','background-unresolved']})}));
   const item=object({id:string,text:string,status:{type:'string',enum:['open','active','waiting','ready','closed','cancelled']},trigger:string,source:string,threadMeta:metadata});
   const operations=group=>object({upsert:list({$ref:'#/$defs/ledgerItem'},200),close:before[group].length?list({type:'string',enum:before[group].map(i=>i.id)},200):list(string,0)});

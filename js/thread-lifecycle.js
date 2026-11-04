@@ -1,6 +1,6 @@
 import {parseStoryDate,parseClock,clockText} from './story-calendar.js';
-export const THREAD_GRACE_MINUTES=3*24*60;
-export const THREAD_OUTCOMES=['resolved','cancelled','expired-unresolved','background-unresolved'];
+const THREAD_GRACE_MINUTES=3*24*60;
+const THREAD_OUTCOMES=['resolved','cancelled','expired-unresolved','background-unresolved'];
 export function normalizeThreadMeta(value) {
   if(value==null)return null;
   if(typeof value!=='object' || Array.isArray(value))throw new Error('Invalid thread metadata.');
@@ -11,7 +11,7 @@ export function normalizeThreadMeta(value) {
 }
 // Conservative legacy adoption: one explicit date and clock in one scheduling
 // statement. Relative dates, multiple candidates and incidental history stay unknown.
-export function legacyThreadMeta(item) {
+function legacyThreadMeta(item) {
   if(item.threadTimingNeedsReview)return null;
   const texts=item.sections ? [item.sections.text?.text,...(item.sections.text?.lines ?? []).map(l=>l.text)] : [item.text];
   const candidates=[];

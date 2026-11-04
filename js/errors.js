@@ -8,7 +8,7 @@ const messages={
 const codeOf=e=>typeof e?.code==='string' ? e.code.match(/^(?:firestore\/)?(resource-exhausted|permission-denied|unavailable)$/)?.[1] : undefined;
 export function friendlyError(e){return messages[codeOf(e)] ?? (typeof e==='string' ? e : e?.message || String(e));}
 const recent=[];
-export function recordError(e){
+function recordError(e){
  // Arbitrary provider errors can contain secrets or story text: diagnostics keep
  // their category, never their free-form text.
  const code=codeOf(e),name=/^[A-Za-z]+Error$/.test(e?.name ?? '') ? e.name : 'Error';

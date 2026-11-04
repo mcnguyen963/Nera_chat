@@ -1,7 +1,7 @@
 // Keep ordinary chunks well below Firestore's 1 MiB document limit. JSON size
 // is only an estimate of Firestore's encoded size, so leave generous headroom.
 export const TARGET_CHUNK_BYTES = 256 * 1024;
-export const MAX_SINGLE_MESSAGE_BYTES = 850 * 1024;
+const MAX_SINGLE_MESSAGE_BYTES = 850 * 1024;
 export const MAX_MESSAGES_PER_CHUNK = 100;
 const CHUNK_OVERHEAD_BYTES = 1024;
 const MESSAGE_OVERHEAD_BYTES = 128;

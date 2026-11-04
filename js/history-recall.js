@@ -12,7 +12,7 @@ import {embeddingSourcesUnchanged} from './embedding-source.js';
 
 const engine=createRecallEngine({storage:recallStorage,embed:embedTexts});
 const resumedBatches=new Map();
-export function recallEnabled(snapshot) {return snapshot?.session?.memory?.historyRecall===true && snapshot.settings?.narrationMode!=='director';}
+function recallEnabled(snapshot) {return snapshot?.session?.memory?.historyRecall===true && snapshot.settings?.narrationMode!=='director';}
 const connectionFor=snapshot=>snapshot.session.memory.semanticRecall===true ? semanticConnection(snapshot.session.memory,ownerNow()) : null;
 const ownerNow=()=>{try{return currentUid();}catch{return null;}};
 
@@ -80,7 +80,7 @@ export async function resumePendingHistory(snapshot,{getLive=()=>snapshot,onStat
   })();
   resumedBatches.set(key,job);try{return await job;}finally{if(resumedBatches.get(key)===job)resumedBatches.delete(key);}
 }
-export async function clearHistoryIndex(sid) {return engine.clear(currentUid(),sid);}
+
 export async function exportHistoryVectors(sid,{messages}={}) {
   const rows=(await engine.load(currentUid(),sid)).rows.filter(r=>r.vector);
   if(!messages)return rows;
@@ -95,8 +95,5 @@ export async function importHistoryVectors(snapshot,rows,{check=()=>true}={}) {
   if(!snapshot.historyComplete)throw new Error('Complete story history is required to verify downloaded vectors.');
   return engine.importRows({owner:currentUid(),sid:snapshot.session.id,messages:snapshot.messages,rows,connection:semanticConnection(snapshot.session.memory,ownerNow()),check});
 }
-export async function historyIndexStatus(sid) {
-  const record=await engine.load(currentUid(),sid);
-  return {messages:record.indexedMessages,passages:record.rows.length,persisted:record.persisted ?? false};
-}
+
 globalThis.document?.addEventListener('history-recall-cleared',event=>engine.forget(event.detail.owner,event.detail.sid));

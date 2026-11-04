@@ -113,3 +113,12 @@ test('WP-05 a small backwards clock slip across noon cannot advance the date',as
  const contract={version:1,action:'narrate',transition:'unchanged',objective:'Wait.',stopCondition:'Before the next decision.',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'11:50'}}};
  assert.throws(()=>director.parseDirectorContract(JSON.stringify(contract),before,[]),/backward|backwards/);
 });
+
+for(const [date,next] of [['28/2/2000','29/2/2000'],['28/2/1900','1/3/1900'],['31/12/9998','1/1/9999']])test('shared day advancement agrees with midnight rollover '+date,()=>{
+ const day=calendar.nextStoryDay(calendar.parseStoryDate(date));assert.equal(`${day.day}/${day.month}/${day.year}`,next);
+ assert.equal(calendar.midnightRolloverDate(date,'23:55',date,'00:05'),next);
+});
+test('shared day advancement and midnight rollover reject year 10000',()=>{
+ assert.throws(()=>calendar.nextStoryDay(calendar.parseStoryDate('31/12/9999')),/supported calendar/);
+ assert.throws(()=>calendar.midnightRolloverDate('31/12/9999','23:55','31/12/9999','00:05'),/supported calendar/);
+});

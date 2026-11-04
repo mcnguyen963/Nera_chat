@@ -1,5 +1,5 @@
 // Display telemetry is device-local and never replaces request-budget checks.
-export function compactTokenReport(report) {
+function compactTokenReport(report) {
   if(!report)return null;
   return {mode:report.mode,totals:{...report.totals},
     blocks:(report.blocks ?? []).map(({key,label,tokens,budget})=>({key,label,tokens,...(budget==null ? {} : {budget})})),

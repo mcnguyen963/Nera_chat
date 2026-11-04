@@ -147,7 +147,7 @@ function loadEmbeddingKey(){
   try{const endpoint=new URL(get('semanticEndpoint').value.trim()).href;field.value=getEmbeddingKey(currentUid(),endpoint);}catch{field.value='';}
   if(status)status.textContent='';
 }
-export function refreshMemoryProfiles(selected = get('updateProfileId')?.value ?? '') {
+function refreshMemoryProfiles(selected = get('updateProfileId')?.value ?? '') {
   const select=get('updateProfileId');if(!select)return;
   const profiles=state.settings?.profiles ?? [];
   const option=(value,label)=>{const item=document.createElement('option');item.value=value;item.textContent=label;return item;};

@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS } from './reasoning-efforts.js';
 import {setTokenCountingMode} from './tokenizer.js';
 import {getPref,setPref} from './local-pref.js';
 import { preserveLegacyStorySeed } from './story-settings-store.js';
@@ -14,7 +15,7 @@ import * as auth from "./auth.js";
 const currentUid=auth.currentUid;
 import { state } from "./state.js";
 
-export const PROMPT_KEYS = ['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt'];
+const PROMPT_KEYS = ['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt'];
 const legacyHashes = new Map(PROMPT_KEYS.map(k => [k,new Set()]));
 for (const line of prompts.legacyPromptHashes.split('\n')) { const [key,hash]=line.trim().split(/\s+/);legacyHashes.get(key)?.add(hash); }
 export function storedSettings(settings) {
@@ -25,7 +26,7 @@ export function storedSettings(settings) {
   return out;
 }
 const localKey=owner => 'nera.settings.local.'+owner;
-export function withLocal(settings,owner=currentUid()) {
+function withLocal(settings,owner=currentUid()) {
   const out=structuredClone(settings);out.providerCooldownAccount=owner;out.streamVibrationMode=getPref('nera.streamVibrationMode','spaces');
   return out;
 }
@@ -170,8 +171,8 @@ export function hydrateProfiles(settings) {
   } else {
     mirrorToActiveProfile(settings);
   }
-  for(const profile of settings.profiles)if(!['minimal','low','medium','high','xhigh','max','none'].includes(profile.reasoning?.effort)){profile.reasoning={...DEFAULT_SETTINGS.reasoning,...profile.reasoning,effort:'medium'};}
-  if(!['minimal','low','medium','high','xhigh','max','none'].includes(settings.reasoning?.effort))settings.reasoning={...DEFAULT_SETTINGS.reasoning,...settings.reasoning,effort:'medium'};
+  for(const profile of settings.profiles)if(!REASONING_EFFORTS.includes(profile.reasoning?.effort)){profile.reasoning={...DEFAULT_SETTINGS.reasoning,...profile.reasoning,effort:'medium'};}
+  if(!REASONING_EFFORTS.includes(settings.reasoning?.effort))settings.reasoning={...DEFAULT_SETTINGS.reasoning,...settings.reasoning,effort:'medium'};
   return settings;
 }
 

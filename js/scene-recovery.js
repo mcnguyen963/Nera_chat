@@ -1,3 +1,4 @@
+import { isDirectorSchemaEndpoint } from './director-schema.js';
 import { calendarInstruction } from './story-calendar.js';
 import {requestInputLimit} from './request-budget.js';
 import { prompts } from './system-prompts.js';
@@ -30,7 +31,7 @@ export async function recoverScene(settings, context, { signal,onStart } = {}) {
   const messages = recoveryMessages(context), maxResponseTokens = 1500;
   const tokens = 24+(await Promise.all(messages.map(m => countTokens(m.content)))).reduce((n,t) => n+t,0);
   if (tokens > requestInputLimit({...settings,maxResponseTokens})) throw new Error('Scene recovery input exceeds the context budget.');
-  const isOpenRouter = /^https:\/\/openrouter\.ai\//.test(settings.endpoint);
+  const isOpenRouter = isDirectorSchemaEndpoint(settings);
   onStart?.();
   const result = await chatCompletion({ settings:{ ...settings,modelId:context.model || settings.modelId,streaming:false,
     advancedParametersEnabled:false,maxResponseTokens,reasoning:{ ...settings.reasoning,enabled:false,explicitDisable:true } },messages,signal,

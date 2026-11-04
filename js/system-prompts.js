@@ -86,7 +86,7 @@ export function renderPrompt(template, values) {
 }
 
 // Small label templates keep all text sent to models in editable Markdown.
-export const loreLabels = Object.freeze(Object.fromEntries(prompts.loreLabels.split('\n').map(line => {
+const loreLabels = Object.freeze(Object.fromEntries(prompts.loreLabels.split('\n').map(line => {
   const match = line.match(/^([a-zA-Z]+): (.*)$/);
   if (!match) throw new Error('Invalid lore label template: '+line);
   return [match[1],match[2]];

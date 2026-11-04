@@ -5,11 +5,7 @@ export const LEGACY_PLAN_LOSS_RULE = /\s*If, at the start of a turn, neither a <
 // The tag is emitted by the model anywhere in its reply; the app extracts it,
 // strips it from visible content. Model output never changes the fixed author plan.
 
-export function extractPlan(text) {
-  if (!text) return null;
-  const m = text.match(/<plan>([\s\S]*?)<\/plan>/i);
-  return m ? m[1].trim() : null;
-}
+
 
 export function extractPlanThread(text) {
   if (!text) return null;
@@ -17,7 +13,7 @@ export function extractPlanThread(text) {
   return m ? m[1].trim() : null;
 }
 
-export function stripPlanThread(text) {
+function stripPlanThread(text) {
   if (!text) return "";
   return text
     .replace(/<plan_thread>[\s\S]*?<\/plan_thread>\s*/gi, "")

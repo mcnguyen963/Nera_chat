@@ -1,6 +1,6 @@
 export const HISTORY_VECTOR_FORMAT='history-passages-v1';
 export const LORE_VECTOR_FORMAT='lore-records-v2';
-export function embeddingModel(row) {
+function embeddingModel(row) {
   if(row.modelId)return row.modelId;
   try{const key=JSON.parse(row.modelKey ?? '');if(Array.isArray(key))return key[1] ?? '';}catch{}
   return '';

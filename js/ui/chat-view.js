@@ -1,3 +1,4 @@
+import { applyDottedPatch } from '../dotted-patch.js';
 import {composerDrafts} from '../composer-drafts.js';
 import {mergeSummaryResult} from '../summary-state.js';
 import {createLoreIndexUpdater} from '../lore-index-updater.js';
@@ -77,13 +78,12 @@ function clearChatRetry(){clearTimeout(chatRetryTimer);chatRetryTimer=null;}
 let msgUnsub = null;
 let sessUnsub = null;
 let session = null;      // latest snapshot of the active session doc
-let sessionSnapshotVersion = 0;
 let streamState = null;  // live streaming UI handle
 let busy = false;
 let waitingForMemoryBatch = false;
 const batchSummaryDue=new Map();
 const historySearchPhases=new Map();
-const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();}});
+const busyGate=createBusyGate({current:()=>({sid:state.sessionId,epoch:historyEpoch,owner:state.user?.uid ?? (()=>{try{return currentUid();}catch{return null;}})()}),onChange:b=>applyBusyUi(b),onRelease:()=>{document.dispatchEvent(new CustomEvent('turn-finished'));void updateIndicator();scheduleIdleMaintenance();}});
 const releaseBusy=token=>{
   if(busyGate.active!==token)return false;
   token.stopTimer?.();const released=busyGate.release(token);token.loreHold?.release();return released;
@@ -114,11 +114,9 @@ async function waitForPendingChanges(token) {
 }
 let storySettingsReady=Promise.resolve(),chatLoading=Promise.resolve();
 // Disabled: page reloads use the local cache; full refresh is explicit Sync only.
-// let refreshOnReload=globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type==='reload';
 let syncStatus={pending:0,error:null,durable:true};
 let indicatorTimer=null,maintenanceTimer=null,pendingMaintenance=null;
 const turnCheckpoints=new Map();
-// let freshnessRequested=false,freshnessJob=null;
 function checkpointTurn(token){
   let owner;try{owner=currentUid();}catch{return;}
   if(token.owner!==owner)return;
@@ -126,31 +124,8 @@ function checkpointTurn(token){
   const pending=store.checkpoint();turnCheckpoints.set(store,pending);
   void pending.catch(()=>{/* The queue retains the text and exposes the save error. */}).finally(()=>{
     if(turnCheckpoints.get(store)===pending)turnCheckpoints.delete(store);
-    scheduleIdleMaintenance();void checkActiveStoryFreshness();
+    scheduleIdleMaintenance();
   });
-}
-function requestStoryFreshness(){
-  // Disabled: foreground events must not download the story or acquire the chat lock.
-  // freshnessRequested=true;void checkActiveStoryFreshness();
-}
-async function checkActiveStoryFreshness(){
-  /* Disabled automatic freshness checks. Keep explicit Sync available.
-  if(!freshnessRequested || freshnessJob || !session || cacheWritesPaused || busy || editingState || document.hidden || hasPendingSettings(currentUid(),state.sessionId))return;
-  const store=storyStore(state.sessionId);if(!store || store.status.pending || store.status.running || store.status.paused)return;
-  freshnessRequested=false;
-  const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
-  const active=()=>sid===state.sessionId && owner===currentUid() && epoch===historyEpoch && !cacheWritesPaused;
-  freshnessJob=(async()=>{
-    await chatLoading;if(!active())return;
-    const fresh=await getSessionFromServer(sid);if(!active())return;
-    if(busy || editingState || hasPendingSettings(owner,sid) || store.status.pending || store.status.running){freshnessRequested=true;return;}
-    if(store.requiresReconciliation || !fresh || fresh.deleting || preparationKey(fresh)!==preparationKey(session) || fresh.directorCheckpoint!==session.directorCheckpoint){
-      await historyAction('refresh',token=>refreshStoryFromServer(token));
-    }
-  })();
-  try{await freshnessJob;}catch(error){if(active())showTransientError(error);}
-  finally{freshnessJob=null;if(freshnessRequested)void checkActiveStoryFreshness();}
-  */
 }
 function scheduleIdleMaintenance(){
   const store=storyStore(state.sessionId);
@@ -171,7 +146,7 @@ function applyWorkingStory(view,status) {
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
   syncStatus=status;latestReady=true;hasEarlier=false;
   if(changed)renderMessages(historyMessages);
-  updateSyncStatus();queueCacheSave();void updateIndicator();scheduleIdleMaintenance();void checkActiveStoryFreshness();
+  updateSyncStatus();queueCacheSave();void updateIndicator();scheduleIdleMaintenance();
 }
 function updateSyncStatus(){
   const node=document.getElementById('chat-sync-status');if(!node)return;
@@ -328,8 +303,8 @@ let historyLoading = null;
 let historyEpoch = 0;
 let historyRevision = null;
 let loreReady = Promise.resolve(),loreReloading=Promise.resolve(),dataEpoch=0,loreLoadVersion=0,loreReloadVersion=0;
-let verifiedLoreRevision = null;
 const historyCache = new Map(); // three most recently visited sessions in memory
+function touchHistoryCache(key,value){historyCache.delete(key);historyCache.set(key,value);if(historyCache.size>3)historyCache.delete(historyCache.keys().next().value);}
 let cacheSaveTimer = null;
 let cacheWritesPaused = false;
 let refreshingStory=null;
@@ -454,7 +429,7 @@ function syncLore(force=false) {
     // const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
     const snapshot=await loreStore.getLoreSnapshot(sid),entries=snapshot.entries;
     if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch || run!==loreLoadVersion)return;
-    loreEntries=entries;verifiedLoreRevision=snapshot.loadedRevision;loreStatus='ok';
+    loreEntries=entries;loreStatus='ok';
     rememberMemoryStory();updateMemoryChip();document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries}}));void updateIndicator();
   })();
   loreReady.catch(error=>{if(currentUid()===owner && state.sessionId===sid && epoch===dataEpoch && run===loreLoadVersion){loreSessionId=null;loreStatus='error';showTransientError('Could not load lorebooks. Your draft is kept. Use Sync data to retry.');}});
@@ -474,12 +449,10 @@ async function reconcileStory(token = null, forceServer = false) {
   };
   if (!sid) throw new Error('Open a story first.');
   await messagesApi.ensureContinuityMetadata(sid);check();
-  const version = sessionSnapshotVersion;
   const fresh = await getSessionFromServer(sid);check();
   if (!fresh || fresh.deleting) throw new Error('Story no longer exists.');
   // A listener may have advanced while the server read was in flight.
-  const newer = session && (sessionSnapshotVersion !== version ||
-    (session.historyRevision ?? 0) > (fresh.historyRevision ?? 0));
+  const newer = session && ((session.historyRevision ?? 0) > (fresh.historyRevision ?? 0));
   return prepareStoryDocument(newer ? session : fresh,token);
 }
 async function prepareStoryDocument(fresh,token = null) {
@@ -496,12 +469,6 @@ async function prepareStoryDocument(fresh,token = null) {
   syncLore();
   if (normalizeMemory(fresh.memory).lorebooks || normalizeMemory(fresh.memory).autoUpdate || state.storySettings?.values?.narrationMode==='director') {
     try {await loreReady;check();} catch {check();syncLore();await loreReady;check();}
-    /* Disabled automatic collection reload on revision mismatch.
-    if (verifiedLoreRevision !== (fresh.loreRevision ?? 0)) {
-      const entries = await getLore(sid);check();
-      loreEntries = entries; verifiedLoreRevision = fresh.loreRevision ?? 0;
-    }
-    */
   }
   check();
   await ensureHistory();check();
@@ -570,12 +537,7 @@ export function initChatView() {
   document.addEventListener('search-index-status',e=>{if(e.detail.sessionId!==state.sessionId)return;updateMemoryChip();if(e.detail.status==='failed')showTransientInfo('Memory saved. Search update pending: '+e.detail.message);});
   document.addEventListener('provider-fallback',event=>showTransientInfo('Provider unavailable. Trying '+event.detail.to+'…'));
   // Disabled automatic full Sync; reconnecting still retries pending saves.
-  // document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestStoryFreshness();});
-  // window.addEventListener('pageshow',requestStoryFreshness);
-  // window.addEventListener('focus',requestStoryFreshness);
-  // window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();requestStoryFreshness();});
   window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();});
-  document.addEventListener('settings-save-finished',()=>{void checkActiveStoryFreshness();});
   document.getElementById('btn-copy-diagnostics')?.addEventListener('click',async()=>{try{await copyClipboard(JSON.stringify(diagnostics({...state,session}),null,2));showTransientInfo('Diagnostics copied.');}catch(error){showTransientError(error);}});
   configureLoreWrites(sid=>flushStory(sid));
   memoryUpdater.configureMemoryUpdater({
@@ -603,40 +565,20 @@ export function initChatView() {
   document.addEventListener('memory-session-saved', e => {
     if (e.detail.sessionId !== state.sessionId || !session) return;
     const { partial } = e.detail;
-    session={...session};
-    for(const [key,value] of Object.entries(partial)){const parts=key.split('.');if(parts.length===1){session[key]=value;continue;}let dest=session;for(const part of parts.slice(0,-1)){dest[part]={...dest[part]};dest=dest[part];}dest[parts.at(-1)]=value;}
+    session=applyDottedPatch(session,partial);
     if ('memoryState.extractedThroughOrder' in partial) session.memoryState = { ...session.memoryState, extractedThroughOrder: partial['memoryState.extractedThroughOrder'] };
     delete session['memoryState.extractedThroughOrder'];
     const local=storyStore(state.sessionId);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});
     syncLore(); rememberMemoryStory(); invalidateRenderedMessages(); renderMessages(lastMessages); void updateIndicator();
   });
   document.addEventListener('local-lore-saved',e=>{
-    /* Disabled: successful writes must not reread the header and all lore cards.
-    const sid=e.detail.sessionId,owner=currentUid(),epoch=dataEpoch;
-    if(sid!==state.sessionId)return;
-    const run=++loreReloadVersion;
-    const active=()=>state.sessionId===sid && currentUid()===owner && epoch===dataEpoch && run===loreReloadVersion;
-    loreReloading=(async()=>{
-      await flushStory(sid);const fresh=await getSessionFromServer(sid);if(!active())return;
-      session={...session,...fresh};syncLore(true);await loreReady;if(!active())return;
-      const store=storyStore(sid);
-      if(store && !store.status.pending)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
-      queueCacheSave();
-    })();
-    void loreReloading.catch(error=>{if(active())showTransientError(error);});
-    */
     const d=e.detail;
     if(d.uid!==currentUid() || !d.snapshot)return;
     const active=d.sessionId===state.sessionId && session,remembered=memoryStories.get(d.sessionId);
     if(!active && remembered?.owner!==d.uid)return;
-    const patched={...(active?session:remembered.session),loreRevision:Math.max((active?session:remembered.session).loreRevision ?? 0,d.revision ?? 0)};
-    for(const [key,value]of Object.entries(d.sessionPatch ?? {})){
-      const parts=key.split('.');let target=patched;
-      for(const part of parts.slice(0,-1))target=target[part]={...target[part]};
-      target[parts.at(-1)]=value;
-    }
+    const patched=applyDottedPatch({... (active?session:remembered.session),loreRevision:Math.max((active?session:remembered.session).loreRevision ?? 0,d.revision ?? 0)},d.sessionPatch ?? {});
     if(!active){memoryStories.set(d.sessionId,{...remembered,session:patched,entries:d.snapshot.entries});void loreIndexUpdater.request(memorySnapshot(d.sessionId));return;}
-    session=patched;loreEntries=d.snapshot.entries;verifiedLoreRevision=d.snapshot.loadedRevision;
+    session=patched;loreEntries=d.snapshot.entries;
     if(d.snapshot.initialized!==false)loreStatus='ok';
     const store=storyStore(d.sessionId);
     if(store && !store.status.pending && !store.status.paused)store.adopt({session,messages:historyMessages ?? store.view.messages,turns:store.view.turns});
@@ -902,9 +844,8 @@ export function setSession(sessionId) {
   if (!cacheWritesPaused && state.sessionId && session && latestReady) {
     const snapshot = chatSnapshot();
     historyCache.delete(currentUid()+':'+state.sessionId);
-    historyCache.set(currentUid()+':'+state.sessionId, snapshot);
+    touchHistoryCache(currentUid()+':'+state.sessionId,snapshot);
     saveLocalCache(currentUid(), state.sessionId, snapshot);
-    if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
   }
   rememberComposerDraft();
   composerDrafts.flush(composerDraftOwner, composerDraftSid);
@@ -935,7 +876,7 @@ export function setSession(sessionId) {
   historyStartOrder = 0;
   if (cachedHistory) {
     historyCache.delete(currentUid()+':'+sessionId);
-    historyCache.set(currentUid()+':'+sessionId, cachedHistory);
+    touchHistoryCache(currentUid()+':'+sessionId,cachedHistory);
   } else if (sessionId && historyCache.size >= 3) {
     historyCache.delete(historyCache.keys().next().value);
   }
@@ -978,8 +919,7 @@ export function setSession(sessionId) {
     if (state.sessionId !== sessionId || currentUid() !== owner || loadEpoch!==dataEpoch) return;
     if(saved?.tokenUsage)tokenUsageCache.restore(owner,sessionId,saved.tokenUsage);
     if (saved?.session && Array.isArray(saved.recent)) {
-      historyCache.set(currentUid()+':'+sessionId, saved);
-      if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+      touchHistoryCache(currentUid()+':'+sessionId,saved);
       restoreCachedChat(sessionId, saved);
       subscribeChat(sessionId);
     } else {
@@ -1067,7 +1007,7 @@ function subscribeChat(sessionId) {
     // if(refreshOnReload){refreshOnReload=false;await refreshStoryFromServer();if(!active())return;}
     document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId,session}}));
     void updateIndicator();
-  })().catch(error=>{if(active())showTransientError(error);}).finally(()=>{if(active())requestStoryFreshness();});
+  })().catch(error=>{if(active())showTransientError(error);});
 }
 
 export function forgetChatSession(sessionId) {
@@ -1125,8 +1065,7 @@ async function ensureHistory(forceServer = false) {
       historyStartOrder = 0;
       const snapshot = chatSnapshot();
       historyCache.delete(owner+':'+sessionId);
-      historyCache.set(owner+':'+sessionId,snapshot);
-      if (historyCache.size > 3) historyCache.delete(historyCache.keys().next().value);
+      touchHistoryCache(owner+':'+sessionId,snapshot);
       queueCacheSave();
       return historyMessages;
     }
@@ -1487,7 +1426,7 @@ async function startEdit(m, wrap) {
     editingState = null; clearOriginalDraft();
     const entry = renderedMessages.get(m.id); if (entry) entry.message = null;
     renderMessages(lastMessages);
-    refreshFloatingCopy(); void updateIndicator();void checkActiveStoryFreshness();
+    refreshFloatingCopy(); void updateIndicator();
   };
   const loadLatest = async () => {
     // Keep the field editable after gesture-time focus so iOS keeps its keyboard.
@@ -1628,7 +1567,6 @@ const indicatorRefresh = createIndicatorRefresh({
   apply: record => {if(record && tokenUsageCache.read(tokenOwner(),state.sessionId)===record){applyIndicator(record);persistTokenUsage();tokenUsageChanged();}},
   onError: error => {const owner=tokenOwner();if(!owner)return;const record=tokenUsageCache.read(owner,state.sessionId);if(record?.kind && record.kind!=='estimate'){applyIndicator(record);return;}tokenUsageError=error.message;if(el.contextLabel)el.contextLabel.textContent=error.message;tokenUsageChanged();},
 });
-export function scheduledPlanDraftJump() {return null;}
 export async function updateIndicator() {
   refreshTokenDisplayMeta();
   updateMemoryChip();
@@ -1854,9 +1792,9 @@ async function refreshStoryFromServer(token=null,{pendingStateSave=false,discard
       check();
       account.apply();applyStorySettingsRefresh(sid,prompts);messagesApi.applyMessageSnapshot(sid,messageData);
       session=latest;historyMessages=messages;historyRevision=latest.historyRevision ?? 0;historyStartOrder=0;
-      loreEntries=entries;verifiedLoreRevision=latest.loreRevision ?? 0;loreSessionId=sid;loreStatus='ok';
+      loreEntries=entries;loreSessionId=sid;loreStatus='ok';
       loreReady=Promise.resolve();loreReloading=Promise.resolve();latestReady=true;hasEarlier=false;
-      historyCache.set(owner+':'+sid,snapshot);memoryStories.delete(sid);
+      touchHistoryCache(owner+':'+sid,snapshot);memoryStories.delete(sid);
       renderMessages(messages);rememberMemoryStory();
       document.dispatchEvent(new CustomEvent('settings-changed'));
       document.dispatchEvent(new CustomEvent('story-settings-changed'));
@@ -1948,9 +1886,9 @@ export async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFing
       }
       ++dataEpoch;++loreLoadVersion;invalidateStorySettingsLoads();indicatorRefresh.invalidate();
       session=result.session;historyMessages=result.messages;historyRevision=result.session.historyRevision;historyStartOrder=0;hasEarlier=false;latestReady=true;
-      loreEntries=result.loreSnapshot.entries;loreSessionId=sid;verifiedLoreRevision=session.loreRevision;loreStatus='ok';loreReady=Promise.resolve();loreReloading=Promise.resolve();
+      loreEntries=result.loreSnapshot.entries;loreSessionId=sid;loreStatus='ok';loreReady=Promise.resolve();loreReloading=Promise.resolve();
       applyStorySettingsRefresh(sid,result.storySettings);messagesApi.applyMessageSnapshot(sid,result.messageSnapshot);
-      historyCache.set(owner+':'+sid,saved);rememberMemoryStory();renderMessages(result.messages);updateMemoryChip();void updateIndicator();
+      touchHistoryCache(owner+':'+sid,saved);rememberMemoryStory();renderMessages(result.messages);updateMemoryChip();void updateIndicator();
       document.dispatchEvent(new CustomEvent('story-settings-changed'));
       document.dispatchEvent(new CustomEvent('lore-changed',{detail:{sessionId:sid,entries:loreEntries}}));
       document.dispatchEvent(new CustomEvent('memory-refresh',{detail:{sessionId:sid}}));
@@ -2364,51 +2302,18 @@ function streamSummaryUI(label) {
   };
 }
 
-async function handleSummarize() {
-  if (busy || !session) return;
-  const petTurn = startPetTurn();
-  const token=acquireBusy('summary');if(!token)return;
-  const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
-  const ui = streamSummaryUI("Summarizing…");
-  try {
-    await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
-    const settings=effectiveActiveSettings();
-    await waitForPreparation(flushStory(token.sid),controller);assertActive(token);
-    await waitForPreparation(reconcileStory(token),controller);assertActive(token);
-    const r = await runSummarization(session, settings, {
-      signal:controller.signal,
-      validateSource: () => assertActive(token),
-      messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
-      onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
-      onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
-    });
-    assertActive(token);applySummaryResult(r);
-    setStatus(r.skipped ? r.reason : "Summary checkpoint created.", true);
-    finishPetTurn("ready", petTurn);
-  } catch (err) {
-    finishPetTurn("blocked", petTurn);
-    if(controller.signal.aborted)showTransientInfo('Summary stopped. Previous checkpoint kept.');
-    else showTransientError("Summarization failed: " + (err.message || String(err)));
-  } finally {
-    ui.done();
-    releaseBusy(token);
-  }
-}
-
-// Full-history summary: ignores the checkpoint and folds in every message
-// from the very start, replacing the active summary (local-only action).
+async function handleSummarize() {return runSummaryStream(false);}
 async function handleFullSummarize() {
-  if (busy || !session) return;
-  if (
-    !confirm(
-      "Summarize the ENTIRE chat history from the start? This replaces the current summary and may take a while."
-    )
-  )
-    return;
+  if(busy || !session)return;
+  if(!confirm('Summarize the ENTIRE chat history from the start? This replaces the current summary and may take a while.'))return;
+  return runSummaryStream(true);
+}
+async function runSummaryStream(full) {
+  if(busy || !session)return;
   const petTurn = startPetTurn();
   const token=acquireBusy('summary');if(!token)return;
   const controller=new AbortController();token.abort=()=>controller.abort('user');el.stopBtn.classList.remove('hidden');el.sendBtn.hidden=true;
-  const ui = streamSummaryUI("Summarizing full history…");
+  const ui = streamSummaryUI(full ? 'Summarizing full history…' : 'Summarizing…');
   try {
     await waitForPreparation(waitForPendingChanges(token),controller);assertActive(token);
     const settings=effectiveActiveSettings();
@@ -2418,15 +2323,15 @@ async function handleFullSummarize() {
       signal:controller.signal,
       validateSource: () => assertActive(token),
       messages: structuredClone(historyMessages),loreEntries:structuredClone(loreEntries),
-      full: true,
+      full,
       onDelta: (t) => { updatePetPhase("writing", petTurn); ui.onDelta(t); },
       onReasoning: (t) => { updatePetPhase("thinking", petTurn); ui.onReasoning(t); },
       onProgress: (multi, i, total) => {
-        if (multi) ui.setLabel(total ? `Summarizing part ${i}/${total}…` : `Summarizing part ${i}…`);
+        if (full && multi) ui.setLabel(total ? `Summarizing part ${i}/${total}…` : `Summarizing part ${i}…`);
       },
     });
     assertActive(token);applySummaryResult(r);
-    setStatus(r.skipped ? r.reason : "Full-history summary created.", true);
+    setStatus(r.skipped ? r.reason : full ? 'Full-history summary created.' : 'Summary checkpoint created.', true);
     finishPetTurn("ready", petTurn);
   } catch (err) {
     finishPetTurn("blocked", petTurn);

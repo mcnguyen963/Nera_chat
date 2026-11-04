@@ -287,11 +287,7 @@ test('migration packs existing messages once and checkpoint reads use chunks', a
   assert.ok(h.reads.documents - before < 5);
   assert.equal(h.reads.legacy, 1000);
   assert.equal(h.documents.get(h.sessionPath).storageVersion, 2);
-  const seen = await new Promise((resolve, reject) =>
-    h.api.subscribeLatestMessages('s', resolve, reject)
-  );
-  assert.equal(seen.messages.length, 300);
-  assert.equal(seen.hasEarlier, true);
+
 });
 
 test('assistant plan thread is stored separately from visible content', async () => {
@@ -1254,16 +1250,6 @@ test('core edits preserve concurrent references and reject overlapping reference
  const changed=structuredClone(base);changed.coreReferences=[{id:'local'}];assert.throws(()=>h.lore.mergeEntryEdits(e,changed,base),/Core references changed/);
 });
 
-test('Opening an old-message editor reads its authoritative bounded chunk without loading the story',async()=>{
-  const h=await setup(800);await h.api.ensureContinuityMetadata('s');
-  const before=h.reads.documents;
-  const message=await h.api.getMessageForEdit('s','m1',1);
-  assert.equal(message.content,'event 1');assert.equal(message.revision,0);
-  assert.equal(h.reads.documents-before,1);
-  await h.api.editMessage('s','m1','Server edit',1,{expectedRevision:0});
-  const fresh=await h.api.getMessageForEdit('s','m1',1);assert.equal(fresh.content,'Server edit');assert.equal(fresh.revision,1);
-  await assert.rejects(h.api.editMessage('s','m1','Stale draft',1,{expectedRevision:0}),error=>error.name==='MessageEditConflict' && error.currentMessage.content==='Server edit');
-});
 
 
 for (const operation of ['edit','delete','overwrite']) test(`Recent ${operation} reads stay bounded at 100 and 10000 messages`,async()=>{
@@ -1346,7 +1332,7 @@ test('Latest assistant deletion ignores summary-only and empty trailing chunks, 
   const empty=h.sessionPath+'/messageChunks/empty';h.documents.set(empty,{firstOrder:202,lastOrder:202,count:0,messages:[],lookupVersion:1,hasLiveSummary:false,lastNarrativeOrder:0});
   const before=h.documents.get(h.sessionPath).nextNarratorTurn;
   await h.api.deleteMessage('s','m2',2);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,before);
-  const reply=(await h.api.getMessageForEdit('s','m200',200));
+  const reply=(await h.api.getMessages('s')).find(m=>m.id==='m200');
   const reads=h.reads.documents;await h.api.deleteMessage('s','m200',200);
   assert.ok(h.reads.documents-reads<=6);assert.equal(h.documents.get(h.sessionPath).nextNarratorTurn,reply.narratorTurn);
 });
@@ -1587,4 +1573,20 @@ test('restored chunk ranges support an append without rereading untouched cloud 
  await h.api.restoreMessageChunkCache('s',messages);
  const added=await h.api.addMessage('s',{role:'assistant',content:'A new reply.'});
  assert.equal(added.order,101);assert.equal((await h.api.getMessages('s')).length,101);
+});
+
+for(const kind of ['edit','delete'])for(const size of [4,7,10])test(`local and server history reducers agree on ${kind} with ${size} turns and a summary`,async()=>{
+ const h=await setup(),use=appHarness(),{applyStoryOperation}=await use('local-story.js');
+ const rows=Array.from({length:size},(_,i)=>({id:'p'+(i+1),role:i%2?'assistant':'user',content:'Turn '+(i+1)}));
+ rows.push({id:'sum',role:'summary',content:'Covered story',coveredRange:{fromOrder:0,toOrder:size-1}});
+ await h.api.addMessagesBulk('s',rows);await h.api.ensureContinuityMetadata('s');
+ const original=await h.api.getMessages('s'),session={...h.documents.get(h.sessionPath),id:'s',activeSummaryMessageId:'sum',breakpointOrder:size-1,memoryState:{extractedThroughOrder:size}};
+ h.documents.set(h.sessionPath,structuredClone(session));
+ const target=original.find(m=>m.id==='p2'),op={id:'parity',kind,createdAt:1,payload:{id:target.id,content:'Revised',tokenCount:7,expectedRevision:target.revision ?? 0}};
+ const local=applyStoryOperation({session,messages:original,turns:{}},op);
+ if(kind==='edit')await h.api.editMessage('s',target.id,'Revised',target.order,{expectedRevision:target.revision ?? 0,tokenCount:7});else await h.api.deleteMessage('s',target.id,target.order);
+ const server=await h.api.getMessages('s'),saved=h.documents.get(h.sessionPath);
+ const selected=messages=>messages.map(({id,content,revision,retired})=>({id,content,revision,retired:!!retired}));
+ assert.deepEqual(JSON.parse(JSON.stringify(selected(local.messages))),selected(server));
+ for(const field of ['activeSummaryMessageId','breakpointOrder','contentEdits','contentEditsFloor','memoryInvalidations'])assert.deepEqual(JSON.parse(JSON.stringify(local.session[field] ?? null)),saved[field] ?? null,field);
 });

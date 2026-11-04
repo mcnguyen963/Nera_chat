@@ -1,6 +1,6 @@
 import { fetchModels } from '../llm-client.js';
 
-export function filterModels(models, query) {
+function filterModels(models, query) {
   const term = query.trim().toLowerCase();
   return models.filter(model => model.id.toLowerCase().includes(term) || model.name.toLowerCase().includes(term));
 }

@@ -182,3 +182,16 @@ test('WP-02 non-streamed total deadline never cools down healthy providers',asyn
  assert.ok(delay>=300000);assert.equal(fetches,1);
  for(const tag of settings.providerOrder)assert.equal(routing.providerRetryAt(settings,tag),0);
 });
+
+for(const target of ['models','providers'])for(const mode of ['pre-aborted','abort','timeout','success'])test(`${target} discovery shares bounded cancellation and removes caller listeners: ${mode}`,async()=>{
+  const jobs=new Map();let next=0,reads=0,attached=0,removed=0;
+  const caller=new AbortController(),add=caller.signal.addEventListener.bind(caller.signal),remove=caller.signal.removeEventListener.bind(caller.signal);
+  caller.signal.addEventListener=(...args)=>{attached++;add(...args);};caller.signal.removeEventListener=(...args)=>{removed++;remove(...args);};
+  const use=appHarness({globals:{setTimeout:fn=>{jobs.set(++next,fn);return next;},clearTimeout:id=>jobs.delete(id),fetch:async()=>{reads++;if(mode==='success')return {ok:true,status:200,json:async()=>target==='models'?{data:[{id:'a/b'}]}:{data:{endpoints:[{tag:'first'}]}}};return new Promise(()=>{});}}});
+  const module=await use(target==='models'?'llm-client.js':'provider-routing.js'),discover=target==='models'?module.fetchModels:module.fetchProviders;
+  if(mode==='pre-aborted')caller.abort();
+  const pending=discover(settings,{signal:caller.signal});
+  if(mode==='abort')caller.abort();if(mode==='timeout')[...jobs.values()][0]();
+  if(mode==='success')assert.equal((await pending).length,1);else await assert.rejects(pending,mode==='timeout'?/timed out/:/cancelled/);
+  assert.equal(reads,mode==='pre-aborted'?0:1);assert.equal(jobs.size,0);assert.equal(removed,1);assert.equal(attached,mode==='pre-aborted'?0:1);
+});

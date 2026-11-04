@@ -1,8 +1,8 @@
-import { normalizeName } from './lore-lines.js';
+import { isNamed } from './lore-lines.js';
 import { latestScene, parseScene, sceneLine } from './scene.js';
 import {normalizeThreadMeta,threadLifecycle,threadIdentity} from './thread-lifecycle.js';
 import { parseStoryDate, parseClock, clockText, midnightRolloverDate } from './story-calendar.js';
-export const DIRECTOR_VERSION = 2;
+const DIRECTOR_VERSION = 2;
 const groups = ['decisions','threads','commitments'];
 const statuses = ['open','active','waiting','ready','closed','cancelled'];
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -125,7 +125,7 @@ export function parseDirectorContract(content, before, entries = [], {protagonis
   if(raw.encounterCharacterIds!==undefined) {
     if(!Array.isArray(raw.encounterCharacterIds)||raw.encounterCharacterIds.length>100||new Set(raw.encounterCharacterIds).size!==raw.encounterCharacterIds.length||raw.encounterCharacterIds.some(id=>{
       const e=entries.find(e=>known.has(id)&&e.id===id&&e.book==='characters');
-      return !e || [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist));
+      return !e || isNamed(e,protagonist);
     }))fail('encounterCharacterIds must contain distinct offered NPC card IDs; seeking someone does not establish presence.');
     raw.memoryIds=[...new Set([...raw.memoryIds,...raw.encounterCharacterIds])];
   }
@@ -133,7 +133,7 @@ export function parseDirectorContract(content, before, entries = [], {protagonis
     const ids=raw.focusCharacterIds;
     if(!Array.isArray(ids)||ids.length>focusLimit||new Set(ids).size!==ids.length||ids.some(id=>{
       const e=entries.find(e=>known.has(id)&&e.id===id && e.book==='characters');
-      return !e || [e.name,...(e.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(protagonist)) || !after.scene.present.some(n=>[e.name,...(e.aliases ?? [])].some(name=>normalizeName(name)===normalizeName(n)));
+      return !e || isNamed(e,protagonist) || !after.scene.present.some(n=>isNamed(e,n));
     }))fail('focusCharacterIds must contain distinct present NPC card IDs within the focus limit. Use encounterCharacterIds for NPCs being sought but not yet present.');
     raw.memoryIds=[...new Set([...raw.memoryIds,...ids])];
     if(raw.memoryIds.length>100)fail('too many selected memory cards.');

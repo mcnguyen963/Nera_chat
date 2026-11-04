@@ -5,18 +5,18 @@ import { parseScene } from './scene.js';
 import { resolveScene, renderEntry } from './lore-select.js';
 import { renderCharacterSelection } from './character-select.js';
 
-export const BRIEF_LORE_LIMIT=1500;
+const BRIEF_LORE_LIMIT=1500;
 export function replySubjects(turn,index) {
   const ids=new Set(turn.contract.memoryIds);
   for(const state of [turn.before,turn.after]){const resolved=resolveScene(parseScene(directorScene(state)),index);for(const id of resolved.characters)ids.add(id);if(resolved.place)ids.add(resolved.place);}
   return ids;
 }
-export function fittedPassage(item,book,{recordMode=false,characterSelection=false,protagonist=''}={}) {
+function fittedPassage(item,book,{recordMode=false,characterSelection=false,protagonist=''}={}) {
   return book==='characters' && characterSelection && !recordMode
     ? renderCharacterSelection(item.entry,item.chosen,protagonist)
     : renderEntry(item.entry,item.lineIds,protagonist);
 }
-export function withoutBriefEntries(fits,ids,options) {
+function withoutBriefEntries(fits,ids,options) {
   return Object.fromEntries(Object.entries(fits).map(([book,fit])=>{
     if(book==='plan')return [book,fit];
     const included=fit.included.filter(i=>!ids.has(i.entry.id));

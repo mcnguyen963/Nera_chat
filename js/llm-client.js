@@ -1,3 +1,5 @@
+import { REASONING_EFFORTS } from './reasoning-efforts.js';
+import { withTimeoutAbort } from './abortable.js';
 import {supportsProviders, providerOrder, providerRetryAt, coolDownProvider, availabilityFailure, unavailableProviders} from './provider-routing.js';
 
 // OpenAI-compatible chat client with SSE streaming + reasoning/thinking handling (spec §7).
@@ -15,7 +17,7 @@ export function modelsEndpoint(endpoint) {
   return url.href;
 }
 
-export function normalizeModels(response) {
+function normalizeModels(response) {
   if (!Array.isArray(response?.data)) throw new Error('Malformed model listing: expected a data array.');
   const models = new Map();
   for (const entry of response.data) {
@@ -27,35 +29,17 @@ export function normalizeModels(response) {
 
 export async function fetchModels({ endpoint, apiKey }, { signal } = {}) {
   const url = modelsEndpoint(endpoint);
-  const controller = new AbortController();
-  const cancel = () => controller.abort(signal.reason);
-  let timer, rejectAbort;
-  const aborted = new Promise((_, reject) => {
-    rejectAbort = () => reject(new Error(controller.signal.reason === 'timeout'
-      ? 'Fetching models timed out after 30 seconds. Try again.' : 'Model discovery cancelled.'));
-    controller.signal.addEventListener('abort', rejectAbort, { once: true });
-  });
-  if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
-  timer = setTimeout(() => controller.abort('timeout'), 30000);
-  try {
-    if (controller.signal.aborted) { rejectAbort(); return await aborted; }
-    const request = async () => {
+  return withTimeoutAbort(signal,30000,{timeout:'Fetching models timed out after 30 seconds. Try again.',cancelled:'Model discovery cancelled.'},async requestSignal=>{
       let response;
       try {
-        response = await fetch(url, { method: 'GET', headers: apiKey?.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}, signal: controller.signal });
+        response = await fetch(url, { method: 'GET', headers: apiKey?.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}, signal: requestSignal });
       } catch { throw new Error('Could not fetch models. Check the connection and whether the provider allows browser requests.'); }
       if (response.status === 401 || response.status === 403) throw new Error('Model discovery authentication failed. Check the API key and access permissions.');
       if (!response.ok) throw new Error(`Model listing unavailable (HTTP ${response.status}). Enter Model ID manually or try again.`);
       let data;
       try { data = await response.json(); } catch { throw new Error('Malformed model listing: expected JSON.'); }
       return normalizeModels(data);
-    };
-    return await Promise.race([request(), aborted]);
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', cancel);
-    controller.signal.removeEventListener('abort', rejectAbort);
-  }
+  });
 }
 
 export function buildRequestBody(settings, messages) {
@@ -78,7 +62,7 @@ export function buildRequestBody(settings, messages) {
   if (r?.enabled) {
     // Never send both effort and max_tokens together (spec §4.1).
     if (r.mode === "effort") {
-      body.reasoning = {effort:['minimal','low','medium','high','xhigh','max','none'].includes(r.effort) ? r.effort : 'medium'};
+      body.reasoning = {effort:REASONING_EFFORTS.includes(r.effort) ? r.effort : 'medium'};
     } else {
       body.reasoning = {max_tokens:Math.max(0,Math.min(Number(r.maxTokens)||0,settings.maxResponseTokens-1))};
     }

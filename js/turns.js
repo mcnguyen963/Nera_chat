@@ -27,7 +27,7 @@ export function nextNarratorTurnForMessages(messages,turns=computeTurns(messages
   return maximum+(last?.role==='user' ? 0 : 1);
 }
 export function turnStartOrder(turns, t) { return turns.assistants.find(a => a.turn === t)?.startOrder ?? (t === turns.lastTurn+1 ? turns.trailingStartOrder : null); }
-export function assistantOrderOfTurn(turns, t) { return turns.assistants.find(a => a.turn === t)?.order ?? null; }
+
 function prepareEligibility(messages, memoryState, mem) {
   const turns=computeTurns(messages),byId=new Map();
   // Preserve Array.find's first-ID behavior, including damaged duplicate input.

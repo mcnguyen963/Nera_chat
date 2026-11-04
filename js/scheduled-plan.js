@@ -1,6 +1,6 @@
 import { parseStoryDate } from './story-calendar.js';
 
-export const PLAN_PREVIEW_DAYS = 7;
+const PLAN_PREVIEW_DAYS = 7;
 export const PLAN_HEADER = '# SCHEDULED AUTHOR PLAN\nThese are author instructions for future opportunities, not historical facts or predetermined outcomes. Respect player choices. Active phases may be pursued now. Upcoming phases are preparation only; do not execute them before their start date. Overdue phases remain pending opportunities, not completed events. Only the author can mark events or phases complete. During a confirmed time skip, consider phases on their scheduled dates along the jump, not all at the destination. Shared overviews do not activate omitted phases. Never infer completion from a passed date.';
 export function planDate(value) {
   const date = parseStoryDate(value);
@@ -76,7 +76,7 @@ export function selectScheduledPlan(entries, date, jump = null) {
   selected.sort((a,b)=>priorities[a.reason]-priorities[b.reason] || a.start-b.start || a.entry.id.localeCompare(b.entry.id) || (a.phase?.id ?? '').localeCompare(b.phase?.id ?? ''));
   return {selected,skipped,warnings};
 }
-export function renderPlanOverview(entry) {
+function renderPlanOverview(entry) {
   const section = entry.sections.text;
   return [section.text,...(section.lines ?? []).map(l=>l.text)].filter(Boolean).join('\n');
 }

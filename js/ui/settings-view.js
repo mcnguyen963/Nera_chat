@@ -546,7 +546,7 @@ function integerField(value, id) {
     throw Object.assign(new Error(`${field.closest("label").firstChild.textContent.trim()}: enter a whole number from ${min}${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ""}.`),{fieldId:id});
   return Number(text);
 }
-export function normalizeReasoningBudget(value,responseLimit) {
+function normalizeReasoningBudget(value,responseLimit) {
   const text=String(value ?? '').trim(),parsed=text ? Number(text) : NaN;
   const budget=Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_SETTINGS.reasoning.maxTokens;
   return Math.max(1,Math.min(budget,Math.max(1,responseLimit-1)));

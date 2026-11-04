@@ -9,7 +9,7 @@ export function resolveModelProfile(settings,profileId,{role='Selected'}={}) {
     reasoning:structuredClone(profile.reasoning ?? {}),advancedParametersEnabled:advanced,
     ...Object.fromEntries(['temperature','topP','frequencyPenalty','presencePenalty'].map(k=>[k,profile[k] ?? null]))};
 }
-export const ROLE_TEST_PROFILES=Object.freeze([
+const ROLE_TEST_PROFILES=Object.freeze([
   Object.freeze({role:'director',name:'Haiku 5.5 · medium',modelId:'anthropic/claude-haiku-5.5:floor',maxOutputPrice:.5}),
   Object.freeze({role:'narrator',name:'DeepSeek Flash · high',modelId:'deepseek/deepseek-v4.1-flash:floor',maxOutputPrice:.4})
 ]);

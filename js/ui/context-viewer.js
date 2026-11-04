@@ -97,6 +97,22 @@ function replaceBody(dialog,body) {
   dialog.querySelector('.memory-content')?.remove();dialog.append(body);
   body.scrollTop=scrollPositions.get('body') ?? 0;
 }
+function renderSentSection(sent) {
+  sent={...sent,report:sent.report ?? {}};
+  return group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString(),false,section=>{
+      section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
+      if(sent.report?.replyBrief){section.append(preview('sent-reply-brief','Reply brief · exact sent text',sent.report.replyBrief.text),preview('sent-brief-sources','Reply brief sources and omissions',JSON.stringify(sent.report.replyBrief,null,2)));}
+      if(sent.director){const d=sent.director;section.append(node('p',`Director: ${d.reused ? 'reused contract' : (d.usage?.prompt_tokens ?? d.report?.totals?.input ?? 0).toLocaleString()+' input tokens'} · ${d.elapsedMs ?? 0} ms. Narrator: ${sent.narratorUsage?.prompt_tokens?.toLocaleString() ?? 'usage unavailable'} input tokens · ${sent.narratorElapsedMs ?? 0} ms. Combined estimate: ${((d.reused ? 0 : d.report?.totals?.input ?? 0)+(sent.report?.totals?.input ?? 0)).toLocaleString()} input tokens.`, 'muted'));if(d.timings && !d.reused)section.append(node('p',Object.entries(d.timings).map(([key,value])=>({contextPreparationMs:'Prepare',providerMs:'Model',validationMs:'Validate',pendingPersistenceMs:'Save'}[key] ?? key)+': '+Math.round(value)+' ms').join(' · '),'muted'));if(d.usage?.cost!=null && !d.reused)section.append(node('p','Director cost: $'+Number(d.usage.cost).toFixed(6),'muted'));if(d.requestBody)section.append(preview('director-sent-json','Director serialized request',JSON.stringify(d.requestBody,null,2)));section.append(preview('director-contract','Director contract',JSON.stringify(d.contract,null,2)));}
+      if(sent.report.semanticLore){if(sent.report.semanticLore.modelMismatch)section.append(node('p','Lore vectors were built with a different embedding connection or model; matching may be unreliable.','memory-warning'));section.append(preview('semantic-sent','Sent request semantic candidates and status',JSON.stringify(sent.report.semanticLore,null,2)));}
+      if(sent.report.recall){if(sent.report.recall.modelMismatch)section.append(node('p','Historical vectors were built with a different embedding connection or model; matching may be unreliable.','memory-warning'));if(sent.report.recall.incompatibleDimensions)section.append(node('p',`${sent.report.recall.incompatibleDimensions} historical vectors have incompatible dimensions and could not be compared.`,'memory-warning'));section.append(preview('recall-sent','Sent historical recall sources and omissions',JSON.stringify(sent.report.recall,null,2)));}
+      if(sent.report.characterBudget)characterBudgetReport(section,sent.report.characterBudget);
+      if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
+      if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
+      noteLimitDetails(section,sent.report.noteLimits?.omitted ?? [],'sent-note-limits');
+      section.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
+  });
+}
+
 function renderCached() {
   viewMode='cached';currentViewSource=null;
   const dialog=document.querySelector('#context-viewer .sheet');if(!dialog || !open)return;
@@ -129,14 +145,8 @@ function renderCached() {
   calculate.dataset.focusKey='calculate-preview';calculate.disabled=!view.sid || view.busy || view.loading;
   overview.append(calculate);body.append(overview);
   const sent=view.sentContext;
-  if(sent){
-    const section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString(),false,d=>{
-      if(sent.report?.characterSelection)characterReport(d,sent.report.characterSelection,'sent-character');
-      if(sent.report?.recordSelection)recordReport(d,sent.report.recordSelection,'sent-records');
-      noteLimitDetails(d,sent.report?.noteLimits?.omitted ?? [],'sent-note-limits');
-      d.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
-    });body.append(section);
-  }else if(record && (record.kind==='provider' || record.kind==='sent-estimate'))body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
+  if(sent)body.append(renderSentSection(sent));
+  else if(record && (record.kind==='provider' || record.kind==='sent-estimate'))body.append(node('p','The count is cached on this device. Full request text is available after the next send.','muted'));
   replaceBody(dialog,body);
   if(focusKey)[...body.querySelectorAll('summary,pre,button')].find(e=>e.dataset.focusKey===focusKey)?.focus({preventScroll:true});
 }
@@ -234,20 +244,7 @@ async function render({current=false}={}) {
     if (r.characterSelection) characterReport(lore,r.characterSelection,'next-character',live);
     if(r.recordSelection)recordReport(lore,r.recordSelection,'next-records');
     body.append(lore);
-    if (live.sentContext) {
-      const sent=live.sentContext,section=group('last-sent','Last sent request · '+new Date(sent.sentAt).toLocaleString());
-      section.append(node('p','Captured at request serialization. This report stays with that request when the draft, lore or next-request preview changes.','muted'));
-      if(sent.report?.replyBrief){section.append(preview('sent-reply-brief','Reply brief · exact sent text',sent.report.replyBrief.text),preview('sent-brief-sources','Reply brief sources and omissions',JSON.stringify(sent.report.replyBrief,null,2)));}
-      if(sent.director){const d=sent.director;section.append(node('p',`Director: ${d.reused ? 'reused contract' : (d.usage?.prompt_tokens ?? d.report?.totals?.input ?? 0).toLocaleString()+' input tokens'} · ${d.elapsedMs ?? 0} ms. Narrator: ${sent.narratorUsage?.prompt_tokens?.toLocaleString() ?? 'usage unavailable'} input tokens · ${sent.narratorElapsedMs ?? 0} ms. Combined estimate: ${((d.reused ? 0 : d.report?.totals?.input ?? 0)+(sent.report?.totals?.input ?? 0)).toLocaleString()} input tokens.`, 'muted'));if(d.timings && !d.reused)section.append(node('p',Object.entries(d.timings).map(([key,value])=>({contextPreparationMs:'Prepare',providerMs:'Model',validationMs:'Validate',pendingPersistenceMs:'Save'}[key] ?? key)+': '+Math.round(value)+' ms').join(' · '),'muted'));if(d.usage?.cost!=null && !d.reused)section.append(node('p','Director cost: $'+Number(d.usage.cost).toFixed(6),'muted'));if(d.requestBody)section.append(preview('director-sent-json','Director serialized request',JSON.stringify(d.requestBody,null,2)));section.append(preview('director-contract','Director contract',JSON.stringify(d.contract,null,2)));}
-      if(sent.report.semanticLore){if(sent.report.semanticLore.modelMismatch)section.append(node('p','Lore vectors were built with a different embedding connection or model; matching may be unreliable.','memory-warning'));section.append(preview('semantic-sent','Sent request semantic candidates and status',JSON.stringify(sent.report.semanticLore,null,2)));}
-      if(sent.report.recall){if(sent.report.recall.modelMismatch)section.append(node('p','Historical vectors were built with a different embedding connection or model; matching may be unreliable.','memory-warning'));if(sent.report.recall.incompatibleDimensions)section.append(node('p',`${sent.report.recall.incompatibleDimensions} historical vectors have incompatible dimensions and could not be compared.`,'memory-warning'));section.append(preview('recall-sent','Sent historical recall sources and omissions',JSON.stringify(sent.report.recall,null,2)));}
-      if(sent.report.characterBudget)characterBudgetReport(section,sent.report.characterBudget);
-      if (sent.report.characterSelection) characterReport(section,sent.report.characterSelection,'sent-character');
-      if(sent.report.recordSelection)recordReport(section,sent.report.recordSelection,'sent-records');
-      noteLimitDetails(section,sent.report.noteLimits?.omitted ?? [],'sent-note-limits');
-      section.append(preview('last-sent-json','Read exact serialized request body',()=>JSON.stringify(sent.requestBody,null,2)));
-      body.append(section);
-    }
+    if(live.sentContext)body.append(renderSentSection(live.sentContext));
     if(live.settings.narrationMode==='director'){
       const dg=group('director-preview','Director · next request preview'),d=previewResult.director;
       if(d)dg.append(node('p',`${d.usedTokens.toLocaleString()} estimated Director input tokens. Narrator selection is provisional until a contract exists.`,'muted'),preview('director-next-json','Read Director input',JSON.stringify({messages:d.apiMessages,response_format:d.responseFormat},null,2)));

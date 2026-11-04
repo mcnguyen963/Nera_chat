@@ -27,7 +27,7 @@ export function nextPetId(ids, previous, random = Math.random) {
   return pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))] ?? null;
 }
 
-export function intersects(a, b, padding = 0) {
+function intersects(a, b, padding = 0) {
   return a.x < b.x + b.width + padding && a.x + a.width > b.x - padding &&
     a.y < b.y + b.height + padding && a.y + a.height > b.y - padding;
 }

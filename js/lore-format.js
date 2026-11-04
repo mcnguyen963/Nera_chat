@@ -263,7 +263,7 @@ export function serializeCard(entry,{format='md',storyId=null,title='',now=new D
   // Empty sections are explicit so deleting a section and clearing one both replace it with empty text.
   return text;
 }
-export function validateCard(entry) {
+function validateCard(entry) {
   if(entry)validateImportance(entry);
   if (!entry || !SECTION_KEYS[entry.book] || typeof entry.name !== 'string' || !entry.name.trim()) throw new Error('A card needs a supported book and a name.');
   if (entry.book === 'events' ? !['timeline','thread'].includes(entry.kind) : entry.kind !== 'card') throw new Error('Unsupported card kind.');

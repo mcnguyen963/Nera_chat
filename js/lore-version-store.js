@@ -1,13 +1,14 @@
+import { applyDottedPatch } from './dotted-patch.js';
 import { doc, collection, getDocFromServer, getDocsFromServer, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { db } from './db.js';
 import { currentUid } from './auth.js';
 import { fromRecordDocument, toRecordDocument } from './lore-records.js';
 import {assertStory} from './errors.js';
 const parts=sid=>['users',sid?.uid ?? currentUid(),'sessions',sid?.id ?? sid];
-export const versionSessionRef=sid=>doc(db,...parts(sid));
+const versionSessionRef=sid=>doc(db,...parts(sid));
 export const versionRoot=(sid,generation)=>collection(db,...parts(sid),...(generation ? ['loreV3',generation,'entries'] : ['lore']));
 export const versionRef=(sid,id,generation)=>doc(db,...parts(sid),...(generation ? ['loreV3',generation,'entries',id] : ['lore',id]));
-export function decodeLoreSnapshot(snap) {
+function decodeLoreSnapshot(snap) {
   if(!snap.exists() || snap.data()?.schemaVersion!==3)return snap;
   const entry=fromRecordDocument(snap.data());
   return {id:snap.id,ref:snap.ref,exists:()=>true,data:()=>{const {id,...data}=cloneData(entry);return data;}};
@@ -39,15 +40,7 @@ export function subscribeVersionedLore(sid,callback,onError) {
   },onError);
   return ()=>{epoch++;outer();stop?.();};
 }
-function applyFields(data,fields) {
-  const out={...data};
-  for(const [key,value] of Object.entries(fields)) {
-    const path=key.split('.');let target=out;
-    for(const part of path.slice(0,-1)){target[part]={...target[part]};target=target[part];}
-    target[path.at(-1)]=value;
-  }
-  return out;
-}
+
 // Existing store operations address logical /lore paths. This boundary translates
 // them to the active generation and projects canonical records back to sections.
 // All reads finish before any native transaction write, including blind updates.
@@ -70,7 +63,7 @@ export function wrapLoreTransaction(tx,sid,session) {
           const id=w.target.id ?? w.target.path.split('/').at(-1),prior=changes.get(id),previous=prior?.type==='set'?prior.data:cache.get(w.target.path)?.data();
           if(w.method==='delete')changes.set(id,{id,type:'delete'});
           else if(w.method==='set' && !w.options?.merge)changes.set(id,{id,type:'set',data:w.data});
-          else if(previous)changes.set(id,{id,type:'set',data:applyFields(previous,w.data)});
+          else if(previous)changes.set(id,{id,type:'set',data:applyDottedPatch(previous,w.data)});
           else changes.set(id,{id,type:'patch',data:{...(prior?.data ?? {}),...w.data}});
         }
         if(w.method==='delete')tx.delete(w.target);else if(w.options)tx[w.method](w.target,w.data,w.options);else tx[w.method](w.target,w.data);continue;
@@ -79,7 +72,7 @@ export function wrapLoreTransaction(tx,sid,session) {
       if(w.method==='delete'){tx.delete(target);state.set(key,null);changes.set(id,{id,type:'delete'});continue;}
       const previous=state.has(key) ? state.get(key) : cache.get(key)?.data();
       if(w.method==='update'&&!previous)throw new Error('This lorebook subject was deleted');
-      const data=w.method==='update' ? applyFields(previous,w.data) : w.options?.merge ? {...previous,...w.data} : w.data;
+      const data=w.method==='update' ? applyDottedPatch(previous,w.data) : w.options?.merge ? {...previous,...w.data} : w.data;
       const canonical=toRecordDocument({...data,id},previous?{...previous,id}:null);
       if(new TextEncoder().encode(JSON.stringify(canonical)).length>900000)throw new Error('card storage full');
       state.set(key,fromRecordDocument(canonical));changes.set(id,{id,type:'set',data:state.get(key)});tx.set(target,canonical);

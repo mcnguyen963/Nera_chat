@@ -1,7 +1,7 @@
 import { buildLoreIndex, findMentions } from './lore-select.js';
-import { normalizeName } from './lore-lines.js';
+import { isNamed } from './lore-lines.js';
 
-const matches=(entry,name)=>[entry.name,...(entry.aliases ?? [])].some(n=>normalizeName(n)===normalizeName(name));
+const matches=isNamed;
 export function directorCast(turn,entries,{protagonist='',limit=5,currentText='',recentText=''}={}) {
   const people=entries.filter(e=>e.book==='characters'),present=turn.after.scene.present;
   const attendees=people.filter(e=>present.some(n=>matches(e,n))),index=buildLoreIndex(people);

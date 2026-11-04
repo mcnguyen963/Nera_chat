@@ -9,7 +9,7 @@ export const STOPLIST = new Set('he she they him her them i you me we it someone
 export const COMMON_ALIAS_WORDS = new Set('captain guard old lady lord man woman girl boy'.split(' '));
 export function sortLines(lines) { return [...lines].sort((a,b) => (a.turn ?? (a.by==='user'?Infinity:0))-(b.turn ?? (b.by==='user'?Infinity:0))||(a.at ?? 0)-(b.at ?? 0)); }
 export function normalizeName(s) { return String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’]/g,"'").replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’.,;:!?]+$/g, '').trim(); }
-export function validRecallAlias(value) {
+function validRecallAlias(value) {
   const name=normalizeName(value), words=name.replace(/^the /,'').split(' ');
   return name.length>=2 && name.length<=60 && !words.every(w=>STOPLIST.has(w)||COMMON_ALIAS_WORDS.has(w));
 }
@@ -173,4 +173,9 @@ export function applyOps(entries, ops, stampCtx = {}) {
     }
   }
   return { creates, appends, aliases, statusChanges, skipped, entries:working };
+}
+
+export function isNamed(entry,name) {
+  const normalized=normalizeName(name);
+  return [entry.name,...(entry.aliases ?? [])].some(value=>normalizeName(value)===normalized);
 }

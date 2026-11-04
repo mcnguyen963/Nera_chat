@@ -1,15 +1,11 @@
-import { parseStoryDate, parseClock, validateModernTimestamp, calendarInstruction, formatStoryDate, clockText } from './story-calendar.js';
+import { parseStoryDate, nextStoryDay, parseClock, validateModernTimestamp, calendarInstruction, formatStoryDate, clockText } from './story-calendar.js';
 import { isAcceptedTurn, lastUserOrderOf, stripDialogue } from './turn-review.js';
 import { canonicalScene, canonicalFromFields, parseSceneFields, readSceneOutput } from './scene-parser.js';
-export { canonicalScene, canonicalFromFields, parseSceneFields, readSceneOutput };
+export { canonicalScene,  parseSceneFields, readSceneOutput };
 import { prompts, renderPrompt } from './system-prompts.js';
 export const MAX_SCENE_LENGTH = 2000;
 export const SCENE_RULE = (protagonist = '', calendar = null) => [renderPrompt(prompts.scene, { PROTAGONIST: protagonist || 'the main character' }),calendarInstruction(calendar)].filter(Boolean).join('\n\n');
-export function normalizeSceneLine(raw) {
-  const text = String(raw ?? '').replace(/\s*\n\s*/g, ' ').trim();
-  if (text.length > MAX_SCENE_LENGTH) throw new Error(`The scene line exceeds ${MAX_SCENE_LENGTH} characters. Shorten it before saving.`);
-  return text || null;
-}
+
 export function classifyUserInput(text) {
   text = String(text ?? '').trim();
   const cue = /(?:then|and)\s+(?:continue|advance|narrate|play|resume)|\banyway\b|back to the story/i;
@@ -25,7 +21,7 @@ export function classifyUserInput(text) {
 }
 export function isPureOoc(text) { return classifyUserInput(text) !== 'narrative'; }
 export function extractScene(text) { return readSceneOutput(text).scene; }
-export function inspectSceneOutput(text) { const {scene,warning}=readSceneOutput(text); return {scene,warning}; }
+
 export function parseScene(raw) {
   const fields=parseSceneFields(raw);
   const known=x => x && x!=='unknown' ? x : null;
@@ -128,8 +124,6 @@ const MONTHS=['january','february','march','april','may','june','july','august',
 const MONTH_PATTERN=MONTHS.join('|');
 const DATE_PATTERN=`(?:\\d{3,4}-\\d{1,2}-\\d{1,2}|\\d{1,2}([/.-])\\d{1,2}\\1\\d{1,4}|\\d{1,2} (?:${MONTH_PATTERN}) \\d{1,4}|(?:${MONTH_PATTERN}) \\d{1,2},? \\d{1,4})`;
 const CLOCK_PATTERN='\\d{1,2}:\\d{2}(?:\\s*[ap]m)?';
-const leapYear=year=>year%4===0 && (year%100!==0 || year%400===0);
-const daysInMonth=(year,month)=>[31,leapYear(year)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
 // Complete dates only; custom calendars and partial dates keep their free-text rules.
 function completeDate(value) { return parseStoryDate(value); }
 function clockMinutes(value) { return parseClock(value); }
@@ -154,8 +148,8 @@ function oneDayForward(previous,next) {
   const before=completeDate(previous),after=completeDate(next);
   if(before || after) {
     if(!before?.valid || !after?.valid)return false;
-    let {year,month,day}=before;
-    if(++day>daysInMonth(year,month)) {day=1;if(++month>12){month=1;year++;}}
+    let tomorrow;try{tomorrow=nextStoryDay(before);}catch{return false;}
+    const {year,month,day}=tomorrow;
     return year===after.year && month===after.month && day===after.day;
   }
   const old=normalized(previous),fresh=normalized(next),a=[...old.matchAll(/\d+/g)],b=[...fresh.matchAll(/\d+/g)];

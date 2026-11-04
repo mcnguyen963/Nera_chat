@@ -1,3 +1,4 @@
+import { applyDottedPatch } from './dotted-patch.js';
 import * as storage from './chat-cache.js';
 
 const records=new Map(),hydrating=new Map(),downloads=new Map(),failures=new Map(),journals=new Map(),versions=new Map();
@@ -68,7 +69,7 @@ export async function getCachedLoreSnapshot(uid,sid,download){
   })().catch(error=>{if(loreCacheVersion(uid,sid)===version)failures.set(key,error);throw error;}).finally(()=>downloads.delete(key));
   downloads.set(key,job);return structuredClone(await job);
 }
-function patchFields(entry,fields){const out=structuredClone(entry);for(const [path,value]of Object.entries(fields)){const parts=path.split('.');let target=out;for(const part of parts.slice(0,-1))target=target[part]={...target[part]};target[parts.at(-1)]=loreData(value);}return out;}
+
 export async function applyLoreDelta(delta){
   const {uid,sid,revision,generation}=delta,key=keyOf(uid,sid);
   await cachedLoreSnapshot(uid,sid);
@@ -79,7 +80,7 @@ export async function applyLoreDelta(delta){
       if(revision<=Math.max(next.loadedRevision ?? -1,next.entryRevisions[change.id] ?? -1))continue;
       if(change.type==='delete')entries.delete(change.id);
       else if(change.type==='set')entries.set(change.id,{...loreData(change.data),id:change.id});
-      else if(entries.has(change.id))entries.set(change.id,patchFields(entries.get(change.id),change.data));
+      else if(entries.has(change.id))entries.set(change.id,applyDottedPatch(structuredClone(entries.get(change.id)),change.data,loreData));
       next.entryRevisions[change.id]=revision;
     }
     next.entries=[...entries.values()];next.lastCommittedRevision=Math.max(next.lastCommittedRevision ?? 0,revision);

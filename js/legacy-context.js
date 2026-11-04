@@ -43,7 +43,7 @@ export function normalizeAdDirective(content) {
 }
 
 // Input must be cleaned story messages in order, as used by both builders.
-export function openingExchange(messages) {
+function openingExchange(messages) {
   const firstUser = messages.find((m) => m.role === "user");
   const firstAssistant = firstUser && messages.find((m) => m.role === "assistant" && m.order > firstUser.order);
   return [firstUser, firstAssistant].filter(Boolean);
@@ -211,12 +211,7 @@ export async function buildLegacyContext(session, settings, opts = {}) {
 }
 
 // Indicator metric: tokens that would be sent for the next turn (no new user turn yet).
-export async function computeLegacyUsage(session, settings, messages = null) {
-  const context = await buildLegacyContext(session, settings, { messages });
-  const max = requestInputLimit(settings);
-  const threshold = (max * settings.autoSummaryThresholdPercent) / 100;
-  return { ...context, max, threshold, overThreshold: context.usedTokens >= threshold };
-}
+
 
 // <plan>...</plan> tag handling (spec §11).
 // The tag is emitted by the model anywhere in its reply; the app extracts it,

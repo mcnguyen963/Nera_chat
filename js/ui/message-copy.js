@@ -1,7 +1,7 @@
 import {setIcon} from './icons.js';
 import {copyText} from './clipboard.js';
 
-export function displayedMessageText(message) {
+function displayedMessageText(message) {
   const body = message?.querySelector('.msg-content');
   return body ? (body.innerText ?? body.textContent ?? '') : '';
 }

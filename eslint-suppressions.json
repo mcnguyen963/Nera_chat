@@ -54,11 +54,6 @@
       "count": 2
     }
   },
-  "js/messages.js": {
-    "no-unused-vars": {
-      "count": 1
-    }
-  },
   "js/scene-parser.js": {
     "no-control-regex": {
       "count": 1
@@ -81,7 +76,7 @@
   },
   "js/ui/chat-view.js": {
     "no-unused-vars": {
-      "count": 13
+      "count": 12
     },
     "preserve-caught-error": {
       "count": 1

@@ -1,5 +1,6 @@
+import { withTimeoutAbort } from './abortable.js';
 // OpenRouter provider discovery and device-local health. No credentials are stored here.
-export const PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
+const PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
 const memory = new Map();
 const localOnly = new Set();
 globalThis.addEventListener?.('storage',event=>{
@@ -37,34 +38,18 @@ export async function fetchProviders({endpoint, apiKey, modelId}, {signal} = {})
   // Routing shortcuts are request options, not distinct models in the catalog.
   const model = String(modelId ?? '').trim().replace(/:(floor|nitro)$/, '');
   if (!/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error('Choose a model before fetching providers.');
-  const controller = new AbortController();
-  const cancel = () => controller.abort('cancelled');
-  let rejectAbort;
-  const aborted = new Promise((_,reject) => {
-    rejectAbort = () => reject(new Error(controller.signal.reason === 'timeout' ? 'Fetching providers timed out after 30 seconds.' : 'Provider discovery cancelled.'));
-    controller.signal.addEventListener('abort',rejectAbort,{once:true});
-  });
-  const timer = setTimeout(() => controller.abort('timeout'),30000);
-  if (signal?.aborted) cancel(); else signal?.addEventListener('abort',cancel,{once:true});
-  try {
-    if (controller.signal.aborted) { rejectAbort(); return await aborted; }
-    const request = async () => {
+  return withTimeoutAbort(signal,30000,{timeout:'Fetching providers timed out after 30 seconds.',cancelled:'Provider discovery cancelled.'},async requestSignal=>{
       let response;
       try {
         response = await fetch('https://openrouter.ai/api/v1/models/'+model.split('/').map(encodeURIComponent).join('/')+'/endpoints',{
-          method:'GET', headers: apiKey?.trim() ? {Authorization:'Bearer '+apiKey.trim()} : {}, signal:controller.signal,
+          method:'GET', headers: apiKey?.trim() ? {Authorization:'Bearer '+apiKey.trim()} : {}, signal:requestSignal,
         });
       } catch { throw new Error('Could not fetch providers. Check the connection and browser access.'); }
       if (!response.ok) throw new Error(`Provider listing unavailable (HTTP ${response.status}). Check your model and API key.`);
       let data;
       try { data = await response.json(); } catch { throw new Error('Malformed provider listing: expected JSON.'); }
       return normalizeProviders(data);
-    };
-    return await Promise.race([request(),aborted]);
-  } finally {
-    clearTimeout(timer); signal?.removeEventListener('abort',cancel);
-    controller.signal.removeEventListener('abort',rejectAbort);
-  }
+  });
 }
 
 function cooldownKey(settings,tag) {

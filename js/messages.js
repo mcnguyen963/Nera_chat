@@ -1,7 +1,6 @@
 import {saveStoryData,loadStoryData} from './chat-cache.js';
 import {findReceipt,readReceipt,writeReceipt} from './operation-receipts.js';
 import { directorReplyPatch, directorTurnRef } from './director-store.js';
-import { maxOf } from './math-utils.js';
 import { assertStory } from './errors.js';
 import { computeTurns, nextNarratorTurnForMessages } from './turns.js';
 import { canonicalScene, validateSceneEdit } from './scene.js';
@@ -9,7 +8,7 @@ import { assertSource, revisionOf, trimInvalidations, StoryConflict } from './co
 import {
   doc, getDocFromServer, getDocsFromServer, query, orderBy, where, startAfter, limit,
   limitToLast, collection, runTransaction, serverTimestamp,
-  Timestamp, arrayUnion, onSnapshot,
+  Timestamp, arrayUnion,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { db } from "./db.js";
 import { currentUid } from "./auth.js";
@@ -322,7 +321,6 @@ function cacheRecords(owner,sid,records){
   const chunks=[...byId.values()];chunkCache.set(owner+':'+sid,chunks);
   void saveStoryData(owner,sid,{chunkRanges:chunks.map(c=>({id:c.id,firstOrder:c.data().firstOrder,lastOrder:c.data().lastOrder}))});
 }
-export function clearMessageChunkCache(sid){const key=currentUid()+':'+sid;nextChunkLoad(key);chunkCache.delete(key);}
 function flatten(snap) {
   return snap.docs.flatMap((d) => d.data().messages ?? []).sort((a, b) => a.order - b.order);
 }
@@ -357,7 +355,7 @@ export async function findSavedMessage(sessionId,messageId,minOrder,{overwrite=f
   return flatten(snap).find(message=>message.id===messageId) ?? null;
 }
 
-export async function getMessagesAfterOrder(sessionId, breakpointOrder) {
+async function getMessagesAfterOrder(sessionId, breakpointOrder) {
   await ensureChunked(sessionId);
   const snap = await getDocsFromServer(query(
     chunksCol(sessionId), where("lastOrder", ">", breakpointOrder), orderBy("lastOrder", "asc")
@@ -390,26 +388,6 @@ export async function getEarlierMessages(sessionId, beforeOrder, pageSize) {
   return found.sort((a, b) => a.order - b.order).slice(-pageSize);
 }
 
-export function subscribeLatestMessages(sessionId, callback, onError) {
-  let closed = false;
-  let unsubscribe = null;
-  ensureChunked(sessionId).then(() => {
-    if (closed) return;
-    unsubscribe = onSnapshot(
-      query(chunksCol(sessionId), orderBy("firstOrder", "asc"), limitToLast(3)),
-      (snap) => callback({
-        messages: flatten(snap),
-        hasEarlier: snap.docs.length > 0 && snap.docs[0].data().firstOrder > 1,
-      }),
-      onError
-    );
-  }).catch((error) => { if (!closed) onError?.(error); });
-  return () => { closed = true; unsubscribe?.(); };
-}
-
-export async function getMessage(sessionId, messageId) {
-  return (await getMessages(sessionId)).find((message) => message.id === messageId) ?? null;
-}
 
 async function findChunk(sessionId, messageId, order, owner = currentUid(),useCache=true) {
   const cached=useCache && chunkCache.get(owner+':'+sessionId)?.find(c=>c.data().messages.some(m=>m.id===messageId));
@@ -425,15 +403,6 @@ async function findChunk(sessionId, messageId, order, owner = currentUid(),useCa
   return chunk;
 }
 
-// Refresh one bounded chunk when opening an editor. The latest-message
-// subscription does not cover old turns restored from the device cache.
-export async function getMessageForEdit(sessionId, messageId, order) {
-  const owner = currentUid();
-  await ensureChunked(sessionId);
-  const chunk = await findChunk(sessionId, messageId, order, owner,false);
-  if (owner !== currentUid()) throw new Error('Account changed while opening the message.');
-  return chunk.data().messages.find(message => message.id === messageId);
-}
 
 async function changeMessage(sessionId, messageId, order, change, sessionUpdate = {}, expectedSource = null, requireLatestReply = false, deletingMessage = false, options = {}) {
   const owner = currentUid();
