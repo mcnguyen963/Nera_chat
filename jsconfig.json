@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+  "target": "es2023", "module": "esnext", "moduleResolution": "bundler",
+  "lib": ["es2023", "dom", "dom.iterable"],
+  "allowJs": true, "checkJs": true, "noEmit": true, "strict": false, "noImplicitAny": false,
+  "skipLibCheck": true, "types": []
+  },
+  "include": ["js/**/*.js", "types/**/*.d.ts"],
+  "exclude": ["js/vendor/**", "js/firebase-config.js", "node_modules", "_site", "coverage"]
+}
