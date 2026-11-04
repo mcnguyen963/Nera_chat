@@ -822,3 +822,18 @@ test('reorganize base-text proposals are explicit, unticked and keep every gener
  const mixed=await r.runReorganizeBatch(live,[e],sections,'',{count,complete:async()=>({content:'TEXT [char] Other | status: Ignore.\nTEXT [char] Mira | notes: Wrong section.\nTEXT [char] Mira | status: Signed.\nT6 [char] Mira | status: Consolidated agreement.'})});
  assert.equal(mixed.previews[0].textChanges.length,1);assert.equal(mixed.previews[0].sections.status.length,1);assert.equal(mixed.skipped.length,2);
 });
+
+for(const [label,replacement,duplicate] of [
+ ['punctuation','Mira remains wary of Nera, after signing the agreement on 15/11 and keeps 2 copies in her room.',true],
+ ['filler','Mira still remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',true],
+ ['number','Mira remains wary of Nera after signing the agreement on 15/11 and keeps 3 copies in her room.',false],
+ ['name','Mira remains wary of Lina after signing the agreement on 15/11 and keeps 2 copies in her room.',false],
+ ['date','Mira remains wary of Nera after signing the agreement on 16/11 and keeps 2 copies in her room.',false],
+ ['word order','Nera remains wary of Mira after signing the agreement on 15/11 and keeps 2 copies in her room.',false],
+ ['negation','Mira remains not wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',false]
+])test('auto note similarity preserves meaningful changes: '+label,async()=>{
+ const use=await setup(),l=await use('lore-lines.js'),e=l.makeEntry('characters','Mira'),text='Mira remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.';
+ e.sections.status.lines=[line('old',text,6)];const before=JSON.stringify(e),op={tag:'char',book:'characters',name:'Mira',section:'status',text:replacement,turn:6,src:12};
+ const changes=l.applyOps([e],[op],{messages});assert.equal(changes.appends.length,duplicate?0:1);assert.equal(JSON.stringify(e),before);
+ if(duplicate){assert.equal(changes.skipped[0].reason,'near-duplicate');assert.equal(l.applyOps([e],[op],{messages,reorganize:true}).appends.length,1);e.sections.status.lines[0].needsReview=true;assert.equal(l.applyOps([e],[op],{messages}).appends.length,1);}
+});

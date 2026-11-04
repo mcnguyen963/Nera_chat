@@ -102,6 +102,22 @@ export function parseMemoryLines(text,ctx={}) {
   if(sawNone && ops.length)info.push('NONE ignored because notes were present');
   return {ops,skipped,adjusted,info,sawNone,valid:ops.length>0 || sawNone && !skipped.some(s=>s.reason!=='not a note')};
 }
+// Only punctuation or one filler word may differ. Preserve ordered factual
+// words as well as names, numbers and dates to avoid hiding changed facts.
+const DUPLICATE_FILLER=new Set(['also','just','really','still','simply','very','actually','basically']);
+function nearDuplicate(a,b) {
+  const tokens=text=>String(text).normalize('NFC').match(/[\p{L}\p{N}]+/gu) ?? [];
+  const leftTokens=tokens(a),rightTokens=tokens(b),left=new Set(leftTokens.map(w=>w.toLowerCase())),right=new Set(rightTokens.map(w=>w.toLowerCase()));
+  if(!left.size || !right.size)return false;
+  const different=[...[...left].filter(w=>!right.has(w)),...[...right].filter(w=>!left.has(w))];
+  if(different.length>1 || different.some(w=>!DUPLICATE_FILLER.has(w)))return false;
+  if([...leftTokens,...rightTokens].some(w=>different.includes(w.toLowerCase()) && /^\p{Lu}/u.test(w)))return false;
+  const facts=words=>words.map(w=>w.toLowerCase()).filter(w=>!DUPLICATE_FILLER.has(w)).join(' ');
+  if(facts(leftTokens)!==facts(rightTokens))return false;
+  const intersection=[...left].filter(w=>right.has(w)).length;
+  return intersection/(left.size+right.size-intersection)>=.9;
+}
+
 export function applyOps(entries, ops, stampCtx = {}) {
   const working = structuredClone(entries), creates = [], appends = [], statusChanges = [], aliases = [], skipped = [];
   const match = (book,name) => {const matches=working.filter(e => e.book === book && [e.name,...(e.aliases ?? [])].some(n => normalizeName(n) === normalizeName(name)));if(matches.length>1)throw Object.assign(new Error('Duplicate cards match '+name+'. Open Lorebooks → Duplicate review and choose the surviving card before retrying memory extraction.'),{code:'duplicate-lore'});return matches[0];};
@@ -145,6 +161,7 @@ export function applyOps(entries, ops, stampCtx = {}) {
     if (!s) { skipped.push({ ...op, reason:'unknown section' }); continue; }
     if (['open','closed','expired','background'].includes(op.tag) && e.kind === 'thread') {e.status=op.tag==='open'?'open':'closed';e.threadMeta=normalizeThreadMeta({...e.threadMeta,outcome:op.tag==='open'?null:op.tag==='closed'?'resolved':op.tag==='expired'?'expired-unresolved':'background-unresolved'});statusChanges.push({entryId:e.id,status:e.status,threadMeta:e.threadMeta});}
     if (!op.threadMeta && !['expired','background'].includes(op.tag) && !stampCtx.reorganize && s.lines.some(l=>normalizeName(l.text)===normalizeName(text) && !l.needsReview && !noteNeedsReview(l,stampCtx.messages ?? [],stampCtx.session ?? {})))continue;
+    if (!op.threadMeta && !['open','closed','expired','background'].includes(op.tag) && !stampCtx.reorganize && s.lines.some(l=>!l.needsReview && !noteNeedsReview(l,stampCtx.messages ?? [],stampCtx.session ?? {}) && nearDuplicate(l.text,text))) { skipped.push({...op,reason:'near-duplicate'});continue; }
     if(!text)continue;
     const original = stampCtx.reorganize ? [...(entries.find(x => x.id === e.id)?.sections[section]?.lines ?? [])].filter(l => l.turn === op.turn).sort((a,b) => a.at-b.at).at(-1) : null;
     const ln = { id:newLoreId('ln'), text, turn:op.turn, when:original?.when ?? op.when, src:original?.src ?? op.src, by:stampCtx.reorganize ? 'reorganize' : 'auto',at:now,evidence:op.evidence ?? [],sourceRevision:op.sourceRevision ?? stampCtx.sourceRevision ?? 0 };
