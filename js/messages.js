@@ -314,7 +314,7 @@ const chunkCache=new Map(),chunkLoads=new Map();
 const nextChunkLoad=key=>{const run=(chunkLoads.get(key) ?? 0)+1;chunkLoads.set(key,run);return run;};
 export async function restoreMessageChunkCache(sid,messages){
   const owner=currentUid(),key=owner+':'+sid,run=nextChunkLoad(key),saved=await loadStoryData(owner,sid);if(owner!==currentUid() || chunkLoads.get(key)!==run)return;
-  if(saved?.chunkRanges)chunkCache.set(owner+':'+sid,saved.chunkRanges.map(({id,firstOrder,lastOrder})=>{const group=messages.filter(m=>m.order>=firstOrder && m.order<=lastOrder);return {id,data:()=>chunkRecord(group,firstOrder,lastOrder)};}));
+  if(saved?.chunkRanges)chunkCache.set(owner+':'+sid,saved.chunkRanges.map(({id,firstOrder,lastOrder})=>{const group=messages.filter(m=>m.order>=firstOrder && m.order<=lastOrder);const record=chunkRecord(group,firstOrder,lastOrder);return {id,data:()=>record};}));
 }
 function cacheRecords(owner,sid,records){
   const old=chunkCache.get(owner+':'+sid);if(!old)return;nextChunkLoad(owner+':'+sid);

@@ -218,8 +218,9 @@ export async function loadBackupGroup(sid,id) {
   return docs.map(d=>({id:d.id,...d.data()}));
 }
 function backupParts(base,entries,createdIds=[],sequence=0) {
-  const parts=[];let part=[];
-  for(const e of entries){const item={id:e.id,data:clean(e)};if(new TextEncoder().encode(JSON.stringify([...part,item])).length>800000 && part.length){parts.push(part);part=[];}part.push(item);}
+  const parts=[];let part=[],size=2;
+  const encoder=new TextEncoder();
+  for(const e of entries){const item={id:e.id,data:clean(e)},length=encoder.encode(JSON.stringify(item)).length;if(size+length+(part.length?1:0)>800000 && part.length){parts.push(part);part=[];size=2;}size+=length+(part.length?1:0);part.push(item);}
   parts.push(part);
   return parts.map((entries,i)=>({id:sequence || i ? base.id+'_'+sequence+'_'+i : base.id,data:{reason:base.reason,label:base.label,entries,createdIds:i ? [] : createdIds,createdAt:serverTimestamp(),createdMs:base.createdMs,partOf:base.id,part:i+1}}));
 }

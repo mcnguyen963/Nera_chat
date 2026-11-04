@@ -25,8 +25,8 @@ export const REQUEST_FRAME_TOKENS = 8;
 
 // The narrator prompt + plan block rarely change between turns; cache its token count
 // to avoid re-running the tokenizer on every send/indicator refresh.
-const previewTokenCounter=createTokenCounter({count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
-const sharedTokenCounter=createTokenCounter({count:countTokens,ready:tokenizerReady,version:()=>tokenizer.tokenizerMode?.()});
+const previewTokenCounter=createTokenCounter({limit:12000,count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
+const sharedTokenCounter=createTokenCounter({limit:12000,count:countTokens,ready:tokenizerReady,version:()=>tokenizer.tokenizerMode?.()});
 
 const AD_DIRECTIVE_RULE = prompts.legacyAuthorDirection;
 

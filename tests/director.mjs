@@ -225,3 +225,11 @@ test('captured Haiku bare-array ledger failure is rejected before saving and fin
  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{id:'u',role:'user',order:1,content:'Shall we go visit Lysia?'}],[]),/invalid decisions operations/);
  assert.equal(calls,1);assert.equal(saves,0);assert.ok(prompts.directorOutput.includes('{"upsert":[],"close":[]}'));assert.match(prompts.directorOutput,/never a bare array/);
 });
+
+
+test('repeated Director builds preserve the entity catalog without serialization-key caching',async()=>{
+ const use=appHarness(),api=await use('director-context.js');
+ const messages=[{id:'u',order:1,role:'user',content:'I wait.'}];
+ const a=await api.buildDirectorContext({id:'s',memory:{}},settings,messages,[],state),b=await api.buildDirectorContext({id:'s',memory:{}},settings,messages,[],state);
+ assert.deepEqual(JSON.parse(JSON.stringify(b)),JSON.parse(JSON.stringify(a)));
+});

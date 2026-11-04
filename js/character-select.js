@@ -6,9 +6,12 @@ import { capLoreNotes, noteOmissions, fittedNoteStats } from './lore-note-window
 const GENERIC = new Set(('a an the and or but if when then of to in on for with from by as at is are was were be been being has have had do does did not no can could will would may might must shall should his her their its he she they it you your we our i me my this that these those who what how where now only also very more most some all any each own said says character person people story scene turn personality appearance status notes bond relations').split(' '));
 const words = text => new Set((normalizeName(text).match(/[\p{L}\p{N}]+/gu) ?? []).filter(w => w.length > 2 && !GENERIC.has(w)));
 export function detailMatches(text, currentText, recentText, entry) {
+  return createDetailMatcher(currentText,recentText,entry)(text);
+}
+export function createDetailMatcher(currentText,recentText,entry) {
   const ignored = words([entry.name,...(entry.aliases ?? [])].join(' '));
-  const source = words(text), current = words(currentText), recent = words(recentText);
-  return {current:[...source].filter(w => !ignored.has(w) && current.has(w)).sort(),recent:[...source].filter(w => !ignored.has(w) && recent.has(w)).sort()};
+  const current = words(currentText), recent = words(recentText);
+  return text=>{const source=words(text);return {current:[...source].filter(w => !ignored.has(w) && current.has(w)).sort(),recent:[...source].filter(w => !ignored.has(w) && recent.has(w)).sort()};};
 }
 export function resolveCharacterUnits(entry, currentText = '', recentText = '') {
   const units = [], invalid = [];

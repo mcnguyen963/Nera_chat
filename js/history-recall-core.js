@@ -80,21 +80,28 @@ function inflection(word){
   const stem=(englishStemmer??=new EnglishStemmer()).stem(word);
   if(stems.size>=50000)stems.clear();stems.set(word,stem);return stem;
 }
-export function rankPassages(rows, query, queryVector = null, modelKey = '', model = '', {stem=false}={}) {
+const passageTerms=new Map();
+export function lexicalRank(rows,query,{stem=false}={}) {
   const tokenize=text=>stem?terms(text).map(inflection):terms(text);
   const q = [...new Set(tokenize(query))].slice(0,64);
   if (!q.length) return [];
   const df=new Map(q.map(t=>[t,0]));
   const docs=rows.map(row=>{
-    const words=tokenize(row.text),frequency=new Map();
+    const key=JSON.stringify([stem,row.text]);
+    let words=passageTerms.get(key);
+    if(!words){words=tokenize(row.text);if(passageTerms.size>=12000)passageTerms.delete(passageTerms.keys().next().value);passageTerms.set(key,words);}
+    const frequency=new Map();
     for(const word of words)if(df.has(word))frequency.set(word,(frequency.get(word) ?? 0)+1);
     for(const word of frequency.keys())df.set(word,df.get(word)+1);
     return {row,length:words.length,frequency};
   });
-  const lexical=docs.map(({row,length,frequency})=>({row,lexical:q.reduce((n,t)=>{
+  return docs.map(({row,length,frequency})=>({row,lexical:q.reduce((n,t)=>{
     const tf=frequency.get(t) ?? 0;
     return n+(tf ? Math.log(1+(rows.length+1)/(1+df.get(t)))*tf/(tf+1.2*(.25+.75*length/150)) : 0);
   },0)})).filter(r=>r.lexical>0).sort((a,b)=>b.lexical-a.lexical || a.row.order-b.row.order);
+}
+export function rankPassages(rows, query, queryVector = null, modelKey = '', model = '', {stem=false,lexical:prepared=null}={}) {
+  const lexical=prepared ?? lexicalRank(rows,query,{stem});
   const semantic=queryVector ? rows.filter(r=>r.vector?.length===queryVector.length && compatibleEmbedding(r,{key:modelKey,model},HISTORY_VECTOR_FORMAT)).map(row=>({row,similarity:cosine(queryVector,row.vector)})).filter(r=>r.similarity>=.35).sort((a,b)=>b.similarity-a.similarity || a.row.order-b.row.order) : [];
   const combined=new Map();
   for(const [kind,list] of [['keyword',lexical],['semantic',semantic]]) for(const [i,hit] of list.entries()) {

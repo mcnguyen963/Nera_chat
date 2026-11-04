@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,copyFile,readFile,realpath,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,copyFile,readFile,realpath,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -18,6 +18,9 @@ test('coverage remapping attributes real and appended VM sources and rejects mis
   mismatched.functions[1].functionName='unrelated';
   await writeFile(join(root,'raw/input.json'),JSON.stringify({result:[actual,appended,mismatched,external]}));
   await exec(process.execPath,[join(root,'scripts/coverage-remap.mjs'),join(root,'raw'),join(root,'out')]);
+  await writeFile(join(root,'out/coverage-1-1-0.json'),JSON.stringify({result:[]}));
+  await exec(process.execPath,[join(root,'scripts/coverage-remap.mjs'),join(root,'raw'),join(root,'out')]);
+  assert.ok(!(await readdir(join(root,'out'))).includes('coverage-1-1-0.json'),'stale V8 files must not contaminate the next run');
   const out=JSON.parse(await readFile(join(root,'out/input.json'),'utf8')).result;assert.equal(out.length,3);assert.equal(out[0].url,pathToFileURL(join(root,'js/example.js')).href);assert.equal(out[1].functions[0].ranges[0].endOffset,source.length);assert.equal(out[2].url,external.url);
  }finally{await rm(root,{recursive:true,force:true});}
 });

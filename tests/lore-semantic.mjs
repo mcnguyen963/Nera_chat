@@ -257,3 +257,15 @@ test('semantic fitting cannot fill newly freed space with unselected background 
   const result=await fitRecords([{entry,reason:'recent'}],10000,async t=>t.length,{semanticRecords:{clinic:[dose.id]},baselineSources:{clinic:base.resolved.sources.map(s=>({section:s.section,lineId:s.lineId,start:s.start,end:s.end}))}});
   assert.match(result.text,/Dilute the antidote/);assert.match(result.text,/opens at dawn/);assert.doesNotMatch(result.text,/unrelated ship/);
 });
+
+
+test('v3 semantic documents index once and round trip verified vectors',async()=>{
+ const use=appHarness(),{createLoreSemantic}=await use('lore-semantic.js'),{makeEntry}=await use('lore-lines.js'),r=await use('lore-records.js');
+ let saved;const api=createLoreSemantic({storage:{load:async()=>saved,save:async v=>{saved=v;return true;}},embedder:async(_c,texts)=>texts.map(()=>[1,0])});
+ const e=makeEntry('characters','Mara',{id:'mara'});e.sections.notes.text='The antidote must be diluted.';const entries=[r.reconcileRecords(e)];
+ const args={owner:'owner',sid:'s',mem:{semanticLore:true,semanticEndpoint:'https://example.test/v1/embeddings',semanticModel:'embed'},entries};
+ await api.index(args);assert.equal(await api.needsRefresh(args),false);
+ const rows=await api.exportVectors(args);assert.ok(rows.length);
+ const imported=await api.importVectors({...args,rows});assert.equal(imported.skipped,0);
+ assert.deepEqual(JSON.parse(JSON.stringify(await api.exportVectors(args))),JSON.parse(JSON.stringify(rows)));
+});

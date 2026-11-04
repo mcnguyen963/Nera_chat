@@ -88,8 +88,7 @@ async function embed(connection,texts,{signal,timeout=15000}={}) {
 const keyFor=(owner,sid,connection)=>JSON.stringify([owner,sid,connection.key,'records-v2']);
 function documentsFor(entries,mem) {
   return entries.filter(e=>mem.books?.[e.book]?.on!==false).flatMap(entry=>{
-    if(!textFor(entry,0))return [];
-    if(entry.schemaVersion!==3)return [{id:entry.id,recordId:null,text:textFor(entry,mem.loreNotesPerSection)}];
+    if(entry.schemaVersion!==3){const text=textFor(entry,mem.loreNotesPerSection);return text ? [{id:entry.id,recordId:null,text}] : [];}
     return recordUnits(entry,{loreNotesPerSection:0}).units.filter(r=>!r.blocked&&!r.fallback && r.resolved.text.trim()).map(r=>({id:entry.id,recordId:r.id,body:r.resolved.text,text:[entry.book,entry.name,...(entry.aliases ?? []),r.resolved.text].join('\n')}));
   });
 }

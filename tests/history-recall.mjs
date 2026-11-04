@@ -449,3 +449,10 @@ for(const failure of ['error','blocked','timeout','throw'])test('history storage
  if(failure==='timeout'){late.onsuccess();assert.equal(closed,1);}
  assert.equal((await recallStorage.loadPendingBatch('u','s')).throughOrder,4);assert.equal(opens,2);
 });
+
+test('recall LRU reloads evicted stories only from device storage',async()=>{
+ const {create}=await setup();const reads=[];
+ const engine=create({storage:{load:async key=>{reads.push(JSON.parse(key)[1]);return null;}},embed:async()=>[]});
+ for(const sid of ['A','B','A','C','A','B'])await engine.load('owner',sid);
+ assert.deepEqual(reads,['A','B','C','B']);
+});

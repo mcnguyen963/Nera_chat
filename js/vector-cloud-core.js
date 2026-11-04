@@ -50,12 +50,13 @@ export async function encodeVectorChunks(kind,rows) {
   }
   const chunks=[];
   for(const [bucket,entries] of [...groups].sort(([a],[b])=>a.localeCompare(b))) {
-    entries.sort((a,b)=>a.key.localeCompare(b.key));let current=[];
-    const flush=async()=>{if(!current.length)return;const payload=JSON.stringify(current.map(x=>x.row)),hash=await digest(payload);chunks.push({id:hash,bucket,payload,count:current.length});current=[];};
+    entries.sort((a,b)=>a.key.localeCompare(b.key));let current=[],size=2;
+    const flush=async()=>{if(!current.length)return;const payload='['+current.join(',')+']',hash=await digest(payload);chunks.push({id:hash,bucket,payload,count:current.length});current=[];size=2;};
     for(const item of entries) {
-      if(bytes(JSON.stringify([item.row]))>MAX_BYTES)throw new Error('An embedding record is too large to sync.');
-      if(current.length && bytes(JSON.stringify([...current.map(x=>x.row),item.row]))>MAX_BYTES)await flush();
-      current.push(item);
+      const serialized=JSON.stringify(item.row),length=bytes(serialized);
+      if(length+2>MAX_BYTES)throw new Error('An embedding record is too large to sync.');
+      if(current.length && size+length+1>MAX_BYTES)await flush();
+      size+=length+(current.length?1:0);current.push(serialized);
     }
     await flush();
   }

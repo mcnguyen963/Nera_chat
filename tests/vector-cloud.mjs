@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
+import {readFile} from 'node:fs/promises';
 import {indexedDBFixture} from './indexeddb-fixture.mjs';
 const row=(id,vector=[1,0])=>({id:id+':0',messageId:id,revision:0,order:1,role:'assistant',start:0,end:6,sourceHash:'a'.repeat(64),sourceRevision:1,modelKey:'model-A',text:'private story text',vector});
 
@@ -156,4 +157,15 @@ for(const direction of ['upload','download'])test('vector '+direction+' reports 
  const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>null,saveCachedVectorManifest:async()=>false,readCachedVectorChunk:async()=>null,saveCachedVectorChunk:async()=>true},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>null}},'history-recall.js':{exportHistoryVectors:async()=>[],importHistoryVectors:async()=>({restored:0,persisted:true})},'lore-semantic.js':{loreSemantic:{}}}});
  if(direction==='download')await (await use('vector-cloud-core.js')).uploadVectorIndex({adapter:remote,kind:'history',rows:[]});
  const sync=await use('vector-cloud-sync.js');await assert.rejects(sync[direction+'StoryVectors'](snapshot,'history'),/device.*manifest|manifest.*device/i);
+});
+
+
+test('incremental chunk sizing preserves exact Unicode payloads, boundaries and hashes',async()=>{
+ const frozen=await readFile(new URL('fixtures/wp14/vector-cloud-core.txt',import.meta.url),'utf8');
+ const reference=await appHarness({sources:{'vector-cloud-core.js':frozen}})('vector-cloud-core.js'),current=await appHarness()('vector-cloud-core.js');
+ const rows=Array.from({length:350},(_,i)=>({...row('café🌙'+i,Array.from({length:256},(_,j)=>j+1)),order:i%90+1}));
+ for(const kind of ['history','lore']){
+   const input=kind==='history'?rows:rows.map((r,i)=>({id:'café🌙'+i,recordId:'note'+i,hash:'a'.repeat(64),vector:r.vector,modelKey:'model-A'}));
+   assert.deepEqual(JSON.parse(JSON.stringify(await current.encodeVectorChunks(kind,input))),JSON.parse(JSON.stringify(await reference.encodeVectorChunks(kind,input))));
+ }
 });

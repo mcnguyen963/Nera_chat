@@ -1,15 +1,16 @@
-import {RECALL_VERSION,RECALL_MAX_ROWS,RECALL_LIMIT,passages,recallText,contentHash,rankPassages,recallQuery,recallCutoff,vector} from './history-recall-core.js';
+import {RECALL_VERSION,RECALL_MAX_ROWS,RECALL_LIMIT,passages,recallText,contentHash,lexicalRank,rankPassages,recallQuery,recallCutoff,vector} from './history-recall-core.js';
 import {compatibleEmbedding,HISTORY_VECTOR_FORMAT} from './embedding-space.js';
 
 export function createRecallEngine({storage,embed}) {
   const cache=new Map(),loads=new Map(),queues=new Map();
+  const remember=(key,record)=>{cache.delete(key);cache.set(key,record);while(cache.size>2)cache.delete(cache.keys().next().value);return record;};
   const ownerVersions=new Map(),storyVersions=new Map();
   const keyOf=(owner,sid)=>JSON.stringify([owner,sid]);
   const scopeVersion=(owner,sid)=>(ownerVersions.get(owner)??0)+':'+(storyVersions.get(keyOf(owner,sid))??0);
   function guarded(options){const version=scopeVersion(options.owner,options.sid),check=options.check;return {...options,check:()=>scopeVersion(options.owner,options.sid)===version && (!check||check())};}
   async function load(owner,sid) {
     const key=keyOf(owner,sid);
-    if(cache.has(key))return cache.get(key);
+    if(cache.has(key))return remember(key,cache.get(key));
     if(loads.has(key))return loads.get(key);
     const version=scopeVersion(owner,sid);
     const promise=(async()=>{
@@ -17,7 +18,7 @@ export function createRecallEngine({storage,embed}) {
       const record=saved?.version===RECALL_VERSION && saved.owner===owner && saved.sid===sid ? saved : {key,owner,sid,version:RECALL_VERSION,rows:[],indexedMessages:0};
       record.rows=(record.rows ?? []).filter(r=>typeof r.text==='string' && typeof r.messageId==='string' && Number.isFinite(r.order) && Number.isInteger(r.start) && r.start>=0 && Number.isInteger(r.end) && r.end>r.start).slice(-RECALL_MAX_ROWS).map(r=>{if(r.vector)try{vector(r.vector);}catch{return {...r,vector:null,modelKey:null};}return r;});
       if(version!==scopeVersion(owner,sid))return {key,owner,sid,version:RECALL_VERSION,rows:[],indexedMessages:0};
-      cache.set(key,record);return record;
+      remember(key,record);return record;
     })().finally(()=>{if(loads.get(key)===promise)loads.delete(key);});
     loads.set(key,promise);return promise;
   }
@@ -62,7 +63,7 @@ export function createRecallEngine({storage,embed}) {
     }
     assertActive(signal,check);
     try{record.persisted=!!await storage.save({...record,persisted:true},()=>{assertActive(signal,check);return true;});}catch{record.persisted=false;}
-    assertActive(signal,check);cache.set(record.key,record);
+    assertActive(signal,check);remember(record.key,record);
     if(record.persisted && connection)await storage.removeStage?.(JSON.stringify([owner,sid,'embedding-stage-v1',connection.key,session.historyRevision ?? 0,!!force]));
     return record;
   }
@@ -80,7 +81,7 @@ export function createRecallEngine({storage,embed}) {
     try {
       return await Promise.race([(async()=>{
         const record=await load(owner,sid);assertActive(controller.signal,check);
-        const linguistic=/qwen3[\-_]embedding.*0[._]6b/i.test(connection?.model??''),ranking={stem:linguistic};
+        const linguistic=/qwen3[\-_]embedding.*0[._]6b/i.test(connection?.model??''),ranking={stem:linguistic,lexical:null};
         const query=recallQuery(messages,{preferStandalone:linguistic,...opts,queryMessageIds:excludeIds}),cutoff=recallCutoff(messages,opts),excluded=new Set(excludeIds),byId=new Map(messages.map(m=>[m.id,m]));
         // Rebuild captured messages for keyword fallback, even when storage fails.
         const local=messages.slice(-200).flatMap(m=>passages(m)).slice(-RECALL_MAX_ROWS),localIds=new Set(local.map(r=>r.messageId)),priorById=new Map(record.rows.map(r=>[r.id,r]));
@@ -110,6 +111,8 @@ export function createRecallEngine({storage,embed}) {
           }
           return selected;
         };
+        const lexicalResults=lexicalRank(rows,query,ranking);
+        ranking.lexical=lexicalResults;
         const lexical=rankPassages(rows,query,null,'','',ranking);
         fallback={passages:await select(lexical),status:'keyword',coverage,omitted};
         let queryVector=null,status='keyword';
@@ -146,7 +149,7 @@ export function createRecallEngine({storage,embed}) {
     }
     const next={...current,rows:[...merged.values()].sort((a,b)=>a.order-b.order || a.start-b.start)};
     next.indexedMessages=new Set(next.rows.map(r=>r.messageId)).size;
-    assertActive(null,check);next.persisted=!!await storage.save({...next,persisted:true},()=>{assertActive(null,check);return true;});assertActive(null,check);cache.set(next.key,next);
+    assertActive(null,check);next.persisted=!!await storage.save({...next,persisted:true},()=>{assertActive(null,check);return true;});assertActive(null,check);remember(next.key,next);
     return {restored,skipped,persisted:next.persisted};
   }
   async function importRows(options) {

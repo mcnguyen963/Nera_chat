@@ -9,13 +9,15 @@ export function renderRecordEditor(parent,entry,{entries=[],messages=[],session=
   const eligible=r=>resolveRecord(available(),r);
   function render() {
     Object.assign(entry,reconcileRecords(entry));host.replaceChildren(node('h3','Selectable information'),node('p','Cores load when this subject is relevant. Pins request this passage every turn within its book budget. Save after reviewing.','muted'));
-    const records=entry.recordLayout.records;
+    const records=entry.recordLayout.records,availableEntry=available(),resolvedById=new Map(),eligibleById=new Map();
+    const resolvedFor=r=>{if(!resolvedById.has(r.id))resolvedById.set(r.id,resolveRecord(entry,r));return resolvedById.get(r.id);};
+    const eligibleFor=r=>{if(!eligibleById.has(r.id))eligibleById.set(r.id,resolveRecord(availableEntry,r));return eligibleById.get(r.id);};
     for(const category of RECORD_CATEGORIES) {
       const list=records.filter(r=>r.category===category);if(!list.length)continue;
       const group=node('details');group.append(node('summary',category+' · '+list.length));host.append(group);
       for(const r of list) {
-        const resolved=resolveRecord(entry,r),valid=eligible(r),box=node('section',null,'lore-section');
-        box.append(node('p',approvedRecord(available(),r)?'Approved core':r.coreCandidate?'Core awaiting review':'Detail','muted'));
+        const resolved=resolvedFor(r),valid=eligibleFor(r),box=node('section',null,'lore-section');
+        box.append(node('p',approvedRecord(availableEntry,r)?'Approved core':r.coreCandidate?'Core awaiting review':'Detail','muted'));
         if(!valid.valid)box.append(node('p',valid.reason,'memory-warning'));
         for(const s of resolved.sources)box.append(node('pre',s.section+(s.lineId ? ' · '+s.lineId : '')+'\n'+s.text));
         const complete=node('details');complete.append(node('summary','Review complete sources and qualifications'));
@@ -29,7 +31,7 @@ export function renderRecordEditor(parent,entry,{entries=[],messages=[],session=
         for(const other of entries.filter(e=>e.id!==entry.id)){const f=field(other.name,'',{type:'checkbox'});f.input.checked=r.relatedEntryIds.includes(other.id);f.input.addEventListener('change',()=>{r.relatedEntryIds=f.input.checked?[...new Set([...r.relatedEntryIds,other.id])]:r.relatedEntryIds.filter(id=>id!==other.id);onChange();});related.append(f.wrap);}box.append(related);
         const triggers=field('Specific trigger phrases (one per line)',r.triggers.join('\n'),{textarea:true});triggers.input.addEventListener('change',()=>{r.triggers=[...new Set(triggers.input.value.split('\n').map(s=>s.trim()).filter(Boolean))];onChange();});box.append(triggers.wrap);
         const replaces=node('details');replaces.append(node('summary','Explicit replacement (review required)'));
-        for(const old of records.filter(o=>o.id!==r.id&&resolveRecord(entry,o).valid)){const f=field(resolveRecord(entry,old).text,'',{type:'checkbox'});f.input.checked=(r.supersedes ?? []).includes(old.id);f.input.addEventListener('change',()=>{r.supersedes=f.input.checked?[...(r.supersedes ?? []),old.id]:(r.supersedes ?? []).filter(id=>id!==old.id);delete r.replacementApproval;onChange();});replaces.append(f.wrap);}
+        for(const old of records.filter(o=>o.id!==r.id&&resolvedFor(o).valid)){const f=field(resolvedFor(old).text,'',{type:'checkbox'});f.input.checked=(r.supersedes ?? []).includes(old.id);f.input.addEventListener('change',()=>{r.supersedes=f.input.checked?[...(r.supersedes ?? []),old.id]:(r.supersedes ?? []).filter(id=>id!==old.id);delete r.replacementApproval;onChange();});replaces.append(f.wrap);}
         replaces.append(button('Approve selected replacements',()=>{if(!eligible(r).valid || (r.supersedes ?? []).some(id=>!eligible(records.find(v=>v.id===id)).valid))throw new Error('Review source evidence first');approveSupersession(entry,r);onChange();render();},'btn small'));box.append(replaces);
         const reviewed=field('I reviewed the complete passage and its conditions','',{type:'checkbox'});box.append(reviewed.wrap);
         box.append(button('Approve this core',()=>{if(!reviewed.input.checked)throw new Error('Review this core before approving it');if(!eligible(r).valid)throw new Error('Review source evidence first');approveRecord(entry,r);onChange();render();},'btn small'),button('Remove core approval',()=>{delete r.approval;onChange();render();},'btn small'),button('Remove grouping',()=>{entry.recordLayout.records=records.filter(o=>o.id!==r.id);onChange();render();},'btn small'));

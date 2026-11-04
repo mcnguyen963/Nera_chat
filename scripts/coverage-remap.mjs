@@ -13,7 +13,7 @@
 // Anonymous vm:module(N) scripts are matched by length plus function names.
 //
 // Usage: node scripts/coverage-remap.mjs <in-dir> <out-dir>
-import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, readdir, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join, resolve, dirname, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -64,6 +64,8 @@ const clip = (r, length) => ({ ...r, functions: r.functions
   .map(fn => ({ ...fn, ranges: fn.ranges.filter(x => x.startOffset < length).map(x => ({ ...x, endOffset: Math.min(x.endOffset, length) })) })) });
 
 await mkdir(outDir, { recursive: true });
+// c8 cleans raw input between runs; remapped V8 files must not accumulate.
+for(const name of await readdir(outDir))if(/^coverage-.*\.json$/.test(name))await unlink(join(outDir,name));
 const stats = { mapped: 0, dropped: 0, files: new Set(), why: new Map() };
 for (const name of (await readdir(inDir)).filter(n => n.endsWith('.json'))) {
   const data = JSON.parse(await readFile(join(inDir, name), 'utf8'));

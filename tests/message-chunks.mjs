@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {indexedDBFixture} from './indexeddb-fixture.mjs';
 import {appHarness} from './app-harness.mjs';
 
 test('Deleting a story also removes nested device upload recovery backups',async()=>{
@@ -13,7 +14,7 @@ test('Deleting a story also removes nested device upload recovery backups',async
  await h.sessions.deleteSession('s');assert.ok(![...h.documents.keys()].some(path=>path===h.sessionPath || path.startsWith(h.sessionPath+'/')));
 });
 
-async function setup(legacyCount = 0) {
+async function setup(legacyCount = 0, indexedDB) {
   const documents = new Map();
   const reads = { documents: 0, legacy: 0, collections:[] };
   const transactions = [], fault = { failAt:null, failBatchAt:null, batchCount:0, beforeCommit:null };
@@ -143,7 +144,7 @@ async function setup(legacyCount = 0) {
       return () => { active = false; };
     },
   };
-  const context = vm.createContext({ URL, fetch:promptFetch, TextEncoder, Date, structuredClone, console });
+  const context = vm.createContext({ URL, fetch:promptFetch, TextEncoder, Date, structuredClone, console, indexedDB });
   const modules = new Map(),loading=new Map();
   async function load(path) {
     if (loading.has(path)) return loading.get(path);
@@ -171,7 +172,7 @@ async function setup(legacyCount = 0) {
   const lore = await load('lore-store.js'); await link(lore); await lore.evaluate();
   const storySettings=await load('story-settings-store.js');await link(storySettings);await storySettings.evaluate();
   const transfer=await load('import-export.js');await link(transfer);await transfer.evaluate();
-  return {sync:modules.get('story-sync.js').namespace,format:modules.get('lore-format.js').namespace,records:modules.get('lore-records.js').namespace,lines:modules.get('lore-lines.js').namespace,director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
+  return {cache:modules.get('chat-cache.js').namespace,sync:modules.get('story-sync.js').namespace,format:modules.get('lore-format.js').namespace,records:modules.get('lore-records.js').namespace,lines:modules.get('lore-lines.js').namespace,director:modules.get('director-store.js').namespace,source:modules.get('continuity.js').namespace,transfer:transfer.namespace,storySettings:storySettings.namespace,lore: lore.namespace, api: messages.namespace, sessions: sessions.namespace, documents, reads, sessionPath, transactions, fault, turns:modules.get('turns.js').namespace };
 }
 
 for(const operation of ['append','edit'])test('late legacy migration preserves another client migration and '+operation,async()=>{
@@ -1575,4 +1576,15 @@ for(const operation of ['bulk','copy','migration'])test('WP-04 summaries do not 
  }else await h.api.addMessagesBulk('s',messages);
  const path=operation==='copy'?'users/u/sessions/'+await h.sessions.duplicateSession('s'):h.sessionPath;
  assert.equal(h.documents.get(path).nextNarratorTurn,2);
+});
+
+
+test('restored chunk ranges support an append without rereading untouched cloud chunks',async()=>{
+ const db=indexedDBFixture({storyData:[]}),h=await setup(100,db.indexedDB);
+ await h.api.ensureChunked('s');const messages=await h.api.getMessages('s');
+ const chunks=[...h.documents].filter(([path])=>path.includes('/messageChunks/')).map(([path,data])=>({id:path.split('/').at(-1),firstOrder:data.firstOrder,lastOrder:data.lastOrder}));
+ assert.ok(chunks.length);await h.cache.saveStoryData('u','s',{chunkRanges:chunks});
+ await h.api.restoreMessageChunkCache('s',messages);
+ const added=await h.api.addMessage('s',{role:'assistant',content:'A new reply.'});
+ assert.equal(added.order,101);assert.equal((await h.api.getMessages('s')).length,101);
 });

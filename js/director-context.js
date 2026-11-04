@@ -28,11 +28,9 @@ function cachedCount(counter) {
     return n;
   };
 }
-const indexCache=new Map();
 function entityIndex(entries) {
   const rows=entries.filter(e=>['characters','locations'].includes(e.book)).map(e=>({id:e.id,book:e.book,name:e.name,aliases:e.aliases ?? [],brief:brief(e)}));
-  const key=JSON.stringify(rows);if(indexCache.has(key))return indexCache.get(key);
-  if(indexCache.size>=4)indexCache.clear();indexCache.set(key,rows);return rows;
+  return rows;
 }
 export const DIRECTOR_RESPONSE_FORMAT=Object.freeze({type:'json_object'});
 export function directorOutputOptions(settings,context) {

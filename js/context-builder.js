@@ -37,8 +37,8 @@ export function normalizeAdDirective(content) {
   return content;
 }
 
-const countPreviewTokens=createTokenCounter({count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
-const countSystemTokensCached=createTokenCounter({count:text=>tokenizer.countTokens(text),ready:tokenizerIsReady,version:()=>tokenizer.tokenizerMode?.()});
+const countPreviewTokens=createTokenCounter({limit:12000,count:async text=>tokenizer.estimateTokens(text),ready:()=>true});
+const countSystemTokensCached=createTokenCounter({limit:12000,count:text=>tokenizer.countTokens(text),ready:tokenizerIsReady,version:()=>tokenizer.tokenizerMode?.()});
 
 export async function buildContextForRequest(session, settings, opts = {}) {
   const messages = opts.messages ?? await getMessages(session.id);
