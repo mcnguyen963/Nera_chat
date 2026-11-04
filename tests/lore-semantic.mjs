@@ -2,8 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 import {promptFetch} from './prompt-files.mjs';
+import {indexedDBFixture} from './indexeddb-fixture.mjs';
+
+test('default lore storage scopes deletion, clears warmed memory, and ignores pending and staging rows',async()=>{
+  const idb=indexedDBFixture({indexes:[]});
+  const fresh=()=>appHarness({globals:{indexedDB:idb.indexedDB,fetch:async(url,options)=>options?.method?{ok:true,json:async()=>({data:JSON.parse(options.body).input.map((_,index)=>({index,embedding:[1,0]}))})}:promptFetch(url,options)}});
+  const use=fresh(),api=await use('lore-semantic.js'),{makeEntry}=await use('lore-lines.js');
+  const entry=makeEntry('characters','Mara',{id:'mara'});entry.sections.notes.text='Heals poisoned travellers.';
+  const base={owner:'owner',mem:{semanticLore:true,semanticEndpoint:'https://embeddings.test/v1/embeddings',semanticModel:'embed'},entries:[entry],query:'poison'};
+  for(const sid of ['A','B'])await api.loreSemantic.index({...base,sid});
+  await api.loreSemantic.index({...base,owner:'other',sid:'A'});
+  assert.equal((await api.loreSemantic.search({...base,sid:'A'})).status,'ready');
+  await api.deleteLoreSemanticStory('owner','A');
+  assert.equal((await api.loreSemantic.search({...base,sid:'A'})).status,'index missing');
+  assert.equal((await api.loreSemantic.search({...base,sid:'B'})).status,'ready');
+  assert.equal((await api.loreSemantic.search({...base,owner:'other',sid:'A'})).status,'ready');
+  await api.clearLoreSemanticAccount('owner');
+  assert.equal((await api.loreSemantic.search({...base,sid:'B'})).status,'index missing');
+  assert.equal((await api.loreSemantic.search({...base,owner:'other',sid:'A'})).status,'ready');
+  await api.loreIndexProgress.save('owner','A',true);assert.equal(await api.loreIndexProgress.load('owner','A'),true);
+  const saved=[...idb.stores.get('indexes').values()].find(v=>v.owner==='other' && !v.staging);
+  idb.stores.get('indexes').set('unfinished',{...saved,key:'unfinished',owner:'owner',sid:'A',staging:true});
+  assert.equal((await api.loreSemantic.search({...base,sid:'A'})).status,'index missing');
+  const reopened=await fresh()('lore-semantic.js');
+  assert.equal((await reopened.loreSemantic.search({...base,sid:'A'})).status,'index missing');
+  assert.equal((await reopened.loreSemantic.search({...base,owner:'other',sid:'A'})).status,'ready');
+});
 
 const plain=x=>JSON.parse(JSON.stringify(x));
+
+test('semantic relevance uses the model floor before keyword bonuses and retains only the top score band',async()=>{
+ for(const model of ['qwen3-embedding:0.6b','other']){
+  const use=appHarness(),{makeEntry}=await use('lore-lines.js'),{createLoreSemantic}=await use('lore-semantic.js');let saved,indexing=true;
+  const entries=[.44,.47,.50,.60].map((similarity,i)=>{const e=makeEntry('facts','Card '+i,{id:'c'+i});e.sections.text.text=i===0?'poison antidote':'Unrelated background';return e;});
+  const semantic=createLoreSemantic({storage:{load:async()=>saved,save:async value=>{saved=value;return true;}},embedder:async(_c,texts)=>indexing?texts.map((_t,i)=>Float32Array.from([[.44,.47,.50,.60][i],Math.sqrt(1-[.44,.47,.50,.60][i]**2)])):[Float32Array.from([1,0])]});
+  const args={owner:'u',sid:'s',mem:{semanticLore:true,semanticEndpoint:'https://embed.test',semanticModel:model},entries};await semantic.index(args);indexing=false;
+  const hits=await semantic.search({...args,query:'poison antidote'});
+  assert.deepEqual(plain(hits.ids),model==='other'?['c3','c0']:['c3']);assert.ok(!hits.ids.includes('c2'));
+  const low=await semantic.search({...args,entries:entries.slice(0,2),query:'poison antidote'});
+  assert.deepEqual(plain(low.ids),model==='other'?['c0']:['c1']);
+ }
+});
 async function fixture(){
   const use=appHarness(),{makeEntry}=await use('lore-lines.js'),{normalizeMemory}=await use('memory-settings.js');
   const entries=[makeEntry('characters','Mara',{id:'mara'}),makeEntry('characters','Bram',{id:'bram'})];

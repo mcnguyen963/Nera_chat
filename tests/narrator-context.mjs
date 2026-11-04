@@ -20,6 +20,36 @@ async function setup({records=false,limit=30000,bookBudget=2200}={}) {
  const build=(extra={})=>builder.buildContextForRequest(session,settings,{messages,loreEntries:entries,directorTurn:turn,includeInspection:true,...extra});
  return {use,entries,settings,session,messages,turn,build,settingsApi};
 }
+
+test('Narrator rejects a Director-selected card deleted after planning',async()=>{
+ const h=await setup();await assert.rejects(h.build({loreEntries:h.entries.filter(e=>e.id!=='clinic')}),/Director-selected memory changed/);
+});
+
+test('required record cards reject omitted approved core constraints',async()=>{
+ const h=await setup({records:true,bookBudget:800}),r=await h.use('lore-records.js'),entry=h.entries.find(e=>e.id==='depart');
+ entry.sections.appearance.text='A very long required qualification. '.repeat(1000);Object.assign(entry,r.reconcileRecords(entry));
+ for(const record of entry.recordLayout.records){record.coreCandidate=true;r.approveRecord(entry,record);}
+ h.turn.contract.memoryIds=['depart'];h.turn.contract.requiredMemoryIds=['depart'];
+ await assert.rejects(h.build(),/omitted core constraints/);
+});
+
+test('memory accounting rebuilds only once and reports persistent inconsistent counts',async()=>{
+ const api=await appHarness()('memory-context.js');let calls=0;
+ const result=await api.buildMemoryContext({id:'s',memory:{scene:true}},{narratorSystemPrompt:'Narrate.',maxContextTokens:100000,maxResponseTokens:100},{messages:[{id:'u',role:'user',order:1,content:'Begin.'}],loreEntries:[]},{count:async text=>text.length+(++calls),adRule:'',normalizeAd:text=>text});
+ assert.equal(result.report.warnings.filter(w=>/rebuilt once/.test(w)).length,1);assert.equal(result.report.warnings.filter(w=>/remained inconsistent/.test(w)).length,1);assert.ok(calls<200);
+});
+
+test('optional memory reminder omission reports why it was removed',async()=>{
+ const use=appHarness(),api=await use('memory-context.js'),{prompts}=await use('system-prompts.js');
+ const result=await api.buildMemoryContext({id:'s',memory:{scene:true,memoryBlock:true,startingScene:'date: 1/10/738 · time: 10:00 · place: Hall · present: Mira'}},{narratorSystemPrompt:'Narrate.',maxContextTokens:100000,maxResponseTokens:100},{messages:[{id:'u',role:'user',order:1,content:'Begin.'}],loreEntries:[]},{count:async text=>text.length+(text.includes(prompts.memoryHeader)?200000:0),adRule:'',normalizeAd:text=>text});
+ assert.ok(result.report.warnings.some(w=>/Optional memory reminder omitted/.test(w)));assert.ok(!result.apiMessages.some(m=>m.content.includes(prompts.memoryHeader)));
+});
+
+test('final rendered memory request cannot exceed its budget after the single rebuild',async()=>{
+ const api=await appHarness()('memory-context.js');let systemCalls=0;
+ await assert.rejects(api.buildMemoryContext({id:'s',memory:{}},{narratorSystemPrompt:'Narrate.',maxContextTokens:100000,maxResponseTokens:100},{messages:[{id:'u',role:'user',order:1,content:'Begin.'}],loreEntries:[]},{count:async text=>text.length+(text.startsWith('Narrate.') && ++systemCalls%4===3 ? 200000:0),adRule:'',normalizeAd:text=>text}),/fully rendered request exceeds/);
+ assert.equal(systemCalls,8);
+});
 test('Both built-in narrator modes share the reviewed foundation and Director delegates state authority',async()=>{
  const {prompts}=await appHarness()('system-prompts.js');
  assert.match(prompts.narrator,/NO MANUFACTURED TENSION OR THREADS/);assert.match(prompts.directorNarratorDefault,/NO MANUFACTURED TENSION OR THREADS/);

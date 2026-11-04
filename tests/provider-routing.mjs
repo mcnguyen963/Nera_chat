@@ -6,6 +6,41 @@ const settings={endpoint,modelId:'author/model',apiKey:'key',streaming:false,max
 const plain=value=>JSON.parse(JSON.stringify(value));
 const ok=()=>new Response(JSON.stringify({choices:[{message:{content:'Complete reply'},finish_reason:'stop'}]}));
 const failure=(status,message='Provider unavailable')=>new Response(JSON.stringify({error:{code:status,message}}),{status});
+
+test('request-level price caps can only lower the user completion cap',async()=>{
+ for(const cap of [2,.2]){
+  const h=await fixture(()=>ok());await h.client.chatCompletion({settings:{...settings,maxOutputPrice:.4},messages:[],provider:{max_price:{prompt:1,completion:cap}}});
+  assert.deepEqual(h.calls[0].body.provider.max_price,{prompt:1,completion:Math.min(.4,cap)});
+ }
+});
+
+test('provider discovery rejects bad model ids before fetching and reports HTTP, network and JSON failures',async()=>{
+ const h=await fixture(()=>{throw Error('Should not fetch');});
+ for(const modelId of ['','gpt-4','a/ b'])await assert.rejects(h.routing.fetchProviders({...settings,modelId}),/Choose a model/);
+ assert.equal(h.calls.length,0);
+ for(const status of [401,404,500]){const f=await fixture(()=>({ok:false,status}));await assert.rejects(f.routing.fetchProviders(settings),new RegExp('HTTP '+status));assert.equal(f.calls.length,1);}
+ const network=await fixture(()=>{throw Error('offline');});await assert.rejects(network.routing.fetchProviders(settings),/Could not fetch providers/);
+ const json=await fixture(()=>({ok:true,json:async()=>{throw Error('invalid json');}}));await assert.rejects(json.routing.fetchProviders(settings),/Malformed provider listing: expected JSON/);
+});
+
+test('provider body and pre-delta SSE errors fall back using provider codes and report the route',async()=>{
+  for(const streaming of [false,true]){
+    const h=await fixture((_url,_opts,n)=>{
+      if(!streaming)return n===1?new Response(JSON.stringify({error:{code:503,message:'upstream'}})):ok();
+      const event=n===1?{error:{code:502,message:'upstream'}}:{choices:[{delta:{content:'Complete reply'},finish_reason:'stop'}]};
+      return new Response('data: '+JSON.stringify(event)+'\ndata: [DONE]\n');
+    });
+    const result=await h.client.chatCompletion({settings:{...settings,streaming},messages:[]});
+    assert.equal(result.provider,'second');assert.equal(result.content,'Complete reply');assert.equal(h.calls.length,2);
+    assert.deepEqual(plain(h.events[0].detail),{from:'first',to:'second'});
+  }
+});
+
+test('a provider request error does not fall back even when HTTP status is an availability failure',async()=>{
+  const h=await fixture(()=>new Response(JSON.stringify({error:{code:400,message:'Invalid provider request'}}),{status:502}));
+  await assert.rejects(h.client.chatCompletion({settings,messages:[]}),/Invalid provider request/);
+  assert.equal(h.calls.length,1);assert.equal(h.events.length,0);assert.equal(h.routing.providerRetryAt(settings,'first'),0);
+});
 function storage() {const data=new Map();return {getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key),data};}
 async function fixture(fetch,store=storage()) {
   let now=1000000;class Clock extends Date {static now(){return now;}}

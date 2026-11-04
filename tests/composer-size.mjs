@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
+
+test('composer inset reports chrome height and supports manual updates without ResizeObserver',async()=>{
+ const {observeComposerInset}=await appHarness()('ui/composer-size.js');let height=140,resizes=0;const values=new Map(),frames=[];
+ const schedule=observeComposerInset({shell:{getBoundingClientRect:()=>({height}),querySelector:()=>({getBoundingClientRect:()=>({height:60})})},style:{setProperty:(k,v)=>values.set(k,v)},onResize:()=>resizes++,frame:fn=>frames.push(fn),Observer:null});
+ frames.shift()();assert.equal(values.get('--composer-height'),'140px');assert.equal(values.get('--composer-chrome-height'),'80px');
+ height=200;schedule();schedule();assert.equal(frames.length,1);frames.shift()();assert.equal(values.get('--composer-chrome-height'),'140px');assert.equal(resizes,2);
+ height=40;schedule();frames.shift()();assert.equal(values.get('--composer-chrome-height'),'0px');
+});
 test('Composer batches typing, restore, starter and rewrite sizing; skips unchanged text/width',async()=>{
   const {createComposerSizer}=await appHarness()('ui/composer-size.js');
   const frames=[],writes=[],field={value:'',clientWidth:300,scrollHeight:30,scrollTop:0,style:new Proxy({},{set:(target,key,value)=>{writes.push(value);target[key]=value;return true;}})};

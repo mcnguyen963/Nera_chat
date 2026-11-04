@@ -5,6 +5,11 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { appHarness } from './app-harness.mjs';
 
+test('lightweight estimates retain fixed ASCII, CJK and Unicode codepoint costs',async()=>{
+ const {estimateTokens}=await appHarness()('tokenizer.js');
+ assert.deepEqual(['','hello world','世界','👋','a'.repeat(100)].map(estimateTokens),[0,4,3,2,31]);
+});
+
 test('Tokenizer retries after cooldown and coalesces imports without retaining fallback estimates', async () => {
   const context = vm.createContext({ TextEncoder });
   const module = new vm.SourceTextModule(

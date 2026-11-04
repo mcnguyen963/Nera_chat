@@ -144,10 +144,28 @@ for(const failure of ['backup','final'])test('Device upload '+failure+' failure 
  await assert.rejects(api.uploadDeviceStory(device),/Network failed/);assert.deepEqual(active(),before);assert.deepEqual(plain(device),phone);
 });
 
-test('Device upload stops if Firebase changes during backup instead of replacing the newer cloud state',async()=>{
+test('Device upload stops if Firebase changes during final replacement instead of replacing newer cloud state',async()=>{
  const {api,device,documents,root,calls}=await setup();
- await assert.rejects(api.uploadDeviceStory(device,{onProgress:text=>{if(text.startsWith('Replacing'))documents.get(root).historyRevision++;}}),/Firebase changed/);
+ await assert.rejects(api.uploadDeviceStory(device,{onProgress:text=>{if(text.startsWith('Replacing'))documents.get(root).historyRevision++;}}),/Firebase changed during upload/);
  assert.equal(calls.activeWrites,0);assert.equal(documents.get(root).historyRevision,10);assert.equal(documents.get(root+'/messageChunks/chunk_old').messages[1].content,'Cloud reply.');
+});
+
+test('Device upload detects cloud changes between recovery backup batches before writing the next parts',async()=>{
+ const {api,device,documents,root,calls}=await setup();let batches=0;
+ await assert.rejects(api.uploadDeviceStory(device,{onProgress:text=>{if(text.startsWith('Saving recovery backups') && ++batches===2)documents.get(root).historyRevision++;}}),/Firebase changed during backup/);
+ assert.equal(batches,2);assert.equal(calls.activeWrites,0);assert.equal([...documents.keys()].filter(path=>path.includes('/storyRecovery/') && path.includes('/parts/')).length,6);
+ assert.equal(documents.get(root+'/messageChunks/chunk_old').messages[1].content,'Cloud reply.');
+});
+
+for(const source of ['cache','confirmed'])test('Device recovery labels and preserves the '+source+' source without cloud reads',async()=>{
+ const {api,device,calls}=await setup(),view={session:device.session,messages:device.messages,turns:{}};
+ const copies=api.deviceStoryCopies({sid:'story',...(source==='cache'?{cached:{session:device.session,history:device.messages,historyRevision:4,hasEarlier:false}}:{aux:{confirmed:view}}),storySettings:device.storySettings,loreSnapshot:device.loreSnapshot});
+ assert.equal(copies.length,1);assert.equal(copies[0].label,source==='cache'?'Cached story':'Last saved device copy');assert.equal(copies[0].snapshot.messages[1].content,'Phone reply.');assert.equal(calls.reads,0);
+});
+
+for(const flag of ['importing','loreMigration'])test('Device upload refuses an active '+flag+' before opening any transaction',async()=>{
+ const {api,device,documents,root,calls,active}=await setup();documents.get(root)[flag]=flag==='importing'?true:{active:true};const before=active();
+ await assert.rejects(api.uploadDeviceStory(device),/import|migration/i);assert.equal(calls.transactions,0);assert.equal(calls.activeWrites,0);assert.deepEqual(active(),before);
 });
 
 test('Device upload rejects a changed account before any active cloud replacement',async()=>{

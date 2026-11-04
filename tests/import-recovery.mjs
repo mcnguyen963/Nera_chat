@@ -7,17 +7,24 @@ const messages=[{id:'u',order:1,role:'user',revision:0,content:'Begin.'},{id:'a'
 const file=value=>({name:'story.json',size:1000,text:async()=>JSON.stringify(value)});
 const backup=(extra={})=>({format:'nera-chat-backup',version:1,session:{id:'original',historyRevision:12,title:'Story',memoryState:{extractedThroughOrder:2,needsRebuild:true,rebuildFromOrder:1},memoryInvalidations:[{fromOrder:1,toOrder:2,revision:12}]},messages:plain(messages),lore:[],...extra});
 async function setup({storage,changeAccount=false,failPublish=false}={}) {
- const calls=[],lore=[],session={id:'imported',historyRevision:0,nextOrder:0,storySettingsRevision:1};let owner='owner';
+ const calls=[],lore=[],importedMessages=[],session={id:'imported',historyRevision:0,nextOrder:0,storySettingsRevision:1};let owner='owner';
  const use=appHarness({stubs:{
   'auth.js':{currentUid:()=>owner},
   'sessions.js':{createSession:async()=>{calls.push('create');return session.id;},getSession:async()=>structuredClone(session),listSessions:async()=>[],deleteSession:async()=>calls.push('delete'),updateSession:async(_id,patch)=>{calls.push('publish');if(failPublish)throw Error('Publish failed');Object.assign(session,patch);}},
-  'messages.js':{newMessageId:()=> 'recovered',getMessages:async()=>[],addMessagesBulk:async(_id,items)=>{calls.push('messages');session.historyRevision++;session.nextOrder=items.at(-1)?.order ?? 0;}},
+  'messages.js':{newMessageId:()=> 'recovered',getMessages:async()=>[],addMessagesBulk:async(_id,items)=>{calls.push('messages');importedMessages.push(...structuredClone(items));session.historyRevision++;session.nextOrder=items.at(-1)?.order ?? 0;}},
   'lore-store.js':{getLore:async()=>lore,importLore:async(_id,plan)=>{calls.push('lore');lore.push(...plan.writes.map(w=>structuredClone(w.data)));session.loreRevision=(session.loreRevision ?? 0)+1;},migrateRecords:async()=>calls.push('migrate')},
   'ui/memory-ui.js':{download(){}},
   ...(storage?{'unsaved-replies.js':{storeUnsavedReply:async(...args)=>{calls.push('retain-reply');if(changeAccount)owner='other';return storage(...args);}}}:{}),
  }});
- return {use,api:await use('import-export.js'),calls,lore,session};
+ return {use,api:await use('import-export.js'),calls,lore,session,importedMessages};
 }
+
+test('reviewed section-snapshot cores become unavailable at their source cutoff',async()=>{
+ const use=appHarness(),{makeEntry}=await use('lore-lines.js'),core=await use('character-core.js'),entry=makeEntry('characters','Mira');
+ Object.assign(entry.sections.notes,{text:'Agreed to wait.',origin:'auto',kind:'snapshot',cutoff:{order:4,turn:2}});
+ const bundle=core.reviewCore(entry,[core.coreSource(entry,'notes')]);assert.equal(core.resolveCore(entry,bundle,{session:{},messages:[],upToOrder:5}).valid,true);
+ const result=core.resolveCore(entry,bundle,{session:{},messages:[],upToOrder:4});assert.equal(result.valid,false);assert.match(result.reason,/stale or unavailable evidence/);
+});
 
 test('malformed JSONL reports original line numbers and performs no story writes',async()=>{
  const h=await setup(),text='\n'+JSON.stringify({character_name:'Story'})+'\n\n{"mes":"lost"\n'+JSON.stringify({mes:'Valid',is_user:true})+'\n{broken';
@@ -68,6 +75,7 @@ for(const schema of [2,3])test(`import v${schema} freezes stale lore and rebases
  const edited={...h.session,memoryInvalidations:[{fromOrder:4,toOrder:4,revision:2}]};
  assert.equal(continuity.noteNeedsReview(lines[1],history,edited),true);
  assert.equal(core.resolveCore(result,result.coreReferences[0],{messages:history,session:h.session}).valid,true);
+ for(const context of [{messages:history.filter(m=>m.id!=='a4'),session:h.session},{messages:history,session:h.session,upToOrder:3}]){const invalid=core.resolveCore(result,result.coreReferences[0],context);assert.equal(invalid.valid,false);assert.match(invalid.reason,/stale or unavailable evidence/);}
  if(schema===3){
   const valid=result.recordLayout.records.find(r=>records.resolveRecord(result,r).sources.some(s=>s.lineId==='valid'));
   const stale=result.recordLayout.records.find(r=>records.resolveRecord(result,r).sources.some(s=>s.lineId==='stale'));
@@ -153,4 +161,10 @@ test('a failed import clears its staged unsaved reply before cleanup',async()=>{
  const retained=[],h=await setup({failPublish:true,storage:async(...args)=>{retained.push(args);return true;}});
  await assert.rejects(h.api.importSillyTavern(file(backup({messages:[messages[0]],unsavedReply:unsaved()}))),/Publish failed/);
  assert.equal(retained.at(-1)[2],null);assert.equal(h.calls.at(-1),'delete');
+});
+
+test('minimal SillyTavern JSONL imports exact message roles, text and ordering',async()=>{
+ const h=await setup(),text=JSON.stringify({character_name:'Mira'})+'\n'+JSON.stringify({name:'You',is_user:true,mes:'Hello.'})+'\n'+JSON.stringify({name:'Mira',is_user:false,mes:'Welcome.'});
+ assert.equal(await h.api.importSillyTavern({name:'story.jsonl',size:text.length,text:async()=>text}),'imported');
+ assert.deepEqual(h.importedMessages.map(m=>[m.role,m.content,m.order]),[['user','Hello.',1],['assistant','Welcome.',2]]);
 });

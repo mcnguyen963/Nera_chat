@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 import {indexedDBFixture} from './indexeddb-fixture.mjs';
 const row=(id,vector=[1,0])=>({id:id+':0',messageId:id,revision:0,order:1,role:'assistant',start:0,end:6,sourceHash:'a'.repeat(64),sourceRevision:1,modelKey:'model-A',text:'private story text',vector});
+
+test('vector cache deletion removes only the specified story and account',async()=>{
+ const idb=indexedDBFixture({items:[]}),cache=await appHarness({globals:{indexedDB:idb.indexedDB}})('vector-cloud-cache.js');
+ for(const [owner,sid]of [['owner','a'],['owner','b'],['other','a']]){await cache.saveCachedVectorChunk(owner,sid,'lore','chunk','payload');await cache.saveCachedVectorManifest(owner,sid,'lore',{revision:1});}
+ await cache.deleteVectorCloudStory('owner','a');assert.equal(await cache.readCachedVectorChunk('owner','a','lore','chunk'),null);assert.equal(await cache.readCachedVectorManifest('owner','a','lore'),null);
+ assert.equal(await cache.readCachedVectorChunk('owner','b','lore','chunk'),'payload');assert.equal(await cache.readCachedVectorChunk('other','a','lore','chunk'),'payload');
+ await cache.clearVectorCloudAccount('owner');assert.equal(await cache.readCachedVectorChunk('owner','b','lore','chunk'),null);assert.equal((await cache.readCachedVectorManifest('other','a','lore')).revision,1);assert.equal(idb.stores.get('items').size,2);
+});
 function adapter(){const chunks=new Map(),manifests=new Map(),writes=[];return {chunks,manifests,writes,async writeChunk(id,payload){chunks.set(id,payload);writes.push(id);},async readChunk(id){return chunks.get(id);},async loadManifest(kind){return manifests.get(kind)??null;},async commitManifest(kind,expected,next){if((manifests.get(kind)?.revision??0)!==expected)throw Error('Vector index changed on another device.');manifests.set(kind,next);}};}
 test('vector sync stores no source text, checks chunks and reuses unchanged chunks',async()=>{
   const {uploadVectorIndex,downloadVectorIndex}=await appHarness()('vector-cloud-core.js'),remote=adapter(),a=row('a'),b={...row('b'),order:101};
@@ -79,6 +87,37 @@ async function syncFixture(){
   const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>cached,saveCachedVectorManifest:async(_o,_s,_k,value)=>{cached=value;return true;},readCachedVectorChunk:async()=>null,saveCachedVectorChunk:async()=>{}},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>pending}},'history-recall.js':{exportHistoryVectors:async(_sid,options)=>{assert.equal(options.messages,snapshot.messages);exports++;return [];},importHistoryVectors:async()=>({restored:0,skipped:0,persisted:true})},'lore-semantic.js':{loreSemantic:{exportVectors:async()=>[],needsRefresh:async()=>staleLore,importVectors:async()=>({restored:0,skipped:0})}}}});
   return {remote,snapshot,sync:await use('vector-cloud-sync.js'),setCached:value=>cached=value,getCached:()=>cached,exports:()=>exports,setPending:value=>pending=value,setStaleLore:value=>staleLore=value};
 }
+
+async function loreSyncFixture(){
+ const remote=adapter(),chunks=new Map(),imports=[],manifests=[];let reads=0,persisted=true,live;
+ const originalRead=remote.readChunk;remote.readChunk=async id=>{reads++;return originalRead(id);};
+ const sourceRows=[{id:'mara',recordId:'notes:one',hash:'a'.repeat(64),modelKey:'model-A',modelId:'embed',vector:[1,0]},{id:'bram',recordId:null,hash:'b'.repeat(64),modelKey:'model-A',modelId:'embed',vector:[0,1]}];
+ const snapshot={historyComplete:true,storyEpoch:1,session:{id:'s',historyRevision:1,loreRevision:1,memory:{semanticLore:true}},messages:[],entries:[]};live=snapshot;
+ const use=appHarness({stubs:{'auth.js':{currentUid:()=> 'u'},'vector-cloud-firestore.js':{createVectorCloudAdapter:()=>remote},'vector-cloud-cache.js':{readCachedVectorManifest:async()=>null,saveCachedVectorManifest:async(...args)=>{manifests.push(args);return true;},readCachedVectorChunk:async(_u,_s,_k,id)=>chunks.get(id),saveCachedVectorChunk:async(_u,_s,_k,id,payload)=>chunks.set(id,payload)},'history-recall-storage.js':{recallStorage:{loadPendingBatch:async()=>null}},'history-recall.js':{exportHistoryVectors:async()=>[],importHistoryVectors:async()=>{throw Error('Wrong history importer');}},'lore-semantic.js':{loreSemantic:{needsRefresh:async()=>false,exportVectors:async()=>sourceRows,importVectors:async args=>{imports.push(args);args.check();return {restored:args.rows.length,skipped:0,persisted};}}}}});
+ return {sync:await use('vector-cloud-sync.js'),snapshot,remote,chunks,imports,manifests,sourceRows,reads:()=>reads,getLive:()=>live,setLive:value=>live=value,setPersisted:value=>persisted=value};
+}
+
+test('lore cloud sync preserves entry, record and digest identities and reuses verified cached chunks',async()=>{
+ const h=await loreSyncFixture();await h.sync.uploadStoryVectors(h.snapshot,'lore');
+ const result=await h.sync.downloadStoryVectors(h.snapshot,'lore');assert.equal(result.restored,2);assert.ok(h.reads()>0);
+ const imported=h.imports[0];assert.equal(imported.owner,'u');assert.equal(imported.sid,'s');
+ const identities=rows=>Array.from(rows,r=>[r.id,r.recordId,r.hash,Array.from(r.vector)]).sort();
+ assert.deepEqual(identities(imported.rows),identities(h.sourceRows));
+ const reads=h.reads();await h.sync.downloadStoryVectors(h.snapshot,'lore');assert.equal(h.reads(),reads);
+ const id=h.chunks.keys().next().value;h.chunks.set(id,'[]');
+ assert.equal((await h.sync.downloadStoryVectors(h.snapshot,'lore')).restored,2);assert.equal(h.reads(),reads+1);assert.equal(h.chunks.get(id),h.remote.chunks.get(id));
+});
+
+test('cloud download rejects an unpersisted import before recording a device manifest',async()=>{
+ const h=await loreSyncFixture();await h.sync.uploadStoryVectors(h.snapshot,'lore');h.setPersisted(false);const before=h.manifests.length;
+ await assert.rejects(h.sync.downloadStoryVectors(h.snapshot,'lore'),{message:'Device storage is unavailable; downloaded vectors were not saved.'});assert.equal(h.manifests.length,before);
+});
+
+for(const change of ['story','epoch'])test('cloud download stops before import after changing '+change,async()=>{
+ const h=await loreSyncFixture();await h.sync.uploadStoryVectors(h.snapshot,'lore');
+ const read=h.remote.readChunk;h.remote.readChunk=async id=>{const payload=await read(id);h.setLive({...h.snapshot,...(change==='story'?{session:{...h.snapshot.session,id:'other'}}:{storyEpoch:2})});return payload;};
+ await assert.rejects(h.sync.downloadStoryVectors(h.snapshot,'lore',{getLive:h.getLive}),/Story or account changed/);assert.equal(h.imports.length,0);
+});
 test('manual sync detects a newer remote revision even if local vectors would be unchanged',async()=>{
   const h=await syncFixture();h.setCached({kind:'history',revision:1,count:0,chunks:[]});h.remote.manifests.set('history',{kind:'history',revision:2,count:0,chunks:[]});
   await assert.rejects(h.sync.uploadStoryVectors(h.snapshot,'history'),/another device/);assert.equal(h.exports(),0);

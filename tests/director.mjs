@@ -172,6 +172,20 @@ test('Director failures and stale inputs never persist a contract',async()=>{
  let saved=0;const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{saved++;}},'llm-client.js':{chatCompletion:async()=>({content:'{}',finishReason:'length'})}}})('director-turn.js');
  await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{role:'user',content:'Go',order:1}],[]),/incomplete/);assert.equal(saved,0);
 });
+
+test('Director rejects a changed source after planning before saving a pending contract',async()=>{
+ let changed=false,saved=0;
+ const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>null,savePendingDirectorTurn:async()=>{saved++;}},'llm-client.js':{chatCompletion:async()=>{changed=true;return {finishReason:'stop',content:JSON.stringify(contract({}))};}}}})('director-turn.js');
+ await assert.rejects(api.prepareDirectorTurn({id:'s',directorState:state},settings,[{id:'u',role:'user',content:'I wait.',order:1}],[],{},{check:()=>{if(changed)throw Object.assign(Error('Story changed'),{name:'StoryConflict'});}}),{name:'StoryConflict',message:'Story changed'});assert.equal(saved,0);
+});
+
+test('Director replan walks same-assistant checkpoints to the original before state and replaces the pending turn',async()=>{
+ const states=[0,1,2,3].map(n=>({...state,scene:{...state.scene,time:(10+n)+':00'}}));
+ const chain=new Map([['t3',{id:'t3',assistantId:'a',before:states[3],previousCheckpoint:'t2'}],['t2',{id:'t2',assistantId:'a',before:states[2],previousCheckpoint:'t1'}],['t1',{id:'t1',assistantId:'a',before:states[1],previousCheckpoint:'t0'}],['t0',{id:'t0',assistantId:'earlier',before:states[0]}]]),lookups=[];
+ const api=await appHarness({stubs:{'tokenizer.js':tokens,'director-store.js':{getDirectorTurn:async()=>{throw Error('Use scoped hook');},savePendingDirectorTurn:async(_sid,turn)=>turn},'llm-client.js':{chatCompletion:async()=>({finishReason:'stop',content:JSON.stringify(contract({}))})}}})('director-turn.js');
+ const turn=await api.prepareDirectorTurn({id:'s',directorState:state,directorCheckpoint:'t3',directorPending:'replacement'},settings,[{id:'u',order:1,role:'user',content:'I wait.'},{id:'a',order:2,role:'assistant',content:'Waiting.',directorTurnId:'t3'}],[],{overwriteId:'a',upToOrder:2,replan:true},{getTurn:async(sid,id)=>{assert.equal(sid,'s');lookups.push(id);return chain.get(id);}});
+ assert.deepEqual(lookups,['t3','t2','t1','t0']);assert.deepEqual(plain(turn.before),states[1]);assert.equal(turn.previousCheckpoint,'t0');assert.equal(turn.replaces,'replacement');
+});
 test('Narrator context follows Director state and preserves existing retrieval alongside Director selections',async()=>{
  const use=appHarness({stubs:{'tokenizer.js':tokens,'messages.js':{getMessages:async()=>[]}}}),api=await use('context-builder.js'),lore=await use('lore-lines.js');
  const nera=lore.makeEntry('characters','Nera'),lysia=lore.makeEntry('characters','Lysia');lysia.sections.appearance.text='Silver healer coat';nera.sections.appearance.text='Player profile';

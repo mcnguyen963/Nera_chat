@@ -1,17 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync} from 'node:fs';
 import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 
+import {findChrome} from './browser-fixture.mjs';
+
 // A fresh, unsigned browser profile and synthetic sources only. These checks use
 // actual IndexedDB transactions, not the in-memory substitutes in unit tests.
 test('browser index recovery, concurrent queue claims and summary field merging', {timeout:60000},async t=>{
-  const chrome=[process.env.CHROME_BIN,'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/chromium','/usr/bin/google-chrome'].find(p=>p&&existsSync(p));
+  const chrome=await findChrome();
   if(!chrome)return t.skip('Chrome/Chromium unavailable.');
+  t.diagnostic('Browser: '+chrome);
   const root=resolve('js'),prompts=resolve('system prompts'),profile=await mkdtemp(join(tmpdir(),'nera-index-recovery-'));
   const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><title>Embedding maintenance test</title>');}const url=decodeURIComponent(req.url.split('?')[0]),isPrompt=url.startsWith('/system prompts/'),base=isPrompt?prompts:root,path=resolve(base,'.'+(isPrompt?url.slice('/system prompts'.length):url));if(!path.startsWith(base+'/')||!path.endsWith(isPrompt?'.md':'.js'))throw Error();res.setHeader('Content-Type',isPrompt?'text/plain':'text/javascript');res.end(await readFile(path));}catch{res.writeHead(404);res.end();}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));

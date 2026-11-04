@@ -1018,6 +1018,34 @@ test('Story prompt saves preserve unrelated remote fields and reject overlapping
  assert.equal(merged.values.summarizerSystemPrompt,'Remote summary');assert.equal(merged.values.narratorSystemPrompt,'Local narrator');assert.equal('apiKey' in merged.values,false);
  const before=JSON.stringify([...h.documents]);await assert.rejects(api.saveStorySettings('s',base,{narratorSystemPrompt:'Conflict'}),/Reload and review/);assert.equal(JSON.stringify([...h.documents]),before);
 });
+
+for(const from of ['classic','director'])test('Mode switches reject pending Director turns without changing documents: '+from,async()=>{
+ const h=await setup(),loaded=await h.storySettings.ensureStorySettings('s');
+ h.documents.get(h.sessionPath+'/storySettings/current').values.narrationMode=from;
+ h.documents.get(h.sessionPath).directorPending='pending-contract';
+ const before=structuredClone([...h.documents]);
+ await assert.rejects(h.storySettings.saveStorySettings('s',{...loaded.values,narrationMode:from},{narrationMode:from==='classic'?'director':'classic'}),{message:'Finish or discard pending Director narration before switching modes.'});
+ assert.deepEqual([...h.documents],before);
+});
+
+test('Enabling modern Director requires a reviewed live state and settings revisions must agree',async()=>{
+ const h=await setup(),loaded=await h.storySettings.ensureStorySettings('s');
+ h.documents.get(h.sessionPath).memory={calendar:{mode:'modern'}};
+ let before=structuredClone([...h.documents]);
+ await assert.rejects(h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director'}),{message:'Review live state and save its modern date and HH:mm time before enabling Director mode.'});
+ assert.deepEqual([...h.documents],before);
+ h.documents.get(h.sessionPath).storySettingsRevision=2;before=structuredClone([...h.documents]);
+ await assert.rejects(h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director'}),{message:'Story settings revisions disagree. Reload and review before saving.'});
+ assert.deepEqual([...h.documents],before);
+});
+
+for(const stale of [false,true])test('Enabling Director marks only a state behind history for review: '+stale,async()=>{
+ const h=await setup(),loaded=await h.storySettings.ensureStorySettings('s'),session=h.documents.get(h.sessionPath);
+ Object.assign(session,{nextOrder:8,directorStateHistoryOrder:stale?6:8,memory:{calendar:{mode:'modern'}},directorState:{version:2,scene:{date:'04/11/2026',time:'20:00',location:'Inn',present:['Nera']},event:null,decisions:[],threads:[],commitments:[]}});
+ const saved=await h.storySettings.saveStorySettings('s',loaded.values,{narrationMode:'director'});
+ assert.equal(saved.values.narrationMode,'director');assert.equal(saved.revision,2);assert.equal(h.documents.get(h.sessionPath).storySettingsRevision,2);
+ assert.equal(h.documents.get(h.sessionPath).directorNeedsReview,stale?true:undefined);
+});
 test('New and zero-message copied stories receive independent explicit settings and deletion removes them',async()=>{
  const h=await setup(),api=h.storySettings,source=await api.ensureStorySettings('s');
  await api.saveStorySettings('s',source.values,{narratorSystemPrompt:'Custom source',rewriteSystemPrompt:'Custom rewrite'});

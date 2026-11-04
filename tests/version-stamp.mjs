@@ -1,11 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, cp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stampJavaScript, stampHTML, stampSite } from '../scripts/stamp-version.mjs';
+import {appHarness} from './app-harness.mjs';
 
 const version = '1234abcd';
+
+for(const [current,next,banner]of [['1234abcd','1234abcd5678',false],['1234abcd','5678abcd',true],['local','5678abcd',false]])test(`version banner checks ${current} against ${next}`,async()=>{
+ const elements=[],listeners={},node=tag=>({tag,children:[],append(...xs){this.children.push(...xs);},addEventListener(type,fn){this[type]=fn;}});let reads=0,reloads=0;
+ const label=node('span'),doc={querySelector:selector=>selector.includes('nera-version')?{content:current}:{content:'2026-11-04'},getElementById:id=>id==='app-version'?label:elements.find(e=>e.id===id),createElement:node,body:{append:e=>elements.push(e)},addEventListener:(type,fn)=>listeners[type]=fn};
+ const use=appHarness({globals:{document:doc,window:{addEventListener:(type,fn)=>listeners[type]=fn},location:{reload:()=>reloads++},fetch:async()=>{reads++;return {ok:true,json:async()=>({sha:next})};}}});
+ (await use('version.js')).initVersion();await new Promise(r=>setImmediate(r));assert.equal(elements.length,banner?1:0);assert.equal(reads,current==='local'?0:1);
+ if(banner){elements[0].children[0].click();assert.equal(reloads,1);await listeners.focus();await new Promise(r=>setImmediate(r));assert.equal(elements.length,1);}
+});
+
+test('release stamping accepts the real application tree and stamps every relative module reference',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'nera-real-stamp-'));
+ try{
+  await cp(new URL('../js/',import.meta.url),join(root,'js'),{recursive:true});await cp(new URL('../index.html',import.meta.url),join(root,'index.html'));
+  await stampSite(root,'1234abcd5678','2026-11-04T00:00:00.000Z');
+  const walk=async path=>{for(const entry of await readdir(path,{withFileTypes:true})){const file=join(path,entry.name);if(entry.isDirectory())await walk(file);else if(entry.name.endsWith('.js')){const text=await readFile(file,'utf8');assert.equal(stampJavaScript(text,version),text,file);}}};
+  await walk(join(root,'js'));assert.match(await readFile(join(root,'js','boot.js'),'utf8'),/app\.js\?v=1234abcd/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
 test('release stamping versions static, dynamic, side-effect and re-export relative modules', () => {
   const input = `import x from './x.js';\nimport "../init.js";\nexport {x} from './x.js';\nexport * from "./all.js";\nconst app = import('./app.js');\nconst fixed = import(\`./fixed.js\`);\nimport data from 'https://host/x.js';\n// import ignored from './comment.js'\nconst text = "import x from './quoted.js'";\nconst rx = /import x from 'a.js'/;`;
   const output = stampJavaScript(input,version);

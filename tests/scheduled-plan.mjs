@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import {appHarness} from './app-harness.mjs';
 const plain=x=>JSON.parse(JSON.stringify(x));
 const count=async text=>text.length;
+
+test('plan status uses inclusive start/end dates and preserves explicit completion',async()=>{
+ const {planStatus}=await appHarness()('scheduled-plan.js');
+ for(const [date,expected]of [['19/10/738','upcoming'],['20/10/738','active'],['21/10/738','active'],['22/10/738','overdue'],['unknown','unknown date']])assert.equal(planStatus({start:'20/10/738',end:'21/10/738',status:'pending'},date),expected,date);
+ assert.equal(planStatus({start:'bad',end:'bad',status:'pending'},'20/10/738'),'unknown date');
+ assert.equal(planStatus({start:'bad',end:'bad',status:'completed'},'bad'),'completed');
+});
 async function setup() {
   const use=appHarness({stubs:{'tokenizer.js':{countTokens:count},'messages.js':{getMessages:async()=>{throw Error('Unexpected history read');}}}});
   return {use,plan:await use('scheduled-plan.js'),l:await use('lore-lines.js'),f:await use('lore-format.js'),r:await use('lore-records.js'),b:await use('context-builder.js')};
@@ -81,6 +88,11 @@ test('empty plan exports remain explicitly scoped in legacy and record stories',
 });
 const settings={narratorSystemPrompt:'Narrate.',maxContextTokens:18000,maxResponseTokens:1000,keepRecentMessagesAfterSummary:4};
 function story() {return {id:'s',longTermPlan:'FIXED_UNDATED_GOAL',memory:{scene:true,lorebooks:true,calendar:{mode:'modern',anchor:'Friday 21/10/738'},startingScene:'date: 1/10/738 · time: 10:00 · place: Hall · present: Mira',books:{plan:{on:true,budget:5000}}}};}
+test('context reports scheduled phases omitted by the plan budget',async()=>{
+ const h=await setup(),entry=event(h),session=story();session.memory.books.plan.budget=1;
+ const built=await h.b.buildContextForRequest(session,settings,{messages:[{id:'u',role:'user',order:1,content:'Begin.'}],loreEntries:[entry]});
+ assert.ok(built.report.warnings.some(w=>/scheduled plan phase\(s\) omitted for budget/.test(w)));assert.ok(built.report.skipped.some(s=>s.book==='plan'&&s.reason.includes('budget')));
+});
 const history=[{id:'u',order:1,role:'user',content:'Start.'},{id:'a',order:2,role:'assistant',content:'Morning.',scene:'date: 1/10/738 · time: 10:00 · place: Hall · present: Mira'},{id:'next',order:3,role:'user',content:'Proceed.'}];
 for(const recordMode of [false,true])test(`serialized context gates phases and accounts budget in ${recordMode?'record':'legacy'} mode`,async()=>{
   const h=await setup(),entry=event(h),session=story();if(recordMode)session.loreSchemaVersion=3;

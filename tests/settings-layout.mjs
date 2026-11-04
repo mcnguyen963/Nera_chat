@@ -1,26 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync} from 'node:fs';
-import {mkdtemp, readFile, readdir, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
-import {homedir, tmpdir} from 'node:os';
+import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 
-const root=fileURLToPath(new URL('../',import.meta.url));
-async function findChrome() {
-  const candidates=[process.env.CHROME_BIN,'/usr/bin/google-chrome','/usr/bin/chromium','/usr/bin/chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
-  const cache=join(homedir(),'Library/Caches/ms-playwright');
-  for(const name of await readdir(cache).catch(()=>[]))if(name.startsWith('chromium_headless_shell-'))candidates.push(join(cache,name,'chrome-headless-shell-mac-arm64/chrome-headless-shell'));
-  return candidates.find(path=>path && existsSync(path));
-}
+import {findChrome} from './browser-fixture.mjs';
 
+const root=fileURLToPath(new URL('../',import.meta.url));
 // Actual browser geometry catches overflow that the DOM substitutes cannot.
 // Set CHROME_BIN when Chromium is not installed in a standard location.
 test('Touch composer focus stays readable and all settings tabs fit without horizontal scrolling', {timeout:60000}, async t=>{
   const executable=await findChrome();
   if(!executable)return t.skip('Chrome/Chromium unavailable; set CHROME_BIN to run layout verification.');
+  t.diagnostic('Browser: '+executable);
   const profile=await mkdtemp(join(tmpdir(),'nera-settings-layout-'));
   const server=createServer(async(req,res)=>{
     try {

@@ -155,7 +155,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('logout detail');} },
     'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>{calls.estimateCalls=(calls.estimateCalls ?? 0)+1;return Math.ceil(text.length*0.306);}, countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
-      subscribeSessions:cb=>{calls.sidebarCallback=cb;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('create detail');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('rename detail');},deleteSession:async()=>{if(calls.failDelete)throw Error('Delete failed');},
+      subscribeSessions:(cb,onError)=>{calls.sidebarCallback=cb;calls.sidebarError=onError;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('create detail');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('rename detail');},deleteSession:async()=>{await calls.onDelete?.();if(calls.failDelete)throw Error('Delete failed');},
       getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
       getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
@@ -217,7 +217,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   };
   stubs['lore-store.js'].publishLoreSnapshot=async(sid,snapshot,{commit}={})=>{await commit?.();loreSnapshots.set((sid.uid ?? calls.uid ?? 'test-user')+':'+(sid.id ?? sid),structuredClone(snapshot));return snapshot;};
   stubs['lore-store.js'].readLoreEntry=async(_sid,id)=>structuredClone(calls.loreEntries?.find(e=>e.id===id) ?? null);
-  stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{loreSnapshots.delete(uid+':'+sid);};
+  stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{(calls.forgotLore ??= []).push([uid,sid]);loreSnapshots.delete(uid+':'+sid);};
   Object.assign(stubs,extraStubs);
   if(chatCache)stubs['chat-cache.js']={loadChatCache:async()=>null,saveChatCache:async()=>true,deleteChatCache:async()=>{},replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
   const cache = new Map();
@@ -269,6 +269,54 @@ export async function seedMessagesFixture(value){lastMessages=value.messages;has
     stopAfterGuard:async()=>{for(const [id,job]of [...timerJobs])if(job.stopGuard)await runTimer(id);return document.getElementById('btn-stop').dispatchEvent({type:'click'});},
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
+
+async function appBootHarness(){
+ let authChanged;const sequence=[],actions=[];
+ const h=await harness({extraStubs:{
+  'auth.js':{initAuth:fn=>authChanged=fn,currentUid:()=> 'a',currentUserInfo:()=>({uid:'a',email:'a@example.test'}),login:async(...args)=>{actions.push(['login',...args]);throw {code:'auth/invalid-credential'};},resetPassword:async email=>{actions.push(['reset',email]);throw {code:'auth/user-not-found'};},changePassword:async(...args)=>actions.push(['password',...args])},
+  'ui/chat-view.js':{initChatView(){},setSession(){},prepareChatLogout:async()=>sequence.push('prepare')},
+  'ui/sidebar.js':{initSidebar(){}},'ui/settings-view.js':{initSettingsView(){},openSettingsPopup(){}},'ui/lorebook-view.js':{initLorebookView(){}},'ui/context-viewer.js':{initContextViewer(){}},
+  'ui/icons.js':{initIcons(){},setIcon(){}},'version.js':{initVersion(){}},'viewport.js':{initViewport(){}},
+  'device-caches.js':{clearAccountCaches:async uid=>sequence.push('clear:'+uid)},'memory-updater.js':{stopAll:()=>sequence.push('stop')},
+ }});
+ h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ for(const id of ['login-form','reset-form','change-password-form']){const form=h.el(id),button=h.document.createElement('button');button.disabled=false;form.querySelector=()=>button;form.reset=()=>actions.push(['reset-form',id]);}
+ await h.use('app.js');return {h,authChanged,sequence,actions};
+}
+for(const next of [null,{uid:'b'},{uid:'a'}])test('app auth transition tears down before reloading for '+(next?.uid??'logout'),async()=>{
+ const {h,authChanged,sequence}=await appBootHarness();await authChanged({uid:'a'});await settle();await authChanged(next);
+ assert.deepEqual(sequence,next?.uid==='a'?['stop','prepare']:['stop','prepare','clear:a']);assert.equal(h.calls.reloads,1);
+});
+test('app forms handle credential errors, private reset messages and password confirmation',async()=>{
+ const {h,actions}=await appBootHarness(),submit=async id=>{await h.el(id).dispatchEvent({type:'submit',currentTarget:h.el(id),preventDefault(){}});await settle();};
+ h.el('login-username').value='a@example.test';h.el('login-password').value='old';await submit('login-form');assert.equal(h.el('login-error').textContent,'Incorrect email or password.');assert.deepEqual(actions[0],['login','a@example.test','old']);
+ h.el('reset-email').value='missing@example.test';await submit('reset-form');assert.equal(h.el('reset-message').textContent,'If an account uses that email, a reset link is on its way.');
+ h.el('new-password').value='new-password';h.el('confirm-new-password').value='different';await submit('change-password-form');assert.equal(h.el('change-password-message').textContent,'New passwords do not match.');assert.ok(!actions.some(a=>a[0]==='password'));
+ h.el('confirm-new-password').value='new-password';h.el('current-password').value='old';await submit('change-password-form');assert.deepEqual(actions.find(a=>a[0]==='password'),['password','old','new-password']);assert.equal(h.el('change-password-message').textContent,'Password changed successfully.');assert.equal(h.el('change-password-form').querySelector().disabled,false);
+});
+test('profile deletion keeps one profile and selects a surviving profile before saving',async()=>{
+ const h=await harness(),view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup();
+ await h.fire('btn-profile-delete');assert.equal(h.el('settings-saved-msg').textContent,'Keep at least one profile.');assert.equal(h.calls.writes.length,0);
+ const first=h.el('set-profiles').value;await h.fire('btn-profile-copy');const copy=h.el('set-profiles').value;assert.notEqual(copy,first);
+ await h.fire('btn-profile-delete');assert.equal(h.el('set-profiles').value,first);assert.equal(h.calls.writes.length,0);
+ await h.fire('btn-save-settings');assert.equal(h.calls.writes.at(-1).profiles.length,1);assert.equal(h.calls.writes.at(-1).activeProfileId,first);
+});
+
+test('forgetting a story clears collaborators and reopening cannot render its old history',async()=>{
+ const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>deleted.push(args)}});
+ // Model the browser's list reset instead of retaining detached stub rows.
+ Object.defineProperty(h.el('message-list'),'innerHTML',{set(value){if(value==='')this.replaceChildren();}});
+ const chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'DELETED_HISTORY'}]);
+ const stores=await h.use('local-story-store.js');await stores.openStoryStore('improvement',{session:chat.memorySnapshot().session,messages:chat.memorySnapshot().messages,turns:{}},()=>{});await settle();assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent==='DELETED_HISTORY'));assert.ok(stores.storyStore('improvement'));chat.setSession(null);
+ chat.forgetChatSession('improvement');await settle();assert.equal(stores.storyStore('improvement'),undefined);assert.ok(h.calls.memoryStopped.includes('improvement'));assert.deepEqual(deleted,[['test-user','improvement']]);assert.ok(h.calls.forgotLore.some(a=>a[0]==='test-user'&&a[1]==='improvement'));
+ chat.setSession('improvement');await settle();assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent.includes('DELETED_HISTORY')));assert.equal(chat.memorySnapshot(),null);chat.setSession(null);
+});
+test('sidebar deletion forgets the story only after deletion resolves',async()=>{
+ const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>deleted.push(args),cachedSessionIds:async()=>[]}}),sidebar=await h.use('ui/sidebar.js');sidebar.initSidebar();
+ h.state.sessionId='keep';h.calls.sidebarCallback([{id:'keep',title:'Keep'},{id:'remove',title:'Remove'}],{fromCache:true});
+ const wait=deferred();h.calls.onDelete=()=>wait.promise;const action=h.el('session-list').querySelectorAll('.del')[1].click();await settle();assert.deepEqual(deleted,[]);
+ wait.resolve();await action;assert.deepEqual(deleted,[['test-user','remove']]);
+});
 
 test('Settings drafts survive tabs and profiles, reset locally, and reach requests after save', async () => {
   const h = await harness();
@@ -1861,9 +1909,11 @@ test('Stream vibration coalesces spaces, varies with speed, and cancels on hidin
   assert.ok(pulses.at(-1)[1] > slow);
   assert.ok(pulses.at(-1)[1] <= 25);
   speed.stop();
+  const count=pulses.length,off=createStreamVibration('off',options);off.feed(' a b ');advance(2000);off.stop();assert.equal(pulses.length,count);assert.equal(doc.listener,null);
   for (const mode of ['off', 'spaces', 'speed']) {
     const unsupported = createStreamVibration(mode, { ...options, navigator: {} });
     unsupported.feed('some text '); unsupported.stop();
+    assert.equal(doc.listener,null);assert.equal(pulses.length,count);
   }
   const rejected = createStreamVibration('spaces', { ...options, navigator: { vibrate() { throw new Error('blocked'); } } });
   rejected.feed(' '); rejected.stop();
@@ -2749,6 +2799,32 @@ test('Finishing story creation does not interrupt navigation made while it was p
  await h.fire('btn-new-session');const pending=h.document.body.querySelectorAll('button').find(b=>b.textContent==='Create blank story').click();
  h.state.sessionId='another-story';finish('created-story');await pending;
  assert.equal(h.state.sessionId,'another-story');assert.equal(!!h.el('btn-new-session').disabled,false);
+});
+
+test('sidebar forgets only server-deleted stories and retains active caches and unsaved replies',async()=>{
+ const cached=new Set(['A','B']),deleted=[];
+ const h=await harness({chatCache:{cachedSessionIds:async()=>[...cached],deleteChatCache:async(_uid,sid)=>{deleted.push(sid);cached.delete(sid);}}});
+ const chat=await h.use('ui/chat-view.js'),lore=await h.use('lore-store.js'),unsaved=await h.use('unsaved-replies.js');chat.initChatView();
+ h.state.sessionId='A';h.calls.loreEntries=[{id:'original'}];
+ for(const sid of ['A','B']){await lore.getLoreSnapshot(sid);await unsaved.storeUnsavedReply('test-user',sid,{id:'reply-'+sid,message:{content:'Keep '+sid}});}
+ (await h.use('ui/sidebar.js')).initSidebar();h.calls.sidebarCallback([{id:'A',title:'Story A'}]);await settle();
+ assert.deepEqual(deleted,['B']);assert.deepEqual([...cached],['A']);
+ assert.equal((await unsaved.loadUnsavedReply('test-user','A')).message.content,'Keep A');assert.equal(await unsaved.loadUnsavedReply('test-user','B'),null);
+ h.calls.loreEntries=[{id:'fresh'}];const reads=h.calls.loreReads;
+ assert.equal((await lore.getLoreSnapshot('A')).entries[0].id,'original');assert.equal(h.calls.loreReads,reads);
+ assert.equal((await lore.getLoreSnapshot('B')).entries[0].id,'fresh');assert.equal(h.calls.loreReads,reads+1);
+});
+
+for(const metadata of [{fromCache:true},{hasPendingWrites:true}])test('sidebar uncertain snapshots preserve device caches: '+JSON.stringify(metadata),async()=>{
+ const deleted=[],h=await harness({chatCache:{cachedSessionIds:async()=>['A','B'],deleteChatCache:async(_uid,id)=>deleted.push(id)}});
+ (await h.use('ui/chat-view.js')).initChatView();h.state.sessionId='A';(await h.use('ui/sidebar.js')).initSidebar();
+ h.calls.sidebarCallback([],metadata);await settle();assert.deepEqual(deleted,[]);
+});
+
+test('sidebar listener errors do not treat missing server data as deletion',async()=>{
+ const deleted=[],h=await harness({globals:{console:{error(){},warn(){},log(){}}},chatCache:{cachedSessionIds:async()=>['A','B'],deleteChatCache:async(_uid,id)=>deleted.push(id)}});
+ (await h.use('ui/chat-view.js')).initChatView();h.state.sessionId='A';(await h.use('ui/sidebar.js')).initSidebar();
+ h.calls.sidebarError(Error('offline'));await settle();assert.deepEqual(deleted,[]);assert.match(h.el('session-list').children.at(-1).textContent,/Error loading sessions/);
 });
 
 for(const type of ['director','catch-up'])test(type+' preparation opens a dismissible dialog before a delayed snapshot',async()=>{

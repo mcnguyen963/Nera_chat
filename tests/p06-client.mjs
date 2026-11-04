@@ -3,6 +3,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appHarness } from './app-harness.mjs';
 
+test('reasoning normalization repairs inactive profiles and request construction clamps token limits',async()=>{
+ const use=appHarness({stubs:{'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js':{doc(){},getDocFromServer(){},onSnapshot(){},setDoc(){}},'db.js':{db:{}},'auth.js':{currentUid:()=> 'u'},'story-settings-store.js':{preserveLegacyStorySeed:async()=>({})}}}),{hydrateProfiles}=await use('settings.js'),{buildRequestBody}=await use('llm-client.js');
+ const hydrated=hydrateProfiles({profiles:[{id:'a',endpoint:'https://x',reasoning:{effort:'extreme'}},{id:'b',endpoint:'https://x',reasoning:{effort:'unknown'}}],activeProfileId:'a'});
+ assert.deepEqual(Array.from(hydrated.profiles,p=>p.reasoning.effort),['medium','medium']);
+ const base={modelId:'m',endpoint:'https://x',maxResponseTokens:2000};
+ assert.equal(buildRequestBody({...base,reasoning:{enabled:true,mode:'max_tokens',maxTokens:4096}},[]).reasoning.max_tokens,1999);
+ assert.equal(buildRequestBody({...base,reasoning:{enabled:true,mode:'effort',effort:'unknown'}},[]).reasoning.effort,'medium');
+});
+
+test('rewrite prompt failures and empty files can retry and a successful load is cached',async()=>{
+ const replies=[{ok:false},{ok:true,text:async()=>''},{ok:true,text:async()=>'  Rewrite prompt  '}];let reads=0;
+ let testing=false;const use=appHarness({globals:{fetch:async(url,options)=>testing && String(url).endsWith('/rewrite.md')?(reads++,replies.shift()):promptFetch(url,options)}});await use('system-prompts.js');testing=true;const api=await use('rewrite.js');
+ await assert.rejects(api.loadRewriteDefaultPrompt(),/Could not load/);await assert.rejects(api.loadRewriteDefaultPrompt(),/empty/);
+ assert.equal(await api.loadRewriteDefaultPrompt(),'Rewrite prompt');assert.equal(await api.loadRewriteDefaultPrompt(),'Rewrite prompt');assert.equal(reads,3);
+});
+
+test('SSE preserves every byte split, Unicode characters, comments and blank lines',async()=>{
+  const bytes=new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Café 🌙"},"finish_reason":"stop"}]}\n\n: OPENROUTER PROCESSING\n\ndata: [DONE]\n');
+  for(let split=1;split<bytes.length;split++){
+    const chunks=[bytes.subarray(0,split),bytes.subarray(split)],deltas=[];
+    const api=await appHarness({globals:{fetch:async()=>({ok:true,body:{getReader:()=>({read:async()=>chunks.length?{done:false,value:chunks.shift()}:{done:true},cancel:async()=>{}})}})}})('llm-client.js');
+    const result=await api.chatCompletion({settings:{modelId:'test',endpoint:'https://example.test',streaming:true},messages:[],onDelta:text=>deltas.push(text)});
+    assert.equal(result.content,'Café 🌙','split '+split);assert.equal(deltas.join(''),'Café 🌙','delta split '+split);
+  }
+});
+
 async function client({ streaming, reason, content = 'Narration.' }) {
   const logs = [], requests = [];
   const use = appHarness({ globals: {
