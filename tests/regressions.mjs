@@ -2155,7 +2155,7 @@ test('lore message lookback hydrates, stages and saves per story while rejecting
 test('generated note limit stages, saves, reloads independently by story and rejects invalid input',async()=>{
  const h=await harness();h.calls.sessionDocs={one:{id:'one',title:'One',memory:{}},two:{id:'two',title:'Two',memory:{loreNotesPerSection:7}}};h.state.sessionId='one';
  const view=await h.use('ui/settings-view.js');view.initSettingsView();view.openSettingsPopup(null,{panel:'memory'});await new Promise(r=>setImmediate(r));
- assert.equal(Number(h.el('mem-loreNotesPerSection').value),3);
+ assert.equal(Number(h.el('mem-loreNotesPerSection').value),8);
  h.el('mem-loreNotesPerSection').value='2';await h.fire('nav-story');await h.fire('nav-memory');assert.equal(Number(h.el('mem-loreNotesPerSection').value),2);
  await h.fire('btn-save-session');assert.equal(h.calls.sessionWrites.at(-1)[1]['memory.loreNotesPerSection'],2);
  h.calls.sessionDocs.one.memory.loreNotesPerSection=2;
@@ -4202,4 +4202,19 @@ test('shared dotted patches clone modified ancestors and preserve unrelated fiel
  const h=await harness(),{applyDottedPatch}=await h.use('dotted-patch.js');const before={sections:{status:{text:'old',lines:[1]},notes:{text:'keep'}},name:'Mira'};
  const after=applyDottedPatch(before,{'sections.status.text':'new','name':'Mira Veyr'});
  assert.equal(after.sections.status.text,'new');assert.equal(before.sections.status.text,'old');assert.equal(after.sections.status.lines,before.sections.status.lines);assert.equal(after.sections.notes,before.sections.notes);
+});
+
+test('card editor names the section and number of older notes hidden from the narrator',async()=>{
+ const {root}=await cardUI(card=>{card.sections.notes.lines=Array.from({length:12},(_,i)=>({id:'hidden'+i,text:'Saved note '+i,by:'auto',turn:i+1,at:i+1}));});
+ await settle();assert.ok(root.querySelectorAll('span').some(n=>/Notes: 4 older notes hidden from the narrator/.test(n.textContent)));
+});
+
+test('context viewer reports older notes omitted solely by the saved narrator cap',async()=>{
+ const h=await harness(),l=await h.use('lore-lines.js'),e=l.makeEntry('characters','Mira',{alwaysLoad:true});
+ const history=Array.from({length:12},(_,i)=>({id:'cap'+i,order:i+1,role:i%2?'assistant':'user',content:'Mira waits.'}));
+ e.sections.status.lines=Array.from({length:12},(_,i)=>({id:'cap-note'+i,text:'Saved status '+i,turn:Math.min(i+1,6),src:Math.min(i+1,6)*2,by:'auto',at:i+1,evidence:[{id:'cap'+(Math.min(i+1,6)*2-1),order:Math.min(i+1,6)*2,revision:0}],sourceRevision:0}));h.calls.loreEntries=[e];
+ await openImprovementChat(h,{memory:{lorebooks:true,loreNotesPerSection:3}},history);
+ const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();await settle();const root=h.el('context-viewer');
+ await namedButton(root,'Calculate current preview').click();const book=root.querySelectorAll('details').find(n=>n.dataset.contextKey==='book-characters');book.open=true;await book.dispatchEvent({type:'toggle'});
+ assert.ok(book.querySelectorAll('p').some(n=>n.textContent.includes('9 older lines not sent')),book.querySelectorAll('p').map(n=>n.textContent).join(' | '));
 });

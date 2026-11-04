@@ -104,7 +104,7 @@ const clean = entry => {
   for (const key of ['createdAt','updatedAt']) if (data[key]?.seconds != null && !data[key].toDate) data[key] = new Timestamp(data[key].seconds, data[key].nanoseconds ?? 0);
   return data;
 };
-export function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
+function guardSize(data, automatic = false) { const bytes = new TextEncoder().encode(JSON.stringify(data)).length; if (bytes > 900000) throw new Error(automatic ? 'card storage full' : 'Too big to store much longer — reorganize it'); return bytes; }
 export function subscribeLore(sid, callback, onError) { return subscribeVersionedLore(sid,callback,onError); }
 async function createEntryImpl(sid,entry) { validateImportance(entry); if(entry.book==='plan')validateSchedule(entry.schedule); guardSize(entry); const id = entry.id || newLoreId(); await storyTransaction(sid,async tx=>tx.set(ref(sid,id),{ ...clean(entry),createdAt:serverTimestamp(),updatedAt:serverTimestamp() })); return id; }
 function mergeCardField(current,staged,base,label) {
@@ -551,7 +551,6 @@ async function removeReviewedLinesImpl(sid,entries,fromOrder,throughOrder) {
   }
   return base.id;
 }
-async function deleteLoreTreesImpl(sid) { await deleteRecordGenerations(sid); for (const name of ['lore','loreBackups','loreMeta']) { const snap = await getDocsFromServer(root(sid,name)); for (let i=0;i<snap.docs.length;i+=450) await storyTransaction(sid,async tx=>{for (const d of snap.docs.slice(i,i+450)) tx.delete(d.ref);}); } }
 
 export const createEntry = gateWrite(createEntryImpl);
 export const saveEntry = gateWrite(saveEntryImpl);
@@ -564,7 +563,6 @@ export const replaceLines = gateWrite(replaceLinesImpl);
 export const importLore = gateWrite(importLoreImpl);
 export const copyLore = gateWrite(copyLoreImpl);
 export const removeDeletedLines = gateWrite(removeDeletedLinesImpl);
-export const deleteLoreTrees = gateWrite(deleteLoreTreesImpl);
 
 export const markGeneratedForReview = gateWrite(markGeneratedForReviewImpl);
 

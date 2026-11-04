@@ -24,12 +24,13 @@ const wire=built=>JSON.stringify(built.apiMessages ?? built.messages);
 
 test('defaults, normalization and independent stories retain one note limit',async()=>{
  const h=await setup(),m=await h.use('memory-settings.js');
- assert.equal(m.normalizeMemory().loreNotesPerSection,3);
- for(const value of [undefined,null,'',NaN,Infinity,'invalid'])assert.equal(m.normalizeMemory({loreNotesPerSection:value}).loreNotesPerSection,3);
+ assert.equal(m.normalizeMemory().loreNotesPerSection,8);
+ for(const value of [undefined,null,'',NaN,Infinity,'invalid'])assert.equal(m.normalizeMemory({loreNotesPerSection:value}).loreNotesPerSection,8);
  assert.equal(m.normalizeMemory({loreNotesPerSection:0}).loreNotesPerSection,0);
+ assert.equal(m.normalizeMemory({loreNotesPerSection:3}).loreNotesPerSection,3);
  assert.equal(m.normalizeMemory({loreNotesPerSection:-2}).loreNotesPerSection,0);
  const a=m.normalizeMemory({loreNotesPerSection:8}),b=m.normalizeMemory();a.books.characters.budget=1;
- assert.equal(b.loreNotesPerSection,3);assert.equal(b.books.characters.budget,4000);
+ assert.equal(b.loreNotesPerSection,8);assert.equal(b.books.characters.budget,4000);
  assert.deepEqual(plain(m.normalizeMemory(JSON.parse(JSON.stringify(a)))),plain(a));
 });
 

@@ -8,7 +8,7 @@ export const memoryValidationRanges = {
 const DEFAULT_MEMORY = {
   v: 1, calendar: {mode:'legacy',anchor:null}, characterSelection: false, protagonist: '', scene: false, startingScene:null, sceneFallback:false, sceneFallbackModel:'', replyContract:'off', lorebooks: false, autoUpdate: false, memoryBlock: false, blockWindow: false, semanticLore:false, historyRecall:false, semanticRecall:false, vectorCloudSync:false, historyRecallBudget:1200, historyRecallPassages:4, semanticEndpoint:'http://127.0.0.1:11434/v1/embeddings', semanticModel:'qwen3-embedding:0.6b',
   books: { characters: { on: true, budget: 4000, maxCards: 6 }, locations: { on: true, budget: 4000, maxCards: 2 }, facts: { on: true, budget: 1000 }, events: { on: true, budget: 3000 }, plan: { on: true, budget: 1500 } },
-  loreNotesPerSection: 3, loreLookbackMessages: 4, batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'user',
+  loreNotesPerSection: 8, loreLookbackMessages: 4, batchTurns: 10, lagTurns: 4, updateProfileId:'', updateMaxTokens: 2000, reorganizeMaxTokens: 4000, blockDepth: 3, blockRole: 'user',
 };
 
 export function normalizeMemory(raw) {

@@ -1,3 +1,4 @@
+import { updateLoreFooter } from './lore-editor-footer.js';
 import {threadMatchesFilter} from '../thread-archive.js';
 import { CHARACTER_IMPORTANCE, characterImportance } from '../character-importance.js';
 import {renderThreadEditor} from './thread-editor.js';
@@ -394,7 +395,6 @@ function renderEditor() {
     classification.addEventListener('change',updateKind); cutoff.wrap.hidden = meta.kind !== 'snapshot';
     cutoff.input.addEventListener('input',() => { const turn = Number(cutoff.input.value), assistant = computeTurns(live()?.messages ?? []).assistants.find(a => a.turn === turn); section.cutoff = assistant ? { turn,order:assistant.order } : null; section.unavailable = false; section.sourceRevision = live()?.session.historyRevision ?? 0; });
     container.append(classification,cutoff.wrap);
-
     const text = field('Your text',section.text,{ textarea:true }); text.input.placeholder = key === 'personality' ? 'How they think and behave. Only you write here — memory updates never touch it.' : 'Your description (optional). Updates below add to it.'; text.input.addEventListener('input',() => { section.text = text.input.value; void updateFooter(); });
     if (staged.kind === 'timeline') { const d = node('details'); d.append(node('summary','Backstory before the story starts (optional)'),text.wrap); container.append(d); } else container.append(text.wrap);
     if(section.text && section.lines.length)container.append(button('Reconcile background…',()=>reconcileBackground(key),'btn small'));
@@ -421,7 +421,7 @@ function renderEditor() {
   if (book === 'characters' && staged.schemaVersion!==3) renderCoreEditor(editor,staged,()=>{}, {messages:live()?.messages ?? [],session:live()?.session});
   const footer = node('footer',null,'memory-actions'); footer.id = 'lore-editor-footer';
   const tokenLabel = node('span','','muted'); tokenLabel.title = 'Cards larger than the book budget are sent with only their newest lines.'; footer.append(tokenLabel);
-  async function updateFooter() { const tokens = await countTokens(renderEntry(staged)), budget = normalizeMemory(live()?.session.memory).books[book].budget; if (version !== editorVersion) return; tokenLabel.textContent = `${tokens.toLocaleString()} / ${budget.toLocaleString()} tokens · ${linesOf(staged).length} lines`; tokenLabel.style.color = tokens>budget ? 'var(--danger)' : ''; if (new TextEncoder().encode(JSON.stringify(staged)).length > 700000) tokenLabel.textContent += ' · Too big to store much longer — reorganize it'; }
+  function updateFooter() { return updateLoreFooter(tokenLabel,staged,normalizeMemory(live()?.session.memory),()=>version===editorVersion); }
   const reorganizeBtn = button('Reorganize…',() => { if (dirty()) { toast('Save or cancel your changes before reorganizing.'); return; } return reorganize([entries().find(e => e.id === selected) ?? staged]); }); reorganizeBtn.disabled = linesOf(staged).filter(l => l.by !== 'user').length < 3; reorganizeBtn.title = reorganizeBtn.disabled ? 'Nothing to tidy yet' : '';
   const save = button('Save',saveCard,'btn primary'); save.disabled = reorganizing.has(staged.id);
   const more=actionMenu('More',[
