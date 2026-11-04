@@ -1,3 +1,4 @@
+import { streamSummaryUI as createSummaryStream } from './summary-stream.js';
 import { applyDottedPatch } from '../dotted-patch.js';
 import {composerDrafts} from '../composer-drafts.js';
 import {mergeSummaryResult} from '../summary-state.js';
@@ -2264,42 +2265,7 @@ function renderUnsavedReply() {
 // so the element stays a fixed size while tokens arrive). Reasoning deltas go
 // into the same collapsible Thinking pane used by chat messages.
 function streamSummaryUI(label) {
-  let acc = "";
-  let thinkAcc = "";
-  let frame = 0;
-  const bubble = document.createElement("div");
-  bubble.className = "msg summary streaming-summary";
-  const head = document.createElement("div");
-  head.className = "msg-meta";
-  head.textContent = label;
-  const thinking = buildThinking("", true);
-  const body = document.createElement("div");
-  body.className = "summary-stream-body";
-  bubble.append(head, thinking, body);
-  const thinkingBody = thinking.querySelector(".thinking-body");
-  const sticky = isNearBottom();
-  el.list.appendChild(bubble);
-  if (sticky) scrollToEnd();
-  const schedulePaint = () => {
-    if (frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      const stickyNow = isNearBottom();
-      invalidatePetLayout();
-      body.textContent = acc.slice(-2000);
-      thinkingBody.textContent = thinkAcc.slice(-4000);
-      if (stickyNow) scrollToEnd();
-    });
-  };
-  return {
-    setLabel: (text) => { head.textContent = text; },
-    onDelta: (t) => { acc += t; schedulePaint(); },
-    onReasoning: (t) => { thinkAcc += t; schedulePaint(); },
-    done: () => {
-      if (frame) cancelAnimationFrame(frame);
-      bubble.remove(); clampListScroll();
-    },
-  };
+  return createSummaryStream(label,{list:el.list,buildThinking,isNearBottom,scrollToEnd,invalidatePetLayout,clampListScroll});
 }
 
 async function handleSummarize() {return runSummaryStream(false);}
