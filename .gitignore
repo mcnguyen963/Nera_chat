@@ -36,3 +36,7 @@ _site/
 
 # Local implementation safety copies
 production-backups/
+
+# QC tooling
+node_modules/
+coverage/

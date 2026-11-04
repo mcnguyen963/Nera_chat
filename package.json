@@ -1,0 +1,27 @@
+{
+  "name": "nera-chat",
+  "private": true,
+  "type": "module",
+  "description": "Build-free app: nothing here is shipped. devDependencies are QC tooling only.",
+  "engines": { "node": ">=20.19" },
+  "scripts": {
+  "test": "node --experimental-vm-modules --test tests/*.mjs",
+  "test:ci": "node scripts/test-rerun.mjs",
+  "test:coverage": "c8 --reporter=none --temp-directory coverage/raw node scripts/test-rerun.mjs && node scripts/coverage-remap.mjs coverage/raw coverage/v8 && c8 report --temp-directory coverage/v8 --report-dir coverage --reporter=text-summary --reporter=json-summary --reporter=lcov --all --src js --include 'js/**' --exclude 'js/vendor/**' --exclude 'js/firebase-config*.js' && node scripts/ratchet.mjs coverage",
+  "lint": "eslint .",
+  "lint:prune": "eslint --prune-suppressions .",
+  "typecheck": "node scripts/ratchet.mjs tsc",
+  "check:syntax": "node scripts/check-syntax.mjs",
+  "check:qc": "node scripts/qc-check.mjs",
+  "qc": "npm run check:syntax && npm run lint && npm run typecheck && npm run check:qc && npm run test:coverage"
+  },
+  "devDependencies": {
+  "@eslint/js": "10.0.1",
+  "c8": "12.0.0",
+  "eslint": "10.14.0",
+  "eslint-plugin-import-x": "4.17.1",
+  "eslint-plugin-promise": "7.3.0",
+  "globals": "17.14.0",
+  "typescript": "7.0.2"
+  }
+}
