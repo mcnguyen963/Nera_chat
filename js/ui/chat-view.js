@@ -1,3 +1,4 @@
+import { createDeviceUploadView } from './device-upload-view.js';
 import { createQuickControls } from './quick-controls.js';
 import { streamSummaryUI as createSummaryStream } from './summary-stream.js';
 import { applyDottedPatch } from '../dotted-patch.js';
@@ -1717,43 +1718,8 @@ function deviceUploadFingerprint() {
   return JSON.stringify([state.sessionId,preparationKey(session),state.storySettings,
     (view?.messages ?? historyMessages ?? lastMessages).map(m=>[m.id,m.order,m.role,m.revision,m.content,m.scene,m.sceneMeta]),loreEntries]);
 }
-export async function openDeviceStoryUpload() {
-  if(!session){showTransientInfo('Open a story first.');return;}
-  if(busy || editingState || directStorySaves.size){showTransientInfo('Finish the current reply or edit first.');return;}
-  const sid=state.sessionId,owner=currentUid(),epoch=historyEpoch;
-  let closed=false,uploading=false,downloadedCopy=null,cloudCopy=null;
-  const dialog=subSheet('Force upload this device',{close:()=>{if(uploading)return false;closed=true;return true;}});
-  const body=node('div',null,'memory-content'),status=node('p','Reading copies stored on this device…','muted');body.append(status);dialog.dialog.append(body);
-  const active=()=>!closed && sid===state.sessionId && owner===currentUid() && epoch===historyEpoch;
-  try {
-    const loaded=await Promise.allSettled([loadChatCache(owner,sid),loadStoryData(owner,sid),storyQueueStorage.load(owner,sid),cachedLoreSnapshot(owner,sid),loadUnsavedReply(owner,sid)]);
-    const [cached,aux,outbox,lore,savedReply]=loaded.map(result=>result.status==='fulfilled'?result.value:null);
-    if(!active()){dialog.hide();return;}
-    const store=storyStore(sid),current=store?.view ?? (historyMessages && historyRevision===(session.historyRevision ?? 0)?{session,messages:historyMessages,turns:aux?.turns}:null);
-    const localLore=lore ?? (loreStatus==='ok' && loreSessionId===sid?{initialized:true,entries:loreEntries,schemaVersion:session.loreSchemaVersion ?? 2,generation:session.loreGeneration ?? null}:null);
-    const unsavedReply=unsavedReplies.get(unsavedKey(owner,sid)) ?? savedReply;
-    const copies=deviceStoryCopies({sid,current,cached,aux,outbox,storySettings:state.storySettings,loreSnapshot:localLore,unsavedReply:unsavedReply?.sid===sid && (!unsavedReply.owner || unsavedReply.owner===owner)?unsavedReply:null});
-    if(!copies.length){status.textContent='No complete story copy was found on this device. Recent messages alone cannot safely replace Firebase.';return;}
-    status.textContent='Choose the chat history to upload with this device’s memory, lorebooks, and prompts. This replaces the current Firebase story. It cannot recreate turns that are no longer stored here.';
-    const picker=node('select');picker.setAttribute('aria-label','Device story copy');for(const [index,copy]of copies.entries()){const option=node('option',copy.label+' · '+copy.snapshot.messages.length+' messages · '+copy.snapshot.lore.length+' lore cards');option.value=String(index);picker.append(option);}picker.value='0';
-    const preview=node('p','','muted'),selected=()=>copies[Number(picker.value)]?.snapshot;
-    const render=()=>{const copy=selected(),last=copy?.messages.at(-1);preview.textContent=last?'Last saved text: '+String(last.content).slice(0,240):'';};picker.addEventListener('change',render);render();
-    const baseline=deviceUploadFingerprint();
-    const backupButton=button('Download device backup',()=>{if(!active())throw new Error('Story changed; reopen this dialog.');const copy=selected();download(JSON.stringify(copy,null,2)+'\n',(copy.session.title || 'story').replace(/[^\w\- ]+/g,'').trim()+'-device-backup.json','application/json');downloadedCopy=copy;});
-    const cloudButton=button('Download previous cloud backup',()=>{if(!active())throw new Error('Story changed; reopen this dialog.');if(!cloudCopy)return;download(JSON.stringify(cloudCopy,null,2)+'\n','previous-cloud-story-backup.json','application/json');});cloudButton.hidden=true;
-    const uploadButton=button('Replace Firebase with this copy',async()=>{
-      if(!active())throw new Error('Story changed; reopen this dialog.');
-      const copy=structuredClone(selected());validateDeviceStory(copy);
-      if(!confirm(`Replace this Firebase story with ${copy.messages.length} messages and ${copy.lore.length} lore cards from this device, including memory and prompts? The previous cloud copy will be backed up. Changes from other devices will not be merged.`))return;
-      uploading=true;picker.disabled=true;backupButton.disabled=true;
-      try{const done=await forceUploadDeviceStory(copy,{baseline,owner,epoch,backupDownloaded:downloadedCopy===selected(),onProgress:text=>{if(active())status.textContent=text;},onComplete:result=>{cloudCopy=result.cloudBackup;cloudButton.hidden=false;uploadButton.hidden=true;}});if(done)status.textContent='Uploaded to Firebase. Your previous cloud copy is kept in recovery backups. Use Sync latest data on other devices.';}
-      finally{uploading=false;picker.disabled=false;backupButton.disabled=false;}
-    });
-    body.append(picker,preview,backupButton,uploadButton,cloudButton,node('p','A local backup and a cloud recovery backup are saved before replacement. No AI calls are made.','muted'));
-    if(loaded.some(result=>result.status==='rejected'))body.append(node('p','Some device storage could not be read. Only the complete copies listed above are available.','memory-warning'));
-    for(const warning of copies.warnings ?? [])body.append(node('p',warning,'memory-warning'));
-  }catch(error){if(active())status.textContent=error.message;}
-}
+export const openDeviceStoryUpload=createDeviceUploadView({get busy(){return busy;},get button(){return button;},get cachedLoreSnapshot(){return cachedLoreSnapshot;},get currentUid(){return currentUid;},get deviceStoryCopies(){return deviceStoryCopies;},get deviceUploadFingerprint(){return deviceUploadFingerprint;},get directStorySaves(){return directStorySaves;},get download(){return download;},get editingState(){return editingState;},get forceUploadDeviceStory(){return forceUploadDeviceStory;},get historyEpoch(){return historyEpoch;},get historyMessages(){return historyMessages;},get historyRevision(){return historyRevision;},get loadChatCache(){return loadChatCache;},get loadStoryData(){return loadStoryData;},get loadUnsavedReply(){return loadUnsavedReply;},get loreEntries(){return loreEntries;},get loreSessionId(){return loreSessionId;},get loreStatus(){return loreStatus;},get node(){return node;},get session(){return session;},get showTransientInfo(){return showTransientInfo;},get state(){return state;},get storyQueueStorage(){return storyQueueStorage;},get storyStore(){return storyStore;},get subSheet(){return subSheet;},get unsavedKey(){return unsavedKey;},get unsavedReplies(){return unsavedReplies;},get validateDeviceStory(){return validateDeviceStory;}});
+
 export async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFingerprint(),owner=currentUid(),epoch=historyEpoch,backupDownloaded=false,onProgress=()=>{},onComplete=()=>{}}={}) {
   const sid=state.sessionId;
   if(snapshot?.session?.id!==sid || owner!==currentUid() || epoch!==historyEpoch)throw new Error('Story changed; device upload cancelled.');
