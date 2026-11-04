@@ -146,11 +146,15 @@ export function fromMarkdown(text, { protagonist = '', strictFields = false, boo
         const value = JSON.parse(provenance[2]);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
         if (provenance[1] === 'entry') {
-          for (const prop of ['id','draft','createdFrom','statusSource','threadMeta','threadMetaSource','threadHistory','coreReferences','schedule','createdAt','updatedAt','importance']) if (prop in value) entry[prop] = prop==='threadMeta'?normalizeThreadMeta(value[prop]):value[prop];
+          for (const prop of ['id','draft','createdFrom','statusSource','threadMetaSource','threadHistory','coreReferences','schedule','createdAt','updatedAt','importance']) if (prop in value) entry[prop] = value[prop];
+          if ('threadMeta' in value) {
+            try { entry.threadMeta=normalizeThreadMeta(value.threadMeta); }
+            catch { delete entry.threadMeta;warn(i+1,entry.name+': invalid threadMeta (outcome '+JSON.stringify(value.threadMeta?.outcome)+'); field ignored'); }
+          }
         } else if (provenance[1] === 'section') {
           for (const prop of ['origin','kind','cutoff','unavailable','sourceRevision']) if (prop in value) entry.sections[key][prop] = value[prop];
         } else if (entry.sections[key].lines.length && !noteMetadata.has(entry.sections[key].lines.at(-1))) noteMetadata.set(entry.sections[key].lines.at(-1),value);
-      } catch { throw new Error('Invalid provenance metadata at line '+(i+1)); }
+      } catch { throw new Error('Invalid provenance metadata for '+entry.name+' at line '+(i+1)); }
       continue;
     }
     if (metadata) {

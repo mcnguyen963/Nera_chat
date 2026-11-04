@@ -52,3 +52,12 @@ test('WP-03 old column-zero escaped exports still import identically',async()=>{
  assert.deepEqual(plain(parsed.warnings),[]);
  assert.equal(parsed.entries[0].sections.text.text,'First\n## literal\nUpdates:\n\\literal\nLast');
 });
+
+test('invalid thread metadata preserves every Markdown card and warns with its name and field',async()=>{
+ const {f,l}=await setup(),bad=l.makeEntry('events','Recovered guard',{kind:'thread',status:'closed'}),good=l.makeEntry('events','Letter delivered',{kind:'thread',status:'closed'});
+ bad.threadMeta={kind:'commitment',dueDate:null,dueTime:null,participants:[],location:null,outcome:'resolved'};
+ const markdown=f.toMarkdown([bad,good],{books:['events'],includeEmpty:true}).replace('"outcome":"resolved"','"outcome":"Recovered; returned to duty"');
+ const imported=f.fromMarkdown(markdown);assert.equal(imported.entries.length,2);assert.equal(imported.entries[0].threadMeta,undefined);assert.equal(imported.entries[1].name,'Letter delivered');
+ assert.ok(imported.warnings.some(w=>w.reason.includes('Recovered guard')&&w.reason.includes('threadMeta')));
+ assert.throws(()=>f.fromMarkdown(markdown.replace('"outcome":','"outcome" broken:')),/Recovered guard.*metadata|metadata.*Recovered guard/);
+});
