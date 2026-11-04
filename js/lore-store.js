@@ -400,6 +400,11 @@ async function replaceLinesImpl(sid,previews,snapshotAt) {
       fields['sections.'+key+'.lines']=[...keep.filter(l=>l.by==='user'),...newLines.filter(l=>l.by!=='user').flatMap(l=>snapshot.has(l.id) && !sentIds.has(l.id) ? (byId.has(l.id) ? [byId.get(l.id)] : []) : [l]),...keep.filter(l=>l.by!=='user' && !snapshot.has(l.id))];
       data.sections[key].lines = fields['sections.'+key+'.lines'];
     }
+    for(const change of p.textChanges ?? [])if(change.include===true) {
+      const section=data.sections[change.section];
+      if(!section || typeof change.before!=='string' || typeof change.after!=='string' || section.text!==change.before)throw new Error('This card changed since the preview. Reorganize again.');
+      section.text=change.after;fields['sections.'+change.section+'.text']=change.after;
+    }
     guardSize(data); tx.update(target,fields);
   }); return backup;
 }

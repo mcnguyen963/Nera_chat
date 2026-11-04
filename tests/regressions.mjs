@@ -4218,3 +4218,9 @@ test('context viewer reports older notes omitted solely by the saved narrator ca
  await namedButton(root,'Calculate current preview').click();const book=root.querySelectorAll('details').find(n=>n.dataset.contextKey==='book-characters');book.open=true;await book.dispatchEvent({type:'toggle'});
  assert.ok(book.querySelectorAll('p').some(n=>n.textContent.includes('9 older lines not sent')),book.querySelectorAll('p').map(n=>n.textContent).join(' | '));
 });
+
+test('base-text proposal preview shows literal before and after with approval unchecked',async()=>{
+ const h=await harness(),ui=await h.use('ui/reorganize-text-preview.js'),host=h.document.createElement('div'),change={section:'status',before:'<old> unsigned',after:'<new> signed',include:false};
+ ui.renderTextProposals(host,[change],'Nera');const check=host.querySelector('input');assert.equal(check.checked,false);assert.deepEqual(host.querySelectorAll('pre').map(n=>n.textContent),['<old> unsigned','<new> signed']);
+ check.checked=true;await check.dispatchEvent({type:'change'});assert.equal(change.include,true);check.checked=false;await check.dispatchEvent({type:'change'});assert.equal(change.include,false);
+});

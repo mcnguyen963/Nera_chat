@@ -811,3 +811,14 @@ test('extraction budget keeps a newest suffix of notes after removing its narrat
  const included=e.sections.status.lines.filter(n=>body.includes(n.text));assert.ok(included.length>0&&included.length<12);assert.equal(included.at(-1).id,'budget11');
  assert.deepEqual(included.map(n=>n.id),e.sections.status.lines.slice(-included.length).map(n=>n.id));assert.equal(e.sections.status.lines.length,12);
 });
+
+test('reorganize base-text proposals are explicit, unticked and keep every generated line',async()=>{
+ const use=await setup({'tokenizer.js':{countTokens:count}}),r=await use('memory-reorganize.js'),l=await use('lore-lines.js'),{normalizeMemory}=await use('memory-settings.js');
+ const e=l.makeEntry('characters','Mira');e.sections.status.text='The agreement remains unsigned.';e.sections.status.lines=[line('signed','Agreement signed on 15/11.',6)];
+ const before=JSON.stringify(e),live={settings,mem:normalizeMemory(),messages},sections={[e.id]:['status']};
+ const result=await r.runReorganizeBatch(live,[e],sections,'',{count,complete:async()=>({content:'<think>TEXT [char] Mira | status: Hidden guess.</think>\nTEXT [char] Mira | status: The agreement was signed on 15/11.'})});
+ const p=result.previews[0];assert.deepEqual(plain(p.textChanges),[{section:'status',before:e.sections.status.text,after:'The agreement was signed on 15/11.',include:false}]);assert.deepEqual(plain(p.sections),{});assert.equal(JSON.stringify(e),before);
+ const ordinary=l.parseMemoryLines('TEXT [char] Mira | status: Unapproved change.',{entries:[e],messages,mem:live.mem});assert.equal(ordinary.ops.length,0);
+ const mixed=await r.runReorganizeBatch(live,[e],sections,'',{count,complete:async()=>({content:'TEXT [char] Other | status: Ignore.\nTEXT [char] Mira | notes: Wrong section.\nTEXT [char] Mira | status: Signed.\nT6 [char] Mira | status: Consolidated agreement.'})});
+ assert.equal(mixed.previews[0].textChanges.length,1);assert.equal(mixed.previews[0].sections.status.length,1);assert.equal(mixed.skipped.length,2);
+});

@@ -1593,3 +1593,17 @@ for(const kind of ['edit','delete'])for(const size of [4,7,10])test(`local and s
  assert.deepEqual(JSON.parse(JSON.stringify(selected(local.messages))),selected(server));
  for(const field of ['activeSummaryMessageId','breakpointOrder','contentEdits','contentEditsFloor','memoryInvalidations'])assert.deepEqual(JSON.parse(JSON.stringify(local.session[field] ?? null)),saved[field] ?? null,field);
 });
+
+for(const migrated of [false,true])test(`base-text approval uses the same ${migrated?'selective':'legacy'} card transaction and preserves notes`,async()=>{
+ const operations=[];
+ for(const approved of [false,true]){
+  const h=await setup();await h.lore.createEntry('s',loreEntry());if(migrated)await h.lore.migrateRecords('s',await h.lore.getLore('s'),{expectedRevision:1});
+  const e=(await h.lore.getLore('s')).find(e=>e.id==='mira'),notes=JSON.stringify(e.sections.appearance.lines),reads=h.reads.documents,transactions=h.transactions.length,docs=h.documents.size;
+  const p={entry:e,sections:{},textChanges:[{section:'appearance',before:'canon',after:'Corrected canon',include:approved}]};
+  await h.lore.replaceLines('s',[p],10);const saved=(await h.lore.getLore('s')).find(e=>e.id==='mira');
+  assert.equal(saved.sections.appearance.text,approved?'Corrected canon':'canon');assert.equal(JSON.stringify(saved.sections.appearance.lines),notes);
+  operations.push({reads:h.reads.documents-reads,writes:h.transactions.slice(transactions).map(t=>t.length),docs:h.documents.size-docs});
+  if(approved){p.textChanges[0].after='Stale replacement';await assert.rejects(h.lore.replaceLines('s',[p],10),/changed since the preview/);assert.equal((await h.lore.getLore('s')).find(e=>e.id==='mira').sections.appearance.text,'Corrected canon');}
+ }
+ assert.deepEqual(operations[1],operations[0]);
+});

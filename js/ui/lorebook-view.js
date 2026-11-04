@@ -1,3 +1,4 @@
+import { renderTextProposals } from './reorganize-text-preview.js';
 import { updateLoreFooter } from './lore-editor-footer.js';
 import {threadMatchesFilter} from '../thread-archive.js';
 import { CHARACTER_IMPORTANCE, characterImportance } from '../character-importance.js';
@@ -741,6 +742,7 @@ async function reorganize(cards) {
         if(removed.length){afterView.append(node('h4','Will be removed'));for(const old of removed){const keep=field('Keep: '+old.text,'',{type:'checkbox'});keep.input.addEventListener('change',()=>{if(keep.input.checked){if(!after.some(l=>l.id===old.id))after.push({...old});}else{const i=after.findIndex(l=>l.id===old.id);if(i>=0)after.splice(i,1);}render();});afterView.append(keep.wrap);}}
         columns.append(before,afterView); section.append(columns); body.append(section);
       }
+      renderTextProposals(body,p.textChanges ?? [],mem.protagonist);
       const current = entries().find(e => e.id === p.entry.id), fresh = current ? linesOf(current).filter(l => l.at>snapshotAt).length : 0; if (fresh) body.append(node('p',`${fresh} new notes arrived during reorganize. They'll be kept below the new lines.`,'muted'));
     }
     body.append(button('Discard',s.hide),button(previews.length>1 ? 'Save selected' : 'Save',async b => {
@@ -750,7 +752,6 @@ async function reorganize(cards) {
     },'btn primary'));
   }
 }
-
 function renderNameChips(parent,{aliasesOnly=false}={}) {
   const host = node('div',null,'lore-names'), label = node('p',aliasesOnly ? 'Aliases' : 'Names','eyebrow'); parent.append(label,host);
   function move(from,to) { const names = [staged.name,...staged.aliases]; if (to<0 || to>=names.length || aliasesOnly && (from===0 || to===0)) return; const [item] = names.splice(from,1); names.splice(to,0,item); [staged.name,...staged.aliases] = names; render(); }
@@ -775,7 +776,6 @@ function renderNameChips(parent,{aliasesOnly=false}={}) {
     host.append(node('small',aliasesOnly ? 'Use specific alternative names or phrases that should recall this card.' : 'Drag to reorder, or use Alt + Left/Right on a name. The first name is the main name.','muted'));
   } render();
 }
-
 function pushNavigation(key = [screen,book,selected].join(':')) {
   if (!window.history?.pushState || !navigationId) return;
   navigationKey = key; navigationDepth++;

@@ -1,3 +1,4 @@
+import { parseReorganizeAnswer } from './reorganize-text.js';
 import {requestInputLimit} from './request-budget.js';
 import { buildReorganizeMessages } from './memory-prompts.js';
 import { parseMemoryLines, applyOps } from './lore-lines.js';
@@ -50,17 +51,18 @@ export async function runReorganizeBatch(live,entries,sections,instruction,{ sig
   const messages = buildReorganizeMessages({ settings,mem:live.mem,entries,sections,instruction });
   if (24+(await Promise.all(messages.map(m => count(m.content)))).reduce((a,b) => a+b,0)>requestInputLimit(settings)) throw new Error('Reorganize input exceeds the context budget.');
   const result = await complete({ settings,messages,signal,onDelta,onReasoning:() => {} });
-  const parsed = parseMemoryLines(result.content,{ reorganize:true,allowPersonality:true,entries,messages:live.messages,mem:live.mem });
-  if (!parsed.valid) { const error = new Error("Invalid reorganization; nothing was changed."); error.raw = result.content; throw error; }
+  const answer=parseReorganizeAnswer(result.content,entries,sections);
+  const parsed = parseMemoryLines(answer.notes,{ reorganize:true,allowPersonality:true,entries,messages:live.messages,mem:live.mem });
+  if (!parsed.valid && !answer.proposals.length) { const error = new Error("Invalid reorganization; nothing was changed."); error.raw = result.content; throw error; }
   const empty = entries.map(e => ({ ...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s]) => [key,{ ...s,lines:[] }])) }));
   const changes = applyOps(empty,parsed.ops,{ reorganize:true,allowPersonality:true,allowedIds:entries.map(e => e.id),mem:live.mem });
   const accepted = changes.appends.filter(a => sections[a.entryId]?.includes(a.section));
-  if (!accepted.length) { const error = new Error("The model's answer couldn't be read as notes. Nothing was changed."); error.raw = result.content; throw error; }
+  if (!accepted.length && !answer.proposals.length) { const error = new Error("The model's answer couldn't be read as notes. Nothing was changed."); error.raw = result.content; throw error; }
   const turns = computeTurns(live.messages);
-  const previews = entries.map(e => ({ entry:e,include:true,sent:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.filter(l=>l.by!=='user').map(l=>({id:l.id,text:l.text}))])),snapshot:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.map(l=>l.id)])),sections:Object.fromEntries((sections[e.id] ?? []).map(key => [key,accepted.filter(a => a.entryId === e.id && a.section === key).map(a => {
+  const previews = entries.map(e => ({ entry:e,include:true,textChanges:answer.proposals.filter(p=>p.entryId===e.id).map(p=>({section:p.section,before:p.before,after:p.after,include:p.include})),sent:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.filter(l=>l.by!=='user').map(l=>({id:l.id,text:l.text}))])),snapshot:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,s.lines.map(l=>l.id)])),sections:Object.fromEntries((accepted.length ? (sections[e.id] ?? []).filter(key=>!answer.proposals.some(p=>p.entryId===e.id&&p.section===key) || accepted.some(a=>a.entryId===e.id&&a.section===key)) : []).map(key => [key,accepted.filter(a => a.entryId === e.id && a.section === key).map(a => {
     const original = [...e.sections[key].lines].filter(l => l.turn === a.line.turn).sort((a,b) => a.at-b.at).at(-1) ?? e.sections[key].lines.at(-1);
     return { ...a.line,when:original?.when ?? a.line.when,src:original?.src ?? turns.assistants.find(t => t.turn === a.line.turn)?.order ?? null,evidence:original?.evidence ?? a.line.evidence ?? [],sourceRevision:original?.sourceRevision ?? a.line.sourceRevision ?? 0 };
-  })])) }));
+  })])) })).filter(p=>Object.keys(p.sections).length || p.textChanges.length);
   for(const preview of previews) {
     const original=originals.find(e=>e.id===preview.entry.id);
     for(const key of Object.keys(preview.sections)) {
@@ -70,5 +72,5 @@ export async function runReorganizeBatch(live,entries,sections,instruction,{ sig
     preview.entry=original;
     preview.snapshot=Object.fromEntries(Object.entries(original.sections).map(([key,s])=>[key,(s.lines ?? []).map(l=>l.id)]));
   }
-  return { previews,skipped:[...parsed.skipped,...changes.skipped],noteOmissions:prepared.omitted,raw:result.content };
+  return { previews,skipped:[...answer.skipped,...parsed.skipped,...changes.skipped],noteOmissions:prepared.omitted,raw:result.content };
 }
