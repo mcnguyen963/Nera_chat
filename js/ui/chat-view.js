@@ -1,3 +1,4 @@
+import { createQuickControls } from './quick-controls.js';
 import { streamSummaryUI as createSummaryStream } from './summary-stream.js';
 import { applyDottedPatch } from '../dotted-patch.js';
 import {composerDrafts} from '../composer-drafts.js';
@@ -723,116 +724,7 @@ export function initChatView() {
 // Saved connections are shared; Director mode can select both roles per story.
 const storyRoleProfiles=()=>state.storySettings?.values?.narrationMode==='director' || !!state.storySettings?.values?.narratorProfileId;
 let thinkingPicker;
-async function saveQuickRoleProfile(key,value) {
-  try{
-    if(busy)throw new Error('Finish the current reply before changing profiles.');
-    if(!state.sessionId || state.storySettingsId!==state.sessionId || !state.storySettings || state.storySettingsLoadFailed)throw new Error('Story settings have not loaded.');
-    if(!value && key==='directorProfileId')throw new Error('Choose a Director profile.');
-    if(value && !state.settings.profiles.some(p=>p.id===value))throw new Error('Choose an existing profile.');
-    await saveStorySettings(state.sessionId,state.storySettings.values,{[key]:value});
-  }catch(error){showTransientError(error.message);}
-  refreshQuickControls();
-}
-function initQuickControls() {
-  el.quickProfile = document.getElementById("quick-profile");
-  el.quickDirector = document.getElementById('quick-director-profile');
-  el.quickThinking = document.getElementById("quick-thinking");
-  el.quickThinkingButton = document.getElementById('quick-thinking-button');
-  thinkingPicker = initThinkingPicker({button:el.quickThinkingButton, menu:document.getElementById('quick-thinking-menu'), select:el.quickThinking});
-  el.quickDirector.addEventListener('change',()=>saveQuickRoleProfile('directorProfileId',el.quickDirector.value));
-
-  el.quickProfile.addEventListener("change", async () => {
-    if(storyRoleProfiles())return saveQuickRoleProfile('narratorProfileId',el.quickProfile.value);
-    const s = structuredClone(state.settings);
-    if (!s) return;
-    s.activeProfileId = el.quickProfile.value;
-    normalizeProfiles(s);
-    mirrorFromActiveProfile(s); // load the chosen profile's connection fields
-    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
-  });
-
-  el.quickThinking.addEventListener("change", async () => {
-    const s = structuredClone(state.settings);
-    if (!s) return;
-    const selected=state.storySettings?.values?.narratorProfileId;
-    let connection;
-    try{connection=resolveModelProfile(s,selected,{role:'Narrator'});}catch(error){showTransientError(error.message);refreshQuickControls();return;}
-    const v = el.quickThinking.value;
-    const label = `Thinking: ${Array.from(el.quickThinking.options || []).find(option=>option.value===v)?.textContent || v}`;
-    thinkingPicker?.sync(v,label);
-    const glyph = document.getElementById('quick-thinking-icon');
-    if (glyph) glyph.innerHTML = thinkingIcon(v);
-    if (v === "off") {
-      connection.reasoning = { ...connection.reasoning, enabled: false };
-    } else if (v === "max_tokens") {
-      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "max_tokens" };
-    } else {
-      connection.reasoning = { ...connection.reasoning, enabled: true, mode: "effort", effort: v };
-    }
-    normalizeProfiles(s);
-    if(selected && selected!==s.activeProfileId)s.profiles.find(p=>p.id===selected).reasoning=connection.reasoning;
-    else{s.reasoning=connection.reasoning;mirrorToActiveProfile(s);}
-    try {await saveSettings(s);}catch(error){showTransientError(error.message);refreshQuickControls();}
-  });
-
-  document.addEventListener('story-settings-changed',async e=>{const sid=state.sessionId;if(e.detail?.sessionPatch){await chatLoading;if(sid!==state.sessionId)return;}if(session && state.storySettings){session={...session,...e.detail?.sessionPatch,storySettingsRevision:state.storySettings.revision};const local=storyStore(state.sessionId);if(local && !local.status.pending)local.adopt({session,messages:historyMessages ?? local.view.messages,turns:local.view.turns});}refreshQuickControls();refreshContextIndicator();});
-  document.addEventListener("settings-changed", refreshQuickControls);
-  document.addEventListener("settings-changed", updateIndicator);
-  refreshQuickControls();
-}
-
-function fillQuickProfileSelect(s) {
-  if (!s) return;
-  el.quickProfile.replaceChildren(
-    ...s.profiles.map((p) => {
-      const o = document.createElement("option");
-      o.value = p.id;
-      o.textContent = `${storyRoleProfiles()?'Narrator · ':''}${p.modelId || 'No model'} · ${p.name}`;
-      return o;
-    })
-  );
-  if(storyRoleProfiles()){
-    const option=document.createElement('option');option.value='';option.textContent='Narrator · Active profile';el.quickProfile.replaceChildren(option,...Array.from(el.quickProfile.children));
-    const id=state.storySettings.values.narratorProfileId ?? '';
-    if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Narrator profile';el.quickProfile.append(missing);}el.quickProfile.value=id;
-  }else el.quickProfile.value = s.activeProfileId;
-}
-
-function quickThinkingValue(s) {
-  const r = s?.reasoning;
-  if (!r?.enabled) return "off";
-  return r.mode === "max_tokens" ? "max_tokens" : r.effort ?? "medium";
-}
-
-function refreshQuickControls() {
-  const s = state.settings;
-  if (!s) return;
-  normalizeProfiles(s);
-  let connection=s;
-  try{connection=resolveModelProfile(s,state.storySettings?.values?.narratorProfileId,{role:'Narrator'});}catch{}
-  const p = activeProfile(connection);
-  fillQuickProfileSelect(s);
-  el.quickThinking.value = quickThinkingValue(connection);
-  el.quickProfile.title = p?.name
-    ? `Narrator: ${p.name} · ${connection.modelId || "no model"}`
-    : connection.modelId || "Model not set";
-  const thinkingMode = quickThinkingValue(connection);
-  const thinkingLabel = `Thinking: ${Array.from(el.quickThinking.options || []).find(option=>option.value===thinkingMode)?.textContent || thinkingMode}`;
-  el.quickThinking.title = thinkingLabel;
-  el.quickThinking.setAttribute('aria-label', thinkingLabel);
-  thinkingPicker?.sync(thinkingMode,thinkingLabel);
-  const thinkingGlyph = document.getElementById('quick-thinking-icon');
-  if (thinkingGlyph) {
-    thinkingGlyph.innerHTML = thinkingIcon(thinkingMode);
-    thinkingGlyph.parentElement?.setAttribute('title', thinkingLabel);
-  }
-  const director=state.storySettings?.values?.narrationMode==='director',id=state.storySettings?.values?.directorProfileId ?? '';
-  document.getElementById('quick-director-control').classList.toggle('hidden',!director);
-  el.quickDirector.replaceChildren();
-  const choice=document.createElement('option');choice.value='';choice.textContent='Director · Choose profile';el.quickDirector.append(choice);
-  for(const profile of s.profiles){const option=document.createElement('option');option.value=profile.id;option.textContent='Director · '+(profile.name || profile.modelId);el.quickDirector.append(option);}
-  if(id&&!s.profiles.some(p=>p.id===id)){const missing=document.createElement('option');missing.value=id;missing.textContent='Missing Director profile';el.quickDirector.append(missing);}el.quickDirector.value=id;
-}
+const {initQuickControls}=createQuickControls({get activeProfile(){return activeProfile;},get busy(){return busy;},get chatLoading(){return chatLoading;},get el(){return el;},get historyMessages(){return historyMessages;},get initThinkingPicker(){return initThinkingPicker;},get mirrorFromActiveProfile(){return mirrorFromActiveProfile;},get mirrorToActiveProfile(){return mirrorToActiveProfile;},get normalizeProfiles(){return normalizeProfiles;},get refreshContextIndicator(){return refreshContextIndicator;},get resolveModelProfile(){return resolveModelProfile;},get saveSettings(){return saveSettings;},get saveStorySettings(){return saveStorySettings;},get session(){return session;},set session(value){session=value;},get showTransientError(){return showTransientError;},get state(){return state;},get storyRoleProfiles(){return storyRoleProfiles;},get storyStore(){return storyStore;},get thinkingIcon(){return thinkingIcon;},get thinkingPicker(){return thinkingPicker;},set thinkingPicker(value){thinkingPicker=value;},get updateIndicator(){return updateIndicator;}});
 
 export function setSession(sessionId) {
   const owner = currentUid();
