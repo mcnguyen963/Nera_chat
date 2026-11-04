@@ -45,11 +45,11 @@ export function assertSnapshotRevisions(before,after,{cachedLore=false}={}) {
 // Upgrade exact known built-in defaults; preserve custom story prompts.
 export async function migrateStorySettings(value={}) {
   value={...value};
-  if(globalThis.crypto?.subtle)for(const [field,defaultKey] of [['narratorSystemPrompt','narrator'],['directorNarratorSystemPrompt','directorNarratorDefault'],['directorSystemPrompt','director'],['memoryExtractionPrompt','memoryExtraction']]) {
+  if(globalThis.crypto?.subtle)for(const [field,defaultKey] of [['narratorSystemPrompt','narrator'],['directorNarratorSystemPrompt','directorNarratorDefault'],['directorSystemPrompt','director'],['memoryExtractionPrompt','memoryExtraction'],['summarizerSystemPrompt','summarizer']]) {
     if(typeof value[field]!=='string')continue;
     const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value[field].replace(/\r\n/g,'\n').trimEnd()));
     const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
-    if(prompts.threadDefaultHashes.split('\n').includes(field+' '+hash))value[field]=prompts[defaultKey];
+    if((field==='summarizerSystemPrompt'?prompts.legacyPromptHashes:prompts.threadDefaultHashes).split('\n').includes(field+' '+hash))value[field]=prompts[defaultKey];
   }
   if(typeof value.directorSystemPrompt==='string' && globalThis.crypto?.subtle) {
     const text=value.directorSystemPrompt.replace(/\r\n/g,'\n').trimEnd();

@@ -103,3 +103,10 @@ test('Active-story cached prompts ignore external updates until explicit refresh
  uid='v';state.sessionId='B';await store.selectStorySettings('B');assert.equal(store.effectiveActiveSettings().narratorSystemPrompt,'v B');assert.equal(callbacks.has(path),false);
  state.sessionId='missing';await assert.rejects(store.selectStorySettings('missing'));assert.equal(state.storySettings,null);assert.throws(()=>store.effectiveActiveSettings(),/prompts have not loaded/);
 });
+
+test('known outgoing story summarizers migrate while custom prompts remain exact',async()=>{
+ const {readFile}=await import('node:fs/promises'),use=appHarness(),api=await use('story-settings.js'),{prompts}=await use('system-prompts.js');
+ const old=(await readFile(new URL('./fixtures/outgoing-prompts/summarizer.md',import.meta.url),'utf8')).trim();
+ for(const saved of [old,old.replaceAll('\n','\r\n')+'\r\n'])assert.equal((await api.migrateStorySettings({summarizerSystemPrompt:saved})).summarizerSystemPrompt,prompts.summarizer);
+ const custom=old+'\nKeep my custom instruction.';assert.equal((await api.migrateStorySettings({summarizerSystemPrompt:custom})).summarizerSystemPrompt,custom);
+});
