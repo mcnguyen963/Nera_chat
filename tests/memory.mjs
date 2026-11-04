@@ -784,3 +784,13 @@ for(const variant of ['regenerate','empty'])test('legacy recent-window warning i
  const result=await builder.buildContextForRequest({id:'s'}, {...settings,keepRecentMessagesAfterSummary:10}, {messages:history,...(variant==='regenerate'?{upToOrder:6}:{})});
  assert.deepEqual(plain(result.report.warnings),[]);
 });
+
+test('reorganization consolidates every eligible note independently of the narrator cap',async()=>{
+ const use=await setup({'tokenizer.js':{countTokens:count}}),r=await use('memory-reorganize.js'),p=await use('memory-prompts.js'),l=await use('lore-lines.js'),{normalizeMemory}=await use('memory-settings.js');
+ const e=l.makeEntry('characters','Mira');e.sections.status.lines=Array.from({length:10},(_,i)=>line('all'+i,'Established status '+i,Math.min(6,i+1)));
+ const mem=normalizeMemory({loreNotesPerSection:3}),live={settings,mem,messages},sections={[e.id]:['status']};
+ const plan=await r.planReorganize(live,[e],sections,'',count);assert.equal(plan.batches[0][0].sections.status.lines.length,10);
+ const body=JSON.stringify(p.buildReorganizeMessages({settings,mem,entries:[e],sections}));for(const note of e.sections.status.lines)assert.ok(body.includes(note.text));
+ const result=await r.runReorganizeBatch(live,[e],sections,'',{count,complete:async()=>({content:'T6 [char] Mira | status: Consolidated all established state.'})});
+ assert.equal(result.previews[0].sent.status.length,10);assert.equal(result.previews[0].sections.status.length,1);assert.equal(e.sections.status.lines.length,10);
+});

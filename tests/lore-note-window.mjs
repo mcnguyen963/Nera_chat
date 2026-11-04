@@ -119,7 +119,7 @@ for(const records of [false,true])test('Director hints, excerpts and Narrator re
  const unlimited=await director.buildDirectorContext({...session,memory:{...session.memory,loreNotesPerSection:0}},config,messages,entries,before);assert.match(wire(unlimited),/NOTE_mira_ordinary1_END/);
 });
 
-test('extraction and reorganization requests cap notes, preserve exact sent sources and retain all unsent notes',async()=>{
+test('extraction caps notes while reorganization sees all eligible sources and keeps the input unchanged',async()=>{
  const h=await setup(),prompts=await h.use('memory-prompts.js'),reorg=await h.use('memory-reorganize.js'),m=await h.use('memory-settings.js'),t=await h.use('turns.js');
  const {e,key}=fixture(h);e.sections[key].lines.push(note('manual',1,'user'),note('imported',1,'import'));
  const mem=m.normalizeMemory({lorebooks:true,loreNotesPerSection:2,lagTurns:0,batchTurns:2}),range=t.dueRange(history,{extractedThroughOrder:0},mem,{manual:true}),sections={[e.id]:[key]},before=JSON.stringify(e);
@@ -129,23 +129,23 @@ test('extraction and reorganization requests cap notes, preserve exact sent sour
  const mentioned=await prompts.buildExtractionMessages({settings,mem,entries:[e],messages:mentionedHistory,range:mentionedRange,count});
  assert.doesNotMatch(wire(mentioned),/NOTE_mira_ordinary[123]_END/);assert.match(wire(mentioned),/NOTE_mira_ordinary[45]_END/);assert.equal(mentioned.noteOmissions.length,3);
  const live={session:{id:'s'},settings,mem,messages:history},plan=await reorg.planReorganize(live,[e],sections,'',count);
- assert.equal(plan.batches.length,1);assert.equal(plan.noteOmissions.length,3);assert.ok(plan.warnings.some(s=>s.includes('generated note limit')));
+ assert.equal(plan.batches.length,1);assert.equal(plan.noteOmissions.length,0);assert.equal(plan.warnings.length,0);
  let request,calls=0;
  const result=await reorg.runReorganizeBatch(live,[e],sections,'',{count,complete:async options=>{calls++;request=options.messages;return {content:'T1 [char] Mira | status: Consolidated eligible notes.'};}});
- const serialized=JSON.stringify(request);assert.doesNotMatch(serialized,/NOTE_mira_ordinary[123]_END/);assert.match(serialized,/NOTE_mira_ordinary[45]_END/);assert.match(serialized,/NOTE_manual_END|NOTE_imported_END/);
+ const serialized=JSON.stringify(request);for(const n of [1,2,3,4,5])assert.match(serialized,new RegExp('NOTE_mira_ordinary'+n+'_END'));assert.match(serialized,/NOTE_manual_END|NOTE_imported_END/);
  const p=result.previews[0],changed=p.sections[key].find(l=>l.by==='reorganize');assert.equal(changed.turn,1);assert.equal(changed.src,2); // The uncapped import at T1 was actually sent.
- assert.deepEqual(plain(p.sent[key].map(l=>l.id)),['mira_ordinary4','mira_ordinary5','imported']);
- for(const id of ['mira_ordinary1','mira_ordinary2','mira_ordinary3'])assert.ok(p.sections[key].some(l=>l.id===id));
+ assert.deepEqual(plain(p.sent[key].map(l=>l.id)),['mira_ordinary1','mira_ordinary2','mira_ordinary3','mira_ordinary4','mira_ordinary5','imported']);
+ assert.equal(p.sections[key].filter(l=>l.by==='reorganize').length,1);assert.equal(p.sections[key].length,1);
  assert.equal(calls,1);assert.equal(JSON.stringify(e),before);assert.ok(extracted.messages.length);
 });
 
-test('reorganization excludes stale notes before the cap and never parses against omitted source turns',async()=>{
+test('reorganization excludes stale notes without hiding eligible source turns',async()=>{
  const h=await setup(),reorg=await h.use('memory-reorganize.js'),m=await h.use('memory-settings.js'),{e,key}=fixture(h);
  e.sections[key].lines.push({...note('stale',10),needsReview:true});
  const live={settings,session:{id:'s'},mem:m.normalizeMemory({loreNotesPerSection:1}),messages:history},sections={[e.id]:[key]};
- const result=await reorg.runReorganizeBatch(live,[e],sections,'',{count,complete:async options=>{assert.doesNotMatch(JSON.stringify(options.messages),/NOTE_stale_END|mira_ordinary[1234]_END/);return {content:'T2 [char] Mira | status: Cleaned note.'};}});
- const p=result.previews[0],changed=p.sections[key].find(l=>l.by==='reorganize');assert.equal(changed.turn,5);assert.equal(changed.src,10);assert.deepEqual(plain(changed.evidence),[{id:'m10',order:10,revision:0}]);
- assert.equal(p.sent[key].length,1);assert.ok(p.sections[key].some(l=>l.id==='stale'));assert.equal(result.noteOmissions.filter(n=>n.reason==='generated note limit').length,4);
+ const result=await reorg.runReorganizeBatch(live,[e],sections,'',{count,complete:async options=>{assert.doesNotMatch(JSON.stringify(options.messages),/NOTE_stale_END/);return {content:'T2 [char] Mira | status: Cleaned note.'};}});
+ const p=result.previews[0],changed=p.sections[key].find(l=>l.by==='reorganize');assert.equal(changed.turn,2);assert.equal(changed.src,4);assert.deepEqual(plain(changed.evidence),[{id:'m4',order:4,revision:0}]);
+ assert.equal(p.sent[key].length,5);assert.ok(p.sections[key].some(l=>l.id==='stale'));assert.equal(result.noteOmissions.filter(n=>n.reason==='generated note limit').length,0);
 });
 
 test('serialized story and maintenance requests retain separate pinned caps and exempt reviewed cores',async()=>{
@@ -157,8 +157,9 @@ test('serialized story and maintenance requests retain separate pinned caps and 
  const narrator=await builder.buildContextForRequest(session,settings,{messages,loreEntries:[entry]});
  const extraction=await p.buildExtractionMessages({settings,mem,entries:[entry],messages,range:t.dueRange(messages,{extractedThroughOrder:0},mem,{manual:true}),count});
  const reorganize=p.buildReorganizeMessages({settings,mem,entries:[entry],sections:{mira:['status']}});
- for(const body of [wire(narrator),wire(extraction),JSON.stringify(reorganize)]) {
+ for(const body of [wire(narrator),wire(extraction)]) {
    assert.doesNotMatch(body,/NOTE_mira_ordinary[123]_END|NOTE_pin[123]_END/);
    for(const id of ['mira_ordinary4','mira_ordinary5','pin4','pin5','core1','core2','core3','core4'])assert.match(body,new RegExp('NOTE_'+id+'_END'));
  }
+ for(const id of ['mira_ordinary1','mira_ordinary2','mira_ordinary3','mira_ordinary4','mira_ordinary5','pin1','pin2','pin3','pin4','pin5','core1','core2','core3','core4'])assert.match(JSON.stringify(reorganize),new RegExp('NOTE_'+id+'_END'));
 });

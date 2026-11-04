@@ -654,13 +654,16 @@ test('L6 changed sent text refuses replacement and missing snapshot notes are re
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text='Edited elsewhere';await assert.rejects(h.lore.replaceLines('s',[preview],3),/changed since the preview/);assert.equal(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text,'Edited elsewhere');
  h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines[0].text=sent[0].text;h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.push({id:'fresh',text:'fresh',by:'auto',at:6},{id:'user',text:'mine',by:'user',at:1});await h.lore.replaceLines('s',[preview],3);assert.deepEqual(h.documents.get(h.sessionPath+'/lore/mira').sections.appearance.lines.map(l=>l.id),['user','new','fresh']);
 });
-test('capped reorganization saves only sent notes, preserves concurrent unsent changes and supports Undo',async()=>{
+test('budget-limited reorganization saves only sent notes, preserves concurrent unsent changes and supports Undo',async()=>{
  const h=await setup(),use=appHarness(),reorg=await use('memory-reorganize.js'),mem=await use('memory-settings.js');
  const e=h.lines.makeEntry('characters','Mira',{id:'mira'}),history=Array.from({length:12},(_,i)=>({id:'m'+(i+1),order:i+1,role:i%2?'assistant':'user',revision:0,content:'Story '+i}));
  e.sections.status.lines=Array.from({length:6},(_,i)=>({id:'n'+(i+1),text:'Saved note '+(i+1),turn:i+1,src:(i+1)*2,by:'auto',at:i+1,evidence:[{id:'m'+(i+1)*2,order:(i+1)*2,revision:0}]}));
  e.sections.status.lines.push({id:'manual',text:'My note',by:'user',at:1});await h.lore.createEntry('s',e);
  const path=h.sessionPath+'/lore/mira',live={settings:{maxContextTokens:50000,maxResponseTokens:2000},session:{id:'s'},mem:mem.normalizeMemory({loreNotesPerSection:2}),messages:history};
- const result=await reorg.runReorganizeBatch(live,[e],{mira:['status']},'',{count:async t=>t.length,complete:async options=>{
+ const prompts=await use('memory-prompts.js'),two={...e,sections:{...e.sections,status:{...e.sections.status,lines:e.sections.status.lines.filter(l=>l.by==='user'||['n5','n6'].includes(l.id))}}};
+ live.settings.maxContextTokens=524+prompts.buildReorganizeMessages({settings:live.settings,mem:live.mem,entries:[two],sections:{mira:['status']}}).reduce((n,m)=>n+m.content.length,0);
+ const plan=await reorg.planReorganize(live,[e],{mira:['status']},'',async t=>t.length);assert.ok(plan.warnings.some(w=>w.includes('Token budget')));
+ const result=await reorg.runReorganizeBatch(live,plan.batches[0],{mira:['status']},'',{count:async t=>t.length,complete:async options=>{
    assert.doesNotMatch(JSON.stringify(options.messages),/Saved note [1234]/);
    const current=h.documents.get(path);current.sections.status.lines[0].text='Edited unsent note';current.sections.status.lines=current.sections.status.lines.filter(l=>l.id!=='n2');current.sections.status.lines.push({id:'late',text:'Concurrent note',by:'auto',at:100});
    return {content:'T6 [char] Mira | status: Consolidated latest notes.'};

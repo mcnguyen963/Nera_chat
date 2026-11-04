@@ -78,7 +78,7 @@ export function buildReorganizeMessages({ settings, mem, entries, sections, inst
   const lines = [renderLoreLabel('protagonistLine',{PROTAGONIST:mem.protagonist || renderLoreLabel('mainCharacter')})];
   if (instruction.trim()) lines.push(renderLoreLabel('extraInstruction',{TEXT:instruction.trim()}));
   for (const original of entries) {
-    const e=capLoreNotes(original,mem.loreNotesPerSection);
+    const e=capLoreNotes(original,0);
     const tag = e.book === 'characters' ? 'char' : e.book === 'locations' ? 'loc' : e.book === 'facts' ? 'fact' : e.kind === 'timeline' ? 'event' : 'open';
     lines.push('\n'+renderLoreLabel('reorganizeCard',{TAG:tag,NAME:e.name}));
     for (const [key, section] of Object.entries(e.sections)) {

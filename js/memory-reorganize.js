@@ -10,7 +10,7 @@ import { capLoreNotes, noteOmissions } from './lore-note-window.js';
 
 function prepareNotes(live,entries,sections) {
   const available=usableLore(entries,live.messages,live.session ?? {},Infinity,null,{includeArchived:true});
-  const cards=available.entries.map(entry=>capLoreNotes(entry,live.mem.loreNotesPerSection)).map(e=>({...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,{
+  const cards=available.entries.map(entry=>capLoreNotes(entry,0)).map(e=>({...e,sections:Object.fromEntries(Object.entries(e.sections).map(([key,s])=>[key,{
     ...s,userCanon:s.userCanon ?? (s.lines ?? []).filter(l=>l.by==='user'),
     lines:(s.lines ?? []).filter(l=>l.by!=='user' && !l.needsReview && (!sections || sections[e.id]?.includes(key)))
   }]))}));
