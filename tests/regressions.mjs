@@ -156,7 +156,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
       loadPetCatalog: async () => [],
     },
     'db.js': { db: {} },
-    'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('logout detail');} },
+    'auth.js': { currentUid: () => calls.uid ?? 'test-user',currentUserInfo:()=>({uid:calls.uid ?? 'test-user',email:'owner@example.test'}),logout:async()=>{calls.logouts=(calls.logouts ?? 0)+1;if(calls.failLogout)throw Error('logout detail');} },
     'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>{calls.estimateCalls=(calls.estimateCalls ?? 0)+1;return Math.ceil(text.length*0.306);}, countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
       subscribeSessions:(cb,onError)=>{calls.sidebarCallback=cb;calls.sidebarError=onError;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('create detail');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('rename detail');},deleteSession:async()=>{await calls.onDelete?.();if(calls.failDelete)throw Error('Delete failed');},
@@ -356,6 +356,23 @@ test('forgetting a story clears collaborators and reopening cannot render its ol
  chat.forgetChatSession('improvement');await settle();assert.equal(stores.storyStore('improvement'),undefined);assert.ok(h.calls.memoryStopped.includes('improvement'));assert.deepEqual(deleted,[['test-user','improvement']]);assert.ok(h.calls.forgotLore.some(a=>a[0]==='test-user'&&a[1]==='improvement'));
  h.calls.missingSessions=['improvement'];h.calls.history=[];chat.setSession('improvement');await settle();assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent.includes('DELETED_HISTORY')));assert.equal(chat.memorySnapshot(),null);chat.setSession(null);
 });
+test('sidebar restores this account’s selected story after reload without new cloud work',async()=>{
+ const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();(await h.use('ui/sidebar.js')).initSidebar();
+ h.stageLocalSession({id:'B'},'B');h.calls.sidebarCallback([{id:'A',title:'A'},{id:'B',title:'B'}]);
+ chat.setSession('B');await h.loadLocalStory({messages:[]},'B');
+ const reload=await harness();for(const [key,value]of h.localCache)reload.localCache.set(key,value);
+ (await reload.use('ui/chat-view.js')).initChatView();(await reload.use('ui/sidebar.js')).initSidebar();
+ reload.stageLocalSession({id:'B'},'B');const before=reload.calls.reads;
+ reload.calls.sidebarCallback([{id:'A',title:'A'},{id:'B',title:'B'}]);assert.equal(reload.state.sessionId,'B');assert.equal(reload.calls.reads,before);
+ const other=await harness();other.calls.uid='other';for(const [key,value]of h.localCache)other.localCache.set(key,value);
+ (await other.use('ui/chat-view.js')).initChatView();(await other.use('ui/sidebar.js')).initSidebar();other.stageLocalSession({id:'A'},'A');other.calls.sidebarCallback([{id:'A',title:'A'},{id:'B',title:'B'}]);assert.equal(other.state.sessionId,'A');
+});
+
+test('sidebar selection recovery tolerates unavailable storage and removed stories',async()=>{
+ const h=await harness();h.calls.storageBlocked=true;(await h.use('ui/chat-view.js')).initChatView();(await h.use('ui/sidebar.js')).initSidebar();h.stageLocalSession({id:'A'},'A');assert.doesNotThrow(()=>h.calls.sidebarCallback([{id:'A',title:'A'}]));assert.equal(h.state.sessionId,'A');
+ const removed=await harness();removed.localCache.set('nera:selected-story:test-user','removed');(await removed.use('ui/chat-view.js')).initChatView();(await removed.use('ui/sidebar.js')).initSidebar();removed.stageLocalSession({id:'A'},'A');removed.calls.sidebarCallback([{id:'A',title:'A'}],{fromCache:true});assert.equal(removed.state.sessionId,null);removed.calls.sidebarCallback([{id:'A',title:'A'}],{fromCache:false,hasPendingWrites:true});assert.equal(removed.state.sessionId,null);removed.calls.sidebarCallback([{id:'A',title:'A'}],{fromCache:false,hasPendingWrites:false});await removed.loadLocalStory({messages:[]},'A');assert.equal(removed.state.sessionId,'A');assert.equal(removed.localCache.get('nera:selected-story:test-user'),'A');
+});
+
 test('sidebar deletion forgets the story only after deletion resolves',async()=>{
  const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>deleted.push(args),cachedSessionIds:async()=>[]}}),sidebar=await h.use('ui/sidebar.js');sidebar.initSidebar();
  h.state.sessionId='keep';h.calls.sidebarCallback([{id:'keep',title:'Keep'},{id:'remove',title:'Remove'}],{fromCache:true});

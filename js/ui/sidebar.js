@@ -18,6 +18,9 @@ export function initSidebar() {
 
   const me = currentUserInfo();
   if (me) userEl.textContent = me.email ?? "Signed in";
+  const selectionKey=me?.uid ? 'nera:selected-story:'+encodeURIComponent(me.uid) : null;
+  let rememberedId=null;
+  try{if(selectionKey)rememberedId=localStorage.getItem(selectionKey);}catch{/* Device storage can be unavailable. */}
 
   let storyPickerOpen=false;
   newBtn.addEventListener("click", () => {
@@ -42,6 +45,10 @@ export function initSidebar() {
   let cachedSessions = [],cacheCleanupGeneration=0;
   let renderedSignature = "";
   document.addEventListener("session-changed", () => {
+    if(selectionKey && currentUserInfo()?.uid===me.uid){
+      rememberedId=state.sessionId;
+      try{if(rememberedId)localStorage.setItem(selectionKey,rememberedId);else localStorage.removeItem(selectionKey);}catch{/* Selection still works without persistence. */}
+    }
     refreshActive(listEl, cachedSessions, titleEl);
   });
   subscribeSessions(
@@ -67,9 +74,11 @@ export function initSidebar() {
         }
         return;
       }
-      // Auto-select the first session if none is active or the active one vanished.
+      // Restore only an ID offered by this account's list. A partial offline
+      // list must not replace a remembered selection before the server arrives.
       if (!state.sessionId && sessions.length > 0) {
-        setSession(sessions[0].id);
+        const remembered=sessions.find(s=>s.id===rememberedId);
+        if(remembered || !rememberedId || !metadata.fromCache && !metadata.hasPendingWrites)setSession(remembered?.id ?? sessions[0].id);
       } else if (state.sessionId && !sessions.some((s) => s.id === state.sessionId)) {
         setSession(null);
       }
