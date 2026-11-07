@@ -1,6 +1,7 @@
 import {applyAcknowledgedOperations} from './local-story.js';
 // Device-local chat cache. Firestore remains the source for a session that has
-// never been opened here; the three most recently used sessions stay in IDB.
+// never been opened here. Three display snapshots stay hot; confirmed device
+// history remains available after their eviction so reopening needs no download.
 const DATABASE = "roleplay-chat-cache";
 const STORE = "sessions";
 let opening;
@@ -54,15 +55,12 @@ export async function saveTokenUsage(uid,sessionId,usage) {
 }
 
 export function nextOrder(order,sid) {return [sid,...order.filter(id=>id!==sid)].slice(0,3);}
-function evictStoryData(tx,key) {
-  const aux=tx.objectStore('storyData'),request=aux.get(key);
+function retainStoryData(tx,key) {
+  const cached=tx.objectStore(STORE).get(key),aux=tx.objectStore('storyData'),request=aux.get(key);
   request.onsuccess=()=>{
-    const legacy=request.result?.value?.deviceRecoveryBackups;
-    if(!legacy?.length){aux.delete(key);return;}
-    // Older versions stored recovery copies inside the disposable story cache.
-    // Move them atomically before evicting that cache, including unopened stories.
-    const backups=tx.objectStore('recoveryBackups'),saved=backups.get(key);
-    saved.onsuccess=()=>{if(!saved.result)backups.put({key,value:legacy});aux.delete(key);};
+    const value=request.result?.value ?? {},snapshot=cached.result?.value;
+    if(value.confirmed || !snapshot?.history || snapshot.historyRevision!==(snapshot.session?.historyRevision ?? 0))return;
+    aux.put({key,value:{...value,confirmed:{session:snapshot.session,messages:snapshot.history,turns:value.turns ?? {}}}});
   };
 }
 export async function saveChatCache(uid,sessionId,value) {
@@ -75,7 +73,7 @@ export async function saveChatCache(uid,sessionId,value) {
       store.put({key:`${uid}:${sessionId}`,uid,savedAt:Date.now(),value});
       const recent=[sessionId,...order.filter(id=>id!==sessionId)].slice(0,3);
       if(!request.result || order[0]!==sessionId)store.put({key:'meta:'+uid,order:recent});
-      for(const key of keys.result ?? [])if(key.startsWith(uid+':') && !recent.includes(key.slice(uid.length+1)) && !(pins.result ?? []).includes(key)){store.delete(key);tx.objectStore('tokenUsage').delete(key);evictStoryData(tx,key);}
+      for(const key of keys.result ?? [])if(key.startsWith(uid+':') && !recent.includes(key.slice(uid.length+1)) && !(pins.result ?? []).includes(key)){retainStoryData(tx,key);store.delete(key);tx.objectStore('tokenUsage').delete(key);}
     };
     request.onsuccess=()=>{if(request.result)apply(request.result.order);else{const old=store.getAll();old.onsuccess=()=>apply((old.result ?? []).filter(e=>e.uid===uid).sort((a,b)=>b.savedAt-a.savedAt).map(e=>e.key.slice(uid.length+1)));}};
     tx.oncomplete=resolve;tx.onerror=resolve;tx.onabort=resolve;

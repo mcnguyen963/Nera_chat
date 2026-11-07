@@ -1,3 +1,4 @@
+import {createStorySnapshotCache} from '../story-snapshot-cache.js';
 import { createTokenIndicatorView } from './token-indicator-view.js';
 import { createDeviceUploadView } from './device-upload-view.js';
 import { createQuickControls } from './quick-controls.js';
@@ -162,7 +163,6 @@ async function ensureLocalStory({pendingStateSave=false,saveHold=null,token=busy
   const observe=(view,status)=>{if(active())applyWorkingStory(view,status);};
   let store=storyStore(sid);
   // Disabled: a stale local receipt must not force a full account/lore/settings Sync.
-  // if(store?.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
   if(store?.requiresReconciliation && !store.status.pending && !store.status.paused){
     // Recover only the affected story header and history, once, on demand.
     const fresh=await getSessionFromServer(sid);if(!active())throw new StaleTurn();
@@ -185,7 +185,6 @@ async function ensureLocalStory({pendingStateSave=false,saveHold=null,token=busy
     store.observe=observe;observe(store.view,store.status);
   }
   if(!active())throw new StaleTurn();
-  // if(store.requiresReconciliation){await refreshStoryFromServer(token,{pendingStateSave,saveHold});if(!active())throw new StaleTurn();}
   return store;
 }
 function cancelGeneration(token,controller,vibration,petTurn){
@@ -219,7 +218,6 @@ async function saveStoryState(write,apply,{token=null,sid=state.sessionId,owner=
     if(!apply(result,store,baseline)){
       store.invalidate();historyMessages=null;historyRevision=null;historyCache.delete(key);
       // Disabled: saving state must not trigger a full Sync or delay a waiting Send.
-      // if(reconcile)await refreshStoryFromServer(busyGate.active?.waitingSettings ? busyGate.active : token,{pendingStateSave:true,saveHold:hold});
     }
     check();rememberMemoryStory();invalidateRenderedMessages();renderMessages(lastMessages);
     queueCacheSave();void updateIndicator();return result;
@@ -321,7 +319,7 @@ const sizeComposer=createComposerSizer({input:()=>el.input,frame:fn=>requestAnim
 const dismissedStaleScenes=new Set();
 let loreRetry=0,loreRetryTimer=null,loreStatus='ok';
 let loreUnsub = null, loreEntries = [], loreSessionId = null, managerOpen = false;
-const memoryStories = new Map();
+const memoryStories=createStorySnapshotCache(sid=>sid===state.sessionId || memoryUpdater.isRunning(sid) || loreIndexUpdater.status(currentUid(),sid)==='running');
 const loreIndexUpdater=createLoreIndexUpdater({getSnapshot:memorySnapshot,ownerNow:()=>{try{return currentUid();}catch{return null;}},onStatus:detail=>document.dispatchEvent(new CustomEvent('search-index-status',{detail}))});
 function resumeLoreIndex(){
   const snapshot=memorySnapshot();if(!snapshot)return;
@@ -534,7 +532,7 @@ export function initChatView() {
   document.addEventListener('settings-save-finished',resumeLoreIndex);
   window.addEventListener('online',resumeLoreIndex);
   document.addEventListener('history-recall-cleared',e=>{const {owner,sid}=e.detail;loreIndexUpdater.stop(owner,sid);for(const key of historySearchPhases.keys())if(sid!=null?key===unsavedKey(owner,sid):key.startsWith(unsavedKey(owner,'')))historySearchPhases.delete(key);updateMemoryChip();});
-  document.addEventListener('search-index-status',e=>{if(e.detail.sessionId!==state.sessionId)return;updateMemoryChip();if(e.detail.status==='failed')showTransientInfo('Memory saved. Search update pending: '+e.detail.message);});
+  document.addEventListener('search-index-status',e=>{memoryStories.prune();if(e.detail.sessionId!==state.sessionId)return;updateMemoryChip();if(e.detail.status==='failed')showTransientInfo('Memory saved. Search update pending: '+e.detail.message);});
   document.addEventListener('provider-fallback',event=>showTransientInfo('Provider unavailable. Trying '+event.detail.to+'…'));
   // Disabled automatic full Sync; reconnecting still retries pending saves.
   window.addEventListener('online',()=>{storyStore(state.sessionId)?.retry();});
@@ -593,6 +591,7 @@ export function initChatView() {
   document.getElementById('btn-memory')?.addEventListener('click', () => document.dispatchEvent(new CustomEvent(session?.memory?.autoUpdate && session?.memoryState?.extractedThroughOrder==null ? 'memory-settings' : 'lorebooks')));
   document.addEventListener('lorebook-visibility', e => { managerOpen = e.detail.open;document.getElementById('btn-memory')?.setAttribute('aria-expanded',String(managerOpen)); syncLore(); });
   document.addEventListener('memory-status', e => {
+    memoryStories.prune();
     if(e.detail.searchPhase)historySearchPhases.set(unsavedKey(currentUid(),e.detail.sessionId),e.detail.searchPhase);
     if (e.detail.sessionId !== state.sessionId) return;
     updateMemoryChip(); document.dispatchEvent(new CustomEvent('memory-refresh'));
@@ -895,7 +894,6 @@ function subscribeChat(sessionId) {
     if(session.storageVersion!==2 || session.continuityVersion!==2 || session.lookupVersion!==1){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;historyMessages=null;historyRevision=null;}
     latestReady=true;syncLore();
     await ensureLocalStory();if(!active())return;
-    // if(refreshOnReload){refreshOnReload=false;await refreshStoryFromServer();if(!active())return;}
     document.dispatchEvent(new CustomEvent('session-changed',{detail:{sessionId,session}}));
     void updateIndicator();
   })().catch(error=>{if(active())showTransientError(error);});

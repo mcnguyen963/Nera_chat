@@ -4231,7 +4231,8 @@ test('context viewer reports older notes omitted solely by the saved narrator ca
  const h=await harness(),l=await h.use('lore-lines.js'),e=l.makeEntry('characters','Mira',{alwaysLoad:true});h.state.settings.maxContextTokens=120000;
  const history=Array.from({length:12},(_,i)=>({id:'cap'+i,order:i+1,role:i%2?'assistant':'user',content:'Mira waits.'}));
  e.sections.status.lines=Array.from({length:12},(_,i)=>({id:'cap-note'+i,text:'Saved status '+i,turn:Math.min(i+1,6),src:Math.min(i+1,6)*2,by:'auto',at:i+1,evidence:[{id:'cap'+(Math.min(i+1,6)*2-1),order:Math.min(i+1,6)*2,revision:0}],sourceRevision:0}));h.calls.loreEntries=[e];
- await openImprovementChat(h,{memory:{lorebooks:true,loreNotesPerSection:3}},history);
+ const chat=await openImprovementChat(h,{memory:{lorebooks:true,loreNotesPerSection:3}},history);
+ await waitForParallel(()=>chat.memorySnapshot()?.entries.some(entry=>entry.id===e.id) && chat.tokenUsageSnapshot().record?.contextKey===chat.tokenUsageSnapshot().contextKey);
  const viewer=await h.use('ui/context-viewer.js');viewer.initContextViewer();viewer.openContextViewer();await settle();const root=h.el('context-viewer');
  await namedButton(root,'Calculate current preview').click();const book=root.querySelectorAll('details').find(n=>n.dataset.contextKey==='book-characters');book.open=true;await book.dispatchEvent({type:'toggle'});
  assert.ok(book.querySelectorAll('p').some(n=>n.textContent.includes('9 older lines not sent')),book.querySelectorAll('p').map(n=>n.textContent).join(' | '));
@@ -4258,4 +4259,19 @@ test('real story loading waits for device recovery before enabling Send or readi
  recovery.resolve({confirmed:{session:loadingSession,messages:[{id:'a',order:1,role:'assistant',content:'Recovered narration'}],turns:{}}});
  await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
  assert.equal(h.el('btn-send').disabled,false);assert.equal(h.el('chat-input').value,'Keep this draft');assert.equal(h.calls.requests.length,0);
+});
+
+test('visited memory snapshots stay bounded and evicted stories reopen from device storage without server reads',async()=>{
+ const device=indexedDBFixture(),h=await harness({globals:{indexedDB:device.indexedDB}}),chat=await h.use('ui/chat-view.js'),cache=await h.use('chat-cache.js');
+ const ids=Array.from({length:6},(_,i)=>'retained-'+i);
+ for(const id of ids)await cache.saveStoryData('test-user',id,{confirmed:{session:{id,title:id,storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:0,memory:{scene:true},nextOrder:1},messages:[{id:id+'-message',order:1,role:'assistant',content:'Device narration '+id}],turns:{}}});
+ chat.initChatView();
+ for(const id of ids){chat.setSession(id);await waitForParallel(()=>chat.memorySnapshot()?.session.id===id && chat.memorySnapshot()?.historyComplete);await settle();}
+ assert.ok(ids.filter(id=>chat.memorySnapshot(id)).length<=3,'idle snapshots are limited to three stories');
+ assert.equal(chat.memorySnapshot(ids[0]),null,'the oldest idle story was evicted');
+ const reads={session:h.calls.sessionReads,history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads};
+ chat.setSession(ids[0]);await waitForParallel(()=>chat.memorySnapshot()?.session.id===ids[0] && chat.memorySnapshot()?.historyComplete);await settle();
+ assert.equal(chat.memorySnapshot().messages[0].content,'Device narration '+ids[0]);
+ assert.ok(h.el('message-list').children.some(n=>n.dataset.messageId===ids[0]+'-message'));
+ assert.deepEqual({session:h.calls.sessionReads,history:h.calls.historyReads,lore:h.calls.loreReads,settings:h.calls.reads},reads);
 });

@@ -2,6 +2,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+test('display eviction retains complete device history and never promotes a stale revision',async()=>{
+ const {indexedDBFixture}=await import('./indexeddb-fixture.mjs'),{appHarness}=await import('./app-harness.mjs');
+ const device=indexedDBFixture(),cache=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
+ const full={session:{id:'full',historyRevision:7},historyRevision:7,history:[{id:'m',order:1,content:'Device-only history'}],recent:[]};
+ await cache.saveStoryData('u','full',{storySettings:{revision:2},turns:{turn:{id:'turn'}}});
+ await cache.saveChatCache('u','full',full);
+ await cache.saveChatCache('u','stale',{...full,session:{id:'stale',historyRevision:8}});
+ for(const sid of ['a','b','c','d'])await cache.saveChatCache('u',sid,{session:{id:sid},recent:[]});
+ const reopened=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
+ assert.equal(await reopened.loadChatCache('u','full'),null);
+ const saved=await reopened.loadStoryData('u','full');
+ assert.equal(saved.confirmed.messages[0].content,'Device-only history');assert.equal(saved.confirmed.session.historyRevision,7);
+ assert.equal(saved.storySettings.revision,2);assert.equal(saved.confirmed.turns.turn.id,'turn');
+ assert.equal((await reopened.loadStoryData('u','stale'))?.confirmed,undefined);
+ assert.equal(await reopened.loadStoryData('other','full'),null);
+});
+
 test('Device recovery backups retain three complete copies and survive Sync for their own account and story',async()=>{
  const {indexedDBFixture}=await import('./indexeddb-fixture.mjs'),{appHarness}=await import('./app-harness.mjs');
  const device=indexedDBFixture(),cache=await appHarness({globals:{indexedDB:device.indexedDB}})('chat-cache.js');
@@ -28,7 +45,7 @@ test('new and legacy recovery backups survive cache eviction and reload, and exp
  for(const [sid,text]of [['legacy','Only local copy'],['new','New recovery copy']]){
   assert.equal(await reopened.loadChatCache('u',sid),null);
   const saved=await reopened.loadStoryData('u',sid);
-  assert.equal(saved.deviceRecoveryBackups[0].snapshot.messages[0].content,text);assert.equal(saved.confirmed,undefined);
+  assert.equal(saved.deviceRecoveryBackups[0].snapshot.messages[0].content,text);assert.deepEqual(saved.confirmed,sid==='legacy'?{session:{id:'legacy'}}:undefined);
  }
  await reopened.clearChatCache('u');assert.ok((await reopened.loadStoryData('u','legacy')).deviceRecoveryBackups.length);
  await reopened.saveDeviceRecoveryBackup('u','legacy',{session:{id:'legacy'},messages:[{content:'Another backup'}]});
