@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import {indexedDBFixture} from './indexeddb-fixture.mjs';
 
-export async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {},firestoreOverrides = {},fixtureListeners=true,strictTimers=false,autoFrames=true } = {}) {
+export async function harness({ legacyNarratorHashes = null, chatCache = null, timers = null, globals = {}, sources = {}, extraStubs = {},firestoreOverrides = {},deferStorySettings=true,strictTimers=false,autoFrames=true } = {}) {
   const elements = new Map();
   class Element {
     value = ''; checked = false; hidden = true; style = {}; children = []; dataset = {};
@@ -75,7 +75,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   document.getElementById('settings-tab').classList.add('hidden');
   document.querySelector = selector => { const [first,...rest] = selector.split(' '); const root = first.startsWith('#') ? elements.get(first.slice(1)) : document.body?.querySelector(first); return rest.length ? root?.querySelector(rest.join(' ')) : root; };
   document.body = new Element();
-  const calls = { reads: 0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], sessionCallbacks: [], settingsCallbacks: [], latestCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, prompt:'Story',confirm: true, response: 'summary', responseData: null, streamLines: null };
+  const calls = { reads: 0, historyReads:0, writes: [], messages: [], requests: [], queries: [], subscriptions: [], settingsCallbacks: [], sessionWrites: [], imports: [], exports: [], settingsDoc: null, fail: false, prompt:'Story',confirm: true, response: 'summary', responseData: null, streamLines: null };
   const localCache = new Map(),timerJobs=new Map(),frames=new Map();let timerSequence=0,frameSequence=0,clockNow=0;
   const flushFrames=()=>{const pending=[...frames];frames.clear();for(const [,fn]of pending)fn();return pending.length;};
   const runTimer=id=>{const job=timerJobs.get(id);if(!job)return;timerJobs.delete(id);if(job.native)clearTimeout(job.native);return job.fn();};
@@ -115,7 +115,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     increment:n=>({increment:n}),serverTimestamp:()=>0,runTransaction:async(_db,run)=>run({get:async()=>({exists:()=>true,data:()=>calls.sessionDocs?.[state.sessionId] ?? {}}),update:(_ref,patch)=>calls.sessionWrites.push([state.sessionId,patch])}),
     doc: (...args) => args, collection() {},
     query: (...args) => { calls.queries.push(args); return args; },
-    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback, onError) => {if(ref?.[3]!=='settings')(calls.sessionErrors ??= []).push(onError); (ref?.[3] === 'settings' ? calls.settingsCallbacks : calls.sessionCallbacks).push(snap => { if (ref?.[3] !== 'settings' && snap.exists()) { calls.sessionDocs ??= {}; calls.sessionDocs[snap.id] = { id:snap.id,storySettingsRevision:1,...snap.data(),historyRevision:calls.historyRevision ?? snap.data().historyRevision ?? 0 }; } return callback(snap); }); return () => {}; },
+    orderBy() {}, limitToLast: (count) => ({ limitToLast: count }), onSnapshot: (ref, callback) => {assert.equal(ref?.[3],'settings','Story metadata must load through storage/server boundaries');calls.settingsCallbacks.push(callback);return()=>{};},
     getDoc: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     getDocFromServer: async () => { calls.reads++; return { exists: () => !!calls.settingsDoc, data: () => calls.settingsDoc }; },
     setDoc: async (_ref, settings) => {
@@ -125,13 +125,17 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     },
   };
   Object.assign(firestore,firestoreOverrides);
-  let fixtureSession,fixtureMessages,fixtureLore;
+  const initialStories=new Map(), cachedStories=new Map();
+  const storyKey=(owner,sid)=>owner+':'+sid;
+  const stagedSettings=new Map();
+  const defaultCache={cachedSessionIds:async()=>[],loadChatCache:async(owner,sid)=>cachedStories.get(storyKey(owner,sid)) ?? null,saveChatCache:async(owner,sid,value)=>{cachedStories.set(storyKey(owner,sid),structuredClone(value));return true;},deleteChatCache:async(owner,sid)=>{cachedStories.delete(storyKey(owner,sid));initialStories.delete(storyKey(owner,sid));},replaceStoryCache:async()=>{},loadStoryData:async(owner,sid)=>initialStories.get(storyKey(owner,sid)) ?? null,saveStoryData:async(owner,sid,value)=>{const key=storyKey(owner,sid);initialStories.set(key,{...initialStories.get(key),...structuredClone(value)});return true;},saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true}};
   const stubs = {
     'story-settings-store.js': {
       preserveLegacyStorySeed:async()=>({}),
       selectStorySettings:async (sid,{force=false}={})=>{
-        let fixtureReady=Promise.resolve();if(sid && !force){let ready;fixtureReady=new Promise(resolve=>ready=resolve);calls.sessionCallbacks.push(snap=>{calls.sessionDocs ??= {};calls.sessionDocs[sid]={id:sid,storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,...snap.data(),historyRevision:calls.historyRevision ?? snap.data().historyRevision ?? 0};fixtureSession?.(calls.sessionDocs[sid],snap.metadata);});calls.latestCallbacks.push(value=>{calls.history=value.messages;const delivery=fixtureMessages?.(value);ready();return delivery?.catch(error=>{if(state.sessionId===sid)throw error;});});}
-        state.storySettingsId=sid;state.storySettings=sid ? {version:1,revision:1,values:Object.fromEntries(['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages'].map(k=>[k,state.settings[k]]))} : null;await fixtureReady;},
+        state.storySettingsId=sid;state.storySettings=sid ? {version:1,revision:1,values:Object.fromEntries(['narratorSystemPrompt','summarizerSystemPrompt','memoryExtractionPrompt','memoryReorganizePrompt','rewriteSystemPrompt','rewriteRecentMessages'].map(k=>[k,state.settings[k]]))} : null;
+        if(sid && !force && deferStorySettings){const key=storyKey(calls.uid ?? 'test-user',sid);if(!initialStories.has(key) && !(globals.indexedDB && (await (await use('chat-cache.js')).loadStoryData(calls.uid ?? 'test-user',sid))?.confirmed))await new Promise(resolve=>stagedSettings.set(sid,resolve));}
+      },
       effectiveActiveSettings:()=>structuredClone({...state.settings,...(state.storySettings?.values ?? {})}),
       saveStorySettings:async(sid,base,changes)=>{if(sid!==state.sessionId)throw Error('Story changed');const result={values:{...base,...changes}};state.storySettings=result;return result;},
       invalidateStorySettingsLoads(){},readStorySettingsRefresh:async()=>{await calls.onPromptsRefresh?.();return calls.serverPrompts ?? {revision:calls.sessionDocs?.[state.sessionId]?.storySettingsRevision ?? 1,values:state.storySettings?.values ?? {}};},applyStorySettingsRefresh:(sid,value)=>{state.storySettingsId=sid;state.storySettings=value;state.storySettingsLoadFailed=false;},
@@ -140,10 +144,10 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     // The real pet controller is exercised independently in pets.mjs.
     'lore-store.js': {
       markGeneratedForReview:async()=>[],commitExtraction:async(...args)=>{(calls.memoryCommits ??= []).push(args);return calls.onMemoryCommit?.(...args) ?? {entries:[],cacheApplied:true};},
-      getLore:async () => {calls.loreCallbacks ??= [entries=>fixtureLore?.(entries)];calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {},holdLoreWrites:()=>({ready:calls.lorePending ? calls.onLoreWait?.() : Promise.resolve(),release(){}}), loreWritesPending: () => calls.lorePending===true, waitForLoreWrites: async () => calls.onLoreWait?.(),
-      subscribeLore: (_sid,cb) => { calls.loreSubscriptions ??= 0; calls.loreSubscriptions++; (calls.loreCallbacks ??= []).push(cb); queueMicrotask(() => cb(calls.loreEntries ?? [])); return () => {}; },
-      createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); for (const cb of calls.loreCallbacks ?? []) cb(calls.loreEntries); return e.id; },
-      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); return await calls.onCardSave?.(...args); }, deleteEntry: async (...args) => {await calls.onCardDelete?.(...args);return 'backup';}, mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);for(const cb of calls.loreCallbacks ?? [])cb(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
+      getLore:async () => {calls.loreReads=(calls.loreReads ?? 0)+1;await calls.onLoreRead?.();return calls.loreEntries ?? [];},configureLoreWrites() {},holdLoreWrites:()=>({ready:calls.lorePending ? calls.onLoreWait?.() : Promise.resolve(),release(){}}), loreWritesPending: () => calls.lorePending===true, waitForLoreWrites: async () => calls.onLoreWait?.(),
+      subscribeLore:()=>{throw Error('Unexpected legacy lore listener');},
+      createEntry: async (_sid,e) => { (calls.loreEntries ??= []).push(e); await publishLore(calls.loreEntries); return e.id; },
+      saveEntry: async (...args) => { (calls.cardWrites ??= []).push(args); return await calls.onCardSave?.(...args); }, deleteEntry: async (...args) => {await calls.onCardDelete?.(...args);return 'backup';}, mergeEntries: async () => 'backup', writeBackup: async () => 'backup', restoreBackup: async (...args) => { (calls.cardRestores ??= []).push(args); }, listBackups:async()=>calls.onBackups?.() ?? [], removeDeletedLines: async () => 'backup', importCard:async (origin,plan,guard)=>{await calls.onCardImport?.(origin,plan,guard);if(!guard.isCurrent())throw new Error('Card import cancelled.');(calls.cardImports ??= []).push([origin,plan]);calls.loreEntries=(calls.loreEntries ?? []).filter(e=>e.id!==plan.id).concat(plan.data);await publishLore(calls.loreEntries);return 'card-backup';}, importLore: async (...args) => {await calls.onBookImport?.(...args);if(!args[3].isCurrent())throw new Error('Import cancelled.');(calls.bookImports ??= []).push(args);return 'backup';}, replaceLines: async () => 'backup',
     },
     'memory-updater.js': { dueRangeFor:()=>calls.memoryDue ? {} : null,lastRawAnswer: () => '', rebuildFrom:async()=>{}, configureMemoryUpdater() {}, isRunning: () => calls.memoryRunning === true, maybeStartAlongsideTurn:()=>false, maybeStartAfterTurn: () => { if (calls.memoryDue) { calls.memoryStarts = (calls.memoryStarts ?? 0)+1; return true; } return false; }, stopAndWait:async id=>{(calls.memoryStopped ??= []).push(id);await calls.onMemoryStop?.();},stop:id=>{(calls.memoryStopped ??= []).push(id);}, stopAll() { calls.memoryStops=(calls.memoryStops ?? 0)+1; }, rebuild:async () => {}, updateNow: async () => {}, catchUp: async () => {calls.catchUps=(calls.catchUps ?? 0)+1;} },
     'ui/pet-view.js': {
@@ -156,7 +160,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     'tokenizer.js': { tokenizerStatus:()=>calls.tokenizerStatus ?? 'ok', estimateTokens:text=>{calls.estimateCalls=(calls.estimateCalls ?? 0)+1;return Math.ceil(text.length*0.306);}, countTokens: async (text) => calls.onTokenCount ? calls.onTokenCount(text) : text.length, setTokenCountingMode: mode=>{calls.tokenCountingMode=mode;} },
     'sessions.js': {
       subscribeSessions:(cb,onError)=>{calls.sidebarCallback=cb;calls.sidebarError=onError;return ()=>{};},createSession:async()=>{calls.creates=(calls.creates ?? 0)+1;if(calls.onCreate)return calls.onCreate();if(calls.failCreate)throw Error('create detail');return 'new-story';},renameSession:async()=>{calls.renames=(calls.renames ?? 0)+1;if(calls.failRename)throw Error('rename detail');},deleteSession:async()=>{await calls.onDelete?.();if(calls.failDelete)throw Error('Delete failed');},
-      getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
+      getSessionFromServer:async id => {calls.sessionReads=(calls.sessionReads ?? 0)+1;if(calls.missingSessions?.includes(id))return null;return calls.sessionDocs?.[id] ?? ({ id,title:'Story',longTermPlan:'Old plan',historyRevision:calls.historyRevision ?? 0 });},
       getSession: async id => calls.sessionDocs?.[id] ?? ({ title: 'Story', longTermPlan: 'Old plan' }),
       updateSession: async (...args) => { calls.sessionWrites.push(args); },
       duplicateSession: async (...args) => { calls.sessionCopies ??= []; calls.sessionCopies.push(args); return 'copied-session'; },
@@ -203,7 +207,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
         return {session:calls.sessionDocs[sid],historyRevision:revision,replacement:null};
       },
       updateMessageScene:async(...args)=>calls.updateScene?.(...args),
-      subscribeLatestMessages: (sessionId, callback, onError) => {(calls.latestErrors ??= []).push(onError); calls.subscriptions.push(sessionId); calls.latestCallbacks.push(value => { calls.history = value.messages; callback(value); }); return () => {}; },
+      subscribeLatestMessages:()=>{throw Error('Unexpected legacy message listener');},
     },
   };
   stubs['messages.js'].readMessageSnapshot=async sid=>{await calls.onMessagesRefresh?.();return {messages:await stubs['messages.js'].getMessages(sid),chunkRanges:[],records:[]};};
@@ -219,7 +223,7 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
   stubs['lore-store.js'].readLoreEntry=async(_sid,id)=>structuredClone(calls.loreEntries?.find(e=>e.id===id) ?? null);
   stubs['lore-store.js'].forgetLoreCache=async(uid,sid)=>{(calls.forgotLore ??= []).push([uid,sid]);loreSnapshots.delete(uid+':'+sid);};
   Object.assign(stubs,extraStubs);
-  if(chatCache)stubs['chat-cache.js']={loadChatCache:async()=>null,saveChatCache:async()=>true,deleteChatCache:async()=>{},replaceStoryCache:async()=>{},loadStoryData:async()=>null,saveStoryData:async()=>true,saveDeviceRecoveryBackup:async(...args)=>{(calls.deviceBackups ??= []).push(args);return true;},storyQueueStorage:{load:async()=>null,put:async()=>true,ack:async()=>true},...chatCache};
+  if(chatCache || !globals.indexedDB)stubs['chat-cache.js']={...defaultCache,...chatCache};
   const cache = new Map();
   async function load(path) {
     if (cache.has(path)) return cache.get(path);
@@ -247,22 +251,45 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     return module;
   }
   async function use(path) {
-    if(fixtureListeners && path==='ui/chat-view.js' && !cache.has(path)) {
-      const source=sources[path] ?? await readFile(new URL('../js/'+path,import.meta.url),'utf8');
-      sources[path]=source+`
-export function seedLoreFixture(entries){loreEntries=entries;}\nexport function seedSessionFixture(value,metadata){if(metadata?.fromCache || metadata?.hasPendingWrites || (value.historyRevision ?? 0)<(session?.historyRevision ?? 0))return;session=value;syncLore();updateRewriteControls();void updateIndicator();}
-export async function seedMessagesFixture(value){lastMessages=value.messages;hasEarlier=value.hasEarlier;latestReady=true;historyMessages=null;historyRevision=null;renderMessages(lastMessages);const all=value.hasEarlier ? await messagesApi.getMessages(state.sessionId) : value.messages;historyMessages=all;if(session){session={...session,nextOrder:Math.max(session.nextOrder ?? 0,...all.map(m=>m.order ?? 0))};}historyRevision=session?.historyRevision ?? 0;const store=storyStore(state.sessionId);if(store && !store.status.pending)store.adopt({session,messages:all,turns:store.view.turns});renderMessages(lastMessages);if(!cacheWritesPaused)await ensureLocalStory();void updateIndicator();}`;
-    }
     const module = await load(path);
     if (module.status !== 'evaluated') await module.evaluate();
-    if(fixtureListeners && path==='ui/chat-view.js'){fixtureLore=module.namespace.seedLoreFixture;fixtureSession=module.namespace.seedSessionFixture;fixtureMessages=module.namespace.seedMessagesFixture;}
     return module.namespace;
   }
   const { state } = await use('state.js');
   const settings = await use('settings.js');
   state.settings = settings.hydrateProfiles(structuredClone(settings.DEFAULT_SETTINGS));
   state.settingsSource = "server";
-  return { use, state, settings, calls, localCache, document, el: document.getElementById,
+  // Initial snapshots enter through device storage and setSession. Subsequent
+  // canonical metadata saves use the same public event as story Settings.
+  function stageLocalSession(metadata,sid=state.sessionId){
+    calls.sessionDocs ??= {};
+    const value={id:sid,title:'Story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:calls.historyRevision ?? 0,...metadata};
+    calls.sessionDocs[sid]=value;
+    if(stagedSettings.has(sid)){stagedSettings.get(sid).session=value;return;}
+    void document.dispatchEvent({type:'memory-session-saved',detail:{sessionId:sid,partial:value}});
+  }
+  async function loadLocalStory({messages,hasEarlier=false},sid=state.sessionId){
+    const owner=calls.uid ?? 'test-user',key=storyKey(owner,sid);
+    // Legacy pagination fixtures must now provide complete cached history.
+    const history=hasEarlier ? calls.serverHistory ?? calls.history ?? messages : messages;
+    calls.history=history;
+    const stores=await use('local-story-store.js');
+    const base={session:{...(stores.storyStore(sid)?.confirmed.session ?? calls.sessionDocs?.[sid]),id:sid},messages:structuredClone(history),turns:{}};
+    base.session.nextOrder=Math.max(base.session.nextOrder ?? 0,...history.map(m=>m.order ?? 0));
+    (calls.sessionDocs ??= {})[sid]=structuredClone(base.session);
+    initialStories.set(key,{confirmed:base});
+    if(globals.indexedDB){const storage=await use('chat-cache.js');await storage.saveStoryData(owner,sid,{confirmed:base});}
+    const gate=stagedSettings.get(sid);
+    if(gate){stagedSettings.delete(sid);gate();}
+    else {const stores=await use('local-story-store.js'),store=stores.storyStore(sid);if(store)store.adopt(base);}
+    const chat=await use('ui/chat-view.js');
+    await waitForParallel(()=>{const live=chat.memorySnapshot();return live?.session.id===sid && live.historyComplete && live.messages.length===history.length && history.slice(-100).every(m=>document.getElementById('message-list').children.some(n=>n.dataset.messageId===m.id));});
+  }
+  function publishLore(entries){
+    calls.loreEntries=entries;
+    return document.dispatchEvent({type:'local-lore-saved',detail:{uid:calls.uid ?? 'test-user',sessionId:state.sessionId,revision:calls.sessionDocs?.[state.sessionId]?.loreRevision ?? 0,snapshot:{initialized:true,entries}}});
+  }
+  return { use, state, settings, calls, localCache, document, stageLocalSession,loadLocalStory,publishLore, el: document.getElementById,
     flushFrames,advance,timerJobs,
     runTimers:async(filter=()=>true)=>{for(const [id,job]of [...timerJobs])if(filter(job))await runTimer(id);},
     assertTimersHandled:()=>{if(strictTimers)assert.deepEqual([...timerJobs.values()].map(j=>j.ms),[],'Unconsumed timer delays');},
@@ -303,13 +330,13 @@ test('profile deletion keeps one profile and selects a surviving profile before 
 });
 
 test('forgetting a story clears collaborators and reopening cannot render its old history',async()=>{
- const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>deleted.push(args)}});
+ const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>{deleted.push(args);await (await h.use('chat-cache.js')).saveStoryData(...args,{confirmed:null});}}});
  // Model the browser's list reset instead of retaining detached stub rows.
  Object.defineProperty(h.el('message-list'),'innerHTML',{set(value){if(value==='')this.replaceChildren();}});
  const chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'DELETED_HISTORY'}]);
  const stores=await h.use('local-story-store.js');await stores.openStoryStore('improvement',{session:chat.memorySnapshot().session,messages:chat.memorySnapshot().messages,turns:{}},()=>{});await settle();assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent==='DELETED_HISTORY'));assert.ok(stores.storyStore('improvement'));chat.setSession(null);
  chat.forgetChatSession('improvement');await settle();assert.equal(stores.storyStore('improvement'),undefined);assert.ok(h.calls.memoryStopped.includes('improvement'));assert.deepEqual(deleted,[['test-user','improvement']]);assert.ok(h.calls.forgotLore.some(a=>a[0]==='test-user'&&a[1]==='improvement'));
- chat.setSession('improvement');await settle();assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent.includes('DELETED_HISTORY')));assert.equal(chat.memorySnapshot(),null);chat.setSession(null);
+ h.calls.missingSessions=['improvement'];h.calls.history=[];chat.setSession('improvement');await settle();assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent.includes('DELETED_HISTORY')));assert.equal(chat.memorySnapshot(),null);chat.setSession(null);
 });
 test('sidebar deletion forgets the story only after deletion resolves',async()=>{
  const deleted=[],h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async(...args)=>deleted.push(args),cachedSessionIds:async()=>[]}}),sidebar=await h.use('ui/sidebar.js');sidebar.initSidebar();
@@ -934,8 +961,8 @@ test('message header actions keep consistent order and create copies through the
     chat.initChatView();
     chat.setSession('story');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
-    h.calls.latestCallbacks.at(-1)({
+    h.stageLocalSession({ title: 'Story' },'story');
+    await h.loadLocalStory({
       messages: [{ id: 'chosen-message', order: 7, role, content: 'Chosen turn' }], hasEarlier: false,
     });
     const message = h.el('message-list').children.find((node) => node.dataset.messageId === 'chosen-message');
@@ -968,10 +995,8 @@ test('Switching back to a recently opened session reuses its cached messages', a
   const open = async (id) => {
     chat.setSession(id);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const sessionCallback = h.calls.sessionCallbacks.at(-1);
-    sessionCallback?.({ id, exists: () => true, data: () => ({ title: id, nextOrder: 1 }) });
-    const latestCallback = h.calls.latestCallbacks.at(-1);
-    latestCallback?.({ messages: [{ id: `${id}-m`, order: 1, role: 'user', content: id }], hasEarlier: false });
+    h.stageLocalSession({title:id,nextOrder:1},id);
+    await h.loadLocalStory({messages:[{id:`${id}-m`,order:1,role:'user',content:id}]},id);
   };
   await open('story-a');
   await open('story-b');
@@ -1026,9 +1051,9 @@ test('Memory model selector shares saved profiles and saves per story without sw
 });
 test('legacy stories load no lore and memory stories load it once without a listener',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
-  const callback=h.calls.sessionCallbacks.at(-1); callback({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); assert.equal(h.calls.loreSubscriptions ?? 0,0);
-  callback({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ autoUpdate:true } }) }); assert.equal(h.calls.loreSubscriptions ?? 0,0);
-  callback({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ autoUpdate:true },memoryState:{ failureStreak:1 } }) }); assert.equal(h.calls.loreSubscriptions ?? 0,0);
+  h.stageLocalSession({title:'Story'});await h.loadLocalStory({messages:[]});assert.equal(h.calls.loreReads ?? 0,0);
+  h.stageLocalSession({title:'Story',memory:{autoUpdate:true}});await settle();assert.equal(h.calls.loreReads,1);
+  h.stageLocalSession({title:'Story',memory:{autoUpdate:true},memoryState:{failureStreak:1}});await settle();assert.equal(h.calls.loreReads,1);assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
 test('chat turn ledger gives a due or running update priority over auto-summary, while legacy still summarizes',async () => {
   // The harness counts characters as tokens; keep scheduling coverage independent of the default prompt's size.
@@ -1037,8 +1062,8 @@ test('chat turn ledger gives a due or running update priority over auto-summary,
     Object.assign(h.state.settings,{ narratorSystemPrompt:'Narrate.',summarizerSystemPrompt:'Summarize the established events.',modelId:'model',apiKey:'test-key',streaming:false,maxContextTokens:10000,maxResponseTokens:1000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:0 });
     h.calls.memoryDue=mode === 'due'; h.calls.memoryRunning=mode === 'running'; h.calls.messageOrder=4; h.calls.response='A complete reply.';
     chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
-    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',...(mode !== 'legacy' ? { memory:{ autoUpdate:true },memoryState:{ extractedThroughOrder:0 } } : {}) }) });
-    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u1',order:1,role:'user',content:'Opening',tokenCount:7 },{ id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5 },{ id:'u2',order:3,role:'user',content:'Next',tokenCount:4 },{ id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6 }],hasEarlier:false });
+    h.stageLocalSession({ title:'Story',...(mode !== 'legacy' ? { memory:{ autoUpdate:true },memoryState:{ extractedThroughOrder:0 } } : {}) },'story');
+    await h.loadLocalStory({ messages:[{ id:'u1',order:1,role:'user',content:'Opening',tokenCount:7 },{ id:'a1',order:2,role:'assistant',content:'Story',tokenCount:5 },{ id:'u2',order:3,role:'user',content:'Next',tokenCount:4 },{ id:'a2',order:4,role:'assistant',content:'Story2',tokenCount:6 }],hasEarlier:false });
     await Promise.resolve(); h.el('chat-input').value='Continue'; await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
     await new Promise(resolve=>setTimeout(resolve,15));assert.equal(h.calls.requests.length,mode === 'due' ? 1 : 2,mode); assert.equal(h.calls.memoryStarts ?? 0,mode === 'due' ? 1 : 0); assert.equal(h.state.busy,false);
   }
@@ -1052,13 +1077,13 @@ test('Memory panel reloads for another story and prompt defaults hydrate and res
 test('lorebook editor stages canon text and saves only on Save; closing dirty editor asks to discard',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'), { makeEntry }=await h.use('lore-lines.js'), lore=await h.use('ui/lorebook-view.js');
   const card=makeEntry('characters','Mira'); card.sections.appearance.text='Red hair'; h.calls.loreEntries=[card];
-  chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[],hasEarlier:false }); lore.initLorebookView(); lore.openLorebooks(); await new Promise(resolve => setTimeout(resolve,0)); lore.openLorebooks({ entryId:card.id });
+  chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.stageLocalSession({ title:'Story' },'story'); await h.loadLocalStory({ messages:[],hasEarlier:false }); lore.initLorebookView(); lore.openLorebooks(); await new Promise(resolve => setTimeout(resolve,0)); lore.openLorebooks({ entryId:card.id });
   const root=h.el('lorebook-overlay'); const sections=root.querySelectorAll('.lore-section'); const appearance=sections[1].querySelector('textarea'); assert.equal(appearance.value,'Red hair'); appearance.value='Silver hair'; await appearance.dispatchEvent({ type:'input' }); assert.equal(h.calls.cardWrites,undefined);
   h.calls.confirm=false; await root.querySelector('.settings-close').click(); assert.equal(root.classList.contains('hidden'),false);
   const save=root.querySelectorAll('button').find(b => b.textContent === 'Save'); await save.click(); assert.equal(h.calls.cardWrites[0][1].sections.appearance.text,'Silver hair'); assert.equal(h.calls.cardWrites[0][2].sections.appearance.text,'Red hair');
 });
 test('context viewer excludes unsent input and Copy request matches the saved-context preview',async () => {
-  const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story' }) }); h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Opening' }],hasEarlier:false });
+  const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0)); h.stageLocalSession({ title:'Story' },'story'); await h.loadLocalStory({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'Opening' }],hasEarlier:false });
   h.el('chat-input').value='Ask Mira'; viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve => setTimeout(resolve,0)); const root=h.el('context-viewer');await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click(); assert.ok(root.querySelectorAll('p').some(p => p.textContent.includes('excludes unsent input')));
   await root.querySelectorAll('button').find(b => b.textContent === 'Copy request as text').click(); assert.ok(!h.calls.clipboard.includes('Ask Mira'));assert.ok(h.calls.clipboard.includes('Opening')); assert.equal(h.calls.requests.length,0); assert.equal(h.calls.loreSubscriptions ?? 0,0);
 });
@@ -1066,8 +1091,8 @@ test('context viewer excludes unsent input and Copy request matches the saved-co
 test('grouped context viewer lazily reveals exact request text and preserves navigation across refresh',async () => {
   const h=await harness(), chat=await h.use('ui/chat-view.js'), viewer=await h.use('ui/context-viewer.js');
   chat.initChatView(); chat.setSession('story'); await new Promise(resolve=>setTimeout(resolve,0));
-  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
-  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'}, {id:'a',order:2,role:'assistant',content:'Opening'}],hasEarlier:false});
+  h.stageLocalSession({title:'Story'},'story');
+  await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Start'}, {id:'a',order:2,role:'assistant',content:'Opening'}],hasEarlier:false});
   h.el('chat-input').value='<script>Draft as literal text</script>';
   viewer.initContextViewer(); viewer.openContextViewer(); await new Promise(resolve=>setTimeout(resolve,0));
   const root=h.el('context-viewer');await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();const get=key=>root.querySelectorAll('details').find(d=>d.dataset.contextKey===key);
@@ -1097,8 +1122,8 @@ test('grouped context viewer lazily reveals exact request text and preserves nav
   assert.equal(h.calls.clipboard,built.apiMessages.map(m=>'=== '+m.role.toUpperCase()+' ===\n'+m.content).join('\n\n'));
   assert.equal(h.calls.requests.length,0);
   chat.setSession('other');await new Promise(resolve=>setTimeout(resolve,0));
-  h.calls.sessionCallbacks.at(-1)({id:'other',exists:()=>true,data:()=>({title:'Other'})});
-  h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+  h.stageLocalSession({title:'Other'},'other');
+  await h.loadLocalStory({messages:[],hasEarlier:false});
   await h.document.dispatchEvent({type:'session-changed'});await new Promise(resolve=>setTimeout(resolve,0));
   await root.querySelectorAll('button').find(b=>b.textContent==='Calculate current preview').click();
   assert.equal(get('conversation').open,false);
@@ -1128,8 +1153,8 @@ test('narrative AD replies save valid scene state; invalid metadata warns while 
     const h=await harness(),chat=await h.use('ui/chat-view.js');
     Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder=2;
     chat.initChatView();chat.setSession('story');await new Promise(resolve => setTimeout(resolve,0));
-    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',memory:{ scene:true,memoryBlock:true } }) });
-    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },
+    h.stageLocalSession({ title:'Story',memory:{ scene:true,memoryBlock:true } },'story');
+    await h.loadLocalStory({ messages:[{ id:'u',order:1,role:'user',content:'Start' },
       { id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Nera, Mira, Kael',narratorTurn:1 }],hasEarlier:false });
     h.calls.response='Kael leaves the inn.'+(valid ? '\n<scene>'+raw+'</scene>' : '\n<scene_state>Kael left.</scene_state>');
     h.el('chat-input').value='<ad>Continue the scene. Have Kael leave.</ad>';
@@ -1156,8 +1181,8 @@ test('scene recovery runs only on clean narrative failures, preserves narration 
       ? mode==='flagged' ? 'You say, "Leave."' : 'Mira waits by the door.'+(mode==='valid' ? '\n<scene>'+raw+'</scene>' : '')
       : mode==='bad-json' ? '{"extra":true}' : JSON.stringify({ date:'Day 2',time:'night',place:'Inn',present:['Nera','Mira'],planThread:null }); };
     chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
-    h.calls.sessionCallbacks.at(-1)({ id:'story',exists:()=>true,data:()=>({ title:'Story',memory:{ scene:true,sceneFallback:true,protagonist:'Nera' } }) });
-    h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',role:'user',order:1,content:'Start.' },{ id:'a',role:'assistant',order:2,content:'At the inn.',scene:raw }],hasEarlier:false });
+    h.stageLocalSession({ title:'Story',memory:{ scene:true,sceneFallback:true,protagonist:'Nera' } },'story');
+    await h.loadLocalStory({ messages:[{ id:'u',role:'user',order:1,content:'Start.' },{ id:'a',role:'assistant',order:2,content:'At the inn.',scene:raw }],hasEarlier:false });
     h.el('chat-input').value=mode==='ooc' ? '<ooc>Who is here?</ooc>' : 'Continue.';
     await h.el('composer').dispatchEvent({ type:'submit',preventDefault(){} });
     const saved=h.calls.messages.find(c=>c[1].role==='assistant')?.[1];assert.ok(saved,JSON.stringify({messages:h.calls.messages,ui:h.el('message-list').children.map(x=>x.textContent),requests:h.calls.requests.length}));
@@ -1187,8 +1212,8 @@ test('model plan output cannot change fixed author instructions and pure OOC pre
   const h = await harness(), chat = await h.use('ui/chat-view.js');
   Object.assign(h.state.settings,{ modelId:'model',apiKey:'test-key',streaming:false }); h.calls.messageOrder = 2;
   chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
-  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',longTermPlan:'Elise survives',allowLlmPlanUpdates:true,memory:{ scene:true,memoryBlock:true } }) });
-  h.calls.latestCallbacks.at(-1)({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Elise',narratorTurn:1 }],hasEarlier:false });
+  h.stageLocalSession({ title:'Story',longTermPlan:'Elise survives',allowLlmPlanUpdates:true,memory:{ scene:true,memoryBlock:true } },'story');
+  await h.loadLocalStory({ messages:[{ id:'u',order:1,role:'user',content:'Start' },{ id:'a',order:2,role:'assistant',content:'At the inn',scene:'Day 2 · night · Inn · present: Elise',narratorTurn:1 }],hasEarlier:false });
   h.calls.response = 'Liora believes Elise died.\n<plan>Elise dies</plan>\n<plan_thread>Preserve the mystery</plan_thread>\n<scene>Day 9 · noon · Palace · present: Liora</scene>';
   h.el('chat-input').value = '<ooc>What does Liora believe?</ooc>';
   await h.el('composer').dispatchEvent({ type:'submit',preventDefault() {} });
@@ -1204,10 +1229,10 @@ test('cached history reconciles outside recent subscription and unchanged revisi
   const h = await harness(), chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('story'); await new Promise(resolve => setTimeout(resolve,0));
   const all = Array.from({ length:20 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'old '+i,revision:0,narratorTurn:Math.floor(i/2)+1 }));
   h.calls.serverHistory = all;
-  h.calls.sessionCallbacks.at(-1)({ id:'story',exists:() => true,data:() => ({ title:'Story',historyRevision:1 }) });
-  h.calls.latestCallbacks.at(-1)({ messages:all.slice(-4),hasEarlier:true }); await new Promise(resolve => setTimeout(resolve,0));
+  h.stageLocalSession({ title:'Story',historyRevision:1 },'story');
+  await h.loadLocalStory({ messages:all.slice(-4),hasEarlier:true }); await new Promise(resolve => setTimeout(resolve,0));
   const first = await chat.prepareMemorySnapshot(); assert.equal(first.messages[0].content,'old 0');
-  const reads = h.calls.historyReads; await chat.prepareMemorySnapshot(); assert.equal(h.calls.historyReads,reads);
+  const reads = h.calls.historyReads ?? 0; await chat.prepareMemorySnapshot(); assert.equal(h.calls.historyReads,reads);
   h.calls.sessionDocs.story.historyRevision = 2; h.calls.serverHistory = all.map(m => m.id === 'm0' ? { ...m,content:'Edited on another device',revision:1 } : m);
   await (h.calls.settingsDoc ??= h.settings.storedSettings(h.state.settings),chat.syncChatData());const refreshed = await chat.prepareMemorySnapshot(); assert.equal(refreshed.messages[0].content,'Edited on another device'); assert.equal(h.calls.historyReads,reads+1);
 });
@@ -1224,8 +1249,8 @@ test('lower-revision recovered metadata cannot roll back the production cached-s
 async function openImprovementChat(h, metadata = {}, messages = []) {
   const chat = await h.use('ui/chat-view.js'); chat.initChatView(); chat.setSession('improvement');
   await new Promise(resolve => setTimeout(resolve,0));
-  h.calls.sessionCallbacks.at(-1)({ id:'improvement',exists:() => true,data:() => ({ title:'Story',...metadata }) });
-  h.calls.latestCallbacks.at(-1)({ messages,hasEarlier:false });
+  h.stageLocalSession({ title:'Story',...metadata },'improvement');
+  await h.loadLocalStory({ messages,hasEarlier:false });
   Object.assign(h.state.settings,{modelId:'model',apiKey:'key',streaming:false});h.settings.mirrorToActiveProfile(h.state.settings); h.calls.messageOrder=messages.length || 1;
   return chat;
 }
@@ -1485,13 +1510,13 @@ test('composer memory notice advances from next turn through deferred, running a
  const h=await harness(),memory={autoUpdate:true,batchTurns:2,lagTurns:1},memoryState={extractedThroughOrder:0};
  const history=n=>Array.from({length:n*2},(_,i)=>({id:'notice'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Story',narratorTurn:Math.floor(i/2)+1}));
  const chat=await openImprovementChat(h,{memory,memoryState},history(1));
- await chat.seedMessagesFixture({messages:history(1),hasEarlier:false});
+ await h.loadLocalStory({messages:history(1),hasEarlier:false});
  const notice=h.el('composer-memory-status'),box=h.el('composer-box');
  assert.equal(notice.hidden,true);
- await chat.seedMessagesFixture({messages:history(2),hasEarlier:false});
+ await h.loadLocalStory({messages:history(2),hasEarlier:false});
  assert.equal(notice.hidden,false);assert.equal(notice.textContent,'Memory update with next reply.');assert.equal(notice.classList.contains('upcoming'),true);assert.equal(box.classList.contains('memory-updating'),false);
  let toasts=0;h.document.addEventListener('memory-toast',()=>toasts++);
- await chat.seedMessagesFixture({messages:history(3),hasEarlier:false});
+ await h.loadLocalStory({messages:history(3),hasEarlier:false});
  assert.equal(notice.textContent,'Memory update pending.');
  const reads=h.calls.reads,historyReads=h.calls.historyReads,requests=h.calls.requests.length;
  await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'idle'}});
@@ -1503,7 +1528,7 @@ test('composer memory notice advances from next turn through deferred, running a
  h.calls.memoryRunning=false;
  await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'idle'}});
  assert.equal(notice.hidden,true);assert.equal(box.classList.contains('memory-updating'),false);
- await chat.seedMessagesFixture({messages:history(4),hasEarlier:false});
+ await h.loadLocalStory({messages:history(4),hasEarlier:false});
  assert.equal(notice.textContent,'Memory update with next reply.');
  chat.setSession('another-story');assert.equal(notice.hidden,true);assert.equal(notice.classList.contains('upcoming'),false);
 });
@@ -1511,7 +1536,7 @@ test('composer advance notice responds to settings, checkpoints, history edits, 
  const h=await harness(),memory={autoUpdate:true,batchTurns:2,lagTurns:0},memoryState={extractedThroughOrder:0};
  const messages=[{id:'u',order:1,role:'user',content:'Go'},{id:'a',order:2,role:'assistant',content:'Story'}];
  const chat=await openImprovementChat(h,{memory,memoryState},messages);
- await chat.seedMessagesFixture({messages,hasEarlier:false});
+ await h.loadLocalStory({messages,hasEarlier:false});
  const notice=h.el('composer-memory-status');assert.equal(notice.hidden,false);
  const patch=partial=>h.document.dispatchEvent({type:'memory-session-saved',detail:{sessionId:'improvement',partial}});
  for(const partial of [{'memory.autoUpdate':false},{'memory.autoUpdate':true,'memoryState.paused':true},{'memoryState.paused':false,'memoryState.extractedThroughOrder':null}]) {
@@ -1520,8 +1545,8 @@ test('composer advance notice responds to settings, checkpoints, history edits, 
  await patch({'memoryState.extractedThroughOrder':0});assert.equal(notice.hidden,false);
  await patch({'memory.batchTurns':3});assert.equal(notice.hidden,true);
  await patch({'memory.batchTurns':2});assert.equal(notice.hidden,false);
- await chat.seedMessagesFixture({messages:[],hasEarlier:false});assert.equal(notice.hidden,true);
- await chat.seedMessagesFixture({messages,hasEarlier:false});assert.equal(notice.hidden,false);
+ await h.loadLocalStory({messages:[],hasEarlier:false});assert.equal(notice.hidden,true);
+ await h.loadLocalStory({messages,hasEarlier:false});assert.equal(notice.hidden,false);
  await patch({'memoryState.paused':true,'memoryState.failureStreak':3,'memoryState.lastError':'Update failed'});assert.equal(notice.hidden,true);
  h.calls.memoryRunning=true;
  await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'improvement',status:'running'}});
@@ -1534,38 +1559,35 @@ test('historical indexing completion while viewing another story clears its old 
  await phase('running');assert.match(notice.textContent,/Updating search index/);
  chat.setSession('another-story');await new Promise(r=>setTimeout(r,0));await phase('ready');
  chat.setSession('improvement');await new Promise(r=>setTimeout(r,0));
- h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({title:'Story',...metadata})});h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+ h.stageLocalSession({title:'Story',...metadata},'improvement');await h.loadLocalStory({messages:[],hasEarlier:false});
  assert.doesNotMatch(notice.textContent,/Updating search index/);
  await phase('running');assert.match(notice.textContent,/Updating search index/);
  await h.document.dispatchEvent({type:'history-recall-cleared',detail:{owner:'test-user',sid:'another-story'}});assert.match(notice.textContent,/Updating search index/);
  await h.document.dispatchEvent({type:'history-recall-cleared',detail:{owner:'test-user'}});
  assert.doesNotMatch(notice.textContent,/Updating search index/);
 });
-test('composer advance notice stays hidden for incomplete or stale history without fetching history',async()=>{
- const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
- const h=await harness({sources:{'ui/chat-view.js':source+`\nexport function noticeHistoryFixture({revision,earlier,full}){historyMessages=full ? lastMessages : null;historyRevision=revision;hasEarlier=earlier;updateMemoryChip();}`}});
+test('composer advance notice reflects cached completeness while device recovery is delayed without fetching history',async()=>{
  const messages=[{id:'u',order:1,role:'user',content:'Go'},{id:'a',order:2,role:'assistant',content:'Story'}];
- const chat=await openImprovementChat(h,{memory:{autoUpdate:true,batchTurns:2,lagTurns:0},memoryState:{extractedThroughOrder:0},historyRevision:5},messages);
- await chat.seedMessagesFixture({messages,hasEarlier:false});
- const notice=h.el('composer-memory-status');assert.equal(notice.hidden,false);
- const reads=h.calls.historyReads;
- chat.noticeHistoryFixture({revision:5,earlier:true,full:false});assert.equal(notice.hidden,true);
- chat.noticeHistoryFixture({revision:4,earlier:false,full:true});assert.equal(notice.hidden,true);
- chat.noticeHistoryFixture({revision:5,earlier:false,full:false});assert.equal(notice.hidden,false);
- assert.equal(h.calls.historyReads,reads);
+ for(const [full,revision,earlier,hidden] of [[false,5,true,true],[true,4,false,true],[false,5,false,false]]){
+  const recovery=deferred(),cache={session:{id:'story',storageVersion:2,continuityVersion:2,lookupVersion:1,historyRevision:5,memory:{autoUpdate:true,batchTurns:2,lagTurns:0},memoryState:{extractedThroughOrder:0}},recent:messages,history:full?messages:null,historyRevision:revision,hasEarlier:earlier};
+  const h=await harness({deferStorySettings:false,chatCache:{loadChatCache:async()=>cache,loadStoryData:()=>recovery.promise}}),chat=await h.use('ui/chat-view.js');
+  chat.initChatView();chat.setSession('story');await waitForParallel(()=>chat.memorySnapshot());await settle();
+  assert.equal(h.el('composer-memory-status').hidden,hidden);assert.equal(h.calls.historyReads,0);
+  chat.setSession(null);recovery.resolve(null);
+ }
 });
 test('memory failure details appear on the first failure in the toast and settings panel',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
  const lastError='A memory note was empty or longer than 400 characters. No turns were marked updated.';
  const story={title:'Story',memory:{autoUpdate:true},memoryState:{extractedThroughOrder:0,failureStreak:1,paused:false,lastError}};
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});
+ h.stageLocalSession(story,'story');await h.loadLocalStory({messages:[]});
  let detail;h.document.addEventListener('memory-toast',e=>{detail=e.detail;});
  await h.document.dispatchEvent({type:'memory-status',detail:{sessionId:'story',status:'failed',failureStreak:1,lastError}});
  assert.match(detail.text,/400 characters/);assert.equal(detail.action,'Open settings');
  const panel=await h.use('ui/memory-settings-view.js');panel.fillMemory(story.memory);
  assert.match(h.el('mem-update-status').textContent,/Last update failed:.*400 characters/);
  story.memoryState={...story.memoryState,paused:true,failureStreak:3};
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>story});panel.updateMemorySettingsHints();
+ h.stageLocalSession(story,'story');panel.updateMemorySettingsHints();
  assert.match(h.el('mem-update-status').textContent,/Paused.*400 characters/);
 });
 
@@ -1578,7 +1600,7 @@ test('U4 rendered message comparison tracks scene/review fields and memoizes tur
 test('Final twenty-turn replay keeps narration plus maintenance at two calls and uses no separate reconciliation read on ordinary sends',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js');Object.assign(h.state.settings,{modelId:'test',apiKey:'fixture-key',narratorSystemPrompt:'Narrate.',streaming:false,maxContextTokens:50000,maxResponseTokens:2000,autoSummarizationEnabled:true,autoSummaryThresholdPercent:1,keepRecentMessagesAfterSummary:2});
  const scene='date: Day 1 · time: night · place: Inn · present: Mira';h.calls.messageOrder=2;h.calls.sessionDocs={story:{id:'story',title:'Story',storySettingsRevision:1,memory:{scene:true,sceneFallback:true,autoUpdate:true},memoryState:{extractedThroughOrder:0},historyRevision:0}};
- chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>h.calls.sessionDocs.story});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene}],hasEarlier:false});
+ chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));h.stageLocalSession(h.calls.sessionDocs.story,'story');await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Opening'},{id:'a',order:2,role:'assistant',content:'Mira waits.',scene}],hasEarlier:false});
  const rows=[];let totalCalls=0;for(let turn=0;turn<20;turn++){
   const before=h.calls.requests.length,memoryBefore=h.calls.memoryStarts ?? 0,readsBefore=h.calls.sessionReads ?? 0;h.calls.memoryDue=turn%2===0;
   h.calls.onRequest=()=>{const body=h.calls.requests.at(-1);h.calls.response=body.response_format ? JSON.stringify({date:'Day 1',time:'night',place:'Inn',present:['Mira'],planThread:null}) : body.messages.at(-1).content.includes('New events to fold in:') ? 'Mira remains at the inn.' : 'Mira waits by the door.'+(turn%3 ? '\n<scene>'+scene+'</scene>' : '');};
@@ -1611,8 +1633,8 @@ test('main adaptation: mobile editor grows with text and releases the fixed bubb
  const h=await harness(),chat=await h.use('ui/chat-view.js');const create=h.document.createElement;
  h.document.createElement=tag=>{const node=create(tag);if(tag==='textarea'){node.scrollHeight=900;node.clientHeight=40;}return node;};
  chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});
- h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Long message'}],hasEarlier:false});
+ h.stageLocalSession({title:'Story'},'story');
+ await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Long message'}],hasEarlier:false});
  const bubble=h.el('message-list').children.find(node=>node.dataset.messageId==='u');
  await bubble.querySelector('.message-menu-panel').children.find(button=>button.textContent==='Edit').click();
  const editor=bubble.querySelector('.msg-editor');assert.equal(editor.style.height,'900px');assert.equal(bubble.style.height,'');
@@ -1624,12 +1646,12 @@ test('main adaptation: logout waits for started cache writes and prevents new sc
  const writes=[],scheduled=new Map();let finishWrite,sequence=0;
  const h=await harness({chatCache:{loadChatCache:async()=>null,saveChatCache:(uid,sid)=>{writes.push([uid,sid]);return new Promise(resolve=>{finishWrite=resolve;});},deleteChatCache:async()=>{}},timers:{setTimeout:(fn,ms)=>{const id=++sequence;scheduled.set(id,{fn,ms});return id;},clearTimeout:id=>scheduled.delete(id)}});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('one');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'one',exists:()=>true,data:()=>({title:'One'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Opening'}],hasEarlier:false});
+ h.stageLocalSession({title:'One'},'one');await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Opening'}],hasEarlier:false});
  chat.setSession('two');assert.equal(writes.length,1);
  let ready=false;const prepared=chat.prepareChatLogout().then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,false);
  finishWrite();await prepared;assert.equal(ready,true);
  await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'two',exists:()=>true,data:()=>({title:'Two'})});h.calls.latestCallbacks.at(-1)({messages:[],hasEarlier:false});
+ h.stageLocalSession({title:'Two'},'two');await settle();
  for(const {fn,ms} of [...scheduled.values()])if(ms===1000)fn();
  assert.equal(writes.length,1);assert.equal([...scheduled.values()].some(timer=>timer.ms===1000),false);
 });
@@ -1807,9 +1829,10 @@ async function rewriteChatHarness() {
   const chat = await h.use('ui/chat-view.js');
   chat.initChatView(); chat.setSession('story');
   await new Promise(resolve => setTimeout(resolve, 0));
-  h.calls.sessionCallbacks.at(-1)({ id: 'story', exists: () => true, data: () => ({ title: 'Story' }) });
-  h.calls.latestCallbacks.at(-1)({ messages: [], hasEarlier: false });
+  h.stageLocalSession({ title: 'Story' },'story');
+  await h.loadLocalStory({ messages: [], hasEarlier: false });
   Object.assign(h.state.settings, { modelId: 'rewrite-model', apiKey: 'key', streaming: false, rewriteSystemPrompt: 'Expand', rewriteRecentMessages: 0 });
+  await (await h.use('story-settings-store.js')).saveStorySettings('story',h.state.storySettings.values,{rewriteSystemPrompt:'Expand',rewriteRecentMessages:0});
   h.el('chat-input').value = 'I tell him about the story';
   await h.fire('chat-input', 'input');
   return { ...h, chat };
@@ -1961,10 +1984,9 @@ test('saving shared settings preserves a genuinely unsaved story prompt and its 
  await h.fire('nav-prompts');await h.fire('btn-save-settings');assert.equal(h.state.storySettings.values.narratorSystemPrompt,'Still an unsaved prompt');
  await h.fire('btn-close-settings');assert.equal(h.el('settings-tab').classList.contains('hidden'),true);
 });
-test('MAIN merge stops a rewrite during history loading without a model call',async()=>{
+test('MAIN merge stops a rewrite during local request preparation without a model call',async()=>{
  const h=await rewriteChatHarness();h.state.settings.rewriteRecentMessages=10;let release,started;const ready=new Promise(resolve=>started=resolve);
- h.calls.onHistoryRead=()=>{started();return new Promise(resolve=>release=resolve);};
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:1})});
+ h.calls.onTokenCount=text=>text==='Expand' ? (started(),new Promise(resolve=>release=()=>resolve(text.length))) : text.length;
  const running=h.fire('btn-rewrite');await ready;h.flushFrames();await h.fire('btn-rewrite');await running;
  assert.equal(h.state.busy,false);assert.equal(h.el('chat-input').value,'I tell him about the story');assert.equal(h.calls.requests.length,0);release();
 });
@@ -1986,7 +2008,7 @@ test('F3 missing tags store exactly one carry warning or recover reasoning witho
  for(const thinking of [null,'Scene tag: date: October 738 · time: evening · place: Hall · present: Mira']){
   const h=await harness();await openImprovementChat(h,{memory:{scene:true,sceneFallback:true}},[{id:'u',order:1,role:'user',content:'Begin.'}]);
   // Recovery is disabled for carry case so it does not make a paid fallback.
-  if(!thinking){h.calls.sessionDocs.improvement.memory.sceneFallback=false;h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>h.calls.sessionDocs.improvement});}
+  if(!thinking){h.calls.sessionDocs.improvement.memory.sceneFallback=false;h.stageLocalSession(h.calls.sessionDocs.improvement,'improvement');}
   h.calls.responseData={choices:[{message:{content:'Mira waited.',reasoning:thinking}}]};
   await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Retry reply').click();
   const saved=h.calls.messages.find(c=>c[1].role==='assistant')[1];
@@ -2025,9 +2047,9 @@ test('E14 recent-window setting states that it counts user and reply messages',a
  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');assert.match(html,/Keep recent messages \(user \+ reply\) after summary/);
 });
 
-test('F6 all summary application paths show lint warnings without gating acceptance',async()=>{
- const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');const h=await harness({sources:{'ui/chat-view.js':source+'\nexport {applySummaryResult as testApplySummaryResult};'}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
- chat.testApplySummaryResult({skipped:true,lintWarnings:[{line:1},{line:2}]});assert.ok(h.el('message-list').children.some(n=>n.textContent==='Summary has 2 suspect lines — review it in the summary editor.'));assert.equal(chat.memorySnapshot().session.memoryState?.paused,undefined);
+test('F6 manual summary application shows lint warnings without gating acceptance',async()=>{
+ const h=await harness({extraStubs:{'summarizer.js':{runSummarization:async()=>({skipped:true,lintWarnings:[{line:1},{line:2}]}),planSummary:async()=>({})}}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
+ await h.fire('btn-summarize');assert.ok(h.el('message-list').children.some(n=>n.textContent==='Summary has 2 suspect lines — review it in the summary editor.'));assert.equal(chat.memorySnapshot().session.memoryState?.paused,undefined);
 });
 
 for(const full of [false,true])test(`Manual ${full?'full-history':'normal'} summary Stop keeps the active checkpoint and discards unfinished output`,async()=>{
@@ -2045,14 +2067,14 @@ test('Stale scene confirmation opens carried values and dismissing makes no mode
  const before=JSON.stringify(h.calls.history);await notice.querySelectorAll('button').find(b=>b.textContent==='Confirm scene').click();
  const latest=root.children.find(row=>row.dataset.messageId==='c');assert.equal(latest.querySelector('input').value,raw);await latest.querySelectorAll('button').find(b=>b.textContent==='Cancel').click();assert.equal(JSON.stringify(h.calls.history),before);assert.equal(h.calls.requests.length,0);
  // A fresh render displays the confirmation again until explicitly dismissed.
- h.calls.latestCallbacks.at(-1)({messages:history.map(m=>({...m,content:m.content+' '})),hasEarlier:false});
+ await h.loadLocalStory({messages:history.map(m=>({...m,content:m.content+' '})),hasEarlier:false});
  const dismiss=root.querySelector('.scene-stale-confirm').querySelectorAll('button').find(b=>b.textContent==='Dismiss');await dismiss.click();assert.equal(root.querySelector('.scene-stale-confirm'),null);assert.equal(h.calls.requests.length,0);assert.equal(h.calls.messages.length,0);
 });
 
 async function continueChatHarness({scene=false}={}) {
   const h=await rewriteChatHarness();
-  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'<OOC>Explain this</OOC>'},{id:'a',order:2,role:'assistant',content:'Saved prefix.  ',thinking:'Earlier thinking',narratorTurn:1,...(scene ? {scene:'date: Day 1 · time: night · place: Inn · present: Nera'} : {})}],hasEarlier:false});
-  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene,sceneFallback:false}})});
+  await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'<OOC>Explain this</OOC>'},{id:'a',order:2,role:'assistant',content:'Saved prefix.  ',thinking:'Earlier thinking',narratorTurn:1,...(scene ? {scene:'date: Day 1 · time: night · place: Inn · present: Nera'} : {})}],hasEarlier:false});
+  h.stageLocalSession({title:'Story',memory:{scene,sceneFallback:false}},'story');
   h.el('chat-input').value='  ';await h.fire('chat-input','input');h.calls.response='New passage.';
   return h;
 }
@@ -2079,8 +2101,8 @@ test('Repeated Continue and Regenerate replace only the newest passage',async()=
   assert.ok(h.calls.requests.at(-1).messages.some(m=>m.role==='assistant' && m.content.includes('New passage.') && !m.content.includes('Second passage.')));
 });
 test('Continue disables at summary checkpoint, while editing and with non-assistant latest turn',async()=>{
-  const h=await continueChatHarness();h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',breakpointOrder:2})});assert.equal(h.el('btn-rewrite').disabled,true);
-  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:3,role:'user',content:'Waiting'}],hasEarlier:false});assert.equal(h.el('btn-rewrite').disabled,true);
+  const h=await continueChatHarness();h.stageLocalSession({title:'Story',breakpointOrder:2},'story');assert.equal(h.el('btn-rewrite').disabled,true);
+  h.stageLocalSession({title:'Story'},'story');await h.loadLocalStory({messages:[{id:'u',order:3,role:'user',content:'Waiting'}],hasEarlier:false});assert.equal(h.el('btn-rewrite').disabled,true);
   h.el('chat-input').value='Rewrite me';await h.fire('chat-input','input');assert.equal(h.el('btn-rewrite').textContent,'Rewrite');assert.equal(h.el('btn-rewrite').disabled,false);
 });
 test('Continue uses ending scene rather than interpreting the old OOC directive',async()=>{
@@ -2209,7 +2231,7 @@ test('Context indicator excludes unsent input, skips typing recounts, and refres
   h.el('chat-input').value='First draft';await h.fire('chat-input','input');const continuations=tracker.continuations;
   h.el('chat-input').value='Latest draft\nwith more text';await h.fire('chat-input','input');assert.equal(tracker.continuations,continuations);
   await chat.updateIndicator();await h.document.dispatchEvent({type:'settings-changed'});
-  h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Remote opening update.'}],hasEarlier:false});
+  await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Remote opening update.'}],hasEarlier:false});
   await new Promise(r=>setImmediate(r));assert.equal(tracker.drafts.length,0);assert.equal(h.el('context-label').textContent,previous);
   // Explicit refresh may run while focused, but never includes the draft.
   for(const [id,j]of [...jobs])if(j.ms===300){jobs.delete(id);j.fn();}
@@ -2231,8 +2253,8 @@ test('Context indicator excludes unsent input, skips typing recounts, and refres
 async function oldMessageEditor({read, save}={}) {
   const h=await harness(), chat=await h.use('ui/chat-view.js');
   chat.initChatView(); chat.setSession('story'); await new Promise(resolve=>setTimeout(resolve,0));
-  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:2})});
-  h.calls.latestCallbacks.at(-1)({messages:[{id:'old',role:'user',order:1,content:'Cached old turn',revision:0},{id:'last',role:'assistant',order:200,content:'Newest reply'}],hasEarlier:true});
+  h.stageLocalSession({title:'Story',historyRevision:2},'story');
+  await h.loadLocalStory({messages:[{id:'old',role:'user',order:1,content:'Cached old turn',revision:0},{id:'last',role:'assistant',order:200,content:'Newest reply'}],hasEarlier:true});
   h.calls.serverHistory=[{id:'old',role:'user',order:1,content:'Current server turn',revision:2},{id:'last',role:'assistant',order:200,content:'Newest reply'}];
   if(read)h.calls.getMessageForEdit=read;
   if(save)h.calls.editMessage=save;
@@ -2267,10 +2289,10 @@ test('Edit focuses an editable field synchronously and keeps it editable during 
 
 test('Deleted-turn lore warning completes without loading full history',async()=>{
   const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
-  h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',historyRevision:2})});
-  h.calls.latestCallbacks.at(-1)({messages:[{id:'a',role:'assistant',order:200,content:'Delete me'}],hasEarlier:true});
+  h.stageLocalSession({title:'Story',historyRevision:2},'story');
+  await h.loadLocalStory({messages:[{id:'a',role:'assistant',order:200,content:'Delete me'}],hasEarlier:true});
   await h.document.dispatchEvent({type:'lorebook-visibility',detail:{open:true}});
-  h.calls.loreCallbacks.at(-1)([{id:'mira',book:'characters',name:'Mira',sections:{notes:{text:'',lines:[{id:'note',text:'A fact',src:200}]}}}]);
+  await h.publishLore([{id:'mira',book:'characters',name:'Mira',sections:{notes:{text:'',lines:[{id:'note',text:'A fact',src:200}]}}}]);
   const before=h.calls.historyReads ?? 0;
   let warning;h.document.addEventListener('memory-toast',event=>{warning=event.detail;});
   const bubble=h.el('message-list').children.find(n=>n.dataset.messageId==='a');
@@ -2302,20 +2324,19 @@ test('save-first Send uses loaded local prompts despite a newer settings revisio
 
 test('background memory status changes while building context do not cancel a saved Send',async()=>{
  const source=await readFile(new URL('../js/context-builder.js',import.meta.url),'utf8');let h,changed=false;
- h=await harness({globals:{changeMemoryStatus:()=>{if(changed)return;changed=true;h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,memoryState:{failureStreak:1,lastError:'Background status'}})});}},sources:{'context-builder.js':source.replace('export async function buildContextForRequest(', 'async function capturedBuildContext(')+`
+ h=await harness({globals:{changeMemoryStatus:()=>{if(changed)return;changed=true;h.stageLocalSession({...h.calls.sessionDocs.improvement,memoryState:{failureStreak:1,lastError:'Background status'}},h.state.sessionId);}},sources:{'context-builder.js':source.replace('export async function buildContextForRequest(', 'async function capturedBuildContext(')+`
 export async function buildContextForRequest(...args){const result=await capturedBuildContext(...args);globalThis.changeMemoryStatus();return result;}
 `}});
  await openImprovementChat(h,{},[{id:'u',role:'user',order:1,content:'Opening'}]);h.el('chat-input').value='Continue';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
  assert.equal(changed,true);assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);
 });
 
-test('history changes during a read do not repeat the bulk download or label it as newer history',async()=>{
- const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8');
- const h=await harness({sources:{'ui/chat-view.js':source+`
-export async function readHistoryOnceFixture(){historyMessages=null;historyRevision=null;return ensureHistory(true);}`}}),chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Cached'}]);await settle();
- const before=h.calls.historyReads ?? 0;h.calls.serverHistory=[{id:'server',role:'assistant',order:1,content:'Captured history'}];
- h.calls.onHistoryRead=()=>h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,historyRevision:(h.calls.sessionDocs.improvement.historyRevision ?? 0)+1})});
- const messages=await chat.readHistoryOnceFixture();assert.equal(h.calls.historyReads,before+1);assert.equal(messages[0].content,'Captured history');assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(h.state.busy,false);
+test('Sync reads changing history once and preserves a coherent local revision',async()=>{
+ const h=await harness(),chat=await openImprovementChat(h,{},[{id:'old',role:'assistant',order:1,content:'Cached'}]);await settle();
+ const before=h.calls.historyReads;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.serverHistory=[{id:'server',role:'assistant',order:1,content:'Captured history'}];
+ h.calls.onHistoryRead=()=>h.stageLocalSession({...h.calls.sessionDocs.improvement,historyRevision:1},h.state.sessionId);
+ const result=await chat.syncChatData();assert.equal(h.calls.historyReads,before+1);
+ assert.equal(result,false);assert.equal(chat.memorySnapshot().messages[0].content,'Cached');assert.equal(h.state.busy,false);
 });
 test('save-first Send preserves automatic memory-start initialization',async()=>{
   const h=await harness();const chat=await openImprovementChat(h,{storySettingsRevision:1,memory:{autoUpdate:true,lagTurns:2},memoryState:{}},[]);
@@ -2327,7 +2348,7 @@ test('save-first Send preserves automatic memory-start initialization',async()=>
 test('save-first Send preserves newer subscription metadata at the committed history revision',async()=>{
   const {h,chat,before,send}=await sendFixture();
   h.calls.onMessageSaved=result=>{
-    if(result.role==='user')h.calls.sessionCallbacks.at(-1)({id:'improvement',exists:()=>true,data:()=>({...result.session,title:'Newer title'})});
+    if(result.role==='user')h.stageLocalSession({...result.session,title:'Newer title'},'improvement');
   };
   await send();assert.equal(h.calls.sessionReads ?? 0,before.story);assert.equal(h.calls.requests.length,1);assert.equal(chat.memorySnapshot().session.title,'Newer title');
 });
@@ -2336,7 +2357,7 @@ async function bookPreview({book='characters',mode='merge',empty=false}={}) {
  const ctx=await cardUI(),{h,f,l,lore,root}=ctx;
  const fact=l.makeEntry('facts','World'),closed=l.makeEntry('events','Closed quest',{kind:'thread',status:'closed'}),timeline=l.makeEntry('events','Timeline',{kind:'timeline'});
  const scheduled=l.makeEntry('plan','Festival',{schedule:{start:'21/10/738',end:'22/10/738',status:'pending',phases:[]}});scheduled.sections.text.text='Keep the invitation pending.';
- h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ h.calls.loreEntries=[ctx.card,ctx.other,fact,closed,timeline,scheduled];await h.publishLore(h.calls.loreEntries);
  lore.openLorebooks({screen:'list',book});await (await menuAction(h,root,'Import book…')).click();
  const selects=root.querySelectorAll('select');assert.equal(selects[0].value,'merge');assert.equal(selects[1].value,'mine');selects[0].value=mode;
  await namedButton(root,'Paste text').click();const paste=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);paste.querySelector('textarea').value=f.toJson(empty?[]:h.calls.loreEntries,{books:empty?[book]:undefined});await namedButton(paste,'Read').click();
@@ -2348,7 +2369,7 @@ for(const book of ['characters','locations','facts','events','plan'])test('categ
 });
 for(const change of ['lore','choices','story','account','category','close'])test('book preview rejects '+change+' changes',async()=>{
  const {h,lore,root,preview}=await bookPreview();const importButton=namedButton(preview,'Import');
- if(change==='lore'){h.calls.loreEntries[0].name='Changed';for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);}
+ if(change==='lore'){h.calls.loreEntries[0].name='Changed';await h.publishLore(h.calls.loreEntries);}
  if(change==='choices')root.querySelectorAll('select')[0].value='replace';
  if(change==='story')h.state.sessionId='another';
  if(change==='account')h.calls.uid='another';
@@ -2363,7 +2384,7 @@ for(const book of ['characters','locations','facts','events','plan'])for(const f
  const {h,l,f,lore,root,card,other}=await cardUI(),exports=[];
  const timeline=l.makeEntry('events','Timeline',{kind:'timeline'}),closed=l.makeEntry('events','Closed',{kind:'thread',status:'closed'}),open=l.makeEntry('events','Open',{kind:'thread',status:'open'}),fact=l.makeEntry('facts','World'),place=l.makeEntry('locations','Inn');
  const scheduled=l.makeEntry('plan','Festival',{schedule:{start:'21/10/738',end:'22/10/738',status:'pending',phases:[]}});scheduled.sections.text.text='Keep the invitation pending.';
- h.calls.loreEntries=[card,other,timeline,closed,open,fact,place,scheduled];for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ h.calls.loreEntries=[card,other,timeline,closed,open,fact,place,scheduled];await h.publishLore(h.calls.loreEntries);
  lore.openLorebooks({screen:'list',book,filter:'always'});const search=root.querySelector('input');search.value='No match';await search.dispatchEvent({type:'input'});
  const create=h.document.createElement;h.document.createElement=tag=>{const e=create(tag);if(tag==='a')e.click=async()=>exports.push({name:e.download,text:await (await fetch(e.href)).text()});return e;};
  await (await menuAction(h,root,'Export book…')).click();const dialog=h.document.body.querySelectorAll('.memory-sub-sheet').at(-1);const select=dialog.querySelector('select');select.value=format;await select.dispatchEvent({type:'change'});await namedButton(dialog,'Export book').click();await new Promise(r=>setImmediate(r));
@@ -2431,9 +2452,9 @@ test(`numeric scene collection ${time} via ${mode} survives reload and next requ
  Object.assign(h.state.settings,{modelId:'model',apiKey:'fixture',streaming:mode==='stream'});
  h.calls.messageOrder=2;
  chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene:true,sceneFallback:true}})});
+ h.stageLocalSession({title:'Story',memory:{scene:true,sceneFallback:true}},'story');
  const old={id:'a',order:2,role:'assistant',content:'At the inn.',scene:'date: 21 October 738 · time: 15:40 · place: Inn · present: Mira'};
- h.calls.latestCallbacks.at(-1)({messages:[{id:'u',role:'user',order:1,content:'Start.'},old],hasEarlier:false});
+ await h.loadLocalStory({messages:[{id:'u',role:'user',order:1,content:'Start.'},old],hasEarlier:false});
  h.calls.onRequest=()=>{
   if(mode==='thinking') h.calls.responseData={choices:[{message:{content:prose,reasoning:'Scene tag: '+raw}}]};
   else if(mode==='recovery') h.calls.response=h.calls.requests.length===1?prose:JSON.stringify({date:'21/10/738',time,place:'Inn',present:['Mira'],planThread:null});
@@ -2466,8 +2487,8 @@ test('Director-mode Send saves the player first, persists the contract before na
  h=await harness({extraStubs:{'director-store.js':{discardPendingDirector:async()=>{},getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn,source)=>{assert.equal(h.calls.messages.filter(c=>c[1].role==='user').length,1);pending={...turn,source,status:'pending'};return pending;}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'director-profile',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'narrator-profile',profiles:[{id:'narrator-profile',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'director-profile',endpoint:'https://director.test',apiKey:'small-key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,memory:{scene:true}})});
- h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'At dinner',scene:'date: 21/10/738 · time: Hour 20 · place: Inn · present: Nera'}],hasEarlier:false});h.calls.messageOrder=2;
+ h.stageLocalSession({title:'Story',directorState:seed,memory:{scene:true}},'story');
+ await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Start'},{id:'a',order:2,role:'assistant',content:'At dinner',scene:'date: 21/10/738 · time: Hour 20 · place: Inn · present: Nera'}],hasEarlier:false});h.calls.messageOrder=2;
  h.calls.onRequest=body=>{if(body.model==='director'){assert.equal(pending,null);h.calls.response=JSON.stringify({version:1,action:'narrate',transition:'completed',objective:'Finish dinner',stopCondition:'Stop before the next player action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'21:00'}}});}else{assert.ok(pending);h.calls.response='The plates are cleared.\n<scene>date: 22/10/738 · time: Hour 4 · place: Palace · present: Stranger</scene>';}};
  h.el('chat-input').value='Finish dinner';await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
  assert.equal(h.calls.requests.length,2,JSON.stringify({pending,requests:h.calls.requests.map(r=>r.model),messages:h.el('message-list').children.map(n=>n.textContent)}));assert.equal(h.calls.requests[0].model,'director');assert.equal(h.calls.requests[1].model,'narrator');
@@ -2481,8 +2502,8 @@ test('Cut-off Director Re-plan preserves the original reply and provides Continu
  h=await harness({extraStubs:{'director-store.js':{getDirectorTurn:async(_sid,id)=>id===old.id?old:pending,savePendingDirectorTurn:async(_sid,t,source)=>{pending={...t,status:'pending',source};h.calls.sessionDocs.story.directorPending=t.id;return pending;},discardPendingDirector:async()=>{}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:false,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,activeProfileId:'large',profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,directorCheckpoint:old.id,memory:{scene:true}})});
- h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Dinner'},{id:'a',order:2,role:'assistant',content:'Original dinner reply',directorTurnId:old.id,narratorTurn:1}],hasEarlier:false});
+ h.stageLocalSession({title:'Story',directorState:seed,directorCheckpoint:old.id,memory:{scene:true}},'story');
+ await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Dinner'},{id:'a',order:2,role:'assistant',content:'Original dinner reply',directorTurnId:old.id,narratorTurn:1}],hasEarlier:false});
  h.calls.onRequest=body=>{h.calls.responseData={choices:[{message:{content:body.model==='director'?JSON.stringify({...old.contract,updates:{scene:{time:'21:00'}}}):'Incomplete replacement'},finish_reason:body.model==='director'?'stop':'length'}]};};
  await h.el('message-list').querySelectorAll('button').find(b=>b.textContent==='Re-plan').click();
  for(let i=0;i<100 && h.state.busy;i++)await new Promise(resolve=>setTimeout(resolve,0));
@@ -2582,14 +2603,13 @@ test('Returning to a story displays pending edits without leaking them into anot
  h.calls.editMessage=()=>new Promise(()=>{});
  const local=await h.use('local-story-store.js'),store=local.storyStore('improvement');
  chat.setSession('other');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'other',data:()=>({title:'Other story'})});
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'shared',order:1,role:'user',content:'Other story action'}],hasEarlier:false});
+ h.stageLocalSession({title:'Other story'},'other');
+ await h.loadLocalStory({messages:[{id:'shared',order:1,role:'user',content:'Other story action'}],hasEarlier:false});
  store.enqueue('edit',{id:'shared',order:1,content:'Pending original story correction',expectedRevision:0});
  assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Other story action'));
  assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Pending original story correction'));
  chat.setSession('improvement');await new Promise(resolve=>setTimeout(resolve,0));
- h.calls.sessionCallbacks.at(-1)({id:'improvement',data:()=>({title:'Story',historyRevision:0})});
- await h.calls.latestCallbacks.at(-1)({messages,hasEarlier:false});await new Promise(resolve=>setImmediate(resolve));
+ await waitForParallel(()=>chat.memorySnapshot()?.messages.some(m=>m.content==='Pending original story correction'));
  assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent==='Pending original story correction'));
  assert.equal(local.storyStore('improvement'),store);assert.equal(store.status.pending,1);
 });
@@ -2653,8 +2673,8 @@ for(const stage of ['director','narrator'])test('Cancel during '+stage+' release
  h=await harness({extraStubs:{'director-store.js':{getDirectorTurn:async()=>pending,savePendingDirectorTurn:async(_sid,turn,source)=>{pending={...turn,source,status:'pending'};return pending;},discardPendingDirector:async()=>{pending=null;}}}});
  Object.assign(h.state.settings,{modelId:'narrator',apiKey:'key',streaming:true,narrationMode:'director',directorProfileId:'small',directorMaxInputTokens:20000,directorMaxOutputTokens:4000,directorRecentTurns:5,profiles:[{id:'large',endpoint:'https://narrator.test',apiKey:'key',modelId:'narrator'},{id:'small',endpoint:'https://director.test',apiKey:'key',modelId:'director'}]});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',directorState:seed,memory:{scene:true,protagonist:'Nera'}})});
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Look around'}],hasEarlier:false});
+ h.stageLocalSession({title:'Story',directorState:seed,memory:{scene:true,protagonist:'Nera'}},'story');
+ await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Look around'}],hasEarlier:false});
  h.calls.onMessageSaved=result=>{if(result.role==='assistant' && result.directorTurnId)Object.assign(result.session,{directorState:{...seed,scene:{...seed.scene,time:'21:00'}},directorRevision:1,directorCheckpoint:result.directorTurnId,directorPending:null,directorNeedsReview:false,directorStateHistoryOrder:result.order});};
  const contract={version:1,action:'narrate',transition:'completed',objective:'Describe the room',stopCondition:'Stop before the next voluntary action',memoryIds:[],requiredMemoryIds:[],updates:{scene:{time:'21:00'}}};
  h.calls.onRequest=async body=>{if(body.model==='director'){if(stage==='director')await new Promise(resolve=>finishDirector=resolve);h.calls.response=JSON.stringify(contract);}};
@@ -2670,8 +2690,8 @@ for(const stage of ['director','narrator'])test('Cancel during '+stage+' release
 
 test('A page reload keeps cached history until explicit Sync',async()=>{
  const h=await harness({globals:{performance:{getEntriesByType:()=>[{type:'reload'}]}}}),chat=await h.use('ui/chat-view.js');h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));
- h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story'})});h.calls.serverHistory=[{id:'u',order:1,role:'user',content:'Fresh server history'}];
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'u',order:1,role:'user',content:'Cached history'}],hasEarlier:false});await settle();
+ h.stageLocalSession({title:'Story'},'story');h.calls.serverHistory=[{id:'u',order:1,role:'user',content:'Fresh server history'}];
+ await h.loadLocalStory({messages:[{id:'u',order:1,role:'user',content:'Cached history'}],hasEarlier:false});await settle();
  assert.equal(chat.memorySnapshot().messages[0].content,'Cached history');assert.equal(h.calls.historyReads ?? 0,0);assert.equal(h.state.busy,false);
  assert.equal(await chat.syncChatData(),true);assert.equal(chat.memorySnapshot().messages[0].content,'Fresh server history');assert.equal(h.calls.historyReads,1);assert.equal(h.calls.requests.length,0);
 });
@@ -2895,7 +2915,7 @@ test('Legacy Hour 24 live-state review requires an explicit modern date and cloc
 test('Editing an effectively expired thread preserves the raw saved baseline until an explicit lifecycle action',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js'),{makeEntry}=await h.use('lore-lines.js'),lore=await h.use('ui/lorebook-view.js');
  const card=makeEntry('events','Visit Lysia',{id:'visit',kind:'thread',status:'open'});card.threadMeta={kind:'appointment',dueDate:'24/10/738',dueTime:'08:00',participants:['Lysia'],location:'Inn',outcome:null};h.calls.loreEntries=[card];
- chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));h.calls.sessionCallbacks.at(-1)({id:'story',exists:()=>true,data:()=>({title:'Story',memory:{scene:true,lorebooks:true}})});h.calls.latestCallbacks.at(-1)({messages:[{id:'a',order:1,role:'assistant',content:'The morning passes.',scene:'date: 28/10/738 · time: 09:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}],hasEarlier:false});
+ chat.initChatView();chat.setSession('story');await new Promise(r=>setTimeout(r,0));h.stageLocalSession({title:'Story',memory:{scene:true,lorebooks:true}},'story');await h.loadLocalStory({messages:[{id:'a',order:1,role:'assistant',content:'The morning passes.',scene:'date: 28/10/738 · time: 09:00 · place: Inn · present: Nera',sceneMeta:{kind:'manual'}}],hasEarlier:false});
  lore.initLorebookView();lore.openLorebooks();await new Promise(r=>setTimeout(r,0));lore.openLorebooks({entryId:'visit'});
  const root=h.el('lorebook-overlay');assert.ok(namedButton(root,'Reopen as ongoing'));const title=root.querySelectorAll('input').find(i=>i.value==='Visit Lysia');title.value='Meeting with Lysia';await title.dispatchEvent({type:'input'});await namedButton(root,'Save').click();
  const [,staged,base]=h.calls.cardWrites.at(-1);assert.equal(base.status,'open');assert.equal(staged.status,'open');assert.equal(staged.threadMeta.outcome,null);assert.equal(staged.name,'Meeting with Lysia');
@@ -2903,7 +2923,7 @@ test('Editing an effectively expired thread preserves the raw saved baseline unt
 
 test('character importance editor defaults old cards to Minor and saves manual selection',async()=>{
  const {h,lore,card,root}=await cardUI();delete card.importance;
- for(const cb of h.calls.loreCallbacks ?? [])cb(h.calls.loreEntries);
+ await h.publishLore(h.calls.loreEntries);
  lore.openLorebooks({entryId:card.id});
  const select=root.querySelectorAll('select').find(s=>s.attributes?.['aria-label']==='Importance');
  assert.ok(select);assert.equal(select.value,'3');assert.equal(select.children.length,4);
@@ -3084,8 +3104,8 @@ test('Sync resolves a persisted stale-save conflict after reload and removes dep
    const guard=await h.use('continuity.js');h.calls.onMessageSave=async(_sid,_message,options)=>guard.assertSource(remote,options.expectedSource);
    const chat=await h.use('ui/chat-view.js');h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);chat.initChatView();chat.setSession(sid);await new Promise(r=>setTimeout(r,0));
    const cached=await cache.loadChatCache(uid,sid);
-   h.calls.sessionCallbacks.at(-1)({id:sid,data:()=>cached.session});h.calls.sessionDocs[sid]=remote;h.calls.serverHistory=serverMessages;
-   await h.calls.latestCallbacks.at(-1)({messages:cached.history,hasEarlier:false});await settle();
+   h.calls.sessionDocs ??= {};h.calls.sessionDocs[sid]=remote;h.calls.serverHistory=serverMessages;
+   await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
    return {h,chat,cache,store:(await h.use('local-story-store.js')).storyStore(sid)};
  }
  const first=await open('navigate');
@@ -3140,9 +3160,9 @@ test('opening a visible cached story keeps local data until explicit Sync',async
  const h=await harness({chatCache:{loadChatCache:async()=>({session:{id:'s',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:1},recent:[{id:'old',role:'assistant',order:1,content:'Cached'}],history:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false}),saveChatCache:async()=>{},deleteChatCache:async()=>{}}});
  h.document.hidden=false;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('s');await new Promise(r=>setTimeout(r,0));
- h.calls.sessionCallbacks.at(-1)({id:'s',data:()=>({historyRevision:1})});
+ h.stageLocalSession({historyRevision:1},'s');
  h.calls.sessionDocs.s={...h.calls.sessionDocs.s,historyRevision:3};h.calls.serverHistory=[{id:'phone',role:'assistant',order:2,content:'Phone version'}];
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false});
+ await h.loadLocalStory({messages:[{id:'old',role:'assistant',order:1,content:'Cached'}],hasEarlier:false});
  await settle();assert.equal(chat.memorySnapshot().messages.at(-1).content,'Cached');assert.equal(h.calls.historyReads ?? 0,0);assert.equal(h.state.busy,false);
  assert.equal(await chat.syncChatData(),true);assert.equal(chat.memorySnapshot().messages.at(-1).content,'Phone version');assert.equal(h.calls.historyReads,1);assert.equal(h.calls.requests.length,0);
  const reads=h.calls.historyReads;await h.document.dispatchEvent({type:'visibilitychange'});await settle();assert.equal(h.calls.historyReads,reads);
@@ -3226,7 +3246,7 @@ test('Warm scene save waits for Firebase, rejects duplicates, bridges local hist
 test('Scene save applies summary retirements and fallback/memory metadata to history and the idle store',async()=>{
  const {h,chat,store,edit}=await sceneSaveHarness();
  const summaries=[{id:'early',role:'summary',order:3,content:'Earlier',coveredRange:{toOrder:1}},{id:'late',role:'summary',order:4,content:'Obsolete',coveredRange:{toOrder:2}}];
- await h.calls.latestCallbacks.at(-1)({messages:[...h.calls.history,...summaries],hasEarlier:false});
+ await h.loadLocalStory({messages:[...h.calls.history,...summaries],hasEarlier:false});
  h.calls.retiredSummaries=['late'];h.calls.sceneSessionPatch={activeSummaryMessageId:'early',breakpointOrder:1,memoryState:{extractedThroughOrder:2,needsRebuild:true,rebuildFromOrder:2},memoryInvalidations:[{fromOrder:2,toOrder:2,revision:1}]};
  const before=h.calls.historyReads;await (await edit()).click();
  assert.equal(h.calls.historyReads,before);assert.equal(chat.memorySnapshot().messages.find(m=>m.id==='late').retired,true);
@@ -3265,7 +3285,7 @@ test('Warm Director save waits for Firebase and applies state/checkpoint before 
 
 for(const outcome of ['failure','reconcile-failure'])test('Dismissed Director '+outcome+' keeps failed drafts and lets confirmed saves continue without full Sync',async()=>{
  const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open(),loreBefore=h.calls.loreReads ?? 0;h.calls.onDirectorSave=()=>wait.promise;
- if(outcome==='reconcile-failure'){h.calls.beforeDirectorReturn=()=>{h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,loreRevision:4})});};h.calls.onLoreRead=async()=>{throw Error('Refresh offline');};h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);}
+ if(outcome==='reconcile-failure'){h.calls.beforeDirectorReturn=()=>{h.stageLocalSession({...h.calls.sessionDocs.improvement,loreRevision:4},h.state.sessionId);};h.calls.onLoreRead=async()=>{throw Error('Refresh offline');};h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);}
  const saving=namedButton(root,'Save live state').click();await settle();await root.querySelector('.settings-close').click();h.el('chat-input').value='Keep waiting draft';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
  if(outcome==='failure')wait.reject(Error('Offline'));else wait.resolve();await saving;await send;
  assert.equal(h.calls.requests.length,outcome==='failure'?0:1);assert.equal(h.el('chat-input').value,outcome==='failure'?'Keep waiting draft':'');assert.equal(h.state.busy,false);assert.equal(store.status.paused,false);assert.equal(store.requiresReconciliation,false);
@@ -3275,7 +3295,7 @@ for(const outcome of ['failure','reconcile-failure'])test('Dismissed Director '+
 });
 
 test('A newer scene-save snapshot stays authoritative and requires coherent reconciliation before queued mutations',async()=>{
- const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>{h.calls.historyRevision=4;h.calls.sessionCallbacks.at(-1)({data:()=>({...result.session,historyRevision:4,loreRevision:3,directorRevision:2})});};
+ const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>{h.calls.historyRevision=4;h.stageLocalSession({...result.session,historyRevision:4,loreRevision:3,directorRevision:2},h.state.sessionId);};
  const before=h.calls.historyReads ?? 0;await (await edit()).click();assert.equal(h.calls.historyReads ?? 0,before);assert.equal(chat.memorySnapshot().session.historyRevision,4);assert.equal(chat.memorySnapshot().session.loreRevision,3);
  assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(store.requiresReconciliation,true);assert.match(chat.memorySnapshot().messages[1].scene,/Saved Hall/);
  h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);h.calls.serverHistory=h.calls.history.map(m=>m.id==='u'?{...m,content:'Remote current action'}:m);
@@ -3297,13 +3317,13 @@ test('Director local application leaves cache persistence outside the save compl
 });
 
 test('A same-revision author metadata change during a scene save is retained for coherent reconciliation',async()=>{
- const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>h.calls.sessionCallbacks.at(-1)({data:()=>({...result.session,longTermPlan:'Newer author plan'})});
+ const {h,chat,store,edit}=await sceneSaveHarness();h.calls.beforeSceneReturn=result=>h.stageLocalSession({...result.session,longTermPlan:'Newer author plan'},h.state.sessionId);
  await (await edit()).click();assert.equal(chat.memorySnapshot().session.longTermPlan,'Newer author plan');assert.equal(store.requiresReconciliation,true);assert.equal(chat.memorySnapshot().historyComplete,false);assert.equal(h.state.busy,false);
 });
 
 test('Director save reconciles a remote dependency revision before settling its dismissed dialog and Send',async()=>{
  const {h,chat,store,open}=await directorSaveHarness(),wait=deferred(),root=await open();h.calls.onDirectorSave=()=>wait.promise;h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
- h.calls.beforeDirectorReturn=()=>h.calls.sessionCallbacks.at(-1)({data:()=>({...h.calls.sessionDocs.improvement,loreRevision:3})});
+ h.calls.beforeDirectorReturn=()=>h.stageLocalSession({...h.calls.sessionDocs.improvement,loreRevision:3},h.state.sessionId);
  const saving=namedButton(root,'Save live state').click();await settle();await root.querySelector('.settings-close').click();h.el('chat-input').value='Use reconciled state';const send=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
  const before=h.calls.historyReads ?? 0;wait.resolve();await saving;await send;
  assert.equal(store.requiresReconciliation,false);assert.equal(store.status.paused,false);assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');assert.equal(chat.memorySnapshot().session.loreRevision,3);assert.ok(h.calls.historyReads>before);assert.equal(h.calls.requests.length,1);assert.equal(h.state.busy,false);
@@ -3417,13 +3437,14 @@ test('saving an edit replaces the row without first removing it from the scrolli
 });
 
 test('finishing a stream atomically replaces its row instead of temporarily duplicating the reply',async()=>{
- const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+`\nexport {startStreamUI};\nexport function completeStreamFixture(message){streamState.savedId=message.id;streamState.saveCompleted=true;renderMessages([...lastMessages,message]);}\n`;
- const h=await harness({sources:{'ui/chat-view.js':source}}),chat=await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);
- chat.startStreamUI();const list=h.el('message-list'),stream=list.children.at(-1);let duplicated=false;
- const insert=list.insertBefore.bind(list);list.insertBefore=(node,anchor)=>{if(node.dataset.messageId==='a' && stream.parentNode===list)duplicated=true;return insert(node,anchor);};
- chat.completeStreamFixture({id:'a',order:2,role:'assistant',content:'Completed narration.'});
+ const h=await harness();await openImprovementChat(h,{},[{id:'u',order:1,role:'user',content:'Begin.'}]);h.state.settings.streaming=true;
+ let resume,reads=0;h.calls.streamReader={read:()=>{reads++;return new Promise(r=>resume=r);},cancel:async()=>resume?.({done:true})};
+ h.el('chat-input').value='Continue';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await waitForParallel(()=>reads===1);
+ const list=h.el('message-list'),stream=list.children.at(-1);let duplicated=false;
+ const insert=list.insertBefore.bind(list);list.insertBefore=(node,anchor)=>{if(node.dataset.messageId && node.className==='msg assistant' && stream.parentNode===list)duplicated=true;return insert(node,anchor);};
+ resume({done:false,value:new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:'Completed narration.'},finish_reason:'stop'}]})+'\n')});await waitForParallel(()=>reads===2);resume({done:true});await sending;
  assert.equal(duplicated,false,'Do not insert the completed reply beside the full streaming reply');
- assert.equal(stream.parentNode,null);assert.equal(list.children.filter(n=>n.dataset.messageId==='a').length,1);
+ assert.equal(stream.parentNode,null);assert.equal(list.querySelectorAll('.msg-content').filter(n=>n.textContent==='Completed narration.').length,1);
 });
 
 test('scroll gestures do not highlight or copy a long message, while a stationary hold still copies',async()=>{
@@ -3444,8 +3465,7 @@ test('scroll gestures do not highlight or copy a long message, while a stationar
 });
 
 test('replacing content above the viewport preserves the visible message anchor',async()=>{
- const source=(await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'))+'\nexport {renderMessages};';
- const h=await harness({sources:{'ui/chat-view.js':source}}),chat=await openImprovementChat(h,{},[
+ const h=await harness(),chat=await openImprovementChat(h,{},[
   {id:'u',order:1,role:'user',content:'x'.repeat(300)},
   {id:'a',order:2,role:'assistant',content:'y'.repeat(600)},
   {id:'u2',order:3,role:'user',content:'z'.repeat(300)},
@@ -3458,7 +3478,7 @@ test('replacing content above the viewport preserves the visible message anchor'
  for(const node of list.children)node.getBoundingClientRect=()=>rect(node);
  const create=h.document.createElement;h.document.createElement=tag=>{const node=create(tag);node.getBoundingClientRect=()=>rect(node);return node;};
  const visible=()=>list.children.find(node=>node.dataset.messageId==='a');const before=visible().getBoundingClientRect().top;
- chat.renderMessages(chat.memorySnapshot().messages.map(m=>m.id==='u'?{...m,content:'Shortened above viewport'}:m));
+ await h.loadLocalStory({messages:chat.memorySnapshot().messages.map(m=>m.id==='u'?{...m,content:'Shortened above viewport'}:m)});
  assert.equal(visible().getBoundingClientRect().top,before);assert.ok(list.scrollTop>=0);assert.ok(list.scrollTop<=list.scrollHeight-list.clientHeight);
 });
 
@@ -3624,7 +3644,7 @@ test('Dismiss rebuild refreshes the list while retaining the open unsaved card d
 for(const surface of ['lorebooks','settings'])test('Dismiss rebuild from '+surface+' keeps edits made after the displayed notice',async()=>{
  const {h,chat,store,server,root,banner}=await rebuildDismissHarness();
  server.historyRevision=6;server.memoryInvalidations.push({revision:6,fromOrder:110,toOrder:122});
- h.calls.historyRevision=6;h.calls.sessionCallbacks.at(-1)({data:()=>structuredClone(server)});
+ h.calls.historyRevision=6;h.stageLocalSession(structuredClone(server),h.state.sessionId);
  await (surface==='lorebooks'?namedButton(root,'Dismiss'):h.el('mem-dismiss-rebuild')).click();
  const remaining=JSON.parse(JSON.stringify(chat.memorySnapshot().session.memoryInvalidations));
  assert.deepEqual(remaining,[{revision:6,fromOrder:110,toOrder:122}]);assert.equal(store.confirmed.session.memoryState.needsRebuild,true);
@@ -3633,7 +3653,7 @@ for(const surface of ['lorebooks','settings'])test('Dismiss rebuild from '+surfa
 
 test('Dismiss rebuild retains a newer snapshot delivered after its transaction',async()=>{
  const {h,chat,store,server,root}=await rebuildDismissHarness();
- h.calls.beforeDismissReturn=()=>{server.historyRevision=6;server.memoryInvalidations=[{revision:6,fromOrder:110,toOrder:122}];server.memoryState.needsRebuild=true;server.memoryState.rebuildFromOrder=110;h.calls.historyRevision=6;h.calls.sessionCallbacks.at(-1)({data:()=>structuredClone(server)});};
+ h.calls.beforeDismissReturn=()=>{server.historyRevision=6;server.memoryInvalidations=[{revision:6,fromOrder:110,toOrder:122}];server.memoryState.needsRebuild=true;server.memoryState.rebuildFromOrder=110;h.calls.historyRevision=6;h.stageLocalSession(structuredClone(server),h.state.sessionId);};
  await namedButton(root,'Dismiss').click();
  assert.equal(chat.memorySnapshot().session.memoryState.needsRebuild,true);assert.equal(chat.memorySnapshot().session.memoryState.rebuildFromOrder,110);
  assert.equal(chat.memorySnapshot().session.memoryInvalidations.length,1);
@@ -3704,8 +3724,8 @@ test('Force device upload bypasses a stale queue conflict, preserves the whole l
  const {h,chat,store,open,card}=await deviceUploadChat();let attempts=0;
  h.calls.addMessage=async()=>{attempts++;throw Object.assign(Error('Stale save'),{code:'story-conflict'});};
  store.enqueue('add',{id:'lost-u',message:{role:'user',content:'My lost action'}});store.enqueue('add',{id:'lost-a',message:{role:'assistant',content:'My lost reply'}});await assert.rejects(store.flush());await store.settled();
- const root=await open(),wait=deferred();h.calls.onDeviceUpload=()=>wait.promise;const saving=namedButton(root,'Replace Firebase with this copy').click();await settle();
- assert.equal(h.calls.deviceUploads.length,1);assert.equal(store.status.pending,2);assert.equal(store.status.paused,true);const tried=attempts;
+ const root=await open(),wait=deferred();h.calls.onDeviceUpload=()=>wait.promise;const saving=namedButton(root,'Replace Firebase with this copy').click();await waitForParallel(()=>h.calls.deviceUploads?.length===1);
+ assert.equal(h.calls.deviceUploads?.length,1,JSON.stringify(root.querySelectorAll('p').map(n=>n.textContent)));assert.equal(store.status.pending,2);assert.equal(store.status.paused,true);const tried=attempts;
  const upload=h.calls.deviceUploads[0];assert.equal(upload.messages.length,4);assert.equal(upload.messages.at(-1).content,'My lost reply');assert.equal(upload.messages[1].thinking,'Private thinking');
  assert.equal(upload.storySettings.values.narratorSystemPrompt,'Phone custom prompt');assert.equal(upload.lore[0].sections.text.text,card.sections.text.text);
  wait.resolve();await saving;
@@ -3921,8 +3941,8 @@ test('recovered reply reads ignore stale navigation callbacks and retain the sel
  const h=await harness({extraStubs:{'unsaved-replies.js':{loadUnsavedReply:async(_owner,sid)=>{reads.push(sid);return sid==='improvement'?old.promise:current.promise;},storeUnsavedReply:async()=>true}}});
  const chat=await openImprovementChat(h,{},[{id:'a',order:1,role:'assistant',content:'Opening'}]);await settle();
  chat.setSession('other');await settle();
- h.calls.sessionCallbacks.at(-1)({id:'other',exists:()=>true,data:()=>({title:'Other'})});
- await h.calls.latestCallbacks.at(-1)({messages:[{id:'o',order:1,role:'assistant',content:'Other opening'}],hasEarlier:false});await settle();
+ h.stageLocalSession({title:'Other'},'other');
+ await h.loadLocalStory({messages:[{id:'o',order:1,role:'assistant',content:'Other opening'}],hasEarlier:false});await settle();
  old.resolve({id:'old-recovery',sid:'improvement',owner:'test-user',message:{role:'assistant',content:'Old recovered reply'}});await settle();
  assert.equal(h.el('message-list').querySelector('.unsaved'),null);assert.equal(h.el('btn-send').disabled,true);
  h.el('chat-input').value='Other action';const sending=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});await settle();
@@ -3996,7 +4016,7 @@ test('a rejected recovered reply read preserves the draft and blocks narration',
 
 test('Continue replacement keeps recovery and refuses a changed history source',async()=>{
  const fixture=await cutOffReplacementRecovery(),{h,chat,clears}=fixture,before=structuredClone(fixture.stored),requests=h.calls.requests.length;
- chat.seedSessionFixture({...chat.memorySnapshot().session,historyRevision:1});
+ h.stageLocalSession({...chat.memorySnapshot().session,historyRevision:1});
  await namedButton(h.el('message-list'),'Continue replacement').click();await settle();
  assert.deepEqual(fixture.stored,before);assert.equal(clears.length,0);assert.equal(h.calls.requests.length,requests);
  assert.ok(h.el('message-list').querySelector('.unsaved'));assert.equal(h.state.busy,false);
@@ -4145,10 +4165,9 @@ test('a saved truncated Director narration finishes the pet activity',async()=>{
  assert.equal(h.calls.petFinishes?.at(-1),'ready');assert.equal(h.state.busy,false);
 });
 
-// These loading tests use production boundaries and disable the legacy listener
-// fixtures. Other regression cases still use those fixtures; see package notes.
+// Loading acceptance uses real entry points with explicit cache/outbox boundaries.
 async function productionLoadHarness({cache=null,outbox=null,aux=null}={}){
- let h;h=await harness({fixtureListeners:false,chatCache:{loadChatCache:async()=>cache,loadStoryData:async()=>aux,storyQueueStorage:{load:async()=>outbox,put:async()=>true,ack:async()=>true}},extraStubs:{'story-settings-store.js':{selectStorySettings:async sid=>{h.state.storySettingsId=sid;h.state.storySettings={revision:1,values:{}};},effectiveActiveSettings:()=>h.state.settings,saveStorySettings:async()=>{},readStorySettingsRefresh:async()=>({revision:1,values:{}}),applyStorySettingsRefresh(){},invalidateStorySettingsLoads(){},preserveLegacyStorySeed:async()=>({}),ensureStorySettings:async()=>({revision:1,values:{}}),writeInitialStorySettings:async()=>{}}}});
+ let h;h=await harness({deferStorySettings:false,chatCache:{loadChatCache:async()=>cache,loadStoryData:async()=>aux,storyQueueStorage:{load:async()=>outbox,put:async()=>true,ack:async()=>true}},extraStubs:{'story-settings-store.js':{selectStorySettings:async sid=>{h.state.storySettingsId=sid;h.state.storySettings={revision:1,values:{}};},effectiveActiveSettings:()=>h.state.settings,saveStorySettings:async()=>{},readStorySettingsRefresh:async()=>({revision:1,values:{}}),applyStorySettingsRefresh(){},invalidateStorySettingsLoads(){},preserveLegacyStorySeed:async()=>({}),ensureStorySettings:async()=>({revision:1,values:{}}),writeInitialStorySettings:async()=>{}}}});
  const chat=await h.use('ui/chat-view.js');chat.initChatView();return {h,chat};
 }
 const loadingSession={id:'real-load',title:'Cached story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:3,nextOrder:2};
@@ -4231,4 +4250,13 @@ test('a confirmed-only device snapshot renders after a cold load without a displ
  chat.setSession('real-load');await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
  assert.equal(h.calls.sessionReads ?? 0,0);assert.equal(h.calls.historyReads ?? 0,0);
  assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent===message.content));
+});
+
+test('real story loading waits for device recovery before enabling Send or reading the server',async()=>{
+ const recovery=deferred(),{h,chat}=await productionLoadHarness({aux:recovery.promise});
+ chat.setSession('real-load');h.el('chat-input').value='Keep this draft';await settle();
+ assert.equal(chat.memorySnapshot(),null);await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.equal(h.calls.messages.length,0);assert.equal(h.calls.requests.length,0);assert.equal(h.calls.sessionReads ?? 0,0);assert.equal(h.calls.historyReads,0);
+ recovery.resolve({confirmed:{session:loadingSession,messages:[{id:'a',order:1,role:'assistant',content:'Recovered narration'}],turns:{}}});
+ await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
+ assert.equal(h.el('btn-send').disabled,false);assert.equal(h.el('chat-input').value,'Keep this draft');assert.equal(h.calls.requests.length,0);
 });
