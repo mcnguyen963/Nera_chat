@@ -4224,3 +4224,11 @@ test('base-text proposal preview shows literal before and after with approval un
  ui.renderTextProposals(host,[change],'Nera');const check=host.querySelector('input');assert.equal(check.checked,false);assert.deepEqual(host.querySelectorAll('pre').map(n=>n.textContent),['<old> unsigned','<new> signed']);
  check.checked=true;await check.dispatchEvent({type:'change'});assert.equal(change.include,true);check.checked=false;await check.dispatchEvent({type:'change'});assert.equal(change.include,false);
 });
+
+test('a confirmed-only device snapshot renders after a cold load without a display cache',async()=>{
+ const message={id:'cached',order:1,role:'assistant',content:'Restored local narration'};
+ const {h,chat}=await productionLoadHarness({aux:{confirmed:{session:loadingSession,messages:[message],turns:{}}}});
+ chat.setSession('real-load');await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
+ assert.equal(h.calls.sessionReads ?? 0,0);assert.equal(h.calls.historyReads ?? 0,0);
+ assert.ok(h.el('message-list').querySelectorAll('.msg-content').some(n=>n.textContent===message.content));
+});

@@ -145,7 +145,7 @@ function applyWorkingStory(view,status) {
   if(storyStore(state.sessionId)?.requiresReconciliation || status.paused && directStorySaves.has(currentUid()+':'+state.sessionId))return;
   if(!status.pending && session && revisionFields.some(key=>(view.session[key] ?? 0)<(session[key] ?? 0)))return;
   if(!session || view.session.id!==state.sessionId)return;
-  const changed=!sameHistoryRendering(historyMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
+  const changed=(!renderedMessages.size && view.messages.length>0) || !sameHistoryRendering(historyMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
   syncStatus=status;latestReady=true;hasEarlier=false;
   if(changed)renderMessages(historyMessages);
