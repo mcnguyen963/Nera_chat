@@ -297,26 +297,44 @@ export async function harness({ legacyNarratorHashes = null, chatCache = null, t
     fire: (id, type = 'click') => document.getElementById(id).dispatchEvent({ type }) };
 }
 
-async function appBootHarness(){
+async function appBootHarness(overrides={}){
  let authChanged;const sequence=[],actions=[];
  const h=await harness({extraStubs:{
   'auth.js':{initAuth:fn=>authChanged=fn,currentUid:()=> 'a',currentUserInfo:()=>({uid:'a',email:'a@example.test'}),login:async(...args)=>{actions.push(['login',...args]);throw {code:'auth/invalid-credential'};},resetPassword:async email=>{actions.push(['reset',email]);throw {code:'auth/user-not-found'};},changePassword:async(...args)=>actions.push(['password',...args])},
-  'ui/chat-view.js':{initChatView(){},setSession(){},prepareChatLogout:async()=>sequence.push('prepare')},
+  'ui/chat-view.js':{initChatView(){actions.push(['init-chat']);},setSession(){},prepareChatLogout:async()=>sequence.push('prepare')},
   'ui/sidebar.js':{initSidebar(){}},'ui/settings-view.js':{initSettingsView(){},openSettingsPopup(){}},'ui/lorebook-view.js':{initLorebookView(){}},'ui/context-viewer.js':{initContextViewer(){}},
   'ui/icons.js':{initIcons(){},setIcon(){}},'version.js':{initVersion(){}},'viewport.js':{initViewport(){}},
-  'device-caches.js':{clearAccountCaches:async uid=>sequence.push('clear:'+uid)},'memory-updater.js':{stopAll:()=>sequence.push('stop')},
+  'device-caches.js':{clearAccountCaches:async uid=>sequence.push('clear:'+uid)},'memory-updater.js':{stopAll:()=>sequence.push('stop')},...overrides,
  }});
- h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);
+ h.calls.settingsDoc=h.settings.storedSettings?.(h.state.settings) ?? {};
  for(const id of ['login-form','reset-form','change-password-form']){const form=h.el(id),button=h.document.createElement('button');button.disabled=false;form.querySelector=()=>button;form.reset=()=>actions.push(['reset-form',id]);}
  await h.use('app.js');return {h,authChanged,sequence,actions};
 }
-for(const next of [null,{uid:'b'},{uid:'a'}])test('app auth transition tears down before reloading for '+(next?.uid??'logout'),async()=>{
+for(const next of [null,{uid:'b'}])test('app auth transition tears down before reloading for '+(next?.uid??'logout'),async()=>{
  const {h,authChanged,sequence}=await appBootHarness();await authChanged({uid:'a'});await settle();await authChanged(next);
- assert.deepEqual(sequence,next?.uid==='a'?['stop','prepare']:['stop','prepare','clear:a']);assert.equal(h.calls.reloads,1);
+ assert.deepEqual(sequence,['stop','prepare','clear:a']);assert.equal(h.calls.reloads,1);
+});
+test('repeated same-account callbacks preserve initialized chat and its draft',async()=>{
+ const {h,authChanged,sequence,actions}=await appBootHarness();await authChanged({uid:'a'});await settle();
+ h.el('chat-input').value='Unsubmitted draft';await Promise.all([authChanged({uid:'a'}),authChanged({uid:'a'})]);
+ assert.deepEqual(sequence,[]);assert.equal(h.calls.reloads ?? 0,0);assert.equal(h.el('chat-input').value,'Unsubmitted draft');assert.equal(actions.filter(a=>a[0]==='init-chat').length,1);
+});
+for(const fail of [false,true])test('account transition invalidates delayed startup '+(fail?'failure':'success'),async()=>{
+ let finish,watched=0;const settings=new Promise((resolve,reject)=>finish=()=>fail?reject(Error('Old account failed')):resolve({oldAccount:true}));
+ const {h,authChanged,sequence,actions}=await appBootHarness({'settings.js':{loadSettings:()=>settings,watchSettings:()=>watched++,DEFAULT_SETTINGS:{},hydrateProfiles:x=>x}});
+ await authChanged({uid:'a'});await authChanged({uid:'a'});assert.equal(actions.filter(a=>a[0]==='init-chat').length,0);
+ await authChanged({uid:'b'});finish();await settle();
+ assert.equal(actions.filter(a=>a[0]==='init-chat').length,0);assert.equal(watched,0);assert.equal(h.state.settings.oldAccount,undefined);assert.equal(h.el('login-error').textContent ?? '','');assert.deepEqual(sequence,['stop','prepare','clear:a']);assert.equal(h.calls.reloads,1);
+});
+test('callbacks during account teardown share one reload and cannot restart initialization',async()=>{
+ let finish;const wait=new Promise(resolve=>finish=resolve),events=[];
+ const {h,authChanged,actions}=await appBootHarness({'ui/chat-view.js':{initChatView:()=>events.push('init'),setSession(){},prepareChatLogout:async()=>{events.push('prepare');await wait;}}});
+ await authChanged({uid:'a'});await settle();const changing=authChanged(null);await authChanged({uid:'b'});await authChanged({uid:'a'});finish();await changing;await settle();
+ assert.deepEqual(events,['init','prepare']);assert.equal(h.calls.reloads,1);assert.equal(actions.filter(a=>a[0]==='init-chat').length,0);
 });
 test('app forms handle credential errors, private reset messages and password confirmation',async()=>{
  const {h,actions}=await appBootHarness(),submit=async id=>{await h.el(id).dispatchEvent({type:'submit',currentTarget:h.el(id),preventDefault(){}});await settle();};
- h.el('login-username').value='a@example.test';h.el('login-password').value='old';await submit('login-form');assert.equal(h.el('login-error').textContent,'Incorrect email or password.');assert.deepEqual(actions[0],['login','a@example.test','old']);
+ h.el('login-username').value='a@example.test';h.el('login-password').value='old';await submit('login-form');assert.equal(h.el('login-error').textContent,'Incorrect email or password.');assert.deepEqual(actions.find(a=>a[0]==='login'),['login','a@example.test','old']);
  h.el('reset-email').value='missing@example.test';await submit('reset-form');assert.equal(h.el('reset-message').textContent,'If an account uses that email, a reset link is on its way.');
  h.el('new-password').value='new-password';h.el('confirm-new-password').value='different';await submit('change-password-form');assert.equal(h.el('change-password-message').textContent,'New passwords do not match.');assert.ok(!actions.some(a=>a[0]==='password'));
  h.el('confirm-new-password').value='new-password';h.el('current-password').value='old';await submit('change-password-form');assert.deepEqual(actions.find(a=>a[0]==='password'),['password','old','new-password']);assert.equal(h.el('change-password-message').textContent,'Password changed successfully.');assert.equal(h.el('change-password-form').querySelector().disabled,false);

@@ -117,11 +117,17 @@ document.addEventListener("click", (e) => {
 });
 
 // Auth gate: the UI is shown only when Firebase Auth reports a signed-in user.
-let previousAuthUid=null;
+let previousAuthUid=null,authGeneration=0,accountTransition=false;
 initAuth(async(user)=>{
-  const previous=previousAuthUid;previousAuthUid=user?.uid ?? null;
-  // Tear down account-scoped listeners and in-flight work on auth transitions.
+  const previous=previousAuthUid,next=user?.uid ?? null;
+  // Repeated delivery for this account is not an account transition. Keep the
+  // initialized page (including drafts and pending work) intact.
+  if (accountTransition || (appInitialized && previous===next)) return;
+  previousAuthUid=next;
+  const generation=++authGeneration;
+  // Tear down account-scoped listeners and in-flight work on real transitions.
   if (appInitialized) {
+    accountTransition=true;
     stopAll();
     await prepareChatLogout();
     if(previous && previous!==user?.uid)await clearAccountCaches(previous);
@@ -131,7 +137,7 @@ initAuth(async(user)=>{
   if (user) {
     el.loginScreen.classList.add("hidden");
     el.app.classList.remove("hidden");
-    enterApp().catch(showBootError);
+    enterApp(generation).catch(error=>{if(generation===authGeneration)showBootError(error);});
   } else {
     el.app.classList.add("hidden");
     el.loginScreen.classList.remove("hidden");
@@ -240,16 +246,20 @@ function friendlyAuthError(err) {
   return "Something went wrong. Please try again.";
 }
 
-async function enterApp() {
+async function enterApp(generation) {
   if (appInitialized) return;
   appInitialized = true;
+  let settings;
   try {
-    state.settings = await loadSettings();
+    settings = await loadSettings();
   } catch (e) {
+    if(generation!==authGeneration)return;
     console.error("Failed to load settings:", e);
-    state.settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
+    settings = hydrateProfiles(structuredClone(DEFAULT_SETTINGS));
     alert("Could not load your saved settings. Using defaults for this page. Reload before saving settings.");
   }
+  if(generation!==authGeneration)return;
+  state.settings=settings;
   initChatView();
   initSidebar();
   initSettingsView();
