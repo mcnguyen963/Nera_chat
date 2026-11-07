@@ -14,7 +14,7 @@ import { SCENE_RULE, sceneTimeline, readSceneOutput } from './scene.js';
 import { modernSceneReminder } from './story-calendar.js';
 import { replyContract } from './reply-contract.js';
 import { computeTurns } from './turns.js';
-import { selectEntriesAsync, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
+import { selectEntriesAsync, createMentionFinder, fitBook, renderFactsBlock, renderEventsBlock, renderMemoryBlock } from './lore-select.js';
 import { planInjectionBlock, LEGACY_PLAN_LOSS_RULE } from './plan-parser.js';
 import { CONTINUITY_RULE, usableLore, revisionOf, effectivelyPaused } from './continuity.js';
 import {MESSAGE_FRAME_TOKENS as FRAME,requestInputLimit} from './request-budget.js';
@@ -215,9 +215,11 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
   const recordAnchors=recordMode ? relevantSubjects(selection.index,selection,opts.continuationId ? '' : latest?.content ?? '',recentLoreText) : null;
   if(turn && recordAnchors){for(const id of turn.contract.memoryIds)recordAnchors.add(id);for(const book of ['characters','locations'])for(const item of selection.selected[book])if(['starting character','starting place','in scene','current place'].includes(item.reason))recordAnchors.add(item.entry.id);}
   if(turn && baselineAnchors){for(const id of turn.contract.memoryIds)baselineAnchors.add(id);for(const book of ['characters','locations'])for(const item of baselineSelection.selected[book])if(['starting character','starting place','in scene','current place'].includes(item.reason))baselineAnchors.add(item.entry.id);}
+  const mentionFinder=recordMode ? createMentionFinder(selection.index) : null,baselineMentionFinder=baselineSelection ? createMentionFinder(baselineSelection.index) : null;
   if(recordMode && mem.lorebooks && mem.books.events.on) for(const entry of filtered.entries.filter(e=>e.book==='events'&&e.kind==='thread'&&e.status==='closed')) {
-    if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
-    if(baselineSelection && !baselineSelection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:baselineAnchors,index:baselineSelection.index,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))baselineSelection.selected.events.push({entry,reason:'related closed thread'});
+    await yieldWork();
+    if(!selection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:recordAnchors,index:selection.index,mentionFinder,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))selection.selected.events.push({entry,reason:'related closed thread'});
+    if(baselineSelection && !baselineSelection.selected.events.some(i=>i.entry.id===entry.id)&&recordUnits(entry,{anchors:baselineAnchors,index:baselineSelection.index,mentionFinder:baselineMentionFinder,loreNotesPerSection:mem.loreNotesPerSection}).units.some(u=>!u.blocked&&u.linked.length))baselineSelection.selected.events.push({entry,reason:'related closed thread'});
   }
   // Related records can admit a closed thread after direct name matching.
   for(let i=skipped.length-1;i>=0;i--)if(skipped[i].reason==='no name or alias match' && selection.selected[skipped[i].book]?.some(item=>item.entry.id===skipped[i].entryId))skipped.splice(i,1);
@@ -231,10 +233,10 @@ export async function buildMemoryContext(session, settings, opts, { count, adRul
     const beforeMemory = memory;
     const header = book === 'plan' ? '' : book === 'facts' ? prompts.factsHeader+'\n' : book === 'events' ? prompts.eventsHeader+'\n'+renderLoreLabel('openThreads')+'\n'+(selection.selected.events.some(x=>x.entry.kind==='thread' && x.entry.status==='closed') ? renderLoreLabel('closedThreads')+'\n' : '')+renderLoreLabel('timeline',{OMITTED:renderLoreLabel('omittedEvents',{COUNT:999999})})+'\n' : book === 'characters' ? renderLoreLabel('characters')+'\n' : renderLoreLabel('places')+'\n';
     const budget = Math.max(0,Math.min(mem.books[book].budget,limit-await cost())-await count(header)-FRAME);
-    const recordOptions={loreNotesPerSection:mem.loreNotesPerSection,protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index};
+    const recordOptions={signal:opts.signal,check:opts.check,mentionFinder,loreNotesPerSection:mem.loreNotesPerSection,protagonist:mem.protagonist,requiredIds:turn?.contract.requiredMemoryIds ?? [],currentText:opts.continuationId ? '' : latest?.content ?? '',recentText:recentLoreText,anchors:recordAnchors,index:selection.index};
     let baselineSources=null;
     if(baselineSelection && book!=='plan'){
-      const ordinary=await fitRecords(baselineSelection.selected[book],budget,count,{...recordOptions,anchors:baselineAnchors,semanticRecords:{}});
+      const ordinary=await fitRecords(baselineSelection.selected[book],budget,count,{...recordOptions,anchors:baselineAnchors,mentionFinder:baselineMentionFinder,semanticRecords:{}});
       baselineSources=Object.fromEntries(ordinary.recordReport.entries.map(entry=>[entry.entryId,entry.records.filter(record=>record.selected).flatMap(record=>record.sources)]));
     }
     // Promoting evidence must not use its freed space to introduce unrelated

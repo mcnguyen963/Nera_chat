@@ -12,10 +12,9 @@ test('Long-story UX benchmark',async()=>{
   const path=process.env.NERA_BENCHMARK_BACKUP;if(!path)throw new Error('Set NERA_BENCHMARK_BACKUP to a local story backup.');
   // Preserve the production 300 ms context debounce; the general unit harness accelerates it to zero.
   const data=JSON.parse(await readFile(path,'utf8')),h=await harness({timers:{setTimeout:(fn,ms)=>{if(ms<=500)return setTimeout(fn,ms);},clearTimeout},extraStubs:{'tokenizer.js':{countTokens:async text=>Math.ceil(countTokens(text)*1.02),estimateTokens:text=>Math.ceil(text.length*.306),tokenizerReady:()=>true,tokenizerStatus:()=> 'ok',setTokenCountingMode(){}}}});h.calls.loreEntries=data.lore ?? [];
-  const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('benchmark');await tick();
-  // The offline settings adapter supplies revision 1; no production metadata is written.
-  h.calls.sessionCallbacks.at(-1)({id:'benchmark',exists:()=>true,data:()=>({...data.session,id:'benchmark',storySettingsRevision:1})});
-  await h.calls.latestCallbacks.at(-1)({messages:data.messages,hasEarlier:false});
+  const chat=await h.use('ui/chat-view.js');chat.initChatView();
+  h.stageLocalSession({...data.session,id:'benchmark',storySettingsRevision:1},'benchmark');chat.setSession('benchmark');
+  await h.loadLocalStory({messages:data.messages},'benchmark');
   Object.assign(h.state.settings,{modelId:'offline',apiKey:'offline',streaming:true,narrationMode:'classic',maxContextTokens:120000,modelContextTokens:null});
   h.calls.onMessageSave=()=>new Promise(()=>{});h.calls.editMessage=()=>new Promise(()=>{});h.calls.deleteMessage=()=>new Promise(()=>{});
   const target=data.messages.findLast(m=>m.role==='user'),bubble=()=>h.el('message-list').children.find(n=>n.dataset.messageId===target.id);

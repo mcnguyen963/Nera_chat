@@ -84,6 +84,19 @@ function* matchOccurrences(text,matchers) {
 export function findMentions(text, index, book) {
   return [...new Set(findMentionOccurrences(text,index,book).map(m => m.id))];
 }
+// Scope this finder to one context build, whose index is stable. Cache only
+// within that build so renamed aliases and edited passages remain observable.
+export function createMentionFinder(index) {
+  const matchers=new Map(),cache=new Map();
+  return (text,book)=>{
+    let texts=cache.get(book);if(!texts){texts=new Map();cache.set(book,texts);}
+    if(texts.has(text))return texts.get(text);
+    if(!matchers.has(book))matchers.set(book,finish(mentionMatchers(index,book)));
+    const ids=[...new Set(finish(matchOccurrences(text,matchers.get(book))).map(m=>m.id))];
+    if(texts.size>=1024)texts.delete(texts.keys().next().value);
+    texts.set(text,ids);return ids;
+  };
+}
 export function resolveScene(scene, index) {
   const characters = [], unmatched = [], ambiguous = [];
   for (const name of scene?.present ?? []) {

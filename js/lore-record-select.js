@@ -1,3 +1,4 @@
+import {createWorkBudget} from './ui-work.js';
 import { allocateCharacterPools } from './character-budget.js';
 import { reconcileRecords, resolveRecord, archivedRecord, approvedRecord, validSupersession } from './lore-records.js';
 import { renderEntry, findMentions, sortLines } from './lore-select.js';
@@ -28,7 +29,7 @@ export function renderRecordSelection(entry,records,protagonist='') {
     return [key,{...s,text:merged.map(([a,b])=>s.text.slice(a,b)).join('\n'),lines:(s.lines ?? []).filter(l=>ids.has(l.id))}];
   }));return renderEntry({...entry,sections},null,protagonist);
 }
-export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3,semanticRecords={},semanticOnly=false,preferSemantic=false,baselineSources=null}={}) {
+export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3,semanticRecords={},semanticOnly=false,preferSemantic=false,baselineSources=null,mentionFinder=null}={}) {
   const complete=reconcileRecords(entry);
   const matched=new Set(semanticRecords[entry.id] ?? []);
   entry=capLoreNotes(complete,loreNotesPerSection,[...matched]);
@@ -47,7 +48,7 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
   const units=resolved.map(r=>{
     const capReason=cappedRecordReason(entry,r.id),core=approvedRecord(entry,r),matches=matchDetails(r.resolved.text);
     const explicitCurrent=(r.triggers ?? []).filter(t=>phraseMatch(currentText,t)),explicitRecent=(r.triggers ?? []).filter(t=>phraseMatch(recentText,t));
-    const literalLinks=index ? ['characters','locations','facts','events'].flatMap(book=>findMentions(r.resolved.text,index,book)) : [];
+    const literalLinks=index ? ['characters','locations','facts','events'].flatMap(book=>mentionFinder ? mentionFinder(r.resolved.text,book) : findMentions(r.resolved.text,index,book)) : [];
     const linked=[...new Set([...(r.relatedEntryIds ?? []),...literalLinks])].filter(id=>id!==entry.id && anchors.has(id));
     const current=matches.current.length+explicitCurrent.length,recent=matches.recent.length+explicitRecent.length;
     const activeState=r.category==='state'&&anchors.has(entry.id);
@@ -70,7 +71,9 @@ export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(
   return {entry,capCompanions:[...companions.values()],units:units.sort((a,b)=>a.round-b.round||b.current-a.current||b.recent-a.recent||b.author-a.author||b.recency-a.recency||a.id.localeCompare(b.id))};
 }
 export async function fitRecords(selected,budget,count,options={}) {
-  const cap=Math.max(0,budget),preferSemantic=selected.some(item=>item.entry.book==='events' && options.semanticRecords?.[item.entry.id]?.length),records=selected.map(item=>({...item,...recordUnits(item.entry,{...options,preferSemantic,semanticOnly:item.reason==='semantic match'}),chosen:[],identity:false}));
+  const work=createWorkBudget(options);
+  const cap=Math.max(0,budget),preferSemantic=selected.some(item=>item.entry.book==='events' && options.semanticRecords?.[item.entry.id]?.length),records=[];
+  for(const item of selected){await work();records.push({...item,...recordUnits(item.entry,{...options,preferSemantic,semanticOnly:item.reason==='semantic match'}),chosen:[],identity:false});}
   const rendered=new WeakMap();
   const renderCard=r=>{
     const previous=rendered.get(r),length=r.chosen.length,last=r.chosen.at(-1);
@@ -95,6 +98,7 @@ export async function fitRecords(selected,budget,count,options={}) {
     : (await fill(records,async()=>await count(render())<=cap),null);
   const included=[],skipped=[],report=[];
   for(const r of records) {
+    await work();
     const chosen=new Set(r.chosen.map(u=>u.id)),lineIds=new Set(r.chosen.flatMap(u=>u.resolved.sources.filter(s=>s.lineId!=null).map(s=>s.lineId)));
     r.capCompanions=r.capCompanions.filter(n=>!lineIds.has(n.lineId));
     const text=r.identity ? renderRecordSelection(r.entry,r.chosen,options.protagonist) : '';
