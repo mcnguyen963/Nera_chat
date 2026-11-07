@@ -1,4 +1,5 @@
 import {readingViewport} from './message-copy.js';
+import {isNearBottom} from './scroll-position.js';
 
 export function initJumpToLatest({list, button, onJump, doc = document, frame = requestAnimationFrame}) {
   if (!button) return;
@@ -7,7 +8,7 @@ export function initJumpToLatest({list, button, onJump, doc = document, frame = 
   const update = () => {
     queued = false;
     button.hidden = true;
-    if (list.scrollHeight - list.scrollTop - list.clientHeight < 60) return;
+    if (isNearBottom(list)) return;
     // Count actual messages, skipping notices and checkpoint dividers.
     let count = 0, boundary = null;
     for (let node = list.lastElementChild; node; node = node.previousElementSibling) {

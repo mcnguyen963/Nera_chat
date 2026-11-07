@@ -27,6 +27,7 @@ import {initThinkingPicker} from './thinking-picker.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {initJumpToLatest} from './jump-to-latest.js';
+import {isNearBottom as listIsNearBottom} from './scroll-position.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
@@ -1703,7 +1704,7 @@ function deviceUploadFingerprint() {
 }
 export const openDeviceStoryUpload=createDeviceUploadView({get busy(){return busy;},button,cachedLoreSnapshot,currentUid,deviceStoryCopies,deviceUploadFingerprint,directStorySaves,download,get editingState(){return editingState;},forceUploadDeviceStory,get historyEpoch(){return historyEpoch;},get historyMessages(){return historyMessages;},get historyRevision(){return historyRevision;},loadChatCache,loadStoryData,loadUnsavedReply,get loreEntries(){return loreEntries;},get loreSessionId(){return loreSessionId;},get loreStatus(){return loreStatus;},node,get session(){return session;},showTransientInfo,state,storyQueueStorage,storyStore,subSheet,unsavedKey,unsavedReplies,validateDeviceStory});
 
-export async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFingerprint(),owner=currentUid(),epoch=historyEpoch,backupDownloaded=false,onProgress=()=>{},onComplete=()=>{}}={}) {
+async function forceUploadDeviceStory(snapshot,{baseline=deviceUploadFingerprint(),owner=currentUid(),epoch=historyEpoch,backupDownloaded=false,onProgress=()=>{},onComplete=()=>{}}={}) {
   const sid=state.sessionId;
   if(snapshot?.session?.id!==sid || owner!==currentUid() || epoch!==historyEpoch)throw new Error('Story changed; device upload cancelled.');
   validateDeviceStory(snapshot);
@@ -2282,7 +2283,7 @@ function applyBusyUi(b) {
 
 // Only keep the list pinned to the bottom while the user hasn't scrolled up.
 function isNearBottom() {
-  return el.list.scrollHeight - el.list.scrollTop - el.list.clientHeight < 60;
+  return listIsNearBottom(el.list);
 }
 
 function scrollToEnd() {
