@@ -1,4 +1,5 @@
 // Yield actual tasks, not just resolved promises, so input and painting can run.
+/** @param {{signal?: AbortSignal, check?:()=>void, budget?:number, now?:()=>number, yieldTask?:()=>Promise<void>}} [options] */
 export function createWorkBudget({signal, check=()=>{}, budget=8,
   now=()=>globalThis.performance?.now?.() ?? Date.now(),
   yieldTask=()=>new Promise(resolve=>setTimeout(resolve,0))}={}) {

@@ -8,7 +8,8 @@ import { activeDirectorState, directorScene, playerStopBoundary } from './direct
 import { parseScene, readSceneOutput } from './scene.js';
 import { usableLore } from './continuity.js';
 import { loreSemantic } from './lore-semantic.js';
-import { selectEntriesAsync, renderEntry, findMentions } from './lore-select.js';
+import { selectEntriesAsync, renderEntry, findMentions, createMentionFinder } from './lore-select.js';
+import { createWorkBudget } from './ui-work.js';
 import { recordUnits } from './lore-record-select.js';
 import { capLoreNotes, noteOmissions } from './lore-note-window.js';
 import * as tokenizer from './tokenizer.js';
@@ -45,16 +46,20 @@ export function directorTaskSettings(settings) {
   return {...task,streaming:false,maxResponseTokens:settings.directorMaxOutputTokens,maxContextTokens:settings.directorMaxInputTokens,modelContextTokens:null};
 }
 export async function buildDirectorContext(session, settings, messages, entries, before, {continuation=false,count=countTokens,signal,check}={}) {
-  count=cachedCount(count);
+  const work=createWorkBudget({signal,check}),counter=cachedCount(count),task=directorTaskSettings(settings);
+  count=async text=>{await work();return counter(text);};
+  await work();
   const mem=normalizeMemory(session.memory),available=usableLore(entries,messages,session,Infinity,before.scene).entries;
   const capCompanions=[];
-  const capped=available.map(entry=>{
-    if(entry.schemaVersion!==3)return capLoreNotes(entry,mem.loreNotesPerSection);
+  const capped=[];
+  for(const entry of available){
+    await work();
+    if(entry.schemaVersion!==3){capped.push(capLoreNotes(entry,mem.loreNotesPerSection));continue;}
     const selected=recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection});
     capCompanions.push(...selected.capCompanions);
     const ids=new Set(selected.units.filter(u=>!u.blocked).flatMap(u=>u.resolved.sources.map(s=>s.lineId)));
-    return {...selected.entry,sections:Object.fromEntries(Object.entries(selected.entry.sections).map(([key,s])=>[key,{...s,lines:s.lines.filter(l=>ids.has(l.id))}]))};
-  });
+    capped.push({...selected.entry,sections:Object.fromEntries(Object.entries(selected.entry.sections).map(([key,s])=>[key,{...s,lines:s.lines.filter(l=>ids.has(l.id))}]))});
+  }
   const cappedById=new Map(capped.map(entry=>[entry.id,entry]));
   const raw=messages.filter(m=>['user','assistant'].includes(m.role) && !(session.directorAbandonedTurnIds ?? []).includes(m.directorTurnId)).sort((a,b)=>a.order-b.order);
   const latest=continuation ? {role:'user',content:'Continue the latest completed narration within player-agency boundaries.'} : raw.findLast(m=>m.role==='user');
@@ -69,6 +74,7 @@ export async function buildDirectorContext(session, settings, messages, entries,
   const semantic=continuation ? {ids:[]} : await loreSemantic.search({owner:settings.providerCooldownAccount,sid:session.id,mem,entries:available,query:text,signal,check});
   const selection=await selectEntriesAsync(available,controlMem,text,parseScene(directorScene(before)),recentText,{records:session.loreSchemaVersion===3,semanticIds:semantic.ids,semanticHistoricalIds:semantic.historicalIds},{signal,check});
   const anchors=new Set([...selection.selected.characters,...selection.selected.locations].map(i=>i.entry.id));
+  const mentionFinder=createMentionFinder(selection.index);
   const directIds=new Set([...findMentions(text,selection.index,'characters'),...findMentions(text,selection.index,'locations')]);
   const requested=available.filter(e=>directIds.has(e.id)).map(entry=>({entry}));
   const candidates=[...new Map([...requested,...selection.selected.characters,...selection.selected.locations,...selection.selected.facts,...selection.selected.events].map(item=>[item.entry.id,item])).values()];
@@ -79,31 +85,37 @@ export async function buildDirectorContext(session, settings, messages, entries,
   while(control.length && await count(JSON.stringify(control))>4500)control.pop();
   let controlTokens=await count(JSON.stringify(control));
   for(const {entry} of candidates){
-    const constraints=entry.schemaVersion===3 ? recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection,anchors,currentText:text,recentText,index:selection.index}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(cappedById.get(entry.id),null,mem.protagonist);
+    await work();
+    const constraints=entry.schemaVersion===3 ? recordUnits(entry,{loreNotesPerSection:mem.loreNotesPerSection,anchors,currentText:text,recentText,index:selection.index,mentionFinder}).units.filter(u=>!u.blocked && (u.core || u.pinned || ['constraint','state'].includes(u.category))).map(u=>u.resolved.text).join('\n') : renderEntry(cappedById.get(entry.id),null,mem.protagonist);
     const excerpt=constraints.slice(0,6000),tokens=await count(excerpt);
     if(excerpt && controlTokens+tokens<=4500){control.push({id:entry.id,name:entry.name,text:excerpt});controlTokens+=tokens;}
   }
   const live=activeDirectorState(before);
   const authorPlan=session.longTermPlan ?? '',authorPlanTokens=await count(authorPlan);
-  const authorPlanLimit=Math.min(2000,Math.floor(requestInputLimit(directorTaskSettings(settings))/5));
+  const authorPlanLimit=Math.min(2000,Math.floor(requestInputLimit(task)/5));
   // Keep a short plan whole. Long plans stay with the Narrator instead of
   // displacing the Director's live ledger, index and recent conversation.
   // Never truncate a passage and silently drop a qualifying constraint.
   const planOmitted=authorPlanTokens>authorPlanLimit;
   const base={state:live,focusLimit:settings.directorFocusLimit ?? 5,player:mem.protagonist || null,playerBoundary:continuation?null:playerStopBoundary(latest.content),entityIndex:index,controlLore:control,fixedAuthorPlan:planOmitted ? '' : authorPlan,fixedAuthorPlanStatus:planOmitted ? 'omitted; full plan remains in Narrator context' : 'complete',scheduledPlans:available.filter(e=>e.book==='plan').map(e=>({id:e.id,name:e.name,brief:brief(e),schedule:e.schedule ? {start:e.schedule.start,end:e.schedule.end,status:e.schedule.status,phases:e.schedule.phases.map(p=>({id:p.id,title:p.title,start:p.start,end:p.end,status:p.status}))} : null})),authorTimeSkip:latest.planJump ?? null,intent:continuation?'continue':'user-action'};
   const planGuard=planOmitted ? '\nThe full fixed author plan is omitted from this small context and remains with the Narrator. Omission does not remove its constraints or authorize planned future events. Use the live ledger, selected control lore and explicit player action. When a transition depends on unavailable plan details, keep it unresolved and stop before that transition; do not guess. The author can place essential current constraints in the live ledger or control lore.' : '';
-  const responseFormat=()=>directorResponseFormat(directorTaskSettings(settings),{entries:available,before:live,offeredIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],protagonist:mem.protagonist,focusLimit:settings.directorFocusLimit ?? 5});
-  const schemaCost=async()=>isDirectorSchemaEndpoint(directorTaskSettings(settings)) ? await count(JSON.stringify(responseFormat())) : 0;
-  const render=()=>[{role:'system',content:(settings.directorSystemPrompt || prompts.director)+'\n\n'+prompts.threadPolicy+planGuard+'\n\n'+JSON.stringify(base)},...window.map(m=>({role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content})),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];
+  // Only control removal changes the system block or offered schema. Trimming
+  // older conversation must not serialize and clean every unchanged item again.
+  let controlVersion=0,renderVersion=-1,format,system,schemaText;
+  const refresh=()=>{if(renderVersion===controlVersion)return;format=directorResponseFormat(task,{entries:available,before:live,offeredIds:[...index.map(e=>e.id),...control.map(e=>e.id),...base.scheduledPlans.map(e=>e.id)],protagonist:mem.protagonist,focusLimit:settings.directorFocusLimit ?? 5});schemaText=JSON.stringify(format);system=(settings.directorSystemPrompt || prompts.director)+'\n\n'+prompts.threadPolicy+planGuard+'\n\n'+JSON.stringify(base);renderVersion=controlVersion;};
+  const responseFormat=()=>{refresh();return format;};
+  const schemaCost=async()=>{refresh();return isDirectorSchemaEndpoint(task) ? await count(schemaText) : 0;};
+  const clean=new Map();for(const m of window){await work();clean.set(m,{role:m.role,content:m.role==='assistant'?readSceneOutput(m.content).clean:m.content});}
+  const render=()=>{refresh();return [{role:'system',content:system},...window.map(m=>clean.get(m)),{role:'system',content:prompts.directorOutput},{role:'user',content:latest.content}];};
   const total=async()=>await schemaCost()+REQUEST_FRAME_TOKENS+(await Promise.all(render().map(async m=>MESSAGE_FRAME_TOKENS+await count(m.content)))).reduce((a,b)=>a+b,0);
-  const limit=requestInputLimit(directorTaskSettings(settings));
+  const limit=requestInputLimit(task);
   // Retain direct-action control lore ahead of older conversation when the
   // response schema consumes space. Never trim the current action/state/index.
   while(await total()>limit) {
     const optional=control.findLastIndex(e=>!directIds.has(e.id));
-    if(optional>=0){control.splice(optional,1);continue;}
+    if(optional>=0){control.splice(optional,1);controlVersion++;continue;}
     if(window.length){let n=1;while(n<window.length && window[n].role!=='user')n++;window=window.slice(n);continue;}
-    if(control.length){control.pop();continue;}
+    if(control.length){control.pop();controlVersion++;continue;}
     break;
   }
   const usedTokens=await total();

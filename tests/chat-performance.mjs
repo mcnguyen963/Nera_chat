@@ -7,7 +7,7 @@ const plain=x=>JSON.parse(JSON.stringify(x));
 const count=async text=>Math.ceil(vendor.countTokens(text)*1.02);
 
 test('cooperative record preparation preserves full context across budgets and closed threads',async()=>{
- const names=['memory-context','lore-record-select','lore-select'];
+ const names=['memory-context','lore-record-select','lore-select','director-context'];
  const frozen=Object.fromEntries(await Promise.all(names.map(async name=>[name+'.js',await readFile(new URL('fixtures/chat-performance/'+name+'.txt',import.meta.url),'utf8')])));
  const use=appHarness({stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected service read');}},'tokenizer.js':{countTokens:count,tokenizerReady:()=>true}}}),reference=appHarness({sources:frozen,stubs:{'messages.js':{getMessages:async()=>{throw Error('Unexpected service read');}},'tokenizer.js':{countTokens:count,tokenizerReady:()=>true}}});
  const {makeEntry}=await use('lore-lines.js'),{reconcileRecords}=await use('lore-records.js'),{defaultStorySettings}=await use('story-settings.js');
@@ -43,4 +43,31 @@ test('scoped mention reuse preserves Unicode overlaps and a new build observes r
  }
  entries[3].aliases=['New Alias'];const next=select.createMentionFinder(select.buildLoreIndex(entries));
  assert.deepEqual(plain(next('雪の姫','characters')),[]);assert.deepEqual(plain(next('New Alias','characters')),['c3']);
+});
+
+test('Director preparation preserves complete requests and offered schemas while trimming',async()=>{
+ const source=await readFile(new URL('fixtures/chat-performance/director-context.txt',import.meta.url),'utf8');
+ const boundaries={'messages.js':{getMessages:()=>{throw Error('Unexpected service read');}},'tokenizer.js':{countTokens:count,tokenizerReady:()=>true}};
+ const use=appHarness({stubs:boundaries}),frozen=appHarness({sources:{'director-context.js':source},stubs:boundaries});
+ const {makeEntry}=await use('lore-lines.js'),{reconcileRecords}=await use('lore-records.js'),api=await use('director-context.js'),old=await frozen('director-context.js');
+ const entries=Array.from({length:18},(_,i)=>{const e=makeEntry('characters','Person '+i,{id:'c'+i,alwaysLoad:true});e.sections.personality.text=('Person '+i+' never crosses the river before 21/11/738. ').repeat(8);return reconcileRecords(e);});
+ const messages=Array.from({length:12},(_,i)=>({id:'m'+i,order:i+1,role:i%2?'assistant':'user',content:('Earlier actions and responses. ').repeat(50)+(i%2?'\n<scene>date: 21/11/738 · time: 12:00 · place: River · present: Person 1</scene>':'')}));messages.push({id:'latest',order:13,role:'user',content:'Ask Person 1 and Person 2 about the river.'});
+ const before={version:2,scene:{date:'21/11/738',time:'12:00',location:'River',present:['Person 0','Person 1']},event:null,decisions:[],threads:[],commitments:[]};
+ const session={id:'test',loreSchemaVersion:3,memory:{protagonist:'Person 0',lorebooks:true,books:{characters:{on:true,budget:5000,maxCards:18}}}},original=plain({entries,messages,before,session});
+ for(const endpoint of ['http://local/mock','https://openrouter.ai/api/v1/chat/completions']){
+  const settings={directorProfileId:'d',profiles:[{id:'d',endpoint,apiKey:'mock',modelId:'mock'}],directorMaxInputTokens:30000,directorMaxOutputTokens:1000,directorRecentTurns:5};
+  const large=await old.buildDirectorContext(session,settings,messages,entries,before);
+  for(const limit of [30000,large.usedTokens-100,large.usedTokens-1400]){
+   const current={...settings,directorMaxInputTokens:limit};
+   assert.deepEqual(plain(await api.buildDirectorContext(session,current,messages,entries,before)),plain(await old.buildDirectorContext(session,current,messages,entries,before)));
+  }
+ }
+ assert.deepEqual(plain({entries,messages,before,session}),original);
+});
+
+test('cancelled Director preparation does not count or publish a request',async()=>{
+ const controller=new AbortController();controller.abort(Error('Story changed'));
+ let counts=0;const use=appHarness({stubs:{'messages.js':{getMessages:async()=>[]},'tokenizer.js':{countTokens:async()=>{counts++;return 1;}}}}),api=await use('director-context.js');
+ const settings={directorProfileId:'d',profiles:[{id:'d',endpoint:'http://local',apiKey:'mock',modelId:'mock'}],directorMaxInputTokens:30000,directorMaxOutputTokens:1000,directorRecentTurns:5};
+ await assert.rejects(api.buildDirectorContext({id:'s',memory:{}},settings,[{id:'u',order:1,role:'user',content:'Wait.'}],[],{}, {signal:controller.signal}),/Story changed/);assert.equal(counts,0);
 });
