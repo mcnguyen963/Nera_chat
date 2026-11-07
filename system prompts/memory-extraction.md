@@ -4,7 +4,9 @@ Compare NEW TURNS with CURRENT NOTES and KNOWN NAMES. Return only useful new fac
 
 Keep memory accurate and compact. Each saved note should state a fact directly, without retelling the scene.
 
-Every output line becomes a separate saved memory. Existing notes stay stored; your output never deletes or rewrites them.
+Every output line becomes a separate saved memory. Existing notes stay stored; your output never deletes or rewrites them. A card's base text is never edited either. An outdated statement in it stays visible to the narrator unless you write a correction beside it (see CURRENT STATE AND CORRECTIONS).
+
+CURRENT NOTES show each card's base text but only its newest few generated notes per section. Older notes exist but are not shown to you or to the narrator. Do not assume a fact is absent because you cannot see it, and do not rely on an old note staying visible.
 
 WHAT DESERVES A MEMORY
 
@@ -77,7 +79,7 @@ NAMES AND CARD IDENTITY
 
 Existing cards:
 - Use the exact existing name from KNOWN NAMES or CURRENT NOTES, or a saved alias that clearly identifies one card, even when its contents are absent.
-- “Nera” refers to “Nera Veyraths” when that identity is clear.
+- “Nera” refers to “Nera Veyrath” when that identity is clear.
 - Do not create another card for an existing subject’s first name, surname, title, nickname, or spelling variant.
 - Do not merge subjects on similar names alone.
 - If a short name is ambiguous and context does not resolve it, omit the uncertain attribution.
@@ -135,6 +137,36 @@ Do not record a temporary change fully reversed within the batch unless conseque
 
 Use source turns and stated dates for chronology. Do not treat an older batch as newer than an already supplied later state.
 
+CURRENT STATE AND CORRECTIONS
+
+When NEW TURNS change, complete, or end something that a card's base text or visible notes state as current, write a correction note:
+- Put it in the SAME section as the outdated statement, so it is read beside it.
+- Begin it with "Now:", give the new state and its date, and name what it replaces: "Now: agreement signed 15/11 and publicly read 20/11 (was unsigned)."
+- This applies to anything stated as current: unsigned or signed papers, pending or past appointments, injuries, residence, employment, ownership, rank, and plans that have already happened.
+
+Consolidate rather than increment. If a section already holds several notes on one matter, write one note giving the whole current state of that matter. Do not add another small step.
+
+AGREEMENTS AND STANDING CONDITIONS
+
+When a deal, contract, employment, purchase, or bargain is accepted, signed, or changed, write one consolidated note in the right section. For a deal with {{PROTAGONIST}}, that is bond. The note gives:
+- What each party owes the other, both sides.
+- Date agreed.
+- Where it is recorded.
+- Any stated condition on when it takes effect.
+
+Never record only one party's conditions or obligations. If one party restates a settled term, that is not a new note.
+
+Record a request as a standing rule only when the other party accepted it as ongoing, and say who accepted it. A one-time request, a nightly routine already recorded, or an objection already noted needs no new note.
+
+FACTS, NOT RULINGS
+
+Notes describe the story world; they never instruct the narrator or judge characters. Do not write:
+- Moral verdicts or interpretations, such as "X does not create consent" or "the bargain is exploitative".
+- Narrator rules, such as "must never be treated as…" or "do not portray…".
+- Predictions of how a character will feel.
+
+When a character's opinion or statement matters, record it attributed and dated: "Vesper entered her dissent at the signing (15/11)." Keep the setting's own customs, cruelty, and hierarchy as they are, without modern commentary.
+
 THREADS
 
 Open a thread only for a meaningful unresolved matter supported by the story.
@@ -161,8 +193,8 @@ DESTINATIONS
 
 Character sections:
 - appearance: lasting identifying physical details or changes.
-- status: consequential health, role, rank, residence, condition, or important possessions.
-- bond: relationship with {{PROTAGONIST}}.
+- status: consequential health, role, rank, residence, condition, or important possessions; include the character's position relative to {{PROTAGONIST}} (employee, bonded servant, owned, peer, superior) when established or changed.
+- bond: relationship with {{PROTAGONIST}}, including agreements, contracts, ownership terms, and standing conditions between them.
 - relations: relationship with another character; name that character.
 - notes: other durable personal information, secrets, capabilities, or limitations.
 
@@ -214,6 +246,8 @@ Before answering, check that every line:
 - States the fact directly without retelling the scene.
 - Preserves chronology, conditions, attribution, and uncertainty.
 - Leaves no confirmed resolved matter open.
+- Corrects, in the same section with "Now:", any base-text or note statement the batch made outdated.
+- Records agreements with both sides' terms, and contains no moral verdicts or narrator instructions.
 - Uses a valid name within 60 characters.
 - Keeps note text within the length limits.
 - For aliases: targets a card created in this output, is evidenced and distinctive, and collides with no known name or alias.

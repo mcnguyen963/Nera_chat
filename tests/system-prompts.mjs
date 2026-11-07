@@ -23,13 +23,13 @@ test('prompt files load once at a Pages subpath and preserve text and template d
     urls.push(url.href);
     return diskFetch(url);
   });
-  assert.equal(urls.length, Object.keys(api.prompts).length-2);
+  assert.equal(urls.length, Object.keys(api.prompts).length-1);
   assert.equal(new Set(urls).size, urls.length);
   assert.ok(Object.isFrozen(api.prompts));
   for (const [key, value] of Object.entries(api.prompts)) {
     assert.ok(value.trim(), key);
   }
-  assert.match(api.prompts.narrator, /RESOLVE IN THE SCENE: NO ARTIFICIAL DEFERRAL/);
+  assert.match(api.prompts.narrator, /NO MANUFACTURED TENSION OR THREADS/);
   assert.match(api.prompts.plan, /Never output <plan>/);
   assert.match(api.prompts.planThread, /Omit it for pure OOC/);
   assert.match(api.prompts.continuity, /A lower line is not automatically truer/);
@@ -42,4 +42,15 @@ test('missing and empty Markdown prompts fail visibly without an inline fallback
   await assert.rejects(load(async () => ({ ok:false, status:404 })), /Failed to load system prompt .*HTTP 404/);
   await assert.rejects(load(async () => ({ ok:true, text:async () => '\n  \n' })), /System prompt is empty/);
   await assert.rejects(load(async () => { throw new Error('network unavailable'); }), /network unavailable/);
+});
+
+test('all seven Settings prompt defaults exactly match the approved November 7 export',async()=>{
+ const {createHash}=await import('node:crypto'),{appHarness}=await import('./app-harness.mjs');
+ const expected=JSON.parse(await readFile(new URL('./fixtures/exported-prompt-defaults.json',import.meta.url),'utf8'));
+ const use=appHarness(),settings=await use('story-settings.js'),defaults=settings.defaultStorySettings();
+ assert.equal(Object.keys(expected).length,7);
+ for(const [key,hash]of Object.entries(expected))assert.equal(createHash('sha256').update(defaults[key]).digest('hex'),hash,key);
+ const saved=Object.fromEntries(Object.keys(expected).map(key=>[key,'Custom saved '+key]));
+ const migrated=await settings.migrateStorySettings(saved);
+ for(const [key,value]of Object.entries(saved))assert.equal(migrated[key],value,key+' saved text');
 });

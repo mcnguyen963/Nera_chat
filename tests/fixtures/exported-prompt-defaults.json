@@ -1,0 +1,9 @@
+{
+  "narratorSystemPrompt": "ddbef8e1be26941b797e733335f93b1b1b40c438b6e549812638cb83dbbfcaaa",
+  "directorNarratorSystemPrompt": "7044acced1b85346969cbc411c0e17baab228ee5b368ba920d09f71e09b8d335",
+  "summarizerSystemPrompt": "f7876693999aa13645448a75afa92804b309324016ff24e607bd755284ac0a24",
+  "memoryExtractionPrompt": "9002d3fed5cf47cd5809c7885e0a549b1014aeb51ef98854c76972a42c466b26",
+  "memoryReorganizePrompt": "bcbf738e3f66c54935ce2fd1c3bbf7a212d6c5a3c9fc77067eb558361c9bc6c2",
+  "rewriteSystemPrompt": "6ba613325b5b5d46e95eb8f8742daaa9898971ed0765e0adfb87f5b83a3f24aa",
+  "directorSystemPrompt": "9772488338ddb3e5154a97f7de5da4627b6f468741ff02fef76d33b7ea4df6de"
+}

@@ -427,9 +427,6 @@ function syncLore(force=false) {
   if(loreSessionId===session.id && !force)return;
   const sid=session.id,owner=currentUid(),epoch=dataEpoch,run=++loreLoadVersion,revision=session.loreRevision ?? 0;loreSessionId=sid;
   loreReady=(async()=>{
-    // const cached=await loadStoryData(owner,sid);
-    // Disabled: a different server revision must not invalidate initialized cached lore.
-    // const entries=!force && cached?.lore?.revision===revision?cached.lore.entries:await getLore(sid);
     const snapshot=await loreStore.getLoreSnapshot(sid),entries=snapshot.entries;
     if(currentUid()!==owner || state.sessionId!==sid || epoch!==dataEpoch || run!==loreLoadVersion)return;
     loreEntries=entries;loreStatus='ok';

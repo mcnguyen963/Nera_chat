@@ -494,7 +494,7 @@ test('Thinking and sampling controls use only enabled request parameters', async
   const view = await h.use('ui/settings-view.js'); view.initSettingsView(); view.openSettingsPopup();
   assert.equal(h.settings.DEFAULT_SETTINGS.maxResponseTokens, 8192);
   assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /interactive (?:dark fantasy )?roleplay/);
-  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /RESOLVE IN THE SCENE: NO ARTIFICIAL DEFERRAL/);
+  assert.match(h.settings.DEFAULT_SETTINGS.narratorSystemPrompt, /RESOLVE IN THE SCENE: NO DEFERRAL/);
   assert.equal(h.el('thinking-options').classList.contains('hidden'), true);
   assert.equal(h.el('advanced-options').classList.contains('hidden'), true);
   h.el('set-reasoning-enabled').checked = true;
@@ -1142,7 +1142,7 @@ test('multi-call summary rejects source changes and never advances its checkpoin
   const h = await harness(), { runSummarization } = await h.use('summarizer.js');
   const history = Array.from({ length:6 },(_,i) => ({ id:'m'+i,order:i+1,role:i%2 ? 'assistant' : 'user',content:'Event '.repeat(50) }));
   let checked = 0;
-  await assert.rejects(runSummarization({ id:'s',historyRevision:3 },{ ...h.state.settings,narratorSystemPrompt:'Narrate.',modelId:'test',streaming:false,maxContextTokens:20000,maxResponseTokens:100,keepRecentMessagesAfterSummary:0,summarizerChunkTokens:650 },{ messages:history,validateSource:async expected => { assert.equal(expected.historyRevision,3); if (++checked === 2) throw new Error('Source changed'); } }),/Source changed/);
+  await assert.rejects(runSummarization({ id:'s',historyRevision:3 },{ ...h.state.settings,narratorSystemPrompt:'Narrate.',summarizerSystemPrompt:'Summarize.',modelId:'test',streaming:false,maxContextTokens:20000,maxResponseTokens:100,keepRecentMessagesAfterSummary:0,summarizerChunkTokens:650 },{ messages:history,validateSource:async expected => { assert.equal(expected.historyRevision,3); if (++checked === 2) throw new Error('Source changed'); } }),/Source changed/);
   assert.equal(h.calls.requests.length,2); assert.equal(h.calls.messages.length,0);
   assert.ok(h.calls.requests.every(r => !r.messages.some(m => /1000-2000 words|DETAILED/.test(m.content))));
 });
@@ -1668,7 +1668,7 @@ test('B15 stale turn after user commit has already cleared its sent draft',async
  await h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});assert.equal(h.el('chat-input').value,'');assert.equal(h.calls.requests.length,0);
 });
 test('R3 blocked device storage does not prevent scene messages or memory settings rendering',async()=>{
- const h=await harness();h.calls.storageBlocked=true;const chat=await openImprovementChat(h,{memory:{scene:true}},[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Hello',scene:'date: Day 1 · time: night · place: Inn'}]);
+ const h=await harness();h.calls.storageBlocked=true;await openImprovementChat(h,{memory:{scene:true}},[{id:'u',order:1,role:'user',content:'Begin.'},{id:'a',order:2,role:'assistant',content:'Hello',scene:'date: Day 1 · time: night · place: Inn'}]);
  assert.ok(h.el('message-list').querySelector('.scene-chip'));const settings=await h.use('ui/settings-view.js');settings.initSettingsView();settings.openSettingsPopup(null,{panel:'memory'});await Promise.resolve();assert.equal(h.el('mem-showScene').checked,true);
 });
 
@@ -2941,7 +2941,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 
 test('accepted Send immediately protects Stop for 500 ms, rejects duplicate submits, and preserves its draft during preparation',async()=>{
- const timers=controlledTimers(),h=await harness({timers}),chat=await openImprovementChat(h);
+ const timers=controlledTimers(),h=await harness({timers});await openImprovementChat(h);
  const waiting=deferred();h.calls.lorePending=true;h.calls.onLoreWait=()=>waiting.promise;
  h.el('chat-input').value='Keep this draft';const bubble=h.el('message-list').children.find(n=>n.dataset.messageId);
  const first=h.el('composer').dispatchEvent({type:'submit',preventDefault(){}});
@@ -3103,7 +3103,6 @@ test('Sync resolves a persisted stale-save conflict after reload and removes dep
    }
    const guard=await h.use('continuity.js');h.calls.onMessageSave=async(_sid,_message,options)=>guard.assertSource(remote,options.expectedSource);
    const chat=await h.use('ui/chat-view.js');h.calls.settingsDoc=h.settings.storedSettings(h.state.settings);chat.initChatView();chat.setSession(sid);await new Promise(r=>setTimeout(r,0));
-   const cached=await cache.loadChatCache(uid,sid);
    h.calls.sessionDocs ??= {};h.calls.sessionDocs[sid]=remote;h.calls.serverHistory=serverMessages;
    await waitForParallel(()=>chat.memorySnapshot()?.historyComplete);await settle();
    return {h,chat,cache,store:(await h.use('local-story-store.js')).storyStore(sid)};
@@ -3149,7 +3148,7 @@ for(const event of ['visibilitychange','online','pageshow','focus'])test('foregr
 });
 
 test('finishing a settings save does not start automatic full Sync',async()=>{
- const h=await harness(),chat=await openImprovementChat(h);await settle();h.document.hidden=false;
+ const h=await harness();await openImprovementChat(h);await settle();h.document.hidden=false;
  const pending=await h.use('ui/pending-settings.js'),finish=pending.beginSettingsSave('test-user','improvement');
  h.calls.sessionDocs.improvement={...h.calls.sessionDocs.improvement,historyRevision:5};h.calls.serverHistory=[{id:'phone',role:'assistant',order:1,content:'Phone'}];
  const reads=h.calls.sessionReads;await h.document.dispatchEvent({type:'visibilitychange'});finish(true);await settle();
@@ -3311,7 +3310,7 @@ for(const switched of ['story','account','away-back'])test('Director result afte
 });
 
 test('Director local application leaves cache persistence outside the save completion wait and survives reopening',async()=>{
- const caches=[],{h,chat,store,open}=await directorSaveHarness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},saveStoryData:(_u,_s,value)=>{caches.push(structuredClone(value));return new Promise(()=>{});}}});
+ const caches=[],{chat,store,open}=await directorSaveHarness({chatCache:{loadChatCache:async()=>null,saveChatCache:async()=>{},deleteChatCache:async()=>{},saveStoryData:(_u,_s,value)=>{caches.push(structuredClone(value));return new Promise(()=>{});}}});
  const root=await open();await namedButton(root,'Save live state').click();assert.equal(store.confirmed.session.directorState.scene.time,'21:15');assert.ok(caches.some(v=>v.confirmed?.turns.manual_saved));
  chat.setSession(null);chat.setSession('improvement');assert.equal(chat.memorySnapshot().session.directorState.scene.time,'21:15');
 });
@@ -3698,7 +3697,7 @@ async function deviceUploadChat() {
   replaceStoryCache:async(...args)=>{await h.calls.onDeviceCache?.();if(h.calls.failDeviceCache)throw Error('Cache failed');(h.calls.deviceReplacements ??= []).push(structuredClone(args));},
  };
  h=await harness({chatCache,extraStubs:{'device-story-upload.js':{deviceStoryCopies:pure.deviceStoryCopies,validateDeviceStory:pure.validateDeviceStory,
-  uploadDeviceStory:async(copy,options)=>{
+  uploadDeviceStory:async(copy)=>{
    (h.calls.deviceUploads ??= []).push(structuredClone(copy));await h.calls.onDeviceUpload?.();
    const session={...copy.session,historyRevision:20,loreRevision:10,storySettingsRevision:10},loreSnapshot={...copy.loreSnapshot,entries:copy.lore,initialized:true,loadedRevision:10,lastCommittedRevision:10};
    const ranges=[{id:'device-chunk',firstOrder:copy.messages[0].order,lastOrder:copy.messages.at(-1).order}];
@@ -4088,7 +4087,7 @@ test('WP-02 a healthy Director call may finish after the preparation deadline',a
  const timers=controlledTimers(),response=deferred();let entered=false;
  const h=await harness({timers,extraStubs:{'director-turn.js':{prepareDirectorTurn:async()=>{entered=true;return response.promise;}}}});
  h.state.settings.narrationMode='director';
- const chat=await openImprovementChat(h,{},[{id:'u',role:'user',order:1,content:'Wait.'}]);
+ await openImprovementChat(h,{},[{id:'u',role:'user',order:1,content:'Wait.'}]);
  await settle();const retry=namedButton(h.el('message-list'),'Retry reply').click();
  for(let i=0;i<100&&!entered;i++){timers.advance(0);await settle();}
  assert.equal(entered,true);
@@ -4229,7 +4228,7 @@ test('card editor names the section and number of older notes hidden from the na
 });
 
 test('context viewer reports older notes omitted solely by the saved narrator cap',async()=>{
- const h=await harness(),l=await h.use('lore-lines.js'),e=l.makeEntry('characters','Mira',{alwaysLoad:true});
+ const h=await harness(),l=await h.use('lore-lines.js'),e=l.makeEntry('characters','Mira',{alwaysLoad:true});h.state.settings.maxContextTokens=120000;
  const history=Array.from({length:12},(_,i)=>({id:'cap'+i,order:i+1,role:i%2?'assistant':'user',content:'Mira waits.'}));
  e.sections.status.lines=Array.from({length:12},(_,i)=>({id:'cap-note'+i,text:'Saved status '+i,turn:Math.min(i+1,6),src:Math.min(i+1,6)*2,by:'auto',at:i+1,evidence:[{id:'cap'+(Math.min(i+1,6)*2-1),order:Math.min(i+1,6)*2,revision:0}],sourceRevision:0}));h.calls.loreEntries=[e];
  await openImprovementChat(h,{memory:{lorebooks:true,loreNotesPerSection:3}},history);

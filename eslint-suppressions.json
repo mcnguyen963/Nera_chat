@@ -140,11 +140,6 @@
       "count": 1
     }
   },
-  "tests/regressions.mjs": {
-    "no-unused-vars": {
-      "count": 6
-    }
-  },
   "tests/story-settings.mjs": {
     "no-unused-vars": {
       "count": 1
