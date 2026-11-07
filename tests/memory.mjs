@@ -825,7 +825,9 @@ test('reorganize base-text proposals are explicit, unticked and keep every gener
 
 for(const [label,replacement,duplicate] of [
  ['punctuation','Mira remains wary of Nera, after signing the agreement on 15/11 and keeps 2 copies in her room.',true],
- ['filler','Mira still remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',true],
+ ['filler','Mira also remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',true],
+ ['temporal still','Mira still remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',false],
+ ['temporal already','Mira already remains wary of Nera after signing the agreement on 15/11 and keeps 2 copies in her room.',false],
  ['number','Mira remains wary of Nera after signing the agreement on 15/11 and keeps 3 copies in her room.',false],
  ['name','Mira remains wary of Lina after signing the agreement on 15/11 and keeps 2 copies in her room.',false],
  ['date','Mira remains wary of Nera after signing the agreement on 16/11 and keeps 2 copies in her room.',false],

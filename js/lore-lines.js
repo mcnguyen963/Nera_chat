@@ -104,7 +104,7 @@ export function parseMemoryLines(text,ctx={}) {
 }
 // Only punctuation or one filler word may differ. Preserve ordered factual
 // words as well as names, numbers and dates to avoid hiding changed facts.
-const DUPLICATE_FILLER=new Set(['also','just','really','still','simply','very','actually','basically']);
+const DUPLICATE_FILLER=new Set(['also','just','really','simply','very','actually','basically']);
 function nearDuplicate(a,b) {
   const tokens=text=>String(text).normalize('NFC').match(/[\p{L}\p{N}]+/gu) ?? [];
   const leftTokens=tokens(a),rightTokens=tokens(b),left=new Set(leftTokens.map(w=>w.toLowerCase())),right=new Set(rightTokens.map(w=>w.toLowerCase()));
