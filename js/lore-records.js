@@ -25,19 +25,38 @@ function sourceCategory(entry,section) {
   if(entry.book==='events')return entry.kind==='thread' ? 'thread' : 'event';
   return ({personality:'characterization',appearance:'appearance',description:'appearance',status:'state',state:'state',bond:'relationship',relations:'relationship'})[section] ?? 'background';
 }
-export function resolveRecord(entry,record) {
-  try {
-    if(!RECORD_CATEGORIES.includes(record.category) || !record.sources?.length)throw new Error('Invalid record');
-    const sources=recordSources(entry),resolved=record.sources.map(ref=>{
-      const source=sources.find(s=>s.id===ref.sourceId),text=source?.data.text;
-      if(!source || fingerprint(source)!==ref.fingerprint)throw new Error('Source changed, moved, or unavailable');
-      if(!Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.end)||ref.start<0||ref.end<=ref.start||ref.end>text.length)throw new Error('Invalid source range');
-      if(source.lineId!=null && (ref.start!==0||ref.end!==text.length))throw new Error('Update notes are indivisible');
-      return {...ref,section:source.section,lineId:source.lineId,text:text.slice(ref.start,ref.end),source};
-    });
-    return {valid:true,sources:resolved,text:resolved.map(s=>s.text).join('\n')};
-  }catch(error){return {valid:false,reason:error.message,sources:[],text:''};}
+// A resolver belongs to one synchronous preparation phase. Do not retain it
+// across edits or capped source sets: the next phase must see complete sources
+// again, including provenance changes outside any selected quotation.
+export function createRecordResolver(entry) {
+  let sources;
+  const hashes=new Map();
+  const sourceFor=id=>{
+    if(!sources){sources=new Map();for(const source of recordSources(entry))if(!sources.has(source.id))sources.set(source.id,source);}
+    return sources.get(id);
+  };
+  const sourceHash=source=>{if(!hashes.has(source))hashes.set(source,fingerprint(source));return hashes.get(source);};
+  function resolve(record) {
+    try {
+      if(!RECORD_CATEGORIES.includes(record.category) || !record.sources?.length)throw new Error('Invalid record');
+      const resolved=record.sources.map(ref=>{
+        const source=sourceFor(ref.sourceId),text=source?.data.text;
+        if(!source || sourceHash(source)!==ref.fingerprint)throw new Error('Source changed, moved, or unavailable');
+        if(!Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.end)||ref.start<0||ref.end<=ref.start||ref.end>text.length)throw new Error('Invalid source range');
+        if(source.lineId!=null && (ref.start!==0||ref.end!==text.length))throw new Error('Update notes are indivisible');
+        return {...ref,section:source.section,lineId:source.lineId,text:text.slice(ref.start,ref.end),source};
+      });
+      return {valid:true,sources:resolved,text:resolved.map(s=>s.text).join('\n')};
+    }catch(error){return {valid:false,reason:error.message,sources:[],text:''};}
+  }
+  const approved=record=>record.coreCandidate===true && record.approval?.fingerprint===fingerprint(approvalPayload(entry,record)) && resolve(record).valid;
+  const supersession=record=>{
+    const targets=(record.supersedes ?? []).map(id=>entry.recordLayout?.records?.find(r=>r.id===id));
+    return !!record.replacementApproval && resolve(record).valid && targets.length>0 && targets.every(r=>r && r.id!==record.id && resolve(r).valid) && record.replacementApproval===fingerprint({record:approvalPayload(entry,record),targets:targets.map(r=>approvalPayload(entry,r))});
+  };
+  return {resolve,approved,supersession};
 }
+export function resolveRecord(entry,record) { return createRecordResolver(entry).resolve(record); }
 export function archivedRecord(entry,record) {
   const sources=record.sources.map(ref=>{
     const source=(entry.recordLayout?.sourceArchive ?? []).find(s=>s.id===ref.sourceId&&fingerprint(s)===ref.fingerprint);
@@ -47,7 +66,7 @@ export function archivedRecord(entry,record) {
 function approvalPayload(entry,record) {
   return {entryId:entry.id,category:record.category,sources:record.sources,relatedEntryIds:record.relatedEntryIds ?? [],triggers:record.triggers ?? [],supersedes:record.supersedes ?? []};
 }
-export function approvedRecord(entry,record) { return record.coreCandidate===true && record.approval?.fingerprint===fingerprint(approvalPayload(entry,record)) && resolveRecord(entry,record).valid; }
+export function approvedRecord(entry,record) { return createRecordResolver(entry).approved(record); }
 export function approveRecord(entry,record,now=Date.now()) {
   const resolved=resolveRecord(entry,record);if(!resolved.valid)throw new Error(resolved.reason);
   record.coreCandidate=true;record.approval={fingerprint:fingerprint(approvalPayload(entry,record)),at:now};return record;
@@ -61,15 +80,12 @@ export function approveSupersession(entry,record) {
   if(targets.some(r=>visits(r.id)))throw new Error('Replacement links cannot form a cycle');
   record.replacementApproval=fingerprint({record:approvalPayload(entry,record),targets:targets.map(r=>approvalPayload(entry,r))});
 }
-export function validSupersession(entry,record) {
-  const targets=(record.supersedes ?? []).map(id=>entry.recordLayout?.records?.find(r=>r.id===id));
-  return !!record.replacementApproval && resolveRecord(entry,record).valid && targets.length>0 && targets.every(r=>r && r.id!==record.id && resolveRecord(entry,r).valid) && record.replacementApproval===fingerprint({record:approvalPayload(entry,record),targets:targets.map(r=>approvalPayload(entry,r))});
-}
+export function validSupersession(entry,record) { return createRecordResolver(entry).supersession(record); }
 export function reconcileRecords(entry) {
   validateImportance(entry);
   if(entry.book==='plan')validateSchedule(entry.schedule);
   if(entry.recordLayout)validateRecords(entry);
-  const records=structuredClone(entry.recordLayout?.records ?? []),sources=recordSources(entry);
+  const records=structuredClone(entry.recordLayout?.records ?? []),sources=recordSources(entry),resolver=createRecordResolver(entry);
   if(!entry.recordLayout)for(const bundle of entry.coreReferences ?? []) {
     if(bundle.reviewed!==true||!bundle.sources?.length)continue;
     const refs=bundle.sources.map(ref=>{
@@ -80,14 +96,14 @@ export function reconcileRecords(entry) {
     });
     if(refs.every(Boolean)){const record={id:bundle.id,category:'constraint',coreCandidate:true,relatedEntryIds:[],triggers:[],sources:refs};approveRecord(entry,record);records.push(record);}
   }
-  for(const record of records){if(record.approval&&!approvedRecord(entry,record))delete record.approval;if(record.replacementApproval&&!validSupersession(entry,record))delete record.replacementApproval;}
+  for(const record of records){if(record.approval&&!resolver.approved(record))delete record.approval;if(record.replacementApproval&&!resolver.supersession(record))delete record.replacementApproval;}
   for(const source of sources) {
     const text=source.data.text;if(!text?.trim())continue;
     // A bundle with an unavailable qualifier must not spill its unchanged claim
     // into an independent fallback. Only genuinely new/edited source text is new.
-    const spans=records.flatMap(r=>r.sources.filter(s=>s.sourceId===source.id&&s.fingerprint===fingerprint(source)&&s.start>=0&&s.end<=text.length).map(s=>[s.start,s.end])).sort((a,b)=>a[0]-b[0]);
-    let cursor=0;
     const hash=fingerprint(source);
+    const spans=records.flatMap(r=>r.sources.filter(s=>s.sourceId===source.id&&s.fingerprint===hash&&s.start>=0&&s.end<=text.length).map(s=>[s.start,s.end])).sort((a,b)=>a[0]-b[0]);
+    let cursor=0;
     const add=(start,end)=>{if(text.slice(start,end).trim())records.push({id:'record_auto_'+fingerprint({entryId:entry.id,sourceId:source.id,start,end,hash}),category:sourceCategory(entry,source.section),coreCandidate:false,relatedEntryIds:[],triggers:[],sources:[{sourceId:source.id,start,end,fingerprint:hash}]});};
     for(const [start,end] of spans){if(start>cursor)add(cursor,start);cursor=Math.max(cursor,end);}
     if(cursor<text.length)add(cursor,text.length);

@@ -1,6 +1,6 @@
 import { sortLines } from './lore-lines.js';
 import { resolveCore } from './character-core.js';
-import { resolveRecord, approvedRecord, validSupersession } from './lore-records.js';
+import { createRecordResolver } from './lore-records.js';
 
 // Request-only metadata: symbols survive local spreads, but never enter JSON or
 // persisted card documents. Resolve approvals against complete sources first.
@@ -15,19 +15,19 @@ export function capLoreNotes(entry,limit=3,semanticRecordIds=[]) {
   if(!Number.isSafeInteger(limit) || limit<0)limit=3;
   if(entry.book==='plan' || entry[WINDOW]?.limit===limit && !semanticRecordIds.length)return entry;
   if(limit===0)return entry;
-  const protectedIds=new Set(),pinnedIds=new Set(),records=entry.recordLayout?.records ?? [];
-  const replaced=new Set(records.filter(r=>validSupersession(entry,r)).flatMap(r=>r.supersedes));
+  const protectedIds=new Set(),pinnedIds=new Set(),records=entry.recordLayout?.records ?? [],resolver=createRecordResolver(entry);
+  const replaced=new Set(records.filter(r=>resolver.supersession(r)).flatMap(r=>r.supersedes));
   if(entry.book==='characters')for(const bundle of entry.coreReferences ?? []) {
     const core=resolveCore(entry,bundle);
     if(core.valid)for(const s of core.sources)if(s.lineId!=null)protectedIds.add(keyOf(s.section,s.lineId));
   }
-  const resolved=records.map(record=>({record,result:resolveRecord(entry,record)}));
+  const resolved=records.map(record=>({record,result:resolver.resolve(record)}));
   const semanticIds=new Set(semanticRecordIds);
   for(const {record,result} of resolved)if(semanticIds.has(record.id) && result.valid && !replaced.has(record.id))
     for(const source of result.sources)if(source.lineId!=null)protectedIds.add(keyOf(source.section,source.lineId));
   for(const {record,result} of resolved) {
     if(!result.valid || replaced.has(record.id))continue;
-    const core=entry.book==='characters' && approvedRecord(entry,record);
+    const core=entry.book==='characters' && resolver.approved(record);
     if(!core && !record.pinned)continue;
     for(const s of result.sources)if(s.lineId!=null)(core ? protectedIds : pinnedIds).add(keyOf(s.section,s.lineId));
   }

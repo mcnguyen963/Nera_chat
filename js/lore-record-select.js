@@ -1,6 +1,6 @@
 import {createWorkBudget} from './ui-work.js';
 import { allocateCharacterPools } from './character-budget.js';
-import { reconcileRecords, resolveRecord, archivedRecord, approvedRecord, validSupersession } from './lore-records.js';
+import { reconcileRecords, createRecordResolver, archivedRecord } from './lore-records.js';
 import { renderEntry, findMentions, sortLines } from './lore-select.js';
 import { normalizeName } from './lore-lines.js';
 import { createDetailMatcher } from './character-select.js';
@@ -31,22 +31,22 @@ export function renderRecordSelection(entry,records,protagonist='') {
 }
 export function recordUnits(entry,{currentText='',recentText='',anchors=new Set(),index,loreNotesPerSection=3,semanticRecords={},semanticOnly=false,preferSemantic=false,baselineSources=null,mentionFinder=null}={}) {
   const complete=reconcileRecords(entry);
-  const matched=new Set(semanticRecords[entry.id] ?? []);
+  const completeResolver=createRecordResolver(complete),matched=new Set(semanticRecords[entry.id] ?? []);
   entry=capLoreNotes(complete,loreNotesPerSection,[...matched]);
   const direct=new Set(noteOmissions(entry).map(n=>JSON.stringify([n.section,n.lineId]))),companions=new Map();
   for(const record of complete.recordLayout.records) {
     const reason=cappedRecordReason(entry,record.id);if(!reason)continue;
-    for(const source of resolveRecord(complete,record).sources) {
+    for(const source of completeResolver.resolve(record).sources) {
       const key=JSON.stringify([source.section,source.lineId]);
       if(source.lineId==null || direct.has(key))continue;
       companions.set(key,{entryId:entry.id,book:entry.book,name:entry.name,section:source.section,lineId:source.lineId,text:source.text,reason:'complete record omitted: '+reason,kind:reason.startsWith('pinned')?'pinned':'ordinary',limit:loreNotesPerSection});
     }
   }
   const matchDetails=createDetailMatcher(currentText,recentText,entry);
-  const resolved=entry.recordLayout.records.map(record=>({...record,resolved:resolveRecord(entry,record)}));
-  const replaced=new Set([...supersededBeforeCap(entry),...resolved.filter(r=>validSupersession(entry,r)).flatMap(r=>r.supersedes)]);
+  const resolver=createRecordResolver(entry),resolved=entry.recordLayout.records.map(record=>({...record,resolved:resolver.resolve(record)}));
+  const replaced=new Set([...supersededBeforeCap(entry),...resolved.filter(r=>resolver.supersession(r)).flatMap(r=>r.supersedes)]);
   const units=resolved.map(r=>{
-    const capReason=cappedRecordReason(entry,r.id),core=approvedRecord(entry,r),matches=matchDetails(r.resolved.text);
+    const capReason=cappedRecordReason(entry,r.id),core=resolver.approved(r),matches=matchDetails(r.resolved.text);
     const explicitCurrent=(r.triggers ?? []).filter(t=>phraseMatch(currentText,t)),explicitRecent=(r.triggers ?? []).filter(t=>phraseMatch(recentText,t));
     const literalLinks=index ? ['characters','locations','facts','events'].flatMap(book=>mentionFinder ? mentionFinder(r.resolved.text,book) : findMentions(r.resolved.text,index,book)) : [];
     const linked=[...new Set([...(r.relatedEntryIds ?? []),...literalLinks])].filter(id=>id!==entry.id && anchors.has(id));
