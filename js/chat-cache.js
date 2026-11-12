@@ -80,8 +80,8 @@ export async function saveChatCache(uid,sessionId,value) {
   });
 }
 export async function replaceStoryCache(uid,sid,snapshot,data,{discardPending=false}={}) {
-  const db=await database();if(!db){if(discardPending)throw new Error('Could not replace local story data.');return;}
-  await new Promise((resolve,reject)=>{
+  const db=await database();if(!db){if(discardPending)throw new Error('Could not replace local story data.');return false;}
+  return new Promise((resolve,reject)=>{
     const tx=db.transaction(discardPending?[STORE,'storyData','outbox','operations','loreCache']:[STORE,'storyData','loreCache'],'readwrite'),key=`${uid}:${sid}`;
     if(data.loreSnapshot)tx.objectStore('loreCache').put({key,value:data.loreSnapshot});
     tx.objectStore(STORE).put({key,uid,savedAt:Date.now(),value:snapshot});
@@ -91,7 +91,7 @@ export async function replaceStoryCache(uid,sid,snapshot,data,{discardPending=fa
       const outbox=tx.objectStore('outbox'),header=outbox.get(key);
       header.onsuccess=()=>{for(const id of header.result?.value?.ids ?? [])tx.objectStore('operations').delete(key+':'+id);outbox.delete(key);};
     }
-    tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error ?? new Error('Could not cache refreshed story.'));
+    tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>reject(tx.error ?? new Error('Could not cache refreshed story.'));
   });
 }
 export async function clearChatCache(uid) {
