@@ -356,6 +356,18 @@ test('forgetting a story clears collaborators and reopening cannot render its ol
  chat.forgetChatSession('improvement');await settle();assert.equal(stores.storyStore('improvement'),undefined);assert.ok(h.calls.memoryStopped.includes('improvement'));assert.deepEqual(deleted,[['test-user','improvement']]);assert.ok(h.calls.forgotLore.some(a=>a[0]==='test-user'&&a[1]==='improvement'));
  h.calls.missingSessions=['improvement'];h.calls.history=[];chat.setSession('improvement');await settle();assert.ok(!h.el('message-list').querySelectorAll('.msg-content').some(e=>e.textContent.includes('DELETED_HISTORY')));assert.equal(chat.memorySnapshot(),null);chat.setSession(null);
 });
+test('Recovered newer device history replaces the older display cache on screen',async()=>{
+ const messages=Array.from({length:300},(_,i)=>({id:'canonical-'+i,order:i+1,role:i%2?'assistant':'user',content:'Canonical message '+i}));
+ const metadata={id:'recovered-cache',title:'Story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:0};
+ const h=await harness({chatCache:{loadChatCache:async()=>({session:metadata,recent:messages.slice(0,100),history:messages.slice(0,100),historyRevision:0,hasEarlier:false})}});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('recovered-cache');
+ await waitForParallel(()=>h.el('message-list').children.some(node=>node.dataset.messageId==='canonical-99'));
+ h.stageLocalSession({...metadata,historyRevision:1},'recovered-cache');await h.loadLocalStory({messages},'recovered-cache');
+ const rows=h.el('message-list').children.filter(node=>node.dataset.messageId);
+ assert.equal(rows.length,100);assert.equal(rows[0].dataset.messageId,'canonical-200');assert.equal(rows.at(-1).dataset.messageId,'canonical-299');
+ assert.equal(chat.memorySnapshot().messages.length,300);assert.equal(h.calls.historyReads,0);assert.equal(h.calls.sessionReads ?? 0,0);assert.equal(h.calls.requests.length,0);
+});
+
 test('sidebar restores this account’s selected story after reload without new cloud work',async()=>{
  const h=await harness(),chat=await h.use('ui/chat-view.js');chat.initChatView();(await h.use('ui/sidebar.js')).initSidebar();
  h.stageLocalSession({id:'B'},'B');h.calls.sidebarCallback([{id:'A',title:'A'},{id:'B',title:'B'}]);

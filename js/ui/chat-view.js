@@ -146,7 +146,7 @@ function applyWorkingStory(view,status) {
   if(storyStore(state.sessionId)?.requiresReconciliation || status.paused && directStorySaves.has(currentUid()+':'+state.sessionId))return;
   if(!status.pending && session && revisionFields.some(key=>(view.session[key] ?? 0)<(session[key] ?? 0)))return;
   if(!session || view.session.id!==state.sessionId)return;
-  const changed=(!renderedMessages.size && view.messages.length>0) || !sameHistoryRendering(historyMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
+  const changed=(!renderedMessages.size && view.messages.length>0) || !sameHistoryRendering(lastMessages,view.messages) || preparationKey(session)!==preparationKey(view.session);
   session={...view.session};historyMessages=view.messages;historyRevision=session.historyRevision ?? 0;
   syncStatus=status;latestReady=true;hasEarlier=false;
   if(changed)renderMessages(historyMessages);
@@ -889,7 +889,7 @@ function subscribeChat(sessionId) {
     const [outbox,aux]=await Promise.all([storyQueueStorage.load(owner,sessionId),loadStoryData(owner,sessionId)]);
     if(!active())return;
     const recovered=outbox?.base ?? aux?.confirmed;
-    if(recovered && (outbox || !session || (recovered.session.historyRevision ?? 0)>(session.historyRevision ?? 0))){session=recovered.session;historyMessages=recovered.messages;historyRevision=session.historyRevision ?? 0;lastMessages=historyMessages.slice(-PAGE_SIZE);hasEarlier=false;latestReady=true;}
+    if(recovered && (outbox || !session || (recovered.session.historyRevision ?? 0)>(session.historyRevision ?? 0))){session=recovered.session;historyMessages=recovered.messages;historyRevision=session.historyRevision ?? 0;hasEarlier=false;latestReady=true;}
     if(!session){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;if(!session || session.deleting)throw new Error('Story no longer exists.');}
     if(session.storageVersion!==2 || session.continuityVersion!==2 || session.lookupVersion!==1){await messagesApi.ensureContinuityMetadata(sessionId);if(!active())return;session=await getSessionFromServer(sessionId);if(!active())return;historyMessages=null;historyRevision=null;}
     latestReady=true;syncLore();
