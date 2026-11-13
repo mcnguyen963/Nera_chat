@@ -1302,6 +1302,44 @@ async function openImprovementChat(h, metadata = {}, messages = []) {
   return chat;
 }
 
+function readingGeometry(h,rowHeight=40) {
+ const list=h.el('message-list');list.clientHeight=400;
+ const rect=node=>{let top=-list.scrollTop;for(const row of list.children){if(row===node)break;top+=rowHeight;}return {top,bottom:top+rowHeight,height:rowHeight,width:320};};
+ list.getBoundingClientRect=()=>({top:list.children.some(node=>node.dataset.messageId) ? 0 : 640,bottom:400,height:400,width:320});
+ Object.defineProperty(list,'scrollHeight',{get:()=>list.children.length*rowHeight});
+ const create=h.document.createElement;h.document.createElement=tag=>{const node=create(tag);node.getBoundingClientRect=()=>rect(node);return node;};
+ return list;
+}
+
+test('A fresh page restores an earlier reading anchor from local history after layout changes, without cloud reads',async()=>{
+ const messages=Array.from({length:300},(_,i)=>({id:'read-'+i,order:i+1,role:i%2?'assistant':'user',content:'Reading message '+i}));
+ const first=await harness(),list=readingGeometry(first);await openImprovementChat(first,{},messages);
+ await list.querySelector('.earlier-messages').click();
+ const row=list.children.find(node=>node.dataset.messageId==='read-130');list.scrollTop+=row.getBoundingClientRect().top+17;
+ await list.dispatchEvent({type:'scroll'});for(const fn of first.calls.windowListeners.pagehide)fn();
+ const next=await harness(),nextList=readingGeometry(next,60);for(const [key,value]of first.localCache)next.localCache.set(key,value);
+ await openImprovementChat(next,{},messages);
+ assert.equal(nextList.children.find(node=>node.dataset.messageId==='read-130')?.getBoundingClientRect().top,-17);
+ assert.equal(nextList.children.filter(node=>node.dataset.messageId).length,170,'Only the tail needed to include the saved anchor is rendered');
+ assert.equal(next.calls.historyReads,0);assert.equal(next.calls.sessionReads ?? 0,0);assert.equal(next.calls.requests.length,0);
+ const top=nextList.scrollTop;await next.loadLocalStory({messages});assert.equal(nextList.scrollTop,top,'Repeated initialization updates must not restore twice');
+ const other=await harness(),otherList=readingGeometry(other);other.calls.uid='another-account';for(const [key,value]of first.localCache)other.localCache.set(key,value);
+ await openImprovementChat(other,{},messages);assert.equal(otherList.children.filter(node=>node.dataset.messageId).length,100);
+});
+
+test('An older display cache cannot consume a reading anchor from recovered local work',async()=>{
+ const messages=Array.from({length:300},(_,i)=>({id:'recover-read-'+i,order:i+1,role:i%2?'assistant':'user',content:'Recovered reading '+i}));
+ const metadata={id:'improvement',title:'Story',storageVersion:2,continuityVersion:2,lookupVersion:1,storySettingsRevision:1,historyRevision:0};
+ const h=await harness({chatCache:{loadChatCache:async()=>({session:metadata,recent:messages.slice(0,100),history:messages.slice(0,100),historyRevision:0,hasEarlier:false})}}),list=readingGeometry(h);
+ const {createReadingPositionStore}=await h.use('ui/reading-recovery.js');createReadingPositionStore().write('test-user','improvement',{sticky:false,id:'recover-read-250',order:251,offset:-12});
+ const chat=await h.use('ui/chat-view.js');chat.initChatView();chat.setSession('improvement');
+ await waitForParallel(()=>list.children.some(node=>node.dataset.messageId==='recover-read-99'));
+ for(const fn of h.calls.windowListeners.pagehide)fn();
+ h.stageLocalSession({...metadata,historyRevision:1},'improvement');await h.loadLocalStory({messages});
+ assert.equal(list.children.find(node=>node.dataset.messageId==='recover-read-250')?.getBoundingClientRect().top,-12);
+ assert.equal(h.calls.historyReads,0);assert.equal(h.calls.requests.length,0);
+});
+
 test('large lore lists bound initial work and cancel rows from obsolete searches',async()=>{
  const source=await readFile(new URL('../js/ui/chat-view.js',import.meta.url),'utf8'),counts={snapshots:0};
  const h=await harness({globals:{renderCounts:counts},sources:{'ui/chat-view.js':source.replace('export function memorySnapshot(','function renderSnapshotOriginal(')+'\nexport function memorySnapshot(...args){renderCounts.snapshots++;return renderSnapshotOriginal(...args);}'}});

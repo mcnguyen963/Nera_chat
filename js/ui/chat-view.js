@@ -28,7 +28,8 @@ import {initThinkingPicker} from './thinking-picker.js';
 import {messageMenu, initMessageMenus} from './message-menu.js';
 import {copyDisplayedMessage, initFloatingCopy} from './message-copy.js';
 import {initJumpToLatest} from './jump-to-latest.js';
-import {isNearBottom as listIsNearBottom} from './scroll-position.js';
+import {isNearBottom as listIsNearBottom,captureListPosition,restoreListPosition as restorePosition} from './scroll-position.js';
+import {createReadingRecovery,createReadingPositionStore} from './reading-recovery.js';
 import {createComposerSizer, observeComposerInset} from './composer-size.js';
 import {createIndicatorRefresh} from './indicator-refresh.js';
 import {continuationTarget,continuationPrefix,appendContinuation} from '../continuation.js';
@@ -288,7 +289,7 @@ function applyLocalChange(token,result,mutate) {
   historyMessages=historyMessages && !newerSnapshot && before===result.historyRevision-1 ? mutate(historyMessages) : null;
   historyRevision=historyMessages ? result.historyRevision : null;
 }
-let wasNearBottom = true;
+let wasNearBottom = true,readingRecovery;const readingPositions=createReadingPositionStore();
 let lastProviderUsage = null;
 const memoryDeferrals=new Map(),summaryBackoff=new Map();
 let rewriteController = null, originalDraft = null;
@@ -559,7 +560,7 @@ export function initChatView() {
       });
     },
   });
-  document.addEventListener('memory-session-deleting', e => { memoryUpdater.stop(e.detail.sessionId); loreIndexUpdater.stop(currentUid(),e.detail.sessionId); memoryStories.delete(e.detail.sessionId); composerDrafts.clearStory(currentUid(),e.detail.sessionId); if(composerDraftSid===e.detail.sessionId){composerDraftSid=null;el.input.value='';} clearUnsaved(currentUid(),e.detail.sessionId); });
+  document.addEventListener('memory-session-deleting', e => { const {sessionId}=e.detail; memoryUpdater.stop(sessionId); loreIndexUpdater.stop(currentUid(),sessionId); memoryStories.delete(sessionId); composerDrafts.clearStory(currentUid(),sessionId); readingRecovery.clearStory(currentUid(),sessionId); if(composerDraftSid===sessionId){composerDraftSid=null;el.input.value='';} clearUnsaved(currentUid(),sessionId); });
   document.addEventListener('memory-session-saved', e => {
     if (e.detail.sessionId !== state.sessionId || !session) return;
     const { partial } = e.detail;
@@ -609,6 +610,7 @@ export function initChatView() {
     else if (d.status === 'failed') document.dispatchEvent(new CustomEvent('memory-toast', { detail: { text: (d.failureStreak >= 3 ? 'Memory updates paused after 3 failures. ' : 'Memory update failed. ')+(d.lastError ?? ''), action: 'Open settings', event: 'memory-settings' } }));
   });
   el.list = document.getElementById("message-list");
+  readingRecovery=createReadingRecovery({list:el.list,store:readingPositions,current:()=>({owner:currentUid(),sid:state.sessionId,ready:!cacheWritesPaused && !!session && latestReady}),messages:()=>lastMessages});
   let listHeight = el.list.clientHeight;
   el.list.addEventListener("scroll", () => {
     if (el.list.clientHeight === listHeight) wasNearBottom = isNearBottom();
@@ -730,6 +732,7 @@ export function setSession(sessionId) {
     showTransientError("Wait for the current reply or summary to finish before switching sessions.");
     return false;
   }
+  readingRecovery.open(owner,sessionId);
   if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = null; }
   if (!cacheWritesPaused && state.sessionId && session && latestReady) {
     const snapshot = chatSnapshot();
@@ -838,6 +841,7 @@ function saveLocalCache(owner, sid, snapshot) {
 }
 
 export async function prepareChatLogout() {
+  (readingRecovery ?? readingPositions).clearAccount(composerDraftOwner);
   composerDrafts.clearAccount(composerDraftOwner);
   composerDraftOwner = composerDraftSid = null;
   if (el.input) el.input.value = "";
@@ -900,6 +904,7 @@ function subscribeChat(sessionId) {
 }
 
 export function forgetChatSession(sessionId) {
+  (readingRecovery ?? readingPositions).clearStory(currentUid(),sessionId);
   forgetStoryStore(sessionId);
   memoryUpdater.stop(sessionId); memoryStories.delete(sessionId);clearUnsaved(currentUid(),sessionId);
   historyCache.delete(currentUid()+':'+sessionId);
@@ -995,7 +1000,9 @@ function renderMessages(msgs) {
   // Optimistic store snapshots may arrive before saveNarration returns. Keep
   // the stream until finalization instead of laying out two full-size replies.
   if(savedStream && !savedStream.saveCompleted){lastMessages=msgs;return;}
-  const position = captureListPosition();
+  const recovery=readingRecovery.beforeRender(msgs,{complete:!!storyStore(state.sessionId) && historyMessages===msgs && historyStartOrder===0});
+  const position = recovery?.position ?? captureListPosition(el.list);
+  if(recovery)visibleCount=Math.max(visibleCount,recovery.count);
   const renderHistory=historyMessages ?? msgs;
   const timeline=timelineFor(renderHistory,session?.memory?.startingScene);
   const lastUserOrder=lastUserOrderOf(renderHistory);
@@ -1072,6 +1079,7 @@ function renderMessages(msgs) {
     restoreListPosition(position, savedStream.saveCompleted ? savedStream.savedId : undefined);
     refreshPetPlacement();
   } else restoreListPosition(position);
+  if(recovery)wasNearBottom=isNearBottom();
   queueCacheSave();
   updateRewriteControls();
   updateMemoryChip();
@@ -2291,28 +2299,9 @@ function clampListScroll() {
   if(el.list.scrollTop!==next)el.list.scrollTop=next;
 }
 
-function captureListPosition() {
-  const edge = el.list.getBoundingClientRect().top;
-  const children=[...el.list.children];
-  const visible=child=>{
-    const rect = child.getBoundingClientRect();
-    return rect.top + rect.height > edge;
-  };
-  const node = children.find(child=>child.dataset.messageId && visible(child)) ?? children.find(visible);
-  return { sticky: isNearBottom(), node, id: node?.dataset.messageId,
-    top: node?.getBoundingClientRect().top };
-}
-
-function restoreListPosition(position, replacementId) {
-  if (position.sticky) { scrollToEnd(); return; }
-  const node = position.id ? renderedMessages.get(position.id)?.node
-    : position.node?.parentNode === el.list ? position.node
-      : renderedMessages.get(replacementId)?.node;
-  if (node && Number.isFinite(position.top)) {
-    const delta=node.getBoundingClientRect().top-position.top;
-    if(delta)el.list.scrollTop+=delta;
-  }
-  clampListScroll();
+function restoreListPosition(position,replacementId) {
+  restorePosition(el.list,position,id=>renderedMessages.get(id)?.node,replacementId);
+  if(position.sticky)wasNearBottom=true;
 }
 
 function setStatus(text, autoHide = false) {
